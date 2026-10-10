@@ -24,6 +24,7 @@ use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
 mod grok_hooks;
+mod startup_files;
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,9 +71,7 @@ mod duration_millis {
 /// The user's home directory (`HOME`, else `USERPROFILE`), or the current
 /// directory when neither is set.
 fn user_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    crate::portable_path::user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Callback to locate an executable by name.
@@ -287,6 +286,7 @@ const CHECK_NAMES: &[&str] = &[
     "claude",
     "codex",
     "grok",
+    "startup-files",
     "config",
     "permissions",
     "policy-source",
@@ -322,6 +322,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
+    m.insert("startup-files", startup_files::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -3712,7 +3713,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 20);
+        assert_eq!(check_names().len(), 21);
     }
 
     #[test]

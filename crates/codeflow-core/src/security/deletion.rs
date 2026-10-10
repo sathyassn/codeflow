@@ -4667,7 +4667,7 @@ impl Reader<'_> {
             }
             // OS text rule (issue 79): the reader works on path text, so a
             // home folder that is not valid UTF-8 cannot be placed (unproven).
-            let mut absolute = std::env::home_dir()?.into_os_string();
+            let mut absolute = crate::portable_path::user_home()?.into_os_string();
             absolute.push(rest);
             Some(PathBuf::from(absolute))
         } else if path.starts_with('/') {
@@ -7301,7 +7301,7 @@ fn from_home(rest: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    let home = std::env::home_dir()
+                    let home = crate::portable_path::user_home()
                         .ok_or_else(|| "cannot read home directory".to_string())?;
                     let home = home
                         .to_str()

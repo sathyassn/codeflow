@@ -121,6 +121,14 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // The file name of a Path made from a command word, which is valid UTF-8 text, so the decode never replaces a byte; it is joined back onto the destination word to judge where the copy lands.
+    (
+        "codeflow-core/src/security/startup.rs",
+        "copy_judgment",
+        "to_string_lossy",
+        1,
+        "format-contract",
+    ),
     // Failed Git stderr is displayed inside Err. Successful ignore-rule stdout remains exact bytes.
     (
         "codeflow-core/src/root_checkout.rs",
@@ -1483,6 +1491,86 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // An unread settings file pushes a named finding into missing, and startup_files::check reports any finding as a warning, never a pass.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "missing_rules",
+        "obtain-absent:read_to_string",
+        2,
+        "unproven",
+    ),
+    // A settings file that does not parse pushes a named finding into missing, and startup_files::check reports any finding as a warning, never a pass.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "missing_rules",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // shell_blank is exactly space, tab and newline, the shell's blanks before a comment mark.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "source_operands",
+        "trim_start_matches",
+        1,
+        "grammar:posix-shell",
+    ),
+    // The reader of a startup line removes the quotes around a `source` operand once; nothing downstream removes framing again.
+    (
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "source_operands",
+        "trim_matches",
+        1,
+        "framing:posix-shell-source",
+    ),
+    // The explicit set is C isspace, which git's strtol-based integer parsing skips before a number.
+    (
+        "crates/codeflow-core/src/security/git.rs",
+        "git_int",
+        "trim_start_matches",
+        1,
+        "grammar:git-config-int",
+    ),
+    // Space and tab, the blanks sed skips around an address and its command; another whitespace character stays and makes the command not a print command.
+    (
+        "crates/codeflow-core/src/security/startup.rs",
+        "sed_script_prints",
+        "trim_end_matches",
+        1,
+        "grammar:sed-script",
+    ),
+    // Space and tab, the blanks sed skips around an address and its command; another whitespace character stays and makes the command not a print command.
+    (
+        "crates/codeflow-core/src/security/startup.rs",
+        "sed_script_prints",
+        "trim_matches",
+        2,
+        "grammar:sed-script",
+    ),
+    // Space and tab, the blanks sed skips around an address and its command; another whitespace character stays and makes the command not a print command.
+    (
+        "crates/codeflow-core/src/security/startup.rs",
+        "sed_script_prints",
+        "trim_start_matches",
+        3,
+        "grammar:sed-script",
+    ),
+    // Space and tab before an address, and the ASCII digits of a line-number address; nothing else is removed.
+    (
+        "crates/codeflow-core/src/security/startup.rs",
+        "sed_script_prints::address",
+        "trim_start_matches",
+        2,
+        "grammar:sed-script",
+    ),
+    // A stat line that is not text returns None, and linux_group_holds_only_exited_members returns Ok(false), so it never proves the browser group exited.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "linux_stat_group_and_state",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // Formats Git stderr after command failure, never as an operand or authority.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
@@ -1738,14 +1826,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_utf8",
         1,
         "unproven",
-    ),
-    // var_os has no decoding error: HOME/USERPROFILE are raw OsString paths; or_else applies only to genuinely unset HOME.
-    (
-        "crates/codeflow-cli/src/cmd/hook.rs",
-        "edit_guard",
-        "obtain-absent:var_os",
-        1,
-        "format-contract",
     ),
     // This handler runs after the blocking guard verdict; malformed already-produced JSON chooses the textual denial message, retaining nonzero exit/refusal.
     (
@@ -2115,14 +2195,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // var_os returns native bytes and has no decoding error; None proves HOME/USERPROFILE unset and PathBuf retains present non-UTF8 bytes.
-    (
-        "crates/codeflow-core/src/doctor/mod.rs",
-        "user_home",
-        "obtain-absent:var_os",
-        1,
-        "format-contract",
-    ),
     // Invalid JSON adds its path to invalid; check_config converts any such entry into Status::Fail.
     (
         "crates/codeflow-core/src/doctor/mod.rs",
@@ -2242,22 +2314,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:Repository::discover",
         1,
         "unproven",
-    ),
-    // var_os preserves native bytes; None is a genuinely unset optional environment key. HOME/USERPROFILE and XDG defaults follow their documented lookup precedence.
-    (
-        "crates/codeflow-core/src/hooks/edit_guard.rs",
-        "global_git_config_target",
-        "obtain-absent:var_os",
-        2,
-        "grammar:environment",
-    ),
-    // var_os preserves native HOME/USERPROFILE bytes for interpreter path checks; fallback occurs only for a genuinely unset variable, not a decoding failure.
-    (
-        "crates/codeflow-core/src/hooks/exec_guard.rs",
-        "evaluate_in",
-        "obtain-absent:var_os",
-        1,
-        "grammar:environment",
     ),
     // A ref that cannot be peeled is left out of the kept tips, which can only leave a deleted tip unbacked and return the discard refusal; it never adds backing.
     (
@@ -5396,6 +5452,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "anchored_override",
     ),
     (
+        "posix-shell-source",
+        "crates/codeflow-core/src/doctor/startup_files.rs",
+        "source_operands",
+    ),
+    (
         "pr-task-lines",
         "crates/codeflow-cli/src/cmd/ci/adopter.rs",
         "supply_task",
@@ -5809,6 +5870,11 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
+    ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
+    ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),
+    ("crates/codeflow-core/src/doctor/startup_files.rs", "sourced_files", "is_file", 1, "Type check on metadata from metadata_optional, whose errors are reported as unresolved; a startup path that is not a regular file is not one the shell sources as a file."),
+    ("crates/codeflow-core/src/security/startup.rs", "resolve", "ErrorKind::NotFound", 1, "The walk stats each component in order from the root, so a component that is not found lies beneath one that resolved as a directory or was itself not found; the missing suffix is kept as written, which is where a write lands, and any other error returns None."),
     ("crates/codeflow-cli/src/cmd/ids.rs", "run_admit", "exists", 1, "False only sends a rev:path spec to git show, which refuses on error; a literal path whose metadata fails also fails the read that follows, so no unread input becomes a default."),
     ("crates/codeflow-cli/src/cmd/new.rs", "run_adr", "ErrorKind::NotFound", 1, "NotFound only picks the shipped template text for a new ADR, which check_adr then validates; any other read error refuses, and a dangling ancestor fails create_dir_all."),
     ("crates/codeflow-cli/src/cmd/present.rs", "read_bounded_regular", "is_file", 2, "Both are type checks on metadata obtained with errors propagated (symlink_metadata of the path and the opened file's metadata); a non-file refuses as UnsafePath or CorruptState."),

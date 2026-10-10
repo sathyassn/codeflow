@@ -9,17 +9,18 @@
 //! line (D19).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
-    self, assignment, expand_word, flat_top_level, has_substitution, join_path, launcher_env,
-    map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val, GIT_LOCATION_VARS,
-    SUBSTITUTED, SUBSTITUTED_BARE,
+    self, assignment, expand_word, flat_top_level, has_substitution, host_absolute, host_path,
+    join_path, launcher_env, map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val,
+    GIT_LOCATION_VARS, SUBSTITUTED, SUBSTITUTED_BARE,
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -502,14 +503,15 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
     branches.line = command.to_string();
-    let segments = expand_commands(command);
+    let expanded = expand_commands_read(command);
+    let segments = &expanded.segments;
     // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
     // top-level command and `None` for one nested in a substitution or a
     // `bash -c` string; `None` for the whole line when it is not flat.
-    let roles = flat_top_level(command).and_then(|top| map_top_level(&segments, &top));
+    let roles = flat_top_level(command).and_then(|top| map_top_level(segments, &top));
     let mut shell = ShellState::new(roles.is_some());
-    let line = LineFacts::read(&segments, roles.as_deref(), command);
-    let run = run_dirs(&segments, cwd);
+    let line = LineFacts::read(segments, roles.as_deref(), command);
+    let run = run_dirs(segments, cwd);
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -560,7 +562,8 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             command,
             &run,
         ) {
-            let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH);
+            let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH)
+                || v.message.contains(super::edit_guard::GIT_CONFIG_AUTHORITY);
             if authority {
                 v.level = PolicyLevel::Block;
                 v.level_fixed = true;
@@ -655,6 +658,24 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             ProgramKind::Other => {}
         }
     }
+    // The closed rule (TSK-242): a line that names a user or system git
+    // configuration write and carries a form the guard cannot read refuses,
+    // unless a form it does read already refused that write.
+    if ctx.policy.hook_integrity.is_active()
+        && !violations.iter().any(|v| v.rule == "git.hook_integrity")
+    {
+        if let Some(target) = crate::security::unresolved::gitconfig_target(command) {
+            let names = |word: &str| crate::security::unresolved::gitconfig_target(word).is_some();
+            if let Some(form) = crate::security::unresolved::unresolved_form(&expanded, &names) {
+                violations.push(hook_integrity_violation(
+                    ctx.policy.hook_integrity,
+                    format!(
+                        "the line names {target}, and {form}, so it could set a git key that runs a program where every repository reads it. Run the git config write as its own visible command, or ask the operator to set it"
+                    ),
+                ));
+            }
+        }
+    }
     report.notes = notes;
     report
 }
@@ -720,7 +741,7 @@ fn program_kind(program: &str) -> ProgramKind {
 }
 
 /// The final path component of a token (`/usr/bin/git` -> `git`).
-fn basename(token: &str) -> &str {
+pub(crate) fn basename(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
@@ -1432,6 +1453,9 @@ fn token_integrity_path_literal(
         return None;
     }
     let path = integrity_shell_path(token, cwd);
+    if super::edit_guard::global_git_config_target(&path, payload_cwd) {
+        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY);
+    }
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
@@ -1463,7 +1487,7 @@ fn token_integrity_path_literal(
 /// Whether a word holds pattern syntax some shell reads at run time: Bash's
 /// `*`, `?` and `[`, and the forms the guard reads conservatively
 /// ([`conservative_glob`]).
-fn has_glob(word: &str) -> bool {
+pub(crate) fn has_glob(word: &str) -> bool {
     word.contains(['*', '?', '[']) || conservative_glob(word)
 }
 
@@ -1517,7 +1541,7 @@ fn numeric_range_len(chars: &[char]) -> Option<usize> {
 /// after its first character, also the part before that `~`, since zsh's
 /// exclusion `pat~other` matches only names `pat` matches (TSK-216 round
 /// 18). `None` when the braces are too many to read.
-fn word_readings(word: &str) -> Option<Vec<String>> {
+pub(crate) fn word_readings(word: &str) -> Option<Vec<String>> {
     let mut words = brace_words(word)?;
     let excluded: Vec<String> = words
         .iter()
@@ -1958,7 +1982,7 @@ impl WordGlob {
     fn expand(&self) -> Result<Vec<PathBuf>, GlobStop> {
         let mut read = 0;
         if !self.conservative {
-            return expand_components(&self.pattern, self.literal, false, &mut read);
+            return expand_components(&self.pattern, self.literal, false, false, &mut read);
         }
         let prefix = self.prefix();
         let mut found = every_path_below(&prefix, &mut read)?;
@@ -1971,6 +1995,7 @@ impl WordGlob {
             found.extend(expand_components(
                 &self.pattern,
                 self.literal,
+                true,
                 true,
                 &mut read,
             )?);
@@ -2029,6 +2054,20 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
     Ok(found)
 }
 
+/// Expand a startup target's glob `pattern` below the directory `base`
+/// using the shell reader's bounded listing. Every component of `base` is
+/// literal whatever characters it holds: it is the run directory, the home
+/// or a known location, which the shell does not expand. This only expands
+/// named targets; it never inspects a copier's source tree.
+pub(crate) fn startup_glob_paths(
+    base: &Path,
+    pattern: &Path,
+    match_hidden: bool,
+) -> Option<Vec<PathBuf>> {
+    let literal = base.components().count();
+    expand_components(&base.join(pattern), literal, false, match_hidden, &mut 0).ok()
+}
+
 /// [`WordGlob::expand`] one component at a time; the first `literal`
 /// components are never wild. `**` is zero or more directories. With
 /// `every_name`, each wild component matches every name, names that start
@@ -2037,6 +2076,7 @@ fn expand_components(
     pattern: &Path,
     literal: usize,
     every_name: bool,
+    match_hidden: bool,
     read: &mut usize,
 ) -> Result<Vec<PathBuf>, GlobStop> {
     let options = glob::MatchOptions {
@@ -2072,7 +2112,10 @@ fn expand_components(
                         return Err(GlobStop::TooManyEntries);
                     }
                     let name = entry.file_name();
-                    if !every_name && name.to_str().is_some_and(|n| n.starts_with('.')) {
+                    if !every_name
+                        && !match_hidden
+                        && name.to_str().is_some_and(|n| n.starts_with('.'))
+                    {
                         continue;
                     }
                     let path = dir.join(&name);
@@ -2090,7 +2133,7 @@ fn expand_components(
             continue;
         }
         let matcher = shell_pattern(&text);
-        let dotted = every_name || text.starts_with('.');
+        let dotted = every_name || match_hidden || text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
             let Some(entries) = glob_directory(dir)? else {
@@ -2261,14 +2304,16 @@ const EVERY_PATH_PATTERN: &str =
 const RUN_DIR_LIMIT: usize = 64;
 
 /// Every directory the commands of a script can run in (TSK-216 round 5).
-struct RunDirs {
+pub(crate) struct RunDirs {
     /// The starting directory and each one a literal `cd`, `pushd` or
     /// `env -C` on the script can reach from a directory listed before it.
-    dirs: Vec<PathBuf>,
+    pub(crate) dirs: Vec<PathBuf>,
     /// Why the list may miss one: a directory filled in at run time, a
     /// program that can move the shell untracked, a move that repeats, or
     /// a rotation that can reach a `pushd -n` directory.
-    unknown: Option<String>,
+    pub(crate) unknown: Option<String>,
+    /// The home `~` and `$HOME` name.
+    home: Option<PathBuf>,
 }
 
 /// The directories the commands in `segments` can run in, starting from
@@ -2280,10 +2325,21 @@ struct RunDirs {
 /// then, so once one is stacked a rotation or `popd` makes the directory
 /// unknown (TSK-216 round 10). It over-approximates: a command is judged
 /// from each listed directory.
-fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
+pub(crate) fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
+    run_dirs_from_home(segments, start, crate::portable_path::user_home())
+}
+
+/// [`run_dirs`] with `~` read as `home`: the startup guard passes the home
+/// its class is built from, so a `cd ~` lands where the class lives.
+pub(crate) fn run_dirs_from_home(
+    segments: &[String],
+    start: &Path,
+    home: Option<PathBuf>,
+) -> RunDirs {
     let mut run = RunDirs {
         dirs: vec![start.to_path_buf()],
         unknown: None,
+        home,
     };
     let mut stacked = false;
     let mut repeats = false;
@@ -2388,7 +2444,7 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
     let mut reached = Vec::new();
     for dir in &run.dirs {
         let path = if target == "~" {
-            if let Some(home) = std::env::home_dir() {
+            if let Some(home) = run.home.clone() {
                 home
             } else {
                 run.unknown
@@ -2396,7 +2452,7 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
                 continue;
             }
         } else {
-            integrity_shell_path(target, dir)
+            shell_path_with_home(target, dir, run.home.as_deref())
         };
         if target.contains(['*', '?', '[']) {
             match WordGlob::new(target, dir).expand() {
@@ -2514,9 +2570,14 @@ fn integrity_write_in_run(
 }
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
+    shell_path_with_home(token, cwd, crate::portable_path::user_home().as_deref())
+}
+
+/// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
+fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
     if token == "~" {
-        if let Some(home) = std::env::home_dir() {
-            return home;
+        if let Some(home) = home {
+            return home.to_path_buf();
         }
     }
     // `~+` is the directory the command runs in.
@@ -2527,7 +2588,7 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
         return cwd.join(relative);
     }
     if let Some(relative) = token.strip_prefix("~/") {
-        if let Some(home) = std::env::home_dir() {
+        if let Some(home) = home {
             return home.join(relative);
         }
     }
@@ -2536,7 +2597,12 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
             .strip_prefix(&format!("${name}"))
             .or_else(|| token.strip_prefix(&format!("${{{name}}}")));
         if let Some(relative) = relative.filter(|s| s.is_empty() || s.starts_with('/')) {
-            if let Some(value) = std::env::var_os(name) {
+            let value = if name == "HOME" {
+                home.map(|h| h.as_os_str().to_os_string())
+            } else {
+                std::env::var_os(name)
+            };
+            if let Some(value) = value {
                 return cwd.join(value).join(relative.trim_start_matches('/'));
             }
         }
@@ -2667,8 +2733,8 @@ fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option
 /// round 12). The reader does not read ANSI-C or locale quoting (`$'...'`,
 /// `$"..."`): on a command that holds either and a `>`, every word is kept
 /// in [`Redirects::unread`] and judged by name.
-fn redirect_writes(segment: &str) -> Redirects {
-    let joined = join_continuations(segment);
+pub(crate) fn redirect_writes(segment: &str) -> Redirects {
+    let joined = join_continuations(&decode_dollar_quotes(segment));
     if (joined.contains("$'") || joined.contains("$\"")) && joined.contains('>') {
         let unread = line_words(&joined.replace(['\'', '"', '$', '\\'], " "))
             .map(str::to_string)
@@ -2686,12 +2752,57 @@ fn redirect_writes(segment: &str) -> Redirects {
 
 /// What the redirections of one command can write ([`redirect_writes`]).
 #[derive(Default)]
-struct Redirects {
+pub(crate) struct Redirects {
     /// The targets of its write redirections, read as written.
-    targets: Vec<String>,
+    pub(crate) targets: Vec<String>,
     /// Every word of a command whose quoting the reader does not read:
     /// any of them may be a write target, so each is judged by name.
-    unread: Vec<String>,
+    pub(crate) unread: Vec<String>,
+}
+
+/// `text` with each unquoted ANSI-C string `$'...'` replaced by its decoded
+/// text in single quotes, and each locale string `$"..."` by the plain double
+/// quoted one, so a redirect target such as `$HOME/$'\\x2ezshrc'` is read
+/// as the path the shell passes.
+fn decode_dollar_quotes(text: &str) -> String {
+    if !text.contains("$'") && !text.contains("$\"") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let (mut single, mut double) = (false, false);
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !single => {
+                out.push(c);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '\'' if !double => {
+                single = !single;
+                out.push(c);
+            }
+            '"' if !single => {
+                double = !double;
+                out.push(c);
+            }
+            '$' if !single && !double => match chars.clone().next() {
+                Some('\'') => {
+                    chars.next();
+                    let body = ansi_c_text(&mut chars);
+                    out.push('\'');
+                    out.push_str(&body.replace('\'', "'\\''"));
+                    out.push('\'');
+                }
+                // A locale string is an ordinary double-quoted one.
+                Some('"') => {}
+                _ => out.push(c),
+            },
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// `text` with each backslash-newline outside single quotes removed, as the
@@ -2831,15 +2942,6 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
         i += 1;
     }
     (word, i)
-}
-
-fn rsync_dry_run(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        arg == "--dry-run"
-            || arg
-                .strip_prefix('-')
-                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('n'))
-    })
 }
 
 // Find's traversal roots are separate from predicate operands and -exec data.
@@ -3165,7 +3267,7 @@ fn line_words(line: &str) -> impl Iterator<Item = &str> {
 
 /// Whether the shell fills in part of `word` when the command runs: a
 /// variable, or a command substitution the tokenizer cut out.
-fn unresolved_word(word: &str) -> bool {
+pub(crate) fn unresolved_word(word: &str) -> bool {
     word.contains(['$', '`']) || has_substitution(word)
 }
 
@@ -3265,7 +3367,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
                 GlobStop::TooManyEntries => format!("target glob `{text}` has too many entries"),
             });
     }
-    if (text == "~" || text.starts_with("~/")) && std::env::home_dir().is_none() {
+    if (text == "~" || text.starts_with("~/")) && crate::portable_path::user_home().is_none() {
         return Err("cannot resolve the home directory".to_string());
     }
     Ok(Some(vec![integrity_shell_path(&text, cwd)]))
@@ -3944,7 +4046,7 @@ fn find_action_violation(
 }
 
 /// The command an `xargs` runs, GNU and BSD options read.
-fn xargs_command(args: &[String]) -> Option<&[String]> {
+pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "--" {
@@ -4254,11 +4356,25 @@ fn direct_write_violation(
 ) -> Option<Violation> {
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
-        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install" => {
-            Some(args)
-        }
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
         _ => None,
     };
+    // Every writer the table lists goes through the one judge exec-guard
+    // uses too: what it copies, the files its options and operands write
+    // (from the line's option environment as well), an option the table
+    // does not list, and where it places files (review round 23).
+    let guard = GitWriter {
+        cmd,
+        level,
+        cwd,
+        payload_cwd,
+        line,
+    };
+    let assigned =
+        crate::security::unresolved::line_assignments(&expand_commands_read(line).segments);
+    if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
+        return Some(v);
+    }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
             token_integrity_path(".", cwd, payload_cwd).map(str::to_string)
@@ -4319,19 +4435,6 @@ fn direct_write_violation(
             }
         }
     }
-
-    if matches!(cmd, "cp" | "ln") || (cmd == "rsync" && !rsync_dry_run(args)) {
-        // Only the destination is written. A copy or link from an integrity
-        // path leaves that source in place.
-        if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
-            if let Some(p) = token_integrity_path(dest, cwd, payload_cwd) {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!("`{cmd}` writes the integrity path `{p}`"),
-                ));
-            }
-        }
-    }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
         if let Some(p) = arg_integrity_path(&args[1..], cwd, payload_cwd) {
             return Some(hook_integrity_violation(
@@ -4343,6 +4446,243 @@ fn direct_write_violation(
     None
 }
 
+/// Git-guard's side of the shared writer judge: the integrity files and
+/// prefixes, and the repository git configuration a copy can replace
+/// (review round 23).
+struct GitWriter<'a> {
+    cmd: &'a str,
+    level: PolicyLevel,
+    cwd: &'a Path,
+    payload_cwd: &'a Path,
+    line: &'a str,
+}
+
+impl GitWriter<'_> {
+    /// The integrity path one of `paths` names, as spelled or unresolved
+    /// on a line that names an enforcement path.
+    fn integrity(&self, paths: &[String]) -> Option<String> {
+        arg_integrity_path(paths, self.cwd, self.payload_cwd)
+            .map(str::to_string)
+            .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
+    }
+
+    fn refuse(&self, message: String) -> Violation {
+        hook_integrity_violation(self.level, message)
+    }
+}
+
+impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
+    type Found = Violation;
+
+    fn writes(&self, path: &str) -> Option<Violation> {
+        let p = self.integrity(&[path.to_string()])?;
+        Some(self.refuse(format!("`{}` writes the integrity path `{p}`", self.cmd)))
+    }
+
+    fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let cmd = self.cmd;
+        // A dry run writes nothing at its destination.
+        if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
+            return None;
+        }
+        if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
+            return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        }
+        let p = git_config_destination(cmd, copy, self.cwd)?;
+        Some(self.refuse(format!(
+            "`{cmd}` would put a file in place of the git configuration `{p}`, and a symbolic link there sends later `git config` writes to the file it points at"
+        )))
+    }
+
+    fn unread(
+        &self,
+        option: &str,
+        effects: &crate::security::unresolved::WriterEffects,
+    ) -> Option<Violation> {
+        let words: Vec<String> = effects
+            .read
+            .operands
+            .iter()
+            .chain(effects.copy.iter().flat_map(|c| c.dest.iter()))
+            .chain(effects.read.values.iter().map(|(_, value)| value))
+            .cloned()
+            .collect();
+        let p = self.integrity(&words)?;
+        Some(self.refuse(format!(
+            "`{}` is given `{option}`, an option the guard does not read, so any of its words could be a target, and one names the integrity path `{p}`",
+            self.cmd
+        )))
+    }
+
+    fn places(
+        &self,
+        places: &crate::security::unresolved::Places,
+        effects: &crate::security::unresolved::WriterEffects,
+    ) -> Option<Violation> {
+        use crate::security::unresolved::DirOrder;
+        let join = |base: &str, dir: &str| {
+            if dir.starts_with(['/', '~', '$']) {
+                dir.to_string()
+            } else {
+                format!("{}/{dir}", base.trim_end_matches('/'))
+            }
+        };
+        let dirs: Vec<String> = match places.order {
+            DirOrder::Sequential => places
+                .dirs
+                .iter()
+                .fold(Vec::<String>::new(), |mut at, dir| {
+                    let next = at
+                        .last()
+                        .map_or_else(|| dir.clone(), |last| join(last, dir));
+                    at.push(next);
+                    at
+                })
+                .into_iter()
+                .last()
+                .into_iter()
+                .collect(),
+            DirOrder::Last => places.dirs.last().cloned().into_iter().collect(),
+            DirOrder::Each => {
+                let dest = effects.copy.as_ref().and_then(|c| c.dest.as_deref());
+                places
+                    .dirs
+                    .iter()
+                    .flat_map(|dir| {
+                        std::iter::once(dir.clone()).chain(dest.map(|dest| join(dest, dir)))
+                    })
+                    .collect()
+            }
+        };
+        let p = self.integrity(&dirs)?;
+        Some(self.refuse(format!(
+            "`{}` places files it does not name in the integrity path `{p}`",
+            self.cmd
+        )))
+    }
+}
+
+/// The paths a copy, link, move or install call writes, read with the
+/// writer table's arity by the shared judge
+/// ([`crate::security::unresolved::judge_writer`]): the
+/// files its options write; with `install -d` every operand (each is a
+/// directory it makes); with `-t DIR` each source's name in `DIR`;
+/// otherwise the destination, and for `install` each source's name inside
+/// it in case it is a directory. With an option the table does not list,
+/// whose arity is unknown, every operand could be the destination and
+/// each is returned.
+fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) -> Vec<String> {
+    let inside = |dir: &str, source: &str| {
+        let base = source
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(source);
+        format!("{}/{base}", dir.trim_end_matches('/'))
+    };
+    let mut paths = read.written.clone();
+    if read.directories || read.unknown.is_some() {
+        paths.extend(read.sources.iter().cloned());
+        paths.extend(read.dest.iter().cloned());
+        if read.directories {
+            return paths;
+        }
+    }
+    if let Some(dest) = &read.dest {
+        if !read.target {
+            paths.push(dest.clone());
+        }
+        // A copy into a target directory lands each source there; `install`
+        // is also judged at each source's name inside its destination, in
+        // case that is a directory (review round 19). For `cp`, `ln` and
+        // `rsync` the destination directory itself is judged.
+        if read.target || cmd == "install" {
+            paths.extend(read.sources.iter().map(|source| inside(dest, source)));
+        }
+    }
+    paths
+}
+
+/// The git configuration a link, copy or move puts a file in place of: its
+/// destination, or each entry it makes in a destination directory, when that
+/// is the `config` or `config.worktree` of a git directory, such as a
+/// submodule's under `modules` or a bare git directory's. git follows a
+/// symbolic link there, so a link made on the same line as a `git config`
+/// write would send that write to the user's file before the guard can read
+/// the link (review round twelve).
+fn git_config_destination(
+    cmd: &str,
+    read: &crate::security::unresolved::CopyRead,
+    cwd: &Path,
+) -> Option<String> {
+    if !matches!(
+        cmd,
+        "ln" | "cp" | "mv" | "rsync" | "scp" | "ditto" | "install"
+    ) {
+        return None;
+    }
+    let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
+        (Some(dir), true) => {
+            let dir = integrity_shell_path(dir, cwd);
+            read.sources.iter().map(|op| entry_in(&dir, op)).collect()
+        }
+        (Some(dest), false) => {
+            let path = integrity_shell_path(dest, cwd);
+            let entries = || read.sources.iter().map(|op| entry_in(&path, op));
+            if dest.ends_with('/') {
+                entries().collect()
+            } else {
+                match crate::absence::is_kind(&path, true) {
+                    Some(true) => entries().collect(),
+                    Some(false) => vec![path.clone()],
+                    // Kept strict: a destination whose type cannot be read
+                    // is judged as the file and as a directory.
+                    None => entries().chain([path.clone()]).collect(),
+                }
+            }
+        }
+        (None, _) if cmd == "ln" && read.sources.len() == 1 => {
+            vec![entry_in(cwd, &read.sources[0])]
+        }
+        (None, _) => Vec::new(),
+    };
+    // With an option the table does not list, any operand could be the
+    // destination.
+    if read.unknown.is_some() {
+        destinations.extend(
+            read.sources
+                .iter()
+                .chain(&read.dest)
+                .map(|op| integrity_shell_path(op, cwd)),
+        );
+    }
+    destinations.into_iter().find_map(|path| {
+        // OS text rule (issue 79): a name that is not text is neither
+        // `config` nor `config.worktree`, as its bytes are not. A git
+        // directory the guard cannot read may be one, so it refuses.
+        let config = |p: &Path| {
+            p.file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|name| {
+                    matches!(name.to_lowercase().as_str(), "config" | "config.worktree")
+                })
+                && repository_config_file(p, true) != Some(false)
+        };
+        (config(&path) || real(&path).as_deref().is_some_and(config))
+            .then(|| path.display().to_string())
+    })
+}
+
+/// The entry a link, copy or move of `source` makes in the directory `dir`.
+fn entry_in(dir: &Path, source: &str) -> PathBuf {
+    let name = source
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(source);
+    dir.join(name)
+}
+
 // ---------------------------------------------------------------------------
 // command expansion (task: TOKEN DETECTION HARDENING — wrapper evasions)
 // ---------------------------------------------------------------------------
@@ -4351,7 +4691,8 @@ fn direct_write_violation(
 /// shell constructs an agent can hide a `git`/`gh` token behind so it is not
 /// only the first word of a `&&`/`||`/`;`/`|` segment that is inspected:
 /// newlines, backgrounding `&`, subshells `( )`, brace groups `{ }`,
-/// `$(…)`/backtick command substitution, `bash -c '…'`, and `eval '…'`. Text
+/// `$(…)`/backtick command substitution, `bash -c '…'`, `eval '…'` and `env
+/// -S '…'`, each body unwrapped again in turn up to [`NESTING_LIMIT`]. Text
 /// the shell never executes stays out: comments and heredoc bodies (see
 /// [`split_into_segments`]). Program
 /// resolution goes through [`strip_launchers`], so an env/`command` prefix on
@@ -4360,45 +4701,600 @@ fn direct_write_violation(
 /// (`python3 -c`) and pipe-to-shell (`echo … | sh`) are the genuinely unbounded
 /// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
 pub(crate) fn expand_commands(command: &str) -> Vec<String> {
+    expand_commands_read(command).segments
+}
+
+/// What [`expand_commands_read`] reads from a line.
+#[derive(Debug, Default)]
+pub(crate) struct Expanded {
+    /// The simple commands the line runs ([`expand_commands`]).
+    pub(crate) segments: Vec<String>,
+    /// Each command word whose expansion the guard cannot fill in (`$CMD`
+    /// with no literal assigned before it, `${X:-y}`, a substitution), in
+    /// the order the line runs them. The closed rule of TSK-242 refuses one
+    /// on a line that names a protected target.
+    pub(crate) unread_commands: Vec<String>,
+}
+
+/// [`expand_commands`], with the command words it could not fill in. A
+/// shell `-c` body, an `eval` body or a command word that expands a name
+/// the line assigned a literal before it is read with that literal
+/// (`CMD='git config ...'; sh -c "$CMD"`, TSK-242 review round 15).
+pub(crate) fn expand_commands_read(command: &str) -> Expanded {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
+    let mut out = Expanded::default();
+    expand_segments(raw, &mut out, 1, &mut Literals::default());
+    out
+}
 
-    let mut out = Vec::new();
-    for seg in raw {
+/// Push each segment, then the commands its text carries, unwrapped again
+/// in turn: a `bash -c` body inside another, an `eval` of one, or an `env
+/// -S` string, with the literals assigned before it filled in, and a
+/// command word that expands such a literal read as the words it becomes.
+/// Each body level counts toward [`NESTING_LIMIT`]; a body past it is the
+/// [`NESTING_UNREAD`] marker, which refuses the line (TSK-242 review round
+/// 14).
+fn expand_segments(
+    segments: Vec<String>,
+    out: &mut Expanded,
+    depth: usize,
+    literals: &mut Literals,
+) {
+    for seg in segments {
         let toks = command_argv(&seg);
-        out.push(seg);
-        let Some((prog, args)) = strip_launchers(&toks) else {
-            continue;
-        };
-        let name = basename(prog);
-        if is_shell(name) {
-            // `-c`/`--command`, or a clustered short flag containing `c`
-            // (`-lc`, `-ec`): the wrapped command is the following argument.
-            // It runs in the directory its launchers move to (`env -C DIR
-            // sh -c ...`), which the body carries as its own leading `cd`
-            // so every check that follows directories sees it (TSK-216
-            // round 5).
-            if let Some(inner) = shell_c_argument(args) {
-                let mut moves = String::new();
-                for dir in launcher_effects(&toks).0 {
-                    moves.push_str("cd '");
-                    moves.push_str(&dir.replace('\'', "'\\''"));
-                    moves.push_str("' && ");
+        let mut bodies: Vec<String> = carried_commands(&toks)
+            .iter()
+            .map(|body| literals.fill(body))
+            .collect();
+        let mut words = toks;
+        strip_reserved_words(&mut words);
+        if let Some((program, _)) = strip_launchers(&words) {
+            if expands(program) {
+                if literals.resolves(program) {
+                    bodies.push(literals.fill_words(&words));
+                } else {
+                    out.unread_commands.push(program.to_string());
                 }
-                split_into_segments(&format!("{moves}{inner}"), &mut out, 1, false);
             }
-        } else if name == "eval" {
-            // `eval '<cmd>'` runs its (joined) arguments as a command.
-            let joined = args.join(" ");
-            split_into_segments(&joined, &mut out, 1, false);
+        }
+        // Only the line's own top level: an assignment inside a body or a
+        // subshell may not outlive it.
+        if depth == 1 {
+            literals.note(&words);
+        }
+        out.segments.push(seg);
+        if bodies.is_empty() {
+            continue;
+        }
+        if depth > NESTING_LIMIT {
+            if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
+                out.segments.push(NESTING_UNREAD.to_string());
+            }
+            continue;
+        }
+        for body in bodies {
+            let mut inner = Vec::new();
+            split_into_segments(&body, &mut inner, depth, false);
+            expand_segments(inner, out, depth + 1, literals);
         }
     }
-    out
+}
+
+/// Whether the shell fills in part of `word` at run time: a `$`, a
+/// backquote, or a substitution the segmenter lifted out.
+pub(crate) fn expands(word: &str) -> bool {
+    word.contains(['$', '`', '\u{1}', '\u{2}'])
+}
+
+/// The literal values a line assigns at its top level, in the order its
+/// segments run: a segment of assignments only, or the operands of
+/// `export`, `declare`, `typeset`, `local` and `readonly`. A value that
+/// expands a name with no literal, or a name assigned twice with different
+/// values, has none, so a word that uses it stays unread.
+#[derive(Debug, Default)]
+struct Literals(BTreeMap<String, Option<String>>);
+
+impl Literals {
+    /// Record the assignments of one segment's words.
+    fn note(&mut self, words: &[String]) {
+        fn assignment(w: &str) -> Option<(&str, &str)> {
+            w.split_once('=')
+                .filter(|(name, _)| !name.is_empty() && is_identifier(name))
+        }
+        let declaring = matches!(
+            words.first().map(String::as_str),
+            Some("export" | "declare" | "typeset" | "local" | "readonly")
+        );
+        let rest = if declaring { &words[1..] } else { words };
+        // Assignments in front of a command last only for that command.
+        if !declaring && !rest.iter().all(|w| assignment(w).is_some()) {
+            return;
+        }
+        for word in rest {
+            let Some((name, value)) = assignment(word) else {
+                continue;
+            };
+            let filled = self.fill(value);
+            let value = (!expands(&filled)).then_some(filled);
+            self.0
+                .entry(name.to_string())
+                .and_modify(|seen| {
+                    if *seen != value {
+                        *seen = None;
+                    }
+                })
+                .or_insert(value);
+        }
+    }
+
+    /// `text` with each name that has a literal replaced by it.
+    fn fill(&self, text: &str) -> String {
+        if !text.contains('$') {
+            return text.to_string();
+        }
+        let vars: Vec<(String, String)> = self
+            .0
+            .iter()
+            .filter_map(|(name, value)| value.clone().map(|v| (name.clone(), v)))
+            .collect();
+        crate::security::startup::substitute_with(text, &vars)
+    }
+
+    /// Whether every expansion in `word` has a literal.
+    fn resolves(&self, word: &str) -> bool {
+        !expands(&self.fill(word))
+    }
+
+    /// A command's words as shell text with the literals filled in: a
+    /// filled word splits at blanks as the shell splits an unquoted
+    /// expansion; every other word stays one word.
+    fn fill_words(&self, words: &[String]) -> String {
+        words
+            .iter()
+            .map(|word| {
+                if expands(word) {
+                    self.fill(word)
+                } else {
+                    quote_words(std::slice::from_ref(word))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// The command texts a simple command runs from what it carries: the
+/// command `env -S` splits ([`env_split_command`]), the body of a shell's
+/// `-c`, the joined words of `eval`, and the command a launcher runs from a
+/// string or from its words: `flock`, `script`, `watch`, `parallel`,
+/// `setsid` and `unbuffer` ([`launcher_commands`]), and git or a command
+/// string run by `xargs` or `find -exec` (TSK-242 review round 14).
+fn carried_commands(toks: &[String]) -> Vec<String> {
+    if let Some(command) = env_split_command(toks) {
+        return vec![command];
+    }
+    let Some((prog, args)) = strip_launchers(toks) else {
+        return Vec::new();
+    };
+    let name = launcher_name(prog);
+    if is_shell(name) {
+        // `-c`/`--command`, or a clustered short flag containing `c`
+        // (`-lc`, `-ec`): the wrapped command is the following argument.
+        // It runs in the directory its launchers move to (`env -C DIR
+        // sh -c ...`), which the body carries as its own leading `cd`
+        // so every check that follows directories sees it (TSK-216
+        // round 5).
+        let Some(inner) = shell_c_argument(args) else {
+            return Vec::new();
+        };
+        let mut moves = String::new();
+        for dir in launcher_effects(toks).0 {
+            moves.push_str("cd '");
+            moves.push_str(&dir.replace('\'', "'\\''"));
+            moves.push_str("' && ");
+        }
+        vec![format!("{moves}{inner}")]
+    } else if name == "eval" {
+        // `eval '<cmd>'` runs its (joined) arguments as a command.
+        vec![args.join(" ")]
+    } else {
+        launcher_commands(name, args)
+    }
+}
+
+/// Words as shell text that reads back as the same words. Double quotes
+/// keep a `$` or a backtick live, so a later check still sees an expansion
+/// the words may hold.
+fn quote_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The commands the launcher `name` runs from `args`, as shell text: the
+/// string `flock FILE -c`, `script -c` and `watch` hand to a shell, the
+/// commands `parallel` builds from its template and `:::` inputs, and the
+/// command words after `flock FILE`, `script FILE` (BSD and macOS),
+/// `setsid` and `unbuffer`. For `xargs` and `find -exec`, whose command
+/// gets arguments the guard cannot see, only a git command or one that
+/// carries a command string, the forms git-guard judges there; the
+/// integrity checks read those wrappers on their own ([`wrapped_violation`]).
+/// Empty for any other program.
+pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
+    let judged = |words: &[String]| {
+        strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
+            || !carried_commands(words).is_empty()
+    };
+    match name {
+        "flock" => flock_command(args).into_iter().collect(),
+        "script" => script_command(args).into_iter().collect(),
+        "watch" => watch_command(args).into_iter().collect(),
+        "parallel" => parallel_commands(args),
+        "setsid" | "unbuffer" => {
+            let at = args
+                .iter()
+                .position(|a| !a.starts_with('-'))
+                .unwrap_or(args.len());
+            let words = &args[at..];
+            (!words.is_empty())
+                .then(|| quote_words(words))
+                .into_iter()
+                .collect()
+        }
+        "xargs" => xargs_command(args)
+            .filter(|words| judged(words))
+            .map(quote_words)
+            .into_iter()
+            .collect(),
+        "find" => args
+            .iter()
+            .enumerate()
+            .filter(|(_, word)| matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+            .filter_map(|(at, _)| {
+                let tail = &args[at + 1..];
+                let end = tail
+                    .iter()
+                    .position(|w| w == ";" || w == "+")
+                    .unwrap_or(tail.len());
+                let words = &tail[..end];
+                judged(words).then(|| quote_words(words))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The command `flock` runs: after its options (`-w` and `-E` take a
+/// value) and the lock file, either a `-c CMD`, `-cCMD`, `--command CMD`
+/// or `--command=CMD` string run by `sh -c` (TSK-242 review round 15), or
+/// the command words. Short options run together (`-nc CMD`) are read
+/// letter by letter. `None` with no command.
+fn flock_command(args: &[String]) -> Option<String> {
+    // The string of a `-c` or `--command` option word, the next word when
+    // the option word does not carry it.
+    let command_option = |at: usize| -> Option<Option<String>> {
+        let a = args.get(at)?.as_str();
+        if let Some(long) = a.strip_prefix("--") {
+            return match long.split_once('=') {
+                Some(("command", value)) => Some(Some(value.to_string())),
+                None if long == "command" => Some(args.get(at + 1).cloned()),
+                _ => None,
+            };
+        }
+        let cluster = a.strip_prefix('-').filter(|c| !c.is_empty())?;
+        for (offset, letter) in cluster.char_indices() {
+            let attached = &cluster[offset + letter.len_utf8()..];
+            match letter {
+                'c' if attached.is_empty() => return Some(args.get(at + 1).cloned()),
+                'c' => return Some(Some(attached.to_string())),
+                'w' | 'E' => return None,
+                _ => {}
+            }
+        }
+        None
+    };
+    // Options before the lock file and after it, which getopt permutes.
+    let skip_options = |mut at: usize| -> Result<usize, Option<String>> {
+        while let Some(a) = args.get(at).map(String::as_str) {
+            if a == "--" {
+                return Ok(at + 1);
+            }
+            if !a.starts_with('-') || a.len() < 2 {
+                break;
+            }
+            // Not valid before the file, but judged all the same.
+            if let Some(command) = command_option(at) {
+                return Err(command);
+            }
+            let valued = matches!(a, "--wait" | "--timeout" | "--conflict-exit-code")
+                || a.strip_prefix('-')
+                    .filter(|c| !c.starts_with('-'))
+                    .is_some_and(|c| c.ends_with(['w', 'E']));
+            at += 1 + usize::from(valued);
+        }
+        Ok(at)
+    };
+    let file = match skip_options(0) {
+        Ok(file) => file,
+        Err(command) => return command,
+    };
+    let start = match skip_options(file + 1) {
+        Ok(start) => start,
+        Err(command) => return command,
+    };
+    let rest = args.get(start..).unwrap_or_default();
+    (!rest.is_empty()).then(|| quote_words(rest))
+}
+
+/// The command `script` runs: a `-c CMD` or `--command CMD` string
+/// (util-linux, whose options may follow the file), else the command words
+/// after the file (BSD and macOS: `script -q FILE CMD ...`). The scan stops
+/// at the command words, so a `-c` there is the command's own. `None` with
+/// no command.
+fn script_command(args: &[String]) -> Option<String> {
+    // Options that take a value: `-t TIME` (BSD) and util-linux's logs.
+    const VALUED_LONG: &[&str] = &[
+        "--log-in",
+        "--log-out",
+        "--log-io",
+        "--log-timing",
+        "--logging-format",
+        "--echo",
+        "--output-limit",
+    ];
+    let mut file_seen = false;
+    let mut options = true;
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if options && a == "--" {
+            options = false;
+            at += 1;
+            continue;
+        }
+        if options && a.starts_with("--") {
+            if a == "--command" {
+                return args.get(at + 1).cloned();
+            }
+            if let Some(command) = a.strip_prefix("--command=") {
+                return Some(command.to_string());
+            }
+            at += 1 + usize::from(VALUED_LONG.contains(&a));
+            continue;
+        }
+        if let Some(cluster) = a.strip_prefix('-').filter(|c| options && !c.is_empty()) {
+            at += 1;
+            for (offset, letter) in cluster.char_indices() {
+                let attached = &cluster[offset + letter.len_utf8()..];
+                match letter {
+                    'c' if attached.is_empty() => return args.get(at).cloned(),
+                    'c' => return Some(attached.to_string()),
+                    'B' | 'E' | 'I' | 'O' | 'm' | 'T' | 't' => {
+                        if attached.is_empty() {
+                            at += 1;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        if !file_seen {
+            file_seen = true;
+            at += 1;
+            continue;
+        }
+        return Some(quote_words(&args[at..]));
+    }
+    None
+}
+
+/// The string `watch` hands to `sh -c`: its words after its options (`-n`,
+/// `-q` and `-s` take a value), joined by blanks. `None` with no command.
+fn watch_command(args: &[String]) -> Option<String> {
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if a == "--" {
+            at += 1;
+            break;
+        }
+        if !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        let valued = matches!(a, "--interval" | "--equexit" | "--shotsdir")
+            || (!a.starts_with("--") && a.len() == 2 && a.ends_with(['n', 'q', 's']));
+        at += 1 + usize::from(valued);
+    }
+    let words = args.get(at..).unwrap_or_default();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input, quoted as one word, put in for `{}` or after it;
+/// with no template,
+/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
+/// same way. `::::` names input files, which the guard cannot read.
+fn parallel_commands(args: &[String]) -> Vec<String> {
+    const VALUED: &[&str] = &[
+        "-j",
+        "-P",
+        "-S",
+        "-a",
+        "-d",
+        "-E",
+        "-I",
+        "-N",
+        "-n",
+        "-L",
+        "-l",
+        "-s",
+        "-C",
+        "--jobs",
+        "--sshlogin",
+        "--arg-file",
+        "--delimiter",
+        "--colsep",
+        "--max-args",
+        "--max-lines",
+        "--max-chars",
+        "--tmpdir",
+        "--results",
+        "--joblog",
+        "--timeout",
+        "--delay",
+        "--retries",
+        "--tagstring",
+        "--workdir",
+        "--wd",
+        "--basefile",
+        "--return",
+        "--halt",
+        "--memfree",
+        "--load",
+        "--block",
+        "--sshloginfile",
+        "--env",
+    ];
+    let separator = |w: &str| matches!(w, ":::" | ":::+" | "::::" | "::::+" | "--");
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if separator(a) || !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        at += 1 + usize::from(VALUED.contains(&a));
+    }
+    let rest = args.get(at..).unwrap_or_default();
+    let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
+    let template = rest[..end].join(" ");
+    let mut inputs = Vec::new();
+    let mut files = false;
+    for word in &rest[end..] {
+        if separator(word) {
+            files = word.starts_with("::::");
+        } else if !files {
+            inputs.push(word.as_str());
+        }
+    }
+    if template.is_empty() {
+        return inputs.into_iter().map(str::to_string).collect();
+    }
+    let mut commands = vec![template.clone()];
+    for input in inputs {
+        // parallel quotes an input it puts into the template.
+        let input = quote_words(&[input.to_string()]);
+        commands.push(if template.contains("{}") {
+            template.replace("{}", &input)
+        } else {
+            format!("{template} {input}")
+        });
+    }
+    commands
+}
+
+/// Where an `env -S` option word puts the string env splits.
+enum SplitString<'a> {
+    /// The next word (`-S`, `--split-string`, a cluster ending in `S` such
+    /// as `-iS`, or an abbreviation such as `--split`).
+    NextWord,
+    /// The word itself (`-Scmd`, `-iScmd`, `--split-string=cmd`).
+    Attached(&'a str),
+}
+
+/// How an `env` option word packs the command env runs into one string;
+/// `None` for any other word.
+fn env_split_option(word: &str) -> Option<SplitString<'_>> {
+    if let Some(long) = word.strip_prefix("--") {
+        let (name, value) = long
+            .split_once('=')
+            .map_or((long, None), |(n, v)| (n, Some(v)));
+        return (!name.is_empty() && "split-string".starts_with(name))
+            .then_some(value.map_or(SplitString::NextWord, SplitString::Attached));
+    }
+    let flags = word.strip_prefix('-')?;
+    for (at, flag) in flags.char_indices() {
+        match flag {
+            'S' => {
+                let rest = &flags[at + 1..];
+                return Some(if rest.is_empty() {
+                    SplitString::NextWord
+                } else {
+                    SplitString::Attached(rest)
+                });
+            }
+            // An option that takes a value ends the cluster.
+            'u' | 'C' | 'P' | 'a' | 'L' | 'U' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The command an `env -S` (`--split-string`, or an attached form) in front
+/// of a simple command runs, as shell text the guard reads again: the words
+/// before the option, the split string in its place, then the words after
+/// it. env splits that string into the words it runs, at blanks and at the
+/// `\_` escape, and they may hold more env options, assignments or a shell
+/// `-c`, so the text is expanded like any other command. `None` when no
+/// launcher in front uses `-S`.
+fn env_split_command(tokens: &[String]) -> Option<String> {
+    let assignment = |t: &str| {
+        t.split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+    };
+    let mut idx = 0;
+    loop {
+        while tokens.get(idx).is_some_and(|t| assignment(t)) {
+            idx += 1;
+        }
+        let t = tokens.get(idx)?.as_str();
+        if is_prefix_launcher(t) {
+            idx = skip_launcher_options(t, tokens, idx + 1)?;
+            continue;
+        }
+        if launcher_name(t) != "env" {
+            return None;
+        }
+        idx += 1;
+        while let Some(a) = tokens.get(idx).map(String::as_str) {
+            if a == "--" {
+                idx += 1;
+                break;
+            }
+            if let Some(attached) = env_split_option(a) {
+                let (operand, after) = match attached {
+                    SplitString::Attached(text) => (text, idx + 1),
+                    SplitString::NextWord => (tokens.get(idx + 1)?.as_str(), idx + 2),
+                };
+                // env reads `\_` in the string as a field separator, which
+                // the shell kept inside one word (TSK-242 review round 15).
+                let operand = operand.replace("\\_", " ");
+                let rest = tokens.get(after..).unwrap_or_default();
+                return Some(format!(
+                    "{} {operand} {}",
+                    quote_words(&tokens[..idx]),
+                    quote_words(rest)
+                ));
+            }
+            if matches!(
+                a,
+                "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
+            ) {
+                idx += 2;
+            } else if a.starts_with('-') || assignment(a) {
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 /// The command-string argument of a shell invocation: the token after a `-c`,
 /// `--command`, or a clustered short flag that contains `c` (`-lc`, `-ec`).
-fn shell_c_argument(args: &[String]) -> Option<&String> {
+pub(crate) fn shell_c_argument(args: &[String]) -> Option<&String> {
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -4449,6 +5345,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     let chars: Vec<char> = command.chars().collect();
     let mut cur = String::new();
     let mut in_single = false;
+    let mut ansi_c = false;
     let mut in_double = false;
     // Open `((` arithmetic commands and `$[` arithmetic expansions.
     let mut arithmetic = 0usize;
@@ -4472,8 +5369,16 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         let c = chars[i];
         if in_single {
             cur.push(c);
+            // In ANSI-C quoting `$'...'` a backslash escapes the next character,
+            // a quote included.
+            if ansi_c && c == '\\' && i + 1 < chars.len() {
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
             if c == '\'' {
                 in_single = false;
+                ansi_c = false;
             }
             i += 1;
             continue;
@@ -4506,6 +5411,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         match c {
             '\'' => {
                 in_single = true;
+                ansi_c = cur.ends_with('$') && !cur.ends_with("\\$");
                 cur.push(c);
                 i += 1;
             }
@@ -5323,6 +6229,8 @@ struct Mentions {
     config_env: bool,
     /// Transport cannot trust config supplied by the command being judged.
     transport_env: bool,
+    /// `GIT_CONFIG` itself, not one of the `GIT_CONFIG_*` variables.
+    git_config_var: bool,
     /// A `git config` write whose order the guard does not model: anywhere
     /// on a line that is not flat, or nested in a substitution. Top-level
     /// writes on a flat line are followed in order.
@@ -5338,6 +6246,10 @@ impl LineFacts {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 config_env: mentions_config_env(command),
                 transport_env: transport_config_environment(command),
+                git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
+                    !command[at + word.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                }),
                 config_write: false,
             },
         };
@@ -5394,6 +6306,7 @@ impl LineFacts {
             location_unknown: self.mentions.location_var && !tracked,
             config_unknown: self.mentions.config_env || self.mentions.config_write,
             transport_env: self.mentions.transport_env,
+            git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
         }
@@ -5412,6 +6325,9 @@ struct Moves<'r> {
     /// The line may change where git reads its configuration from.
     config_unknown: bool,
     transport_env: bool,
+    /// The line mentions `GIT_CONFIG`, the file `git config` writes when
+    /// no scope option names one.
+    git_config_var: bool,
     /// The op is a modeled top-level command, so a branch move it makes
     /// holds for the rest of its `&&` list.
     narrows: bool,
@@ -5549,6 +6465,60 @@ fn check_git(
                     return;
                 }
             }
+        }
+    }
+
+    // A relative `--file` read from the directories git runs in: `git -C
+    // ~/.config/git config --file config alias.x y` writes the user's
+    // configuration (review round three); so does a call with no scope
+    // option when `GIT_CONFIG` names the file (review round eleven). The
+    // plain reading is judged per case below.
+    if sub == "config"
+        && ctx.policy.hook_integrity.is_active()
+        && config_writes_code_key(rest, None, None, None).is_none()
+    {
+        let targets = compose_targets(args, moved);
+        let dirs: Vec<PathBuf> = targets
+            .as_ref()
+            .map(|specs| {
+                specs
+                    .iter()
+                    .map(|spec| {
+                        spec.as_ref()
+                            .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        // OS text rule (issue 79): an inherited `GIT_CONFIG` that is not
+        // text names a file the guard cannot judge, never no file.
+        let inherited_config = match std::env::var("GIT_CONFIG") {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => Some("$GIT_CONFIG".to_string()),
+        };
+        let variable = git_config_variable(moved, inherited_config);
+        // The file a repository-scope write opens, read only for a write
+        // that sets a key not known to run nothing. Git takes the git
+        // directory from the environment it inherits too, as it takes
+        // `GIT_CONFIG` (review round 13); a relative `--file` above is still
+        // read from the directories git runs in, which that does not move.
+        let located = inherited_locations(|name| std::env::var(name))
+            .and_then(|inherited| compose_targets_with(args, moved, &inherited));
+        let worktree = parse_options(rest, &GIT_CONFIG_OPTIONS).has_long("--worktree");
+        let local = || {
+            located
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|specs| local_config_files(specs, cwd, worktree))
+        };
+        if let Some(found) =
+            config_writes_code_key(rest, Some(&dirs), variable.as_deref(), Some(&local))
+        {
+            out.push(hook_integrity_violation(
+                ctx.policy.hook_integrity,
+                config_write_message(&found),
+            ));
         }
     }
 
@@ -5826,7 +6796,7 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
                 "a global option or the subcommand",
             ));
         }
-        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+        if GLOBAL_VALUE_OPTIONS.contains(&t.as_str()) {
             if args.get(idx + 1).is_some_and(|v| has_substitution(v)) {
                 return Some(Unclassified::Subcommand("a global option"));
             }
@@ -6160,7 +7130,7 @@ fn expand_alias(
         if t == "-c" {
             config.extend(args.get(idx + 1).cloned());
             idx += 2;
-        } else if GIT_GLOBAL_VALUE_FLAGS.contains(&t) {
+        } else if GLOBAL_VALUE_OPTIONS.contains(&t) {
             idx += 2;
         } else {
             idx += 1;
@@ -6360,6 +7330,43 @@ struct TargetSpec {
 /// reads relative to the `-C` directory. `None` in the result is the session's
 /// own working directory. `Err` names what could not be resolved.
 fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
+    compose_targets_with(args, moved, &[])
+}
+
+/// The git location variables set in the environment git inherits, here
+/// the hook's own, as `(name, value)` pairs, read through `var`.
+///
+/// OS text rule (issue 79): a variable set to a value that is not text
+/// moves git somewhere the guard cannot read, so it leaves the location
+/// unresolved; only an unset variable is absent.
+fn inherited_locations(
+    var: impl Fn(&str) -> Result<String, std::env::VarError>,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let mut found = Vec::new();
+    for name in GIT_LOCATION_VARS {
+        match var(name) {
+            Ok(value) if value.is_empty() => {}
+            Ok(value) => found.push((*name, value)),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(format!(
+                    "`{name}` in the environment the hook runs in, which is not text"
+                ))
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// [`compose_targets`] for git that also inherits `inherited`: an inherited
+/// `GIT_DIR` is the git dir unless the op names one, and an inherited
+/// `GIT_COMMON_DIR` or `GIT_WORK_TREE` leaves the location unresolved, as
+/// it does on the command (TSK-242 review round 13).
+fn compose_targets_with(
+    args: &[String],
+    moved: &Moves<'_>,
+    inherited: &[(&str, String)],
+) -> Result<Vec<Option<TargetSpec>>, String> {
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
     if moved.location_unknown {
@@ -6371,6 +7378,13 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
         return Err(format!("`{name}` set earlier in the line"));
     }
     let mut git_dir: Option<String> = None;
+    for (name, value) in inherited {
+        if *name == "GIT_DIR" {
+            git_dir = Some(value.clone());
+        } else {
+            return Err(format!("`{name}` in the environment the hook runs in"));
+        }
+    }
     for (name, value) in launcher_env(moved.tokens)? {
         match name.as_str() {
             "GIT_DIR" => git_dir = Some(expand_word(&value, vars)?),
@@ -6397,7 +7411,7 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
                 git_dir = Some(expand_word(value()?, vars)?);
                 idx += 2;
             }
-            "-c" | "--config-env" | "--work-tree" | "--namespace" => idx += 2,
+            t if GLOBAL_VALUE_OPTIONS.contains(&t) => idx += 2,
             _ => {
                 if let Some(v) = t.strip_prefix("--git-dir=") {
                     git_dir = Some(expand_word(v, vars)?);
@@ -6419,7 +7433,7 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
         for next in &dash_c {
             dir = match dir {
                 Some(d) => Some(join_path(&d, next)),
-                None if next.starts_with('/') => Some(next.clone()),
+                None if host_absolute(next) => Some(host_path(next)),
                 None => None,
             };
         }
@@ -6428,8 +7442,8 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
                 path: join_path(&d, g),
                 git_dir: true,
             }),
-            (Some(g), None) if g.starts_with('/') => Some(TargetSpec {
-                path: g.clone(),
+            (Some(g), None) if host_absolute(g) => Some(TargetSpec {
+                path: host_path(g),
                 git_dir: true,
             }),
             (None, Some(d)) if d.is_empty() => None,
@@ -6592,6 +7606,13 @@ fn judge_git_sub(
                     policy.hook_integrity,
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
+            } else if policy.hook_integrity.is_active() {
+                if let Some(found) = config_writes_code_key(rest, None, None, None) {
+                    out.push(hook_integrity_violation(
+                        policy.hook_integrity,
+                        config_write_message(&found),
+                    ));
+                }
             }
         }
         "update-ref" => check_update_ref(rest, ctx, out),
@@ -6633,7 +7654,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
                 }
                 idx += 2;
             }
-            "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
+            t if GLOBAL_VALUE_OPTIONS.contains(&t) => {
                 if (t == "-C" || t == "--git-dir") && retarget.is_none() {
                     retarget = args.get(idx + 1).cloned();
                 }
@@ -6710,6 +7731,500 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
+}
+
+/// Where a `git config --file` path sits, as [`config_file_scope`] judges it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileScope {
+    /// A file git reads at user or system scope by its known name.
+    User,
+    /// A repository's own configuration: the `config` or `config.worktree`
+    /// of a git directory, or a `.gitmodules` or `.lfsconfig`.
+    Repository,
+    /// Any other file. git may read it for every repository: the system
+    /// file of another install prefix (`/opt/homebrew/etc/gitconfig`), a
+    /// file the user's configuration includes, or one `GIT_CONFIG_GLOBAL` or
+    /// `GIT_CONFIG_SYSTEM` names (review round eleven).
+    Other,
+    /// A relative path judged without the directory git runs in; the pass
+    /// that knows the directory decides it.
+    Undecided,
+}
+
+/// Where a `git config --file` path sits. The user's and the system's files
+/// by name, `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` (by default
+/// `~/.config/git/config`), `/etc/gitconfig` and the files
+/// `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name, spelled with `~`,
+/// `$HOME` or an absolute path, are [`FileScope::User`]; so is a relative
+/// path that is exactly `.gitconfig` or `.config/git/config`, and one that
+/// climbs with `..`. A path filled in at run time is [`FileScope::Other`].
+/// Only a repository's own
+/// configuration, judged through its symbolic links, is
+/// [`FileScope::Repository`]: git reads the system file under whatever
+/// prefix it was built with, and the files a configuration includes, so a
+/// list of user and system files always misses one (review round eleven,
+/// the same shape as the key list of round ten). With the directories git
+/// runs in, `dirs`, a relative path is read from each of them (review round
+/// three); an empty `dirs` means the directory is unknown.
+fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
+    let file = file.replace('\\', "/");
+    let home = crate::portable_path::user_home();
+    // OS text rule (issue 79): a home that is not text is not spelled into
+    // the path; the `~` or `$HOME` word stays, which reads as `Other`.
+    let expanded = match home.as_deref().and_then(Path::to_str) {
+        Some(home) => {
+            if file == "~" || file == "$HOME" || file == "${HOME}" {
+                home.to_string()
+            } else if let Some(rest) = file
+                .strip_prefix("~/")
+                .or_else(|| file.strip_prefix("$HOME/"))
+                .or_else(|| file.strip_prefix("${HOME}/"))
+            {
+                format!("{}/{rest}", home.trim_end_matches('/'))
+            } else {
+                file.clone()
+            }
+        }
+        None => file.clone(),
+    };
+    if expanded.contains(['$', '`']) || expanded.starts_with('~') {
+        return FileScope::Other;
+    }
+    let mut user_paths = vec![PathBuf::from("/etc/gitconfig")];
+    if let Some(home) = &home {
+        user_paths.push(home.join(".gitconfig"));
+        user_paths.push(home.join(".config/git/config"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        user_paths.push(PathBuf::from(xdg).join("git/config"));
+    }
+    for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        if let Some(path) = std::env::var_os(name).filter(|p| !p.is_empty()) {
+            user_paths.push(PathBuf::from(path));
+        }
+    }
+    // The user files compare as text. One whose path is not text never
+    // equals a path that is, and every path judged below is text.
+    let mut user: Vec<String> = user_paths
+        .iter()
+        .filter_map(|p| p.to_str())
+        .map(|p| lexical(p).to_lowercase())
+        .collect();
+    user.extend(
+        user_paths
+            .iter()
+            .filter_map(|p| real(p))
+            .filter_map(|p| p.to_str().map(str::to_lowercase)),
+    );
+    let scope_of = |path: &Path| {
+        // OS text rule (issue 79): a path that is not text, as written or
+        // through its links, is not shown to be a repository's own file.
+        let Some(path) = path.to_str() else {
+            return FileScope::Other;
+        };
+        // A link the guard cannot follow (a broken one, which git creates
+        // the file behind) is not shown to be a repository's own file.
+        // Any other failure (a `.git` file in place of a directory, where
+        // git cannot write either) is judged by the path as written.
+        let real = match super::edit_guard::normalized(Path::new(path), true) {
+            Ok(real) => real,
+            Err(_)
+                if std::fs::symlink_metadata(path)
+                    .is_ok_and(|meta| meta.file_type().is_symlink()) =>
+            {
+                return FileScope::Other;
+            }
+            Err(_) => PathBuf::from(lexical(path)),
+        };
+        let Some(real_text) = real.to_str() else {
+            return FileScope::Other;
+        };
+        let is_user = user.contains(&lexical(path).to_lowercase())
+            || user.contains(&real_text.to_lowercase());
+        if is_user {
+            FileScope::User
+        } else if repository_config_file(&real, true) == Some(true) {
+            // A git directory the guard cannot read is not shown to be one.
+            FileScope::Repository
+        } else {
+            FileScope::Other
+        }
+    };
+    // A drive path is as absolute as a rooted one (review round 14).
+    if host_absolute(&expanded) {
+        return scope_of(Path::new(&expanded));
+    }
+    let trimmed = expanded.trim_start_matches("./");
+    if trimmed.split('/').any(|part| part == "..")
+        || matches!(
+            lexical(trimmed).to_lowercase().as_str(),
+            ".gitconfig" | ".config/git/config"
+        )
+    {
+        return FileScope::User;
+    }
+    // Without the directory, only the name can show a repository's file.
+    let named_repository =
+        repository_config_file(Path::new(&lexical(trimmed)), false) == Some(true);
+    match dirs {
+        Some(dirs) if !dirs.is_empty() => dirs
+            .iter()
+            .map(|dir| scope_of(&dir.join(trimmed)))
+            .max_by_key(|scope| match scope {
+                FileScope::User => 3,
+                FileScope::Other | FileScope::Undecided => 2,
+                FileScope::Repository => 1,
+            })
+            .unwrap_or(FileScope::Other),
+        _ if named_repository => FileScope::Repository,
+        None => FileScope::Undecided,
+        Some(_) => FileScope::Other,
+    }
+}
+
+/// A path with `.` and `..` resolved by its text.
+fn lexical(text: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in text.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    if text.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// A path through its symbolic links, one component at a time, with a
+/// missing remainder kept as written; `None` when a link cannot be followed.
+fn real(path: &Path) -> Option<PathBuf> {
+    super::edit_guard::normalized(path, true).ok()
+}
+
+/// Whether `path` is a repository's own configuration, which git reads only
+/// for that repository: a `.gitmodules`, a `.lfsconfig` (which only Git LFS
+/// reads, for the repository it sits in), or a `config` or `config.worktree`
+/// in a git directory. A git directory is one named `.git` (with its
+/// `worktrees/<name>` and `modules/...` directories), or one holding `HEAD`
+/// beside `objects` or `commondir`, as a bare repository does; that one is
+/// read from the disk only with `on_disk`. Names compare without case, as
+/// on the case-insensitive file systems git runs on. `None` when the disk
+/// cannot answer: each caller reads that as the answer that refuses.
+fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
+    // OS text rule (issue 79): the names compare as text. A name that is
+    // not text is none of the ASCII names below, as its bytes are not.
+    let text = |part: &std::ffi::OsStr| part.to_str().map(str::to_lowercase);
+    let name = path.file_name().and_then(text);
+    if matches!(name.as_deref(), Some(".gitmodules" | ".lfsconfig")) {
+        return Some(true);
+    }
+    if !matches!(name.as_deref(), Some("config" | "config.worktree")) {
+        return Some(false);
+    }
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    let parts: Vec<Option<String>> = dir.components().map(|c| text(c.as_os_str())).collect();
+    let is = |part: &Option<String>, name: &str| part.as_deref() == Some(name);
+    if let Some(at) = parts.iter().rposition(|part| is(part, ".git")) {
+        let inner = &parts[at + 1..];
+        if inner.is_empty()
+            || (inner.len() == 2 && is(&inner[0], "worktrees"))
+            || inner.first().is_some_and(|part| is(part, "modules"))
+        {
+            return Some(true);
+        }
+    }
+    if !on_disk {
+        return Some(false);
+    }
+    // Kept strict: an entry whose type cannot be read leaves the answer
+    // unknown, never a "no".
+    let kind = |name: &str, want_dir: bool| crate::absence::is_kind(&dir.join(name), want_dir);
+    Some(kind("HEAD", false)? && (kind("objects", true)? || kind("commondir", false)?))
+}
+
+/// Where a `git config` write that [`config_writes_code_key`] judged lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigPlace {
+    /// `--global`, `--system`, or a file git reads at that scope by name.
+    UserOrSystem,
+    /// A file outside a repository's own configuration, by its spelling.
+    File(String),
+    /// The repository configuration a default, `--local` or `--worktree`
+    /// write opens, which leads through a symbolic link to the second file
+    /// (review round twelve).
+    Linked(String, String),
+    /// The repository configuration of a call whose repository the guard
+    /// cannot locate, and why.
+    Unlocated(String),
+}
+
+/// The repository configuration a `git config` write with no `--file`,
+/// `--blob`, `--global` or `--system` opens: the `config` file of the git
+/// directory it selects, which is the common directory's, and with
+/// `--worktree` also the `config.worktree` of the worktree's own git
+/// directory. `targets` are the places [`compose_targets`] read from `-C`,
+/// `--git-dir` and `GIT_DIR`, relative to `cwd`; a git directory named
+/// outright that the guard cannot open is judged by its path, and a
+/// directory outside any repository opens nothing, since git refuses the
+/// write there.
+fn local_config_files(
+    targets: &[Option<TargetSpec>],
+    cwd: &Path,
+    worktree: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    for spec in targets {
+        let (path, git_dir) = spec.as_ref().map_or((cwd.to_path_buf(), false), |s| {
+            (cwd.join(&s.path), s.git_dir)
+        });
+        let repo = if git_dir {
+            git2::Repository::open_ext(
+                &path,
+                git2::RepositoryOpenFlags::NO_SEARCH,
+                std::iter::empty::<&std::ffi::OsStr>(),
+            )
+        } else {
+            git2::Repository::discover(&path)
+        };
+        let (own, common) = match repo {
+            Ok(repo) => (repo.path().to_path_buf(), repo.commondir().to_path_buf()),
+            // A named git directory the guard cannot open has no file to
+            // read through its links, and a `.git` in its name proves
+            // nothing (TSK-242 review round 14).
+            Err(_) if git_dir => {
+                return Err(format!(
+                    "the git directory `{}`, which the guard cannot open",
+                    path.display()
+                ))
+            }
+            Err(_) => continue,
+        };
+        files.push(common.join("config"));
+        if worktree {
+            files.push(own.join("config.worktree"));
+        }
+    }
+    files.dedup();
+    Ok(files)
+}
+
+/// What [`config_writes_code_key`] found: the key, the section a rename
+/// makes, or `--edit`; the value it is set to; what that setting can do
+/// (`None` for an edit or a rename); and where it lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigWrite {
+    found: String,
+    value: String,
+    kind: Option<ConfigKind>,
+    place: ConfigPlace,
+}
+
+/// The file a `git config` call with no scope option writes when
+/// `GIT_CONFIG` names one: set on the call, earlier on the line, or in the
+/// session's environment (`inherited`). A line that mentions the variable
+/// without a value the guard can read gives `$GIT_CONFIG`, which is judged
+/// as a file filled in at run time.
+fn git_config_variable(moved: &Moves<'_>, inherited: Option<String>) -> Option<String> {
+    if let Some((_, value)) = leading_env_assignments(moved.tokens)
+        .into_iter()
+        .rev()
+        .find(|(name, _)| *name == "GIT_CONFIG")
+    {
+        return Some(value.to_string());
+    }
+    if let Some(Val::Known(value)) = moved.vars.and_then(|vars| vars.get("GIT_CONFIG")) {
+        return Some(value.clone());
+    }
+    if moved.git_config_var {
+        return Some("$GIT_CONFIG".to_string());
+    }
+    inherited.filter(|value| !value.is_empty())
+}
+
+/// The key a `git config` invocation sets that is not known to be safe
+/// ([`git::config_kind`]), the section a rename makes unsafe, or an
+/// interactive edit, when the write lands outside a repository's own
+/// configuration: `--global`, `--system`, or a `--file`, `--blob` or
+/// `GIT_CONFIG` file that [`config_file_scope`] does not show to be a
+/// repository's. Repository scope, unsets and every read stay allowed.
+/// Every repository reads the user and system scopes, so a key git runs
+/// later, or one the guard does not know, refuses there (review round ten);
+/// git reads its system file under any install prefix and the files a
+/// configuration includes, so only a repository's own file is known to be
+/// read for that repository alone (review round eleven). A default,
+/// `--local` or `--worktree` write is judged by the file it opens, which
+/// `local` resolves ([`local_config_files`]) only once the setting is known
+/// to need it: git follows a symbolic link there, so a repository whose
+/// `config` links to the user's file takes the setting for every repository
+/// (review round twelve). `variable` is the file `GIT_CONFIG` names
+/// ([`git_config_variable`]).
+fn config_writes_code_key(
+    rest: &[String],
+    dirs: Option<&[PathBuf]>,
+    variable: Option<&str>,
+    local: Option<&dyn Fn() -> Result<Vec<PathBuf>, String>>,
+) -> Option<ConfigWrite> {
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    if config_only_reads(rest) {
+        return None;
+    }
+    let files = parsed.values_of('f', "--file");
+    let blobs = parsed.values_of('\0', "--blob");
+    let named_scope = any_long(&["--global", "--system", "--local", "--worktree"]);
+    let mut place = None;
+    if any_long(&["--global", "--system"]) {
+        place = Some(ConfigPlace::UserOrSystem);
+    }
+    let unscoped = files.is_empty() && blobs.is_empty() && !named_scope;
+    let judged = files
+        .iter()
+        .copied()
+        .chain(variable.filter(|_| unscoped))
+        .map(|file| (file, config_file_scope(file, dirs)));
+    for (file, scope) in judged {
+        match scope {
+            FileScope::User => place = Some(ConfigPlace::UserOrSystem),
+            FileScope::Other if place.is_none() => {
+                place = Some(ConfigPlace::File(file.to_string()));
+            }
+            _ => {}
+        }
+    }
+    // git cannot write a blob; one named on a write is judged as the
+    // file it is not shown to be.
+    if let Some(blob) = blobs.first().filter(|_| place.is_none()) {
+        place = Some(ConfigPlace::File((*blob).to_string()));
+    }
+    let subcommand = parsed.operands.first().copied().filter(|word| {
+        matches!(
+            *word,
+            "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
+        )
+    });
+    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    // What the write sets that is not known to run nothing: an edit, a
+    // section renamed into one whose keys run code (`harmless` to `alias`),
+    // or a key. Unsets and removals set nothing.
+    let (found, value, kind) =
+        if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
+            ("--edit", "", None)
+        } else if any_long(&["--rename-section"]) || subcommand == Some("rename-section") {
+            let new = operands
+                .get(1)
+                .filter(|new| !git::config_section_is_safe(new))?;
+            (*new, "", None)
+        } else if any_long(&["--unset", "--unset-all", "--remove-section"])
+            || matches!(subcommand, Some("unset" | "remove-section"))
+        {
+            return None;
+        } else {
+            let key = operands.first()?;
+            let value = operands.get(1).copied().unwrap_or_default();
+            let kind = git::config_kind(key, value);
+            if kind == ConfigKind::Safe {
+                return None;
+            }
+            (*key, value, Some(kind))
+        };
+    // A default, `--local` or `--worktree` write opens the repository's own
+    // file, and git follows a symbolic link there: judged through it, the
+    // file may be the user's or another one every repository reads (review
+    // round twelve). It is read only for a setting that can run code.
+    let repository_scope =
+        files.is_empty() && blobs.is_empty() && !any_long(&["--global", "--system"]);
+    if place.is_none() && repository_scope {
+        place = match local.map(|resolve| resolve()) {
+            Some(Ok(paths)) => paths.iter().find_map(|path| {
+                // OS text rule (issue 79): a configuration path that is not
+                // text is not shown to be the repository's own file.
+                let Some(text) = path.to_str() else {
+                    return Some(ConfigPlace::File(path.display().to_string()));
+                };
+                (config_file_scope(text, None) != FileScope::Repository).then(|| {
+                    let link = std::fs::symlink_metadata(path)
+                        .is_ok_and(|meta| meta.file_type().is_symlink());
+                    if !link {
+                        return ConfigPlace::File(text.to_string());
+                    }
+                    let real = real(path).map_or_else(
+                        || "a link the guard cannot follow".to_string(),
+                        |real| format!("`{}`", real.display()),
+                    );
+                    ConfigPlace::Linked(text.to_string(), real)
+                })
+            }),
+            Some(Err(why)) => Some(ConfigPlace::Unlocated(why)),
+            None => None,
+        };
+    }
+    Some(ConfigWrite {
+        found: found.to_string(),
+        value: value.to_string(),
+        kind,
+        place: place?,
+    })
+}
+
+/// Why a write that [`config_writes_code_key`] found refuses, built from
+/// what it judged: the setting, its value, what that value does, and where
+/// it lands.
+fn config_write_message(write: &ConfigWrite) -> String {
+    let place = match &write.place {
+        ConfigPlace::UserOrSystem => "the user or system configuration".to_string(),
+        ConfigPlace::File(file) => format!(
+            "`{file}`, which is not a repository's own configuration and may be one git reads for every repository (another install's system file, an included file, or one `GIT_CONFIG_GLOBAL` names)"
+        ),
+        ConfigPlace::Linked(file, real) => format!(
+            "`{file}`, the repository configuration it opens, which is a symbolic link to {real}, not a repository's own configuration, so git writes the setting where every repository may read it"
+        ),
+        ConfigPlace::Unlocated(why) => format!(
+            "the configuration of a repository the guard cannot locate ({why}), which may be a symbolic link to a file every repository reads"
+        ),
+    };
+    let remedy = match &write.place {
+        ConfigPlace::Linked(..) => {
+            "Replace the link with the repository's own file, or ask the operator to set it"
+        }
+        ConfigPlace::Unlocated(_) => {
+            "Run it with the repository named literally (`git -C <path>`), or ask the operator to set it"
+        }
+        _ => "Set it with `--local` for this repository, or ask the operator to set it",
+    };
+    let ConfigWrite {
+        found, value, kind, ..
+    } = write;
+    let why = match kind {
+        None if found == "--edit" => format!(
+            "`git config --edit` would open {place}, where a setting can make a later git command run a program the guards never see"
+        ),
+        None => format!(
+            "`git config` would rename a section to `{found}` in {place}, and settings in that section can make a later git command run a program the guards never see"
+        ),
+        Some(ConfigKind::Command) if found.to_lowercase().starts_with("include") => format!(
+            "`git config` would set `{found}` in {place}; that pulls the settings of `{value}` into later git commands, out of the guards' sight"
+        ),
+        Some(ConfigKind::Command) if found.to_lowercase().starts_with("alias.") => format!(
+            "`git config` would set `{found}` in {place}; that defines a git command for later sessions, and a `!` value makes it run a program the guards never see"
+        ),
+        Some(ConfigKind::Command) => format!(
+            "`git config` would set `{found}` to `{value}` in {place}; a later git command runs that value as a program the guards never see"
+        ),
+        Some(_) => format!(
+            "`git config` would set `{found}` to `{value}` in {place}; the guard does not know that setting to run nothing, and such a setting can make a later git command run a program the guards never see"
+        ),
+    };
+    format!("{why}. {remedy}")
 }
 
 /// Does this `git config` invocation only read? A get, list or single-name
@@ -8205,6 +9720,84 @@ struct ShellWord {
     unquoted_prefix: usize,
 }
 
+/// Up to `max` digits of `radix` read from the front of `chars` without
+/// consuming a non-digit: the value, or `None` when no digit follows.
+fn take_digits(chars: &mut std::str::Chars<'_>, radix: u32, max: usize) -> Option<u32> {
+    let mut value = None;
+    for _ in 0..max {
+        let Some(digit) = chars.clone().next().and_then(|c| c.to_digit(radix)) else {
+            break;
+        };
+        chars.next();
+        value = Some(value.unwrap_or(0) * radix + digit);
+    }
+    value
+}
+
+/// The text of an ANSI-C quoted string `$'...'`, read from after the opening
+/// quote to the closing one, with the escapes bash and zsh decode: `\a \b \e
+/// \E \f \n \r \t \v \\ \' \" \?`, octal `\NNN`, hex `\xHH`, `\uHHHH`,
+/// `\UHHHHHHHH` and `\cX`. A byte above 0x7f reads as the character of that
+/// number; a NUL is dropped. An unknown escape keeps its backslash.
+fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            break;
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let Some(e) = chars.next() else {
+            break;
+        };
+        let decoded = match e {
+            'a' => Some('\u{7}'),
+            'b' => Some('\u{8}'),
+            'e' | 'E' => Some('\u{1b}'),
+            'f' => Some('\u{c}'),
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            'v' => Some('\u{b}'),
+            '\\' | '\'' | '"' | '?' => Some(e),
+            'x' => take_digits(chars, 16, 2).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            'u' => take_digits(chars, 16, 4).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            'U' => take_digits(chars, 16, 8).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            '0'..='7' => {
+                let mut v = e.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    let Some(d) = chars.clone().next().and_then(|c| c.to_digit(8)) else {
+                        break;
+                    };
+                    chars.next();
+                    v = v * 8 + d;
+                }
+                char::from_u32(v & 0xff)
+            }
+            'c' => chars
+                .next()
+                .map(|x| char::from_u32(u32::from(x) & 0x1f).unwrap_or('\0')),
+            other => {
+                out.push('\\');
+                out.push(other);
+                continue;
+            }
+        };
+        match decoded {
+            Some('\0') => {}
+            Some(d) => out.push(d),
+            // `\x` with no digit stays as written.
+            None => {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -8212,11 +9805,33 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut in_double = false;
     let mut started = false;
     let mut prefix_open = true;
-    let mut unquoted_prefix = 0;
+    let mut unquoted_prefix: usize = 0;
+    let mut dollar_pending = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
+        // A `$` just before this character, outside quotes: `$'...'` is
+        // ANSI-C quoting and `$"..."` locale quoting, so the `$` is not text.
+        let dollar = std::mem::take(&mut dollar_pending);
         match c {
+            '\'' if dollar && !in_single && !in_double => {
+                cur.pop();
+                if prefix_open {
+                    unquoted_prefix = unquoted_prefix.saturating_sub(1);
+                }
+                cur.push_str(&ansi_c_text(&mut chars));
+                started = true;
+                prefix_open = false;
+            }
+            '"' if dollar && !in_single && !in_double => {
+                cur.pop();
+                if prefix_open {
+                    unquoted_prefix = unquoted_prefix.saturating_sub(1);
+                }
+                in_double = true;
+                started = true;
+                prefix_open = false;
+            }
             '\'' if !in_double => {
                 in_single = !in_single;
                 started = true;
@@ -8266,6 +9881,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
+                dollar_pending = c == '$' && !in_single && !in_double;
             }
         }
     }
@@ -8353,7 +9969,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 None => return Some((t, &tokens[idx + 1..])),
             }
         }
-        if basename(t) == "env" {
+        if launcher_name(t) == "env" {
             idx += 1;
             // `env [-i] [-u NAME] [VAR=val]... command` — skip its own options
             // and assignments up to the wrapped command.
@@ -8362,6 +9978,12 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 if a == "--" {
                     idx += 1;
                     break;
+                }
+                // `env -S 'cmd'` runs the command packed in that string,
+                // which [`expand_commands`] reads as its own segments; the
+                // string is never a program name.
+                if env_split_option(a).is_some() {
+                    return None;
                 }
                 if matches!(
                     a,
@@ -8400,8 +10022,9 @@ fn is_duration(word: &str) -> bool {
 /// --chdir[=]DIR` moves to, in order, and the first launcher word the
 /// guard cannot read with certainty: an `env` option it does not know, an
 /// `env -C` without a directory, or a `timeout` without a duration. `env
-/// -S`, which packs the command into one word, is a stated limit.
-fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
+/// -S`, which packs the command into one word, ends this walk;
+/// [`expand_commands`] reads the packed command as its own segments.
+pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
     let assignment = |t: &str| {
         t.split_once('=')
             .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -8415,7 +10038,7 @@ fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
         let Some(t) = tokens.get(idx).map(String::as_str) else {
             return (dirs, None);
         };
-        let name = basename(t);
+        let name = launcher_name(t);
         if is_prefix_launcher(t) {
             let Some(next) = skip_launcher_options(t, tokens, idx + 1) else {
                 return (dirs, None);
@@ -8518,13 +10141,34 @@ fn env_options<'t>(
     Ok(idx)
 }
 
+/// The name a launcher word runs as: its base name, or for the GNU names
+/// Homebrew installs with a `g` prefix (`gtimeout`, `gnice`, `gnohup`,
+/// `gstdbuf`, `gtime`, `genv`, `gxargs`, `gfind`) the name without it, so
+/// the command after one is read as after the plain launcher (TSK-242
+/// review round 15). [`gnu_prefixed`] tells the closed rule which it was.
+pub(crate) fn launcher_name(t: &str) -> &str {
+    let name = basename(t);
+    match name.strip_prefix('g') {
+        Some(
+            plain @ ("timeout" | "nice" | "nohup" | "stdbuf" | "time" | "env" | "xargs" | "find"),
+        ) => plain,
+        _ => name,
+    }
+}
+
+/// Whether `t` is a GNU-prefixed launcher name ([`launcher_name`]).
+pub(crate) fn gnu_prefixed(t: &str) -> bool {
+    launcher_name(t) != basename(t)
+}
+
 /// `true` for the launchers that run the simple command after them: the
 /// `command`, `builtin` and `exec` builtins, `nohup`, `time` in its
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
-/// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form.
+/// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
+/// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
 fn is_prefix_launcher(t: &str) -> bool {
     matches!(
-        basename(t),
+        launcher_name(t),
         "command"
             | "builtin"
             | "exec"
@@ -8548,7 +10192,7 @@ fn is_prefix_launcher(t: &str) -> bool {
 /// so a non-executing form such as `nohup --help git push` is judged as the
 /// command after it and may be refused, which fails closed.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
-    let launcher = basename(launcher);
+    let launcher = launcher_name(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if a == "--" {
             // The options end; `timeout`'s duration still follows.
@@ -8609,7 +10253,7 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
 }
 
 /// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
-fn is_shell(name: &str) -> bool {
+pub(crate) fn is_shell(name: &str) -> bool {
     matches!(name, "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash")
 }
 
@@ -8621,15 +10265,12 @@ fn is_identifier(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Global git flags that consume the following token.
-const GIT_GLOBAL_VALUE_FLAGS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
-
 /// Find the git subcommand, skipping global flags (`git -C path commit …`).
 pub(super) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     while idx < args.len() {
         let t = &args[idx];
-        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+        if GLOBAL_VALUE_OPTIONS.contains(&t.as_str()) {
             idx += 2;
         } else if t.starts_with('-') {
             idx += 1;
@@ -9046,6 +10687,7 @@ mod tests {
             let mut run = RunDirs {
                 dirs: vec![dir.path().to_path_buf()],
                 unknown: None,
+                home: crate::portable_path::user_home(),
             };
             assert_eq!(reach_dirs("~", &mut run), vec![expected.clone()]);
             assert_eq!(
@@ -9871,6 +11513,31 @@ mod tests {
     }
 
     #[test]
+    fn global_options_with_a_value_word_are_skipped() {
+        // Issue 120: every git global option that takes the next word as its
+        // value is skipped before the subcommand is read, so the value is
+        // never judged as the subcommand and a push behind one is still seen.
+        let p = default_policy();
+        for cmd in [
+            "git --attr-source HEAD push --force origin main",
+            "git --shallow-file x push --force origin main",
+            "git --config-env color.ui=C push --force origin main",
+            "git --namespace n --attr-source=HEAD push --force origin main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.force_push_protected"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "C=never git --config-env color.ui=C log -1",
+            "git --attr-source HEAD log -1",
+            "git --shallow-file x status",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
     fn test_delete_protected_via_push_blocked() {
         let p = default_policy();
         for cmd in [
@@ -10538,6 +12205,731 @@ mod tests {
     }
 
     #[test]
+    fn keys_not_known_safe_refuse_at_user_and_system_scope() {
+        // Review round ten: a list of code-running keys missed keys git runs
+        // (`difftool.<tool>.path`, `gpg.ssh.defaultKeyCommand` and others),
+        // so a key not known to run nothing refuses at this scope.
+        let p = default_policy();
+        for cmd in [
+            "git config --global difftool.vimdiff.path /tmp/p.sh",
+            "git config --global gpg.ssh.defaultKeyCommand /tmp/p.sh",
+            "git config --global core.alternateRefsCommand /tmp/p.sh",
+            "git config --global mergetool.vimdiff.path /tmp/p.sh",
+            "git config --global imap.tunnel /tmp/p.sh",
+            "git config --global instaweb.httpd /tmp/p.sh",
+            "git config --global browser.chrome.path /tmp/p.sh",
+            "git config --global man.less.path /tmp/p.sh",
+            "git config --global submodule.foo.update '!sh /tmp/p.sh'",
+            "git config --global pager.log less",
+            "git config --global safe.directory '*'",
+            "git config --global --rename-section old.x alias",
+            "git config --system some.new.key x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --local difftool.vimdiff.path /tmp/p.sh",
+            "git config --global user.name Ada",
+            "git config --global submodule.foo.update checkout",
+            "git config --global pager.log true",
+            "git config --global pull.rebase true",
+            "git config --global push.autoSetupRemote true",
+            "git config --global core.autocrlf input",
+            "git config --global color.ui auto",
+            "git config --global commit.gpgsign true",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn numeric_values_git_runs_as_programs_refuse() {
+        // Review round thirteen: git reads `08` as no number, so to
+        // `core.fsmonitor` and `pager.<command>` it is the program `08`; so
+        // are `+08`, `008` and `08k`. `0x10` and `00` are numbers to git.
+        let p = default_policy();
+        for cmd in [
+            "git config --global core.fsmonitor 08",
+            "git config --global core.fsmonitor +08",
+            "git config --global core.fsmonitor 008",
+            "git config --global core.fsmonitor 08k",
+            "git config --global pager.log 08",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global core.fsmonitor true",
+            "git config --global core.fsmonitor 0x10",
+            "git config --global core.fsmonitor 00",
+            "git config --global pager.log 2",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn env_split_string_and_nested_bodies_are_judged() {
+        // Review round fourteen: `env -S` packs the command it runs into one
+        // string, and a shell body can sit inside another body or an `eval`.
+        // Each is read as the commands it runs, never as a program name.
+        let p = default_policy();
+        for cmd in [
+            "env -S \"git config --global alias.x '!id'\"",
+            "/usr/bin/env -S \"git config --global alias.x '!id'\"",
+            "env -S'git config --global alias.x !id'",
+            "env --split-string='git config --global alias.x !id'",
+            "env --split-string 'git config --global alias.x !id'",
+            "env --split 'git config --global alias.x !id'",
+            "env -iS 'git config --global alias.x !id'",
+            "env -u X -S 'git config --global alias.x !id'",
+            "env -S 'git config --global' alias.x '!id'",
+            "nice env -S 'git config --global alias.x !id'",
+            "env -S \"sh -c 'git config --global alias.x !id'\"",
+            "env -S \"env -S 'git config --global alias.x !id'\"",
+            "bash -c \"bash -c 'git config --global alias.x !id'\"",
+            "eval \"bash -c 'git config --global alias.x !id'\"",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "env -S 'echo hi'",
+            "env -S 'git config --global user.name Test'",
+            "bash -c \"bash -c 'git status'\"",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+        // The packed string is never returned as a program.
+        let words: Vec<String> = ["env", "-S", "git status"].map(String::from).to_vec();
+        assert!(strip_launchers(&words).is_none());
+        assert_eq!(
+            expand_commands("env -S 'git status'")[1..],
+            ["\"env\" git status".to_string()]
+        );
+        // A body nested past the limit refuses instead of passing unread.
+        let mut deep = "git status".to_string();
+        for _ in 0..12 {
+            deep = format!("eval {}", deep.replace('\\', "\\\\").replace(' ', "\\ "));
+        }
+        assert!(
+            expand_commands(&deep).iter().any(|s| s == NESTING_UNREAD),
+            "{deep}"
+        );
+    }
+
+    #[test]
+    fn launcher_table_forms_carry_their_command_string() {
+        // Review round fourteen sweep: every launcher in the walker's table
+        // that can carry a command string, in front of a shell `-c`, an
+        // `eval` or an `env -S`, has that string judged.
+        let p = default_policy();
+        let key = "git config --global alias.x !id";
+        for launcher in [
+            "command",
+            "builtin",
+            "exec",
+            "nohup",
+            "time",
+            "nice -n 5",
+            "timeout 5",
+            "stdbuf -o0",
+            "ionice -c 3",
+            "caffeinate",
+            "xcrun",
+            "env",
+            "env -C /tmp",
+            "FOO=1",
+        ] {
+            for carrier in [
+                format!("sh -c '{key}'"),
+                format!("bash -lc '{key}'"),
+                format!("eval '{key}'"),
+                format!("env -S '{key}'"),
+                format!("env -S \"sh -c '{key}'\""),
+            ] {
+                let cmd = format!("{launcher} {carrier}");
+                let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+                assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn launchers_that_run_a_command_carry_it_to_the_git_checks() {
+        // Review round fourteen, residual launchers: the string `flock -c`,
+        // `script -c` and `watch` hand to a shell, the commands `parallel`
+        // builds, the command words after `flock FILE`, `script FILE`,
+        // `setsid` and `unbuffer`, and git or a command string under
+        // `xargs` and `find -exec`.
+        let p = default_policy();
+        let refused = [
+            "flock /tmp/l -c 'git config --global alias.x !id'",
+            "flock -w 5 /tmp/l --command 'git config --global alias.x !id'",
+            "flock /tmp/l git config --global alias.x '!id'",
+            "script -c 'git config --global alias.x !id' /dev/null",
+            "script -qc 'git config --global alias.x !id' /dev/null",
+            "script --command='git config --global alias.x !id' /dev/null",
+            "script -q /dev/null git config --global alias.x '!id'",
+            "script -q /dev/null sh -c 'git config --global alias.x !id'",
+            "watch 'git config --global alias.x !id'",
+            "watch -n 1 git config --global alias.x '!id'",
+            "parallel ::: 'git config --global alias.x !id'",
+            "parallel git config --global alias.x ::: '!id'",
+            "parallel 'git config --global {} !id' ::: alias.x",
+            "parallel -j 2 sh -c ::: 'git config --global alias.x !id'",
+            "parallel git config --global alias.x -- '!id'",
+            "setsid sh -c 'git config --global alias.x !id'",
+            "setsid -f git config --global alias.x '!id'",
+            "unbuffer sh -c 'git config --global alias.x !id'",
+            "unbuffer -p git config --global alias.x '!id'",
+            "xargs sh -c 'git config --global alias.x !id'",
+            "xargs -I{} git config --global alias.x '!id'",
+            "find . -exec sh -c 'git config --global alias.x !id' \\;",
+            "find . -execdir git config --global alias.x '!id' \\;",
+            "find . -name x -ok git config --global alias.x '!id' {} +",
+        ];
+        for cmd in refused {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "flock /tmp/l -c 'git status'",
+            "script -q /dev/null git status",
+            "script -q /dev/null git -c color.ui=never log",
+            "watch git status",
+            "parallel echo ::: a b",
+            "setsid git config --global user.name Test",
+            "xargs -I{} git config --global user.name Test",
+            "find . -name '*.rs' -exec ls {} \\;",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+        // `xargs` and `find -exec` hand over only git or a command string:
+        // another program's arguments come from input the guard cannot see.
+        assert_eq!(expand_commands("printf x | xargs rm").len(), 2);
+        assert_eq!(expand_commands("find . -exec rm {} +").len(), 1);
+    }
+
+    #[test]
+    fn code_running_keys_refuse_at_user_and_system_scope() {
+        // TSK-242: a key whose value git runs later, set where every
+        // repository reads it, makes a later git command run a program no
+        // guard sees. Repository scope and reads stay allowed.
+        let p = default_policy();
+        for cmd in [
+            "git config --global alias.co '!sudo id'",
+            "git config --global Alias.co checkout",
+            "git config --system core.pager 'less; id'",
+            "git config --global core.editor vim",
+            "git config --global core.sshCommand 'ssh -i k'",
+            "git config --global core.fsmonitor ./hook",
+            "git config --global credential.helper store",
+            "git config --global credential.https://example.invalid.helper store",
+            "git config --global diff.external ./d",
+            "git config --global diff.tool.command ./d",
+            "git config --global filter.x.clean ./c",
+            "git config --global filter.x.smudge ./s",
+            "git config --global include.path ~/evil.inc",
+            "git config --global includeIf.gitdir:~/w/.path ~/evil.inc",
+            "git config --global init.templateDir ~/t",
+            "git config --global sequence.editor ./e",
+            "git config --global gpg.program ./g",
+            "git config --global --add alias.st status",
+            "git config set --global alias.co checkout",
+            "git config --file ~/.gitconfig alias.co checkout",
+            "git config -f ~/.config/git/config core.pager cat",
+            "git config --global --edit",
+            // Review round one: a rename into a code-running section, and
+            // the system file by name.
+            "git config --global --rename-section harmless alias",
+            "git config rename-section --global harmless.x credential.x",
+            "git config --file /etc/gitconfig core.pager cat",
+            "git config --file .gitconfig alias.x y",
+            "git config --file ../.gitconfig alias.x y",
+            "git config --file $HOME/.gitconfig alias.x y",
+            // Review round eleven: a file that is not a repository's own
+            // configuration may be one git reads for every repository, so a
+            // project fixture refuses with it.
+            "git config --file fixture.gitconfig alias.x y",
+            "git config --file fixtures/.gitconfig alias.x y",
+            "git config --file fixtures/git/config alias.x y",
+            "git config --file fixtures/gitconfig alias.x y",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global user.name x",
+            "git config --global user.email x@example.invalid",
+            "git config --global init.defaultBranch main",
+            "git config --global --get alias.co",
+            "git config --global --list",
+            "git config --global --unset alias.co",
+            "git config alias.co checkout",
+            "git config --local core.pager cat",
+            "git config --file .git/config alias.co checkout",
+            "git config get --global core.editor",
+            "git config --file fixtures/.gitconfig user.name x",
+            "git config --global --rename-section old.x user.x",
+            "git config --global --remove-section alias",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        // Review round three: a relative `--file` is read from the directory
+        // git runs in. Nothing is written; only the verdict is read. The
+        // home is the one the guard reads: `HOME`, else `USERPROFILE`.
+        let home = crate::portable_path::user_home().unwrap();
+        let user_dir = home.join(".config/git");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        for (cmd, cwd) in [
+            (
+                "git config --file config alias.x y".to_string(),
+                user_dir.as_path(),
+            ),
+            (
+                "git config --file .config/git/config alias.x y".to_string(),
+                home.as_path(),
+            ),
+            (
+                format!(
+                    "git -C {} config --file config alias.x y",
+                    crate::portable_path::slashed(&user_dir)
+                ),
+                elsewhere.path(),
+            ),
+            (
+                "git -C \"$D\" config --file config alias.x y".to_string(),
+                elsewhere.path(),
+            ),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        // Review round eleven: outside a repository's own configuration,
+        // only a key known to run nothing passes.
+        for cmd in [
+            "git config --file config alias.x y",
+            "git config --file fixtures/.gitconfig alias.x y",
+        ] {
+            let v = at(cmd, elsewhere.path());
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        let v = at("git config --file config user.name x", elsewhere.path());
+        assert!(!has_rule(&v, "git.hook_integrity"), "{v:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_files_outside_a_repository_refuse_keys_not_known_safe() {
+        // Review round eleven: git reads its system file under the prefix it
+        // was built with (`/opt/homebrew/etc/gitconfig`), and the files a
+        // configuration includes, so only a repository's own configuration
+        // takes a key not known to run nothing. Nothing is written; only the
+        // verdict is read.
+        let p = default_policy();
+        let temp = tempfile::tempdir().unwrap();
+        let git_dir = |dir: &Path| {
+            std::fs::create_dir_all(dir.join("objects")).unwrap();
+            std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        };
+        let repo = temp.path().join("repo");
+        git_dir(&repo.join(".git"));
+        let bare = temp.path().join("bare.git");
+        git_dir(&bare);
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let system = elsewhere.join("gitconfig");
+        std::fs::write(&system, "").unwrap();
+        // A repository whose configuration is a link to another file.
+        let linked = temp.path().join("linked");
+        git_dir(&linked.join(".git"));
+        std::os::unix::fs::symlink(&system, linked.join(".git").join("config")).unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        let repo_config = [".git", "config"].join("/");
+        for cmd in [
+            "git config --file /opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file=/opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config -f /opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config -f/opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file /usr/local/etc/gitconfig core.pager cat".to_string(),
+            "git config --file /opt/local/etc/gitconfig core.editor vim".to_string(),
+            "git config --file /Library/Developer/CommandLineTools/usr/share/git-core/gitconfig alias.x y".to_string(),
+            "git config --file 'C:/Program Files/Git/etc/gitconfig' alias.x y".to_string(),
+            "git config --file ~/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file ~/.gitconfig.local alias.x '!id'".to_string(),
+            "git config --file /tmp/scratch.cfg alias.x '!id'".to_string(),
+            "git config --file /tmp/scratch.cfg mystery.key 1".to_string(),
+            "git config --file /tmp/scratch.cfg --edit".to_string(),
+            "git config --blob HEAD:x alias.x y".to_string(),
+            format!("git config --file {} alias.x '!id'", system.display()),
+            format!(
+                "git -C {} config --file {repo_config} alias.x '!id'",
+                linked.display()
+            ),
+            "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'".to_string(),
+            "env GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'".to_string(),
+            "export GIT_CONFIG=/opt/homebrew/etc/gitconfig; git config alias.x '!id'"
+                .to_string(),
+            "GIT_CONFIG=\"$X\" git config set alias.x '!id'".to_string(),
+        ] {
+            let v = at(&cmd, &repo);
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            format!("git config --file {repo_config} alias.co checkout"),
+            format!("git config -f ./{repo_config} core.pager cat"),
+            "git config --file .git/config.worktree alias.co checkout".to_string(),
+            "git config --file .git/worktrees/w/config.worktree alias.co checkout".to_string(),
+            "git config --file .git/modules/sub/config alias.co checkout".to_string(),
+            "git config -f .gitmodules submodule.a.branch main".to_string(),
+            "git config -f .lfsconfig lfs.url https://example.invalid/lfs".to_string(),
+            "git config --file /tmp/scratch.cfg user.name Ada".to_string(),
+            "git config --file /opt/homebrew/etc/gitconfig --get alias.x".to_string(),
+            "git config --file /opt/homebrew/etc/gitconfig --unset alias.x".to_string(),
+            format!(
+                "git config --file {}/config alias.co checkout",
+                bare.display()
+            ),
+            format!(
+                "git config --file {}/{repo_config} alias.co checkout",
+                repo.display()
+            ),
+            "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"
+                .to_string(),
+            format!("GIT_CONFIG={repo_config} git config alias.co checkout"),
+            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout".to_string(),
+        ] {
+            let v = at(&cmd, &repo);
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        // The refusal names the file and what the value does.
+        let v = at(
+            "git config --file /opt/homebrew/etc/gitconfig core.pager 'sh x'",
+            &repo,
+        );
+        let text = &v
+            .iter()
+            .find(|v| v.rule == "git.hook_integrity")
+            .unwrap()
+            .message;
+        assert!(
+            text.contains("`/opt/homebrew/etc/gitconfig`")
+                && text.contains("runs that value as a program"),
+            "{text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)] // One fixture tree serves every shape the round found.
+    fn repository_scope_writes_are_judged_by_the_file_git_opens() {
+        // Review round twelve: a default, `--local` or `--worktree` write
+        // opens the selected git directory's configuration, and git follows
+        // a symbolic link there. The links point at a file in the temporary
+        // directory; nothing is written, only the verdict is read.
+        let p = default_policy();
+        let temp = tempfile::tempdir().unwrap();
+        let temp_path = std::fs::canonicalize(temp.path()).unwrap();
+        let system = temp_path.join("etc-elsewhere").join("gitconfig");
+        std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+        std::fs::write(&system, "").unwrap();
+        let git_dir = |dir: &Path, link: bool| {
+            std::fs::create_dir_all(dir.join("objects")).unwrap();
+            std::fs::create_dir_all(dir.join("refs").join("heads")).unwrap();
+            std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            if link {
+                std::os::unix::fs::symlink(&system, dir.join("config")).unwrap();
+            } else {
+                std::fs::write(dir.join("config"), "[core]\n").unwrap();
+            }
+        };
+        let repo = temp_path.join("repo");
+        git_dir(&repo.join(".git"), false);
+        let modules = repo.join(".git").join("modules");
+        git_dir(&modules.join("sub2"), true);
+        std::fs::create_dir_all(modules.join("sub3").join("objects")).unwrap();
+        let other = temp_path.join("other");
+        git_dir(&other.join(".git"), false);
+        std::os::unix::fs::symlink(&system, other.join(".git").join("config.worktree")).unwrap();
+        let bare = temp_path.join("gd");
+        git_dir(&bare, true);
+        let bare2 = temp_path.join("gd2");
+        std::fs::create_dir_all(bare2.join("objects")).unwrap();
+        std::fs::write(bare2.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let linked = temp_path.join("linked");
+        git_dir(&linked.join(".git"), true);
+        // A linked worktree, whose `.git` is a file naming its git directory.
+        let worktree = temp_path.join("wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git").display()),
+        )
+        .unwrap();
+        let broken = temp_path.join("broken");
+        git_dir(&broken.join(".git"), false);
+        std::fs::remove_file(broken.join(".git").join("config")).unwrap();
+        std::os::unix::fs::symlink(temp_path.join("absent"), broken.join(".git").join("config"))
+            .unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        let (s, t) = (system.display(), temp_path.display());
+        for (cmd, cwd) in [
+            (format!("ln -s {s} .git/modules/sub3/config"), &repo),
+            (format!("ln -s {t}/config .git/modules/sub3/"), &repo),
+            (format!("ln -sf -t .git/modules/sub3 {t}/config"), &repo),
+            (format!("mv {t}/l .git/modules/sub3/config"), &repo),
+            (
+                "git --git-dir=.git/modules/sub2 config core.fsmonitor ./m".to_string(),
+                &repo,
+            ),
+            (
+                "GIT_DIR=.git/modules/sub2 git config core.sshCommand ./m".to_string(),
+                &repo,
+            ),
+            (format!("ln -s {s} {t}/other/.git/config.worktree"), &repo),
+            (
+                format!("git -C {t}/other config --worktree core.fsmonitor ./m"),
+                &repo,
+            ),
+            (format!("ln -s {s} {t}/gd2/config"), &repo),
+            (
+                format!("GIT_DIR={t}/gd git config core.fsmonitor ./m"),
+                &repo,
+            ),
+            (format!("git --git-dir={t}/gd config core.pager ./m"), &repo),
+            (format!("GIT_DIR={t}/gd3 git config core.pager ./m"), &repo),
+            ("git config core.sshCommand ./m".to_string(), &linked),
+            ("git config --local alias.x '!id'".to_string(), &linked),
+            ("git config set credential.helper ./m".to_string(), &linked),
+            ("git config --edit".to_string(), &linked),
+            (
+                format!("git -C {t}/linked config core.fsmonitor ./m"),
+                &repo,
+            ),
+            ("git config core.pager ./m".to_string(), &broken),
+            (
+                "cd \"$D\" && git config core.sshCommand ./m".to_string(),
+                &repo,
+            ),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        for (cmd, cwd) in [
+            (
+                "git config --file .git/config alias.co checkout".to_string(),
+                &repo,
+            ),
+            (
+                format!("git --git-dir={t}/repo/.git config alias.co checkout"),
+                &repo,
+            ),
+            ("git config core.pager cat".to_string(), &repo),
+            (
+                "git config --file .git/config alias.co checkout".to_string(),
+                &worktree,
+            ),
+            ("git config --worktree alias.co checkout".to_string(), &repo),
+            ("git config user.name Ada".to_string(), &linked),
+            ("git config core.fsmonitor true".to_string(), &linked),
+            ("git config --unset core.sshCommand".to_string(), &linked),
+            ("git config core.sshCommand".to_string(), &linked),
+            ("ln -s README.md docs-link".to_string(), &repo),
+            (format!("cp .git/modules/sub2/config {t}/backup"), &repo),
+            ("cd \"$D\" && git config user.name Ada".to_string(), &repo),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                !has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        // The refusal names the link and where it leads.
+        let v = at("git config core.sshCommand ./m", &linked);
+        let text = &v
+            .iter()
+            .find(|v| v.rule == "git.hook_integrity")
+            .unwrap()
+            .message;
+        assert!(
+            text.contains("symbolic link to")
+                && text.contains(&system.display().to_string())
+                && text.contains("Replace the link"),
+            "{text}"
+        );
+    }
+
+    /// Issue 79 on the TSK-242 paths: an inherited location variable that is
+    /// not text leaves the location unresolved, never unset.
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_location_that_is_not_text_is_unresolved() {
+        use std::os::unix::ffi::OsStringExt;
+        let found = inherited_locations(|name| match name {
+            "GIT_DIR" => Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(b"/tmp/\xff/.git".to_vec()),
+            )),
+            _ => Err(std::env::VarError::NotPresent),
+        });
+        assert!(found.unwrap_err().contains("`GIT_DIR`"));
+        let found = inherited_locations(|name| match name {
+            "GIT_DIR" => Ok("/tmp/repo/.git".to_string()),
+            "GIT_WORK_TREE" => Ok(String::new()),
+            _ => Err(std::env::VarError::NotPresent),
+        });
+        assert_eq!(found.unwrap(), [("GIT_DIR", "/tmp/repo/.git".to_string())]);
+    }
+
+    /// Issue 79 on the TSK-242 paths: a directory that is not text was read
+    /// through its lossy spelling, which names no file, so its `.git/config`
+    /// read as the repository's own by name alone and its links were never
+    /// followed. It is not shown to be the repository's own file.
+    #[cfg(unix)]
+    #[test]
+    fn a_config_below_a_directory_that_is_not_text_is_not_the_repositorys() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/caf\xff".to_vec()));
+        assert_eq!(
+            config_file_scope(".git/config", Some(std::slice::from_ref(&dir))),
+            FileScope::Other
+        );
+        let text = PathBuf::from("/tmp/cafe");
+        assert_eq!(
+            config_file_scope(".git/config", Some(std::slice::from_ref(&text))),
+            FileScope::Repository
+        );
+    }
+
+    /// Issue 79 on the TSK-242 paths: a bare git directory whose `HEAD`
+    /// cannot be read is neither shown to be one nor shown not to be one.
+    #[cfg(unix)]
+    #[test]
+    fn an_unread_git_directory_is_neither_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("bare");
+        std::fs::create_dir_all(bare.join("objects")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), bare.join("HEAD")).unwrap();
+        assert_eq!(repository_config_file(&bare.join("config"), true), None);
+        assert_eq!(
+            repository_config_file(&bare.join("config"), false),
+            Some(false)
+        );
+        std::fs::remove_file(bare.join("HEAD")).unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(
+            repository_config_file(&bare.join("config"), true),
+            Some(true)
+        );
+        std::fs::remove_file(bare.join("HEAD")).unwrap();
+        assert_eq!(
+            repository_config_file(&bare.join("config"), true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn git_config_variable_names_the_file_a_scopeless_write_lands_in() {
+        // Review round eleven: with no scope option, `git config` writes the
+        // file `GIT_CONFIG` names, set on the call, on the line, or in the
+        // session's environment.
+        let words =
+            |list: &[&str]| -> Vec<String> { list.iter().map(ToString::to_string).collect() };
+        let assigned = words(&["GIT_CONFIG=/x/gitconfig", "git", "config", "a.b", "c"]);
+        let plain = words(&["git", "config", "a.b", "c"]);
+        let moved = |tokens: &'_ [String], mentions: bool| -> String {
+            let moves = Moves {
+                cwd: Cwd::Paths(vec![String::new()]),
+                vars: None,
+                location_unknown: false,
+                config_unknown: mentions,
+                transport_env: false,
+                git_config_var: mentions,
+                narrows: false,
+                tokens,
+            };
+            format!(
+                "{:?}|{:?}|{:?}",
+                git_config_variable(&moves, None),
+                git_config_variable(&moves, Some("/y/gitconfig".to_string())),
+                git_config_variable(&moves, Some(String::new())),
+            )
+        };
+        assert_eq!(
+            moved(&assigned, true),
+            r#"Some("/x/gitconfig")|Some("/x/gitconfig")|Some("/x/gitconfig")"#
+        );
+        assert_eq!(
+            moved(&plain, true),
+            r#"Some("$GIT_CONFIG")|Some("$GIT_CONFIG")|Some("$GIT_CONFIG")"#
+        );
+        assert_eq!(moved(&plain, false), r#"None|Some("/y/gitconfig")|None"#);
+    }
+
+    #[test]
+    fn known_booleans_take_a_boolean_and_the_message_follows_the_value() {
+        // Review round eleven: a match on part of a name read the switches
+        // beside the tool programs as programs, with a false reason.
+        let p = default_policy();
+        for cmd in [
+            "git config --global difftool.prompt false",
+            "git config --global mergetool.keepBackup true",
+            "git config --global uploadpack.allowFilter true",
+            "git config --global rebase.rescheduleFailedExec false",
+            "git config --global pager.log 2",
+            "git config --global mergetool.vimdiff.trustExitCode yes",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global difftool.vimdiff.path /tmp/p.sh",
+            "git config --global difftool.vimdiff.cmd 'sh /tmp/p.sh'",
+            "git config --global mergetool.vimdiff.cmd 'sh /tmp/p.sh'",
+            "git config --global gpg.ssh.defaultKeyCommand /tmp/p.sh",
+            "git config --global pager.log 'sh /tmp/p.sh'",
+            "git config --global difftool.prompt 'sh /tmp/p.sh'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        let message = |cmd: &str| {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .find(|v| v.rule == "git.hook_integrity")
+                .map(|v| v.message)
+                .unwrap()
+        };
+        let program = message("git config --global difftool.vimdiff.path /tmp/p.sh");
+        assert!(
+            program.contains("runs that value as a program"),
+            "{program}"
+        );
+        let unknown = message("git config --global difftool.prompt 'sh /tmp/p.sh'");
+        assert!(
+            unknown.contains("does not know that setting to run nothing")
+                && !unknown.contains("runs that value"),
+            "{unknown}"
+        );
+    }
+
+    #[test]
     fn test_config_hooks_path_writes_blocked() {
         // Every spelling that writes, unsets or can rewrite core.hooksPath, in
         // every scope, including a quoted value that only looks like a
@@ -10638,6 +13030,25 @@ mod tests {
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// Every writer the table lists is judged by git-guard through the
+    /// shared judge: each one writing the repository configuration or into
+    /// the hooks directory refuses (review round 23; exec-guard has the
+    /// same test for its classes).
+    #[test]
+    fn every_writer_entry_is_judged() {
+        let p = default_policy();
+        let config = [".git", "config"].join("/");
+        let hooks = [".git", "hooks"].join("/");
+        for (name, cmd) in crate::security::unresolved::writer_spellings(&config, &hooks) {
+            let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{name}: {cmd}: {v:?}");
+        }
+        for (name, cmd) in crate::security::unresolved::writer_spellings("out/notes.txt", "out") {
+            let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{name}: {cmd}: {v:?}");
         }
     }
 
@@ -10858,20 +13269,29 @@ mod tests {
             assert_eq!(read.targets, writes, "{segment}");
             assert!(read.unread.is_empty(), "{segment}");
         }
-        // ANSI-C or locale quoting with a `>`: every word is judged by name.
-        for segment in [
-            "printf '%s\\n' $'it\\'s' > .codeflow/policy.json",
-            "printf x > $'policy.json'",
-            "printf x >$\"policy.json\"",
+        // ANSI-C and locale quoting are decoded first, so the target is the
+        // path the shell passes (round six of TSK-242).
+        for (segment, target) in [
+            (
+                "printf '%s\\n' $'it\\'s' > .codeflow/policy.json",
+                ".codeflow/policy.json",
+            ),
+            ("printf x > $'policy.json'", "policy.json"),
+            ("printf x >$\"policy.json\"", "policy.json"),
+            (
+                "printf x > $'.codeflow/\\x70olicy.json'",
+                ".codeflow/policy.json",
+            ),
+            ("printf x > $HOME/$'\\x2ezshrc'", "$HOME/.zshrc"),
+            ("printf x > $'a'$'\\056b'", "a.b"),
         ] {
             let read = redirect_writes(segment);
-            assert!(read.targets.is_empty(), "{segment}");
-            assert!(
-                read.unread.iter().any(|w| word_could_name(w).is_some()),
-                "{segment}: {:?}",
-                read.unread
-            );
+            assert_eq!(read.targets, vec![target.to_string()], "{segment}");
+            assert!(read.unread.is_empty(), "{segment}: {:?}", read.unread);
         }
+        // `\x3e` in ANSI-C quotes is a quoted `>`, never a redirection.
+        let quoted = redirect_writes("printf %s $'\\x3e' policy.json");
+        assert!(quoted.targets.is_empty() && quoted.unread.is_empty());
         let quoted_read = redirect_writes("printf '%s' $'a\\tb'");
         assert!(quoted_read.unread.is_empty() && quoted_read.targets.is_empty());
         for segment in [
@@ -10905,6 +13325,46 @@ mod tests {
     /// From a directory the guard cannot determine, a word is read by its
     /// names alone: one that ends an enforcement path, or leads into a
     /// whole enforcement directory, could name it; build output cannot.
+    /// ANSI-C `$'...'` and locale `$"..."` quoting are decoded in the words
+    /// every guard reads (TSK-242 round six): `\x2e`, octal, `\u` and the
+    /// letter escapes, with the quote and backslash escapes inside, and the
+    /// splitter keeps `\'` inside `$'...'` from ending the quote early.
+    #[test]
+    fn ansi_c_and_locale_quotes_are_decoded_in_words() {
+        for (segment, words) in [
+            ("echo $'\\x2ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\056zshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\u002ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\U0000002ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'a\\tb\\nc'", vec!["echo", "a\tb\nc"]),
+            ("echo $'it\\'s'", vec!["echo", "it's"]),
+            ("echo $'a\\\\b'", vec!["echo", "a\\b"]),
+            ("echo $'\\x3e'", vec!["echo", ">"]),
+            ("echo $'\\cA'", vec!["echo", "\u{1}"]),
+            ("echo $'\\q'", vec!["echo", "\\q"]),
+            ("echo $'\\x'", vec!["echo", "\\x"]),
+            ("echo ~/$'.zs'$'hrc'", vec!["echo", "~/.zshrc"]),
+            ("echo ~/'.zs''hrc'", vec!["echo", "~/.zshrc"]),
+            ("echo ~/.z\"s\"hrc", vec!["echo", "~/.zshrc"]),
+            ("echo ~/.zshr$\"c\"", vec!["echo", "~/.zshrc"]),
+            ("echo \"$'x'\"", vec!["echo", "$'x'"]),
+            ("echo \\$'x'", vec!["echo", "$x"]),
+        ] {
+            assert_eq!(shell_tokens(segment), words, "{segment}");
+        }
+        // An escaped quote inside `$'...'` does not hide the next command.
+        let segments = expand_commands("echo $'\\'' ; touch ~/.zshrc; echo '");
+        assert!(
+            segments.iter().any(|s| s.trim() == "touch ~/.zshrc"),
+            "{segments:?}"
+        );
+        // A decoded `>` is a quoted word, never a redirection.
+        assert_eq!(
+            command_argv("printf %s $'\\x3e' out"),
+            vec!["printf", "%s", ">", "out"]
+        );
+    }
+
     #[test]
     fn test_word_could_name_reads_names_alone() {
         for word in [
@@ -13625,7 +16085,6 @@ mod tests {
             "R=/scratch; git -C \"\\$R\" commit -m x",
             "R=/scratch; git -C \\$R commit -m x",
             "R=\\$X; git -C \"$R\" commit -m x",
-            "git -C $'/scratch' commit -m x",
         ] {
             let r = report(cmd, "feat/s");
             assert!(
@@ -13634,6 +16093,16 @@ mod tests {
                 r.violations
             );
         }
+        // ANSI-C quoting is decoded (TSK-242 round six): `$'/scratch'` is
+        // the path `/scratch`, judged as that path.
+        assert_eq!(
+            report("git -C $'/scratch' commit -m x", "feat/s")
+                .violations
+                .len(),
+            report("git -C /scratch commit -m x", "feat/s")
+                .violations
+                .len()
+        );
     }
 
     // T112-2: launcher environment (`env`, `command env`) is modeled; an
@@ -13895,6 +16364,73 @@ mod tests {
         // Nothing there: unresolved.
         assert!(read("missing", false).is_none());
         assert!(read("$R", false).is_none());
+    }
+
+    /// `install` writes its destination; the sources it copies from stay in
+    /// place (review round 19).
+    #[test]
+    fn install_writes_only_its_destination() {
+        let words = |line: &str| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        for (line, written) in [
+            ("-m 644 a/rc /tmp/bak", vec!["/tmp/bak", "/tmp/bak/rc"]),
+            ("-o root -g wheel a/rc b", vec!["b", "b/rc"]),
+            ("-ma=r a/rc b", vec!["b", "b/rc"]),
+            ("--mode 644 a/rc b", vec!["b", "b/rc"]),
+            ("-t dir a/rc b/x", vec!["dir/rc", "dir/x"]),
+            ("--target-directory=dir a/rc", vec!["dir/rc"]),
+            ("-Dt dir a/rc", vec!["dir/rc"]),
+            ("-D a/rc deep/b", vec!["deep/b", "deep/b/rc"]),
+            ("-d one two", vec!["one", "two"]),
+            ("-- -m b", vec!["b", "b/-m"]),
+        ] {
+            assert_eq!(
+                copy_destinations(
+                    "install",
+                    &crate::security::unresolved::copy_read("install", &words(line)).unwrap()
+                ),
+                written,
+                "{line}"
+            );
+        }
+        // A known option that takes a word, after the destination, does
+        // not move it; a file an option writes is a destination too; an
+        // unlisted option makes every operand one (review round 22).
+        let config = [".git", "config"].join("/");
+        for (cmd, line, written) in [
+            (
+                "rsync",
+                format!("-a p {config} --exclude foo"),
+                vec![config.clone()],
+            ),
+            (
+                "rsync",
+                "-a p d/ --log-file=L".to_string(),
+                vec!["L".to_string(), "d/".to_string()],
+            ),
+            (
+                "cp",
+                format!("p {config} --suffix .bak"),
+                vec![
+                    "p".to_string(),
+                    config.clone(),
+                    ".bak".to_string(),
+                    ".bak".to_string(),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                copy_destinations(
+                    cmd,
+                    &crate::security::unresolved::copy_read(cmd, &words(&line)).unwrap()
+                ),
+                written,
+                "{cmd} {line}"
+            );
+        }
     }
 }
 

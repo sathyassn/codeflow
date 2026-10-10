@@ -69,8 +69,20 @@ def command(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+PUBLISHED_CHANGELOG = "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- public\n"
+
+
+def fragment_name(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", label.casefold())[:48].strip("-") or "entry"
+
+
 class Repository:
-    def __init__(self) -> None:
+    """A fixture repository. `carrier` is where `pending` writes pending
+    entries: one fragment per entry under changelog.d/ (ADR-0082), or the
+    written section of CHANGELOG.md, the carrier `assemble` produces."""
+
+    def __init__(self, carrier: str = "written") -> None:
+        self.carrier = carrier
         self.temp = tempfile.TemporaryDirectory(prefix="codeflow-release-")
         self.root = Path(self.temp.name)
         command(self.root, "git", "init", "-q", "-b", "main")
@@ -186,7 +198,21 @@ class Repository:
 
     def pending(self, version: str, entries: list[tuple[str, ...]]) -> None:
         """Pending entries as (impact, label) or (impact, label, body): each
-        is written `- **Label.** body`, identified by its label (R-92)."""
+        is written `- **Label.** body`, identified by its label (R-92). With
+        fragments, each entry is its own fragment under `### Changed`, named
+        after its label, and the written changelog holds no pending section."""
+        if self.carrier == "fragments":
+            for old in (self.root / "changelog.d").glob("*.md"):
+                old.unlink()
+            names: set[str] = set()
+            for index, entry in enumerate(entries):
+                name = fragment_name(entry[1])
+                name = name if name not in names else f"{name}-{index}"
+                names.add(name)
+                self.fragment(name, [entry])
+            self.write("CHANGELOG.md", PUBLISHED_CHANGELOG)
+            self.write_stamps(version)
+            return
         body = "\n".join(
             f"<!-- codeflow:release-impact {entry[0]} -->\n- **{entry[1]}.**"
             + (f" {entry[2]}" if len(entry) > 2 else "")
@@ -198,6 +224,33 @@ class Repository:
             f"# Changelog\n\n## [{version}]\n\n{body}\n## [2.0.0] - 2026-01-01\n\n- public\n",
         )
         self.write_stamps(version)
+
+    def fragment(self, name: str, entries: list[tuple[str, ...]], kind: str = "Changed") -> str:
+        """Write `changelog.d/<name>.md` holding `entries` under one kind
+        heading, as (impact, label) or (impact, label, body); return its path."""
+        body = "\n\n".join(
+            f"<!-- codeflow:release-impact {entry[0]} -->\n- **{entry[1]}.**"
+            + (f" {entry[2]}" if len(entry) > 2 else "")
+            for entry in entries
+        )
+        path = f"changelog.d/{name}.md"
+        self.write(path, f"### {kind}\n\n{body}\n")
+        return path
+
+    def pending_files(self) -> list[Path]:
+        """The files that carry the pending entries."""
+        if self.carrier == "fragments":
+            return sorted((self.root / "changelog.d").glob("*.md"))
+        return [self.root / "CHANGELOG.md"]
+
+    def pending_source(self) -> str:
+        return "".join(path.read_text() for path in self.pending_files())
+
+    def replace_pending(self, old: str, new: str) -> None:
+        """Replace `old` in the one file that carries it."""
+        hits = [path for path in self.pending_files() if old in path.read_text()]
+        assert len(hits) == 1, (old, hits)
+        hits[0].write_text(hits[0].read_text().replace(old, new))
 
     def args(self, **values: object) -> argparse.Namespace:
         defaults = {
@@ -837,8 +890,10 @@ class ReleaseImpactFieldTests(unittest.TestCase):
 
 
 class PullRequestTests(unittest.TestCase):
+    carrier = "written"
+
     def setUp(self) -> None:
-        self.repo = Repository()
+        self.repo = Repository(self.carrier)
 
     def tearDown(self) -> None:
         self.repo.cleanup()
@@ -1036,7 +1091,7 @@ class PullRequestTests(unittest.TestCase):
 
     def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
         for work_name, target_name in [("alpha", "beta"), ("beta", "alpha")]:
-            repo = Repository()
+            repo = Repository(self.carrier)
             try:
                 base = repo.target
                 command(repo.root, "git", "switch", "-q", "-c", work_name)
@@ -1798,8 +1853,10 @@ class EntryEditTests(unittest.TestCase):
     """TSK-106 AC-3: a changed body or impact under an existing label is an
     edit whose net change is assessed, never wording by default."""
 
+    carrier = "written"
+
     def setUp(self) -> None:
-        self.repo = Repository()
+        self.repo = Repository(self.carrier)
 
     def tearDown(self) -> None:
         self.repo.cleanup()
@@ -1855,8 +1912,7 @@ class EntryEditTests(unittest.TestCase):
         # other edit of the entry, at its impact.
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the run command and its alias")])
         base = self.repo.commit("feat: add a flag")
-        text = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", text.replace("the run command and", "the run\n  command  and"))
+        self.repo.replace_pending("the run command and", "the run\n  command  and")
         head = self.repo.commit("docs: rewrap the entry")
         with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
             self.check(base, head, self.repo.body("none"))
@@ -1869,8 +1925,7 @@ class EntryEditTests(unittest.TestCase):
         before = f"Run:\n  {fence}python\n  if approved:\n      audit()\n      publish()\n  {fence}"
         self.repo.pending("2.1.0", [("minor", "Publication", before)])
         base = self.repo.commit("feat: publication")
-        text = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", text.replace("      publish()", "  publish()"))
+        self.repo.replace_pending("      publish()", "  publish()")
         head = self.repo.commit("docs: reindent the example")
         with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
             self.check(base, head, self.repo.body("none"))
@@ -1894,7 +1949,7 @@ class EntryEditTests(unittest.TestCase):
         }
         for why, (before, after) in cases.items():
             with self.subTest(why=why):
-                repo = Repository()
+                repo = Repository(self.carrier)
                 try:
                     repo.pending("2.1.0", [("minor", "Publication", before)])
                     base = repo.commit("feat: publication")
@@ -1914,14 +1969,15 @@ class EntryEditTests(unittest.TestCase):
         # as part of the entry, so changing or deleting it is an edit.
         self.repo.pending("2.1.0", [("minor", "Publication", "First line.\nRequires human approval.")])
         base = self.repo.commit("feat: publication")
-        text = (self.repo.root / "CHANGELOG.md").read_text()
+        [carrier] = [path for path in self.repo.pending_files() if "Publication" in path.read_text()]
+        text = carrier.read_text()
         self.assertIn("\nRequires human approval.", text)
         for change in ["Publishes automatically without human approval.", None]:
             with self.subTest(change=change):
                 if change is None:
-                    self.repo.write("CHANGELOG.md", text.replace("\nRequires human approval.", ""))
+                    carrier.write_text(text.replace("\nRequires human approval.", ""))
                 else:
-                    self.repo.write("CHANGELOG.md", text.replace("Requires human approval.", change))
+                    carrier.write_text(text.replace("Requires human approval.", change))
                 head = self.repo.commit("docs: change the continuation")
                 with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
                     self.check(base, head, self.repo.body("none"))
@@ -1943,8 +1999,11 @@ class EntryEditTests(unittest.TestCase):
     def test_moving_an_entry_between_headings_is_release_neutral(self) -> None:
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
         base = self.repo.commit("feat: add a flag")
-        text = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", text.replace("## [2.1.0]\n", "## [2.1.0]\n\n### Added\n", 1))
+        if self.carrier == "fragments":
+            self.repo.replace_pending("### Changed", "### Added")
+        else:
+            text = (self.repo.root / "CHANGELOG.md").read_text()
+            self.repo.write("CHANGELOG.md", text.replace("## [2.1.0]\n", "## [2.1.0]\n\n### Added\n", 1))
         head = self.repo.commit("docs: add a heading")
         result = self.check(base, head, self.repo.body("none"))
         self.assertEqual((result["added"], result["edited"], result["withdrawn"]), ([], [], []))
@@ -1982,8 +2041,10 @@ class TypedRepairTests(unittest.TestCase):
     """TSK-106 AC-6 (R-95): a PR repairs a base that fails its own release
     state only by changing the changelog and the coupled version stamps."""
 
+    carrier = "written"
+
     def setUp(self) -> None:
-        self.repo = Repository()
+        self.repo = Repository(self.carrier)
         # The base is broken: a patch entry landed without its stamps.
         self.repo.pending("2.0.1", [("patch", "Fix a crash")])
         self.repo.write_stamps("2.0.0")
@@ -2203,10 +2264,9 @@ class TypedRepairTests(unittest.TestCase):
         self.repo.pending("2.0.1", [("patch", "Fix a crash")])
         self.repo.write_stamps("2.0.1")
         self.record_baselines("2.0.1")
-        good = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", good.replace("## [2.0.0]", "- stray item\n\n## [2.0.0]"))
+        self.repo.replace_pending("- **Fix a crash.**", "- **Fix a crash.**\n\n- stray item")
         self.base = self.repo.commit("fix: a crash")
-        self.repo.write("CHANGELOG.md", good)
+        self.repo.replace_pending("- **Fix a crash.**\n\n- stray item", "- **Fix a crash.**")
         baseline = self.repo.root / ".codeflow/.baseline/AGENTS.md"
         baseline.write_text(baseline.read_text().replace("2.0.1", "99.0.0"))
         head = self.repo.commit("docs(changelog): mark the entry")
@@ -2307,8 +2367,7 @@ class TypedRepairTests(unittest.TestCase):
         self.repo.pending("2.0.1", [("patch", "Fix a crash", before)])
         self.repo.write_stamps("2.0.0")
         self.base = self.repo.commit("fix: a crash")
-        text = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", text.replace("      publish()", "  publish()"))
+        self.repo.replace_pending("      publish()", "  publish()")
         self.repo.write_stamps("2.0.1")
         head = self.repo.commit("chore(release): sync stamps")
         with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
@@ -2317,8 +2376,7 @@ class TypedRepairTests(unittest.TestCase):
     def test_a_repair_cannot_rewrap_an_existing_entry(self) -> None:
         # F4: a repair keeps every existing entry byte for byte. The one real
         # repair on this line moves entries without touching their bytes.
-        text = (self.repo.root / "CHANGELOG.md").read_text()
-        self.repo.write("CHANGELOG.md", text.replace("- **Fix a crash.**", "- **Fix a\n  crash.**"))
+        self.repo.replace_pending("- **Fix a crash.**", "- **Fix a\n  crash.**")
         self.repo.write_stamps("2.0.1")
         head = self.repo.commit("chore(release): sync stamps")
         with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
@@ -2328,8 +2386,10 @@ class TypedRepairTests(unittest.TestCase):
 class PreflightTests(unittest.TestCase):
     """TSK-106 AC-4 (R-93): the local release checks pre-push runs."""
 
+    carrier = "written"
+
     def setUp(self) -> None:
-        self.repo = Repository()
+        self.repo = Repository(self.carrier)
         command(self.repo.root, "git", "switch", "-q", "-c", "feat/work")
 
     def tearDown(self) -> None:
@@ -2597,6 +2657,509 @@ class ChangedPathTests(unittest.TestCase):
             # `?` is one byte in the C locale, so `caf??` matches the two bytes.
             self.assertTrue(release.matches_any(paths[0], ["contracts/caf??.txt"]))
             self.assertNotIn("\ufffd", paths[0])
+
+    def test_a_committed_fragment_name_that_is_not_utf8_is_refused_by_name(self) -> None:
+        # Issue 79 on the ADR-0082 reader: the name is read as exact bytes,
+        # so it is refused as misnamed, never looked up by a lossy spelling.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            blob = subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"],
+                cwd=root, input=b"### Fixed\n", stdout=subprocess.PIPE, check=True,
+            ).stdout.decode().strip()
+            name = b"changelog.d/caf\xe9.md"
+            subprocess.run(
+                ["git", "update-index", "--add", "--cacheinfo", b"100644," + blob.encode() + b"," + name],
+                cwd=root, check=True,
+            )
+            tree = subprocess.run(
+                ["git", "write-tree"], cwd=root, stdout=subprocess.PIPE, check=True
+            ).stdout.decode().strip()
+            with self.assertRaisesRegex(release.ReleaseError, "is misnamed"):
+                release.read_fragments(tree, cwd=root)
+
+
+# ADR-0082: the same pull request, edit, repair and preflight behaviour with
+# every pending entry carried in its own fragment under changelog.d/.
+class FragmentPullRequestTests(PullRequestTests):
+    carrier = "fragments"
+
+
+class FragmentEntryEditTests(EntryEditTests):
+    carrier = "fragments"
+
+
+class FragmentTypedRepairTests(TypedRepairTests):
+    carrier = "fragments"
+    # The bounded legacy group lives only in the written section.
+    test_an_entry_moved_out_of_the_legacy_group_is_a_repair = None  # type: ignore[assignment]
+
+
+class FragmentPreflightTests(PreflightTests):
+    carrier = "fragments"
+
+
+
+def check_pr_json(repo: Repository, base: str, head: str, body: str) -> dict[str, object]:
+    path = repo.root / ".git" / "body.md"
+    path.write_text(body)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        release.check_pr(repo.args(base=base, head=head, target_ref=base, body_file=path, body_env=None))
+    return json.loads(output.getvalue())
+
+
+def check_state_json(repo: Repository, ref: str = "HEAD") -> dict[str, object]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        release.check_state(repo.args(ref=ref, structural=True))
+    return json.loads(output.getvalue())
+
+
+def fake_updater(repo: Repository, old: str, new: str) -> str:
+    """A cargo that does nothing and a `target/debug/codeflow` whose `update`
+    moves every coupled stamp from `old` to `new`; returns the cargo path."""
+    cargo = repo.root / "fake-cargo"
+    repo.write("fake-cargo", "#!/bin/sh\nexit 0\n")
+    cargo.chmod(0o755)
+    stamped = [path for path in release.VERSION_STAMP_PATHS if path != "Cargo.toml"]
+    repo.write(
+        "target/debug/codeflow",
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "if sys.argv[1:] == ['--version']:\n"
+        f"    print('codeflow {new} source=0123abcd dirty=false inputs=89ef')\n"
+        "elif sys.argv[1:] == ['update']:\n"
+        f"    for name in {stamped!r}:\n"
+        "        path = Path(name)\n"
+        f"        path.write_text(path.read_text().replace({old!r}, {new!r}))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+    )
+    (repo.root / "target/debug/codeflow").chmod(0o755)
+    return str(cargo)
+
+
+class FragmentTests(unittest.TestCase):
+    """TSK-264 AC-1 and AC-2 (ADR-0082): pending entries in one fragment per
+    pull request merge without conflict and compose one pending section."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_two_branches_each_adding_a_fragment_merge_clean_and_compose(self) -> None:
+        self.repo.pending("2.1.0", [("minor", "Existing feature")])
+        main = self.repo.commit("feat: existing feature")
+        command(self.repo.root, "git", "switch", "-q", "-c", "one")
+        self.repo.fragment("TSK-001", [("patch", "Fix the parser")], "Fixed")
+        one = self.repo.commit("fix: the parser")
+        command(self.repo.root, "git", "switch", "-q", "-c", "two", main)
+        self.repo.fragment("TSK-002", [("minor", "Add a flag")], "Added")
+        two = self.repo.commit("feat: a flag")
+        merged = subprocess.run(
+            ["git", "merge-tree", "--write-tree", one, two],
+            cwd=self.repo.root, text=True, capture_output=True,
+        )
+        self.assertEqual(merged.returncode, 0, merged.stdout)
+        command(self.repo.root, "git", "merge", "-q", "--no-edit", one)
+        result = check_state_json(self.repo)
+        self.assertEqual((result["status"], result["version"]), ("ok", "2.1.0"))
+        self.assertEqual(
+            result["fragments"],
+            {
+                "changelog.d/TSK-001.md": ["Fix the parser."],
+                "changelog.d/TSK-002.md": ["Add a flag."],
+                "changelog.d/existing-feature.md": ["Existing feature."],
+            },
+        )
+
+    def test_a_minor_fragment_declares_minor_and_never_patch(self) -> None:
+        base = self.repo.target
+        self.repo.fragment("TSK-001", [("minor", "Add a flag")], "Added")
+        self.repo.write_stamps("2.1.0")
+        head = self.repo.commit("fix: wire a flag")
+        self.assertEqual(check_pr_json(self.repo, base, head, self.repo.body("minor"))["added"], ["Add a flag."])
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
+            check_pr_json(self.repo, base, head, self.repo.body("patch"))
+
+    def test_composition_orders_kinds_then_names_then_file_order(self) -> None:
+        self.repo.write("changelog.d/b.md", (
+            "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **B fix.** one\n\n"
+            "### Added\n\n<!-- codeflow:release-impact minor -->\n- **B add.** two\n"
+        ))
+        self.repo.write("changelog.d/a.md", (
+            "### Added\n\n<!-- codeflow:release-impact patch -->\n- **A add.** three\n\n"
+            "<!-- codeflow:release-impact patch -->\n- **A second.** four\n"
+        ))
+        composed = release.pending_text(self.repo.root, "2.0.0", cwd=self.repo.root)
+        self.assertEqual(composed.version, "2.1.0")
+        self.assertEqual(composed.section, (
+            "## [2.1.0]\n\n### Added\n\n"
+            "<!-- codeflow:release-impact patch -->\n- **A add.** three\n\n"
+            "<!-- codeflow:release-impact patch -->\n- **A second.** four\n\n"
+            "<!-- codeflow:release-impact minor -->\n- **B add.** two\n\n"
+            "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **B fix.** one"
+        ))
+        self.assertEqual(
+            composed.text,
+            f"# Changelog\n\n{composed.section}\n\n## [2.0.0] - 2026-01-01\n\n- public\n",
+        )
+
+    def test_a_published_undated_baseline_is_not_the_pending_section(self) -> None:
+        # Grok round 3, finding 1: 3.0.0 is published and its heading undated.
+        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [2.0.0]\n\n- public\n")
+        self.repo.fragment("TSK-001", [("patch", "Fix the parser")], "Fixed")
+        for assembling in [False, True]:
+            composed = release.pending_text(
+                self.repo.root, "2.0.0", cwd=self.repo.root, assembling=assembling
+            )
+            self.assertTrue(composed.text.startswith("# Changelog\n\n## [2.0.1]\n\n### Fixed"), composed.text)
+
+
+class FragmentValidationTests(unittest.TestCase):
+    """TSK-264 AC-3: a malformed fragment is refused by name, by the reader
+    and by `check-pr`, `check-state` and `preflight`."""
+
+    ENTRY = "<!-- codeflow:release-impact patch -->\n- **Fix the parser.** now\n"
+
+    CASES = {
+        "a label two fragments share": (
+            {"changelog.d/a.md": f"### Fixed\n\n{ENTRY}", "changelog.d/b.md": f"### Fixed\n\n{ENTRY}"},
+            r"not unique: changelog\.d/a\.md and changelog\.d/b\.md",
+        ),
+        "a version heading": (
+            {"changelog.d/a.md": f"## [9.0.0]\n\n### Fixed\n\n{ENTRY}"},
+            r"changelog\.d/a\.md has the heading '## \[9\.0\.0\]'",
+        ),
+        "a title heading": (
+            {"changelog.d/a.md": f"# Notes\n\n### Fixed\n\n{ENTRY}"},
+            r"changelog\.d/a\.md has the heading '# Notes'",
+        ),
+        "an unknown kind": (
+            {"changelog.d/a.md": f"### Notes\n\n{ENTRY}"},
+            r"changelog\.d/a\.md has the unknown kind '### Notes'",
+        ),
+        "a repeated kind": (
+            {"changelog.d/a.md": f"### Fixed\n\n{ENTRY}\n### Fixed\n\n" + ENTRY.replace("parser", "lexer")},
+            r"changelog\.d/a\.md repeats '### Fixed'",
+        ),
+        "an entry without a heading": (
+            {"changelog.d/a.md": ENTRY},
+            r"changelog\.d/a\.md has text before its first kind heading",
+        ),
+        "an entry without a marker": (
+            {"changelog.d/a.md": f"### Fixed\n\n{ENTRY}\n- **Fix the lexer.** too\n"},
+            r"changelog\.d/a\.md needs one adjacent impact marker per entry",
+        ),
+        "an entry without a label": (
+            {"changelog.d/a.md": "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- fix it\n"},
+            r"changelog\.d/a\.md a pending changelog entry needs a bold label",
+        ),
+        "a misnamed fragment": (
+            {"changelog.d/Fix parser.md": f"### Fixed\n\n{ENTRY}"},
+            r"changelog fragment changelog\.d/Fix parser\.md is misnamed",
+        ),
+        "a nested fragment": (
+            {"changelog.d/sub/a.md": f"### Fixed\n\n{ENTRY}"},
+            r"changelog fragment changelog\.d/sub/a\.md is misnamed",
+        ),
+        "a file that is not Markdown": (
+            {"changelog.d/a.txt": f"### Fixed\n\n{ENTRY}"},
+            r"changelog fragment changelog\.d/a\.txt is misnamed",
+        ),
+        "a legacy-group marker": (
+            {"changelog.d/a.md": "### Fixed\n\n<!-- codeflow:release-impact major legacy-group=x sha256="
+             + "0" * 64 + " -->\n- **Old.** x\n<!-- codeflow:legacy-group-end -->\n"},
+            r"changelog\.d/a\.md carries a legacy-group marker",
+        ),
+    }
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_each_rule_is_refused_naming_the_file(self) -> None:
+        for why, (files, message) in self.CASES.items():
+            with self.subTest(why=why):
+                repo = Repository("fragments")
+                try:
+                    for path, text in files.items():
+                        repo.write(path, text)
+                    repo.write_stamps("2.0.1")
+                    with self.assertRaisesRegex(release.ReleaseError, message):
+                        release.pending_text(repo.root, "2.0.0", cwd=repo.root)
+                    head = repo.commit("fix: the parser")
+                    with self.assertRaisesRegex(release.ReleaseError, message):
+                        release.pending_text(head, "2.0.0", cwd=repo.root)
+                finally:
+                    repo.cleanup()
+
+    def test_check_pr_check_state_and_preflight_fail_with_the_message(self) -> None:
+        files, message = self.CASES["an unknown kind"]
+        command(self.repo.root, "git", "switch", "-q", "-c", "feat/work")
+        base = self.repo.target
+        for path, text in files.items():
+            self.repo.write(path, text)
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("fix: the parser")
+        with self.assertRaisesRegex(release.ReleaseError, message):
+            check_pr_json(self.repo, base, head, self.repo.body("patch"))
+        with self.assertRaisesRegex(release.ReleaseError, message):
+            check_state_json(self.repo)
+        args = self.repo.args(head="HEAD", branch="feat/work", remote="origin", target="main", base="", body_file=None)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.dict(os.environ, {"CODEFLOW_PR_DRAFT": ""}):
+            release.preflight(args)
+        result = json.loads(output.getvalue())
+        self.assertEqual((result["status"], args.exit_code), ("blocked", 1))
+        self.assertRegex(" ".join(result["notes"]), message)
+
+
+class FragmentPathTests(unittest.TestCase):
+    """Security review F1 and F2 of TSK-264: the worktree readers and
+    writers see `changelog.d` as git does and never follow a link."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_a_case_variant_directory_is_refused_as_git_never_reads_it(self) -> None:
+        self.repo.write("changelog.D/a.md", f"### Fixed\n\n{FragmentValidationTests.ENTRY}")
+        with self.assertRaisesRegex(release.ReleaseError, "changelog.D must be named changelog.d exactly"):
+            release.pending_text(self.repo.root, "2.0.0", cwd=self.repo.root)
+        head = self.repo.commit("fix: the parser")
+        self.assertEqual(release.read_fragments(head, cwd=self.repo.root), [])
+
+    def test_moving_an_open_pull_request_never_writes_through_a_link(self) -> None:
+        spec = importlib.util.spec_from_file_location("changelog_split", SCRIPT.with_name("changelog_split.py"))
+        assert spec and spec.loader
+        split = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(split)
+        outside = Path(tempfile.mkdtemp(prefix="codeflow-outside-"))
+        try:
+            (self.repo.root / "changelog.d").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(release.ReleaseError, "must be a directory of changelog fragments"):
+                split.only_new(self.repo.root, "HEAD", "TSK-001", None)
+            self.assertEqual(list(outside.iterdir()), [])
+        finally:
+            (self.repo.root / "changelog.d").unlink()
+            outside.rmdir()
+
+
+class SplitWriteTests(unittest.TestCase):
+    """PR 129 Windows CI: changelog_split.py writes LF bytes, never through a
+    text-mode write that turns LF into CRLF on Windows."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("written")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_split_and_only_new_write_lf_bytes(self) -> None:
+        spec = importlib.util.spec_from_file_location("changelog_split", SCRIPT.with_name("changelog_split.py"))
+        assert spec and spec.loader
+        split = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(split)
+        self.repo.write("CHANGELOG.md", PUBLISHED_CHANGELOG.replace(
+            "## [2.0.0]",
+            "## [2.1.0]\n\n### Added\n\n<!-- codeflow:release-impact minor -->\n- **Add a flag.** now\n\n## [2.0.0]",
+        ))
+        self.repo.write_stamps("2.1.0")
+        source = self.repo.commit("feat: a flag")
+        with mock.patch.object(Path, "write_text", side_effect=AssertionError("text-mode write")):
+            moved = split.only_new(self.repo.root, self.repo.target, "TSK-001", source)
+            self.assertEqual(moved["added"], ["Add a flag."])
+            (self.repo.root / "changelog.d/TSK-001.md").unlink()
+            self.assertEqual(split.split(self.repo.root)["fragments"], 1)
+        written = [self.repo.root / "CHANGELOG.md", *sorted((self.repo.root / "changelog.d").glob("*.md"))]
+        for path in written:
+            self.assertNotIn(b"\r", path.read_bytes(), path)
+
+
+class FragmentCarrierTests(unittest.TestCase):
+    """TSK-264 AC-4: a tree holds pending entries in one carrier."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("written")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_fragments_beside_a_written_section_fail_naming_both_and_assemble(self) -> None:
+        base = self.repo.target
+        self.repo.pending("2.0.1", [("patch", "Fix the parser")])
+        self.repo.fragment("TSK-001", [("patch", "Fix the lexer")], "Fixed")
+        head = self.repo.commit("fix: the lexer")
+        message = r"pending section 2\.0\.1 and changelog\.d holds fragments \(changelog\.d/TSK-001\.md\).*assemble"
+        with self.assertRaisesRegex(release.ReleaseError, message):
+            check_state_json(self.repo)
+        with self.assertRaisesRegex(release.ReleaseError, message):
+            check_pr_json(self.repo, base, head, self.repo.body("patch"))
+
+
+class FragmentSyncTests(unittest.TestCase):
+    """TSK-264 AC-5: `sync` stamps from the fragments and never writes the
+    section. On the unchanged release.py, a fragments-only worktree reads as
+    no pending section and sync keeps the published baseline."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def stamps(self) -> str:
+        return release.validate_version_stamps(
+            {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+        )
+
+    def test_a_fragments_only_worktree_stamps_the_target_and_writes_no_section(self) -> None:
+        self.repo.fragment("TSK-001", [("patch", "Fix the parser")], "Fixed")
+        cargo = fake_updater(self.repo, "2.0.0", "2.0.1")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.sync(self.repo.args(cargo=cargo))
+        self.assertEqual(json.loads(output.getvalue())["version"], "2.0.1")
+        self.assertEqual(self.stamps(), "2.0.1")
+        self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), PUBLISHED_CHANGELOG)
+
+    def test_a_written_section_that_differs_from_the_fragments_is_refused(self) -> None:
+        self.repo.carrier = "written"
+        self.repo.pending("2.0.1", [("patch", "Fix the parser")])
+        self.repo.fragment("TSK-001", [("patch", "Fix the lexer")], "Fixed")
+        with self.assertRaisesRegex(release.ReleaseError, "differs from the section the fragments compose"):
+            release.sync(self.repo.args(cargo="missing-cargo"))
+        self.assertEqual(self.stamps(), "2.0.1")
+
+    def test_a_written_section_equal_to_the_fragments_is_stamped(self) -> None:
+        self.repo.fragment("TSK-001", [("minor", "Add a flag")], "Added")
+        composed = release.pending_text(self.repo.root, "2.0.0", cwd=self.repo.root)
+        self.repo.write("CHANGELOG.md", composed.text)
+        cargo = fake_updater(self.repo, "2.0.0", "2.1.0")
+        with contextlib.redirect_stdout(io.StringIO()):
+            release.sync(self.repo.args(cargo=cargo))
+        self.assertEqual(self.stamps(), "2.1.0")
+        self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), composed.text)
+
+
+class FragmentPublicationTests(unittest.TestCase):
+    """TSK-264 AC-6 and AC-7: a reviewed `assemble` writes the section
+    before publication, and `release-notes` refuses a source with fragments."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+        self.repo.fragment("TSK-001", [("minor", "Add a flag", "to the command")], "Added")
+        self.repo.fragment("TSK-002", [("patch", "Fix the parser")], "Fixed")
+        self.repo.write_stamps("2.1.0")
+        self.base = self.repo.commit("feat: a flag and a fix")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def assemble(self) -> dict[str, object]:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.assemble(self.repo.args(cargo="missing-cargo"))
+        return json.loads(output.getvalue())
+
+    def test_assemble_writes_the_composed_section_and_removes_the_fragments(self) -> None:
+        composed = release.pending_text(self.base, "2.0.0", cwd=self.repo.root)
+        result = self.assemble()
+        self.assertEqual((result["status"], result["version"]), ("assembled", "2.1.0"))
+        self.assertEqual(result["fragments"], ["changelog.d/TSK-001.md", "changelog.d/TSK-002.md"])
+        self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), composed.text)
+        self.assertNotIn(b"\r", (self.repo.root / "CHANGELOG.md").read_bytes())
+        self.assertFalse((self.repo.root / "changelog.d").exists())
+        head = self.repo.commit("chore(release): assemble the pending section")
+        verdict = check_pr_json(self.repo, self.base, head, self.repo.body("none"))
+        self.assertEqual((verdict["added"], verdict["edited"], verdict["withdrawn"]), ([], [], []))
+        self.assertEqual(verdict["version"], "2.1.0")
+
+    def test_assemble_without_fragments_changes_nothing(self) -> None:
+        self.assemble()
+        self.repo.commit("chore(release): assemble")
+        before = (self.repo.root / "CHANGELOG.md").read_text()
+        self.assertEqual(self.assemble()["status"], "nothing to assemble")
+        self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), before)
+
+    def test_assemble_keeps_every_byte_it_does_not_insert(self) -> None:
+        # Windows CI (PR 129): text-mode writes turned every LF into CRLF, and
+        # text-mode reads turn CRLF into LF on every platform. The writer and
+        # the reader now go byte for byte, which this checks on any platform.
+        preamble = b"# Changelog\r\n\r\nNotes kept with their CRLF line ends.\r\n\r\n"
+        path = self.repo.root / "CHANGELOG.md"
+        published = path.read_bytes().removeprefix(b"# Changelog\n\n")
+        path.write_bytes(preamble + published)
+        with mock.patch.object(Path, "write_text", side_effect=AssertionError("text-mode write")):
+            self.assemble()
+        assembled = path.read_bytes()
+        self.assertTrue(assembled.startswith(preamble + b"## [2.1.0]\n\n### Added\n"), assembled[:120])
+        self.assertTrue(assembled.endswith(published), assembled[-120:])
+
+    def test_release_notes_refuse_a_source_that_holds_a_fragment(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, r"still holds changelog fragments \(changelog\.d/TSK-001\.md"):
+            release.release_notes(self.repo.root, self.base, "v2.1.0", self.base, "o/r")
+        self.assemble()
+        head = self.repo.commit("chore(release): assemble")
+        notes = release.release_notes(self.repo.root, head, "v2.1.0", head, "o/r")
+        self.assertIn("### Added\n\n- **Add a flag.** to the command", notes)
+        self.assertNotIn("codeflow:release-impact", notes)
+
+
+class FragmentRepairTests(unittest.TestCase):
+    """TSK-264 AC-8: a typed repair may remove one whole fragment, as a
+    withdrawal of its label, and never edit one."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+        # The base is broken: a minor fragment landed without its stamps.
+        self.repo.fragment("TSK-001", [("patch", "Fix the parser")], "Fixed")
+        self.repo.fragment("TSK-002", [("minor", "Add a flag")], "Added")
+        self.repo.write_stamps("2.0.1")
+        self.base = self.repo.commit("feat: a flag")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_removing_one_whole_fragment_is_a_withdrawal(self) -> None:
+        (self.repo.root / "changelog.d/TSK-002.md").unlink()
+        head = self.repo.commit("revert: withdraw the flag")
+        with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
+            check_pr_json(self.repo, self.base, head, self.repo.body("none"))
+        result = check_pr_json(
+            self.repo, self.base, head, self.repo.body("none", withdrawal="The flag was reverted.")
+        )
+        self.assertIn("disagree", str(result["repair"]))
+        self.assertEqual(result["withdrawn"], ["Add a flag."])
+
+    def test_editing_a_fragment_bytes_or_impact_is_refused(self) -> None:
+        edits = [
+            ("- **Add a flag.**", "- **Add a flag.** now", "2.1.0"),
+            ("impact minor", "impact patch", "2.0.1"),
+        ]
+        for old, new, version in edits:
+            with self.subTest(edit=new):
+                self.repo.replace_pending(old, new)
+                self.repo.write_stamps(version)
+                head = self.repo.commit("chore(release): repair")
+                with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
+                    check_pr_json(self.repo, self.base, head, self.repo.body("minor"))
+                command(self.repo.root, "git", "checkout", "-q", self.base, "--", "changelog.d")
+
+    def test_a_stamp_repair_beside_fragments_is_accepted(self) -> None:
+        self.repo.write_stamps("2.1.0")
+        head = self.repo.commit("chore(release): sync stamps")
+        self.assertIn("disagree", str(check_pr_json(self.repo, self.base, head, self.repo.body("none"))["repair"]))
 
 
 if __name__ == "__main__":

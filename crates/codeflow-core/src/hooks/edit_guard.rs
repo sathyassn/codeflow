@@ -211,8 +211,14 @@ pub(crate) fn enforcement_path(
         cwd: None,
         paths: vec![checked_path(path).map_err(|e| e.to_string())?],
     };
+    // A shell startup file refuses under its own rule; it is not an
+    // enforcement path, so the interpreter check must not call it one.
     evaluate(&request, &ctx)
-        .map(|violations| !violations.is_empty())
+        .map(|violations| {
+            violations
+                .iter()
+                .any(|v| v.rule != crate::security::startup::RULE)
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -252,8 +258,17 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     };
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
+    let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
+        // Shell startup files refuse whatever the integrity level (TSK-242).
+        if let Some(file) = crate::security::startup::class_target(&absolute, &startup) {
+            violations.push(Violation::always_blocking(
+                crate::security::startup::RULE,
+                format!("file edit targets the shell startup file `{file}`"),
+                crate::security::startup::SANCTIONED,
+            ));
+        }
         let lexical = normalized(&absolute, false)?;
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
@@ -472,7 +487,7 @@ pub(crate) fn normalize_case(
 // (beneath a file, or a name the platform refuses, such as Windows `*` or
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
-fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -515,33 +530,52 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
 
+/// How a shell write names a user or system git configuration file, which
+/// [`repository_authority_target`] also covers (TSK-242 review round 12: the
+/// shell sentence named remote-tracking metadata for it).
+pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuration file";
+
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
-fn global_git_config_target(target: &Path, root: &Path) -> bool {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
+pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
+    // Every home a shell of this user may read, as the startup class
+    // reads them: `HOME`, and `USERPROFILE` where it names another
+    // directory (TSK-242 review round 14).
+    let homes = crate::portable_path::user_homes();
     let mut paths = Vec::new();
-    if let Some(home) = &home {
+    for home in &homes {
         paths.push(home.join(".gitconfig"));
     }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.map(|home| home.join(".config")));
-    if let Some(xdg) = xdg {
-        paths.push(xdg.join("git/config"));
+    match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(xdg) => paths.push(PathBuf::from(xdg).join("git/config")),
+        None => paths.extend(homes.iter().map(|home| home.join(".config/git/config"))),
     }
     // /dev/null deliberately disables global config; writes cannot change its contents.
-    if let Some(path) = std::env::var_os("GIT_CONFIG_GLOBAL")
-        .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
-    {
-        paths.push(root.join(path));
+    for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        if let Some(path) = std::env::var_os(name)
+            .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
+        {
+            paths.push(root.join(path));
+        }
     }
+    // git reads its system file under the prefix it was built with
+    // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
+    // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
+    // (TSK-242 review round eleven).
+    let system_file = |path: &Path| {
+        path.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("gitconfig"))
+            && path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir.eq_ignore_ascii_case("etc"))
+    };
     [false, true].into_iter().any(|resolve| {
         normalized(target, resolve).is_ok_and(|target| {
-            paths
-                .iter()
-                .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
+            system_file(&target)
+                || paths
+                    .iter()
+                    .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
         })
     })
 }
@@ -1058,6 +1092,27 @@ mod tests {
     }
 
     #[test]
+    fn system_git_config_files_are_refused_under_any_prefix() {
+        // TSK-242 review round eleven: git reads its system file under the
+        // prefix it was built with, so a `gitconfig` in any `etc` directory
+        // is refused with `/etc/gitconfig`. Nothing is written.
+        let fixture = Fixture::new();
+        let prefix = fixture.temp.path().join("homebrew/etc");
+        std::fs::create_dir_all(&prefix).unwrap();
+        for path in [
+            "/etc/gitconfig".to_string(),
+            "/opt/homebrew/etc/gitconfig".to_string(),
+            "/usr/local/etc/gitconfig".to_string(),
+            prefix.join("gitconfig").display().to_string(),
+        ] {
+            assert!(fixture.refused(&path), "{path}");
+        }
+        for path in ["etc/gitconfig.example", "docs/gitconfig", "notes.md"] {
+            assert!(!fixture.refused(path), "{path}");
+        }
+    }
+
+    #[test]
     fn f9_truncated_inputs_are_refused() {
         for field in ["toolInputTruncated", "tool_input_truncated"] {
             let mut payload = json!({"toolName":"write","toolInput":{"file_path":"notes.md"}});
@@ -1087,6 +1142,21 @@ mod tests {
             payload["tool_input"]["file_path"] = json!("different.md");
             assert!(parse_payload(&payload.to_string()).is_err());
         }
+    }
+
+    /// A startup file refuses under the startup rule; the interpreter check
+    /// that asks whether a word is an enforcement path must not count it
+    /// (it would add a `git.hook_integrity` finding to the startup one).
+    #[test]
+    fn startup_files_are_not_enforcement_paths() {
+        let f = Fixture::new();
+        for startup in ["~/.zshrc", ".envrc", "sub/.envrc", "/etc/profile"] {
+            assert!(
+                !enforcement_path(startup, &f.root, &f.root, Some(&f.home)).unwrap(),
+                "{startup}"
+            );
+        }
+        assert!(enforcement_path("~/.codex/config.toml", &f.root, &f.root, Some(&f.home)).unwrap());
     }
 
     #[cfg(unix)]
@@ -1148,6 +1218,76 @@ mod tests {
                 .replace(".codex/config.toml", "notes.md");
             let request = parse_payload(&ordinary).unwrap().unwrap();
             assert!(evaluate(&request, &fixture.ctx()).unwrap().is_empty());
+        }
+    }
+
+    /// TSK-242 AC-1: a native edit of a shell startup file refuses under
+    /// `security.shell_startup` through every edit payload, in each
+    /// spelling, whatever the integrity level; an ordinary file passes.
+    #[test]
+    fn startup_files_refuse_through_every_edit_payload() {
+        let f = Fixture::new();
+        let home = f.home.to_str().unwrap().to_string();
+        let startup = |request: &EditRequest, ctx: &EditContext<'_>| {
+            evaluate(request, ctx)
+                .unwrap()
+                .iter()
+                .any(|v| v.rule == "security.shell_startup" && v.level_fixed)
+        };
+        let spellings = [
+            "~/.zshrc".to_string(),
+            format!("{home}/.bashrc"),
+            format!("{home}/.ZSHENV"),
+            format!("{home}/.config/fish/conf.d/x.fish"),
+            format!("{home}/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            ".envrc".to_string(),
+            "sub/.envrc".to_string(),
+            "/etc/profile.d/x.sh".to_string(),
+        ];
+        for path in &spellings {
+            let patch = format!("*** Begin Patch\n*** Add File: {path}\n+x\n*** End Patch\n");
+            for request in [
+                synthetic("Write", json!({"file_path": path})),
+                synthetic(
+                    "Edit",
+                    json!({"file_path": path, "old_string": "a", "new_string": "b"}),
+                ),
+                synthetic("write", json!({"path": path})),
+                synthetic("search_replace", json!({"path": path})),
+                synthetic("apply_patch", json!(patch)),
+            ] {
+                assert!(startup(&request, &f.ctx()), "{path}");
+                let off = EditContext {
+                    level: PolicyLevel::Off,
+                    ..f.ctx()
+                };
+                assert!(startup(&request, &off), "{path} with integrity off");
+            }
+        }
+        // Relative from a home working directory, and through a link.
+        let in_home = EditContext {
+            cwd: &f.home,
+            ..f.ctx()
+        };
+        assert!(startup(
+            &synthetic("Write", json!({"file_path": ".zprofile"})),
+            &in_home
+        ));
+        #[cfg(unix)]
+        {
+            std::fs::write(f.home.join(".zshrc"), "x").unwrap();
+            std::os::unix::fs::symlink(f.home.join(".zshrc"), f.root.join("rc")).unwrap();
+            assert!(startup(
+                &synthetic("Write", json!({"file_path": "rc"})),
+                &f.ctx()
+            ));
+        }
+        for ordinary in ["notes.md", "src/zshrc.rs", "docs/profile.md"] {
+            let request = synthetic("Write", json!({"file_path": ordinary}));
+            assert!(
+                evaluate(&request, &f.ctx()).unwrap().is_empty(),
+                "{ordinary}"
+            );
         }
     }
 

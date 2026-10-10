@@ -155,6 +155,31 @@ pub(crate) fn symlink_metadata_optional(path: &Path) -> io::Result<Option<std::f
     }
 }
 
+/// Obtain metadata through symbolic links, returning None only for proven
+/// absence. A dangling link exists, so it is an error, never absence.
+pub(crate) fn metadata_optional(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && proven_absent(path)? => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `path` is a directory (or, with `dir` false, a regular file),
+/// through symbolic links: `Some(false)` when it is proven absent or of
+/// another type, `None` when its metadata cannot be read.
+pub(crate) fn is_kind(path: &Path, dir: bool) -> Option<bool> {
+    match metadata_optional(path) {
+        Ok(Some(metadata)) => Some(if dir {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        }),
+        Ok(None) => Some(false),
+        Err(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::proven_absent;
@@ -207,6 +232,27 @@ mod optional_metadata_tests {
         std::os::unix::fs::symlink("missing", &link).unwrap();
         assert!(super::symlink_metadata_optional(&link).unwrap().is_some());
         assert!(super::symlink_metadata_optional(&link.join("child")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn followed_kind_tells_absence_from_an_unread_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("d")).unwrap();
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+        assert_eq!(super::is_kind(&dir.path().join("d"), true), Some(true));
+        assert_eq!(super::is_kind(&dir.path().join("f"), true), Some(false));
+        assert_eq!(super::is_kind(&dir.path().join("f"), false), Some(true));
+        assert_eq!(
+            super::is_kind(&dir.path().join("missing"), true),
+            Some(false)
+        );
+        // A dangling link exists: what it names cannot be read, so it is not
+        // proven to be absent.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+        assert_eq!(super::is_kind(&link, true), None);
+        assert!(super::metadata_optional(&link).is_err());
     }
 }
 

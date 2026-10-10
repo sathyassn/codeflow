@@ -75,6 +75,7 @@ fn operative(path: &str) -> bool {
 fn historical(path: &str) -> bool {
     path == "CHANGELOG.md"
         || [
+            "changelog.d/",
             "docs/decisions/",
             "docs/verification/",
             "project-management/",

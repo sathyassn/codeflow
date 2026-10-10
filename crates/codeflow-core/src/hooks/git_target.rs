@@ -309,16 +309,41 @@ pub(super) fn assignment(word: &str) -> Option<(&str, &str)> {
 }
 
 /// Join `next` onto the directory expression `base` ("" is the session's
-/// working directory). An absolute `next` replaces the base; an empty one
-/// changes nothing, as `git -C ""` does.
+/// working directory). An absolute `next` ([`host_absolute`]) replaces the
+/// base, as the host would open it ([`host_path`]); an empty one changes
+/// nothing, as `git -C ""` does.
 pub(super) fn join_path(base: &str, next: &str) -> String {
     if next.is_empty() {
         base.to_string()
-    } else if next.starts_with('/') || base.is_empty() {
-        next.to_string()
+    } else if host_absolute(next) || base.is_empty() {
+        host_path(next)
     } else {
         format!("{}/{next}", base.trim_end_matches('/'))
     }
+}
+
+/// Whether `path` names the same place from any directory: rooted at `/`,
+/// a drive path (`C:\x`, `C:/x`) or a UNC path (`\\server\share`). A
+/// Windows git takes the last two as absolute, so the guard never joins them
+/// onto a directory (TSK-242 review round 14).
+pub(super) fn host_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with('/')
+        || path.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
+/// `path` as the host opens it: on Windows a Git Bash drive path such as
+/// `/c/repo` is `C:\repo`; anything else as written.
+pub(super) fn host_path(path: &str) -> String {
+    #[cfg(windows)]
+    if let Some(native) = crate::portable_path::git_bash_drive_text(path) {
+        return native;
+    }
+    path.to_string()
 }
 
 /// Environment variables that move where git reads and writes. The guard
@@ -484,7 +509,7 @@ impl ShellState {
             (Ok(d), Cwd::Paths(bases)) => {
                 Cwd::Paths(bases.iter().map(|b| join_path(b, &d)).collect())
             }
-            (Ok(d), Cwd::Unknown(_)) if d.starts_with('/') => Cwd::Paths(vec![d]),
+            (Ok(d), Cwd::Unknown(_)) if host_absolute(&d) => Cwd::Paths(vec![host_path(&d)]),
             (Ok(_), Cwd::Unknown(why)) => Cwd::Unknown(why.clone()),
             (Err(why), _) => Cwd::Unknown(why),
         };
@@ -700,6 +725,22 @@ mod tests {
         assert_eq!(join_path("/w/", "a"), "/w/a");
         assert_eq!(join_path("/w", "/abs"), "/abs");
         assert_eq!(join_path("/w", ""), "/w");
+        // Review round 14: a drive or UNC path is absolute wherever the guard
+        // runs, and a Git Bash drive path is the drive on Windows.
+        assert_eq!(join_path("C:\\repo", "C:\\evil\\.git"), "C:\\evil\\.git");
+        assert_eq!(join_path("/w", "d:/x"), "d:/x");
+        assert_eq!(
+            join_path("C:\\repo", "\\\\srv\\share\\.git"),
+            "\\\\srv\\share\\.git"
+        );
+        assert_eq!(join_path("C:\\repo", "sub"), "C:\\repo/sub");
+        assert!(!host_absolute("C:repo") && !host_absolute("repo\\.git"));
+        let bash = join_path("C:\\repo", "/c/evil/.git");
+        if cfg!(windows) {
+            assert_eq!(bash, "C:\\evil\\.git");
+        } else {
+            assert_eq!(bash, "/c/evil/.git");
+        }
     }
 
     #[test]

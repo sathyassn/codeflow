@@ -85,6 +85,19 @@ def git(*args: str, cwd: Path = ROOT, check: bool = True) -> str:
     return run(["git", *args], cwd=cwd, check=check).stdout.strip()
 
 
+def read_source(path: Path) -> str:
+    """A tracked text file's exact bytes as UTF-8. Text mode would turn CRLF
+    into LF on every platform, so a rewrite would change bytes git compares."""
+    return path.read_bytes().decode("utf-8")
+
+
+def write_source(path: Path, text: str) -> None:
+    """Write `text` byte for byte. Text mode on Windows writes every LF as
+    CRLF, which would rewrite every line of CHANGELOG.md, published sections
+    included."""
+    path.write_bytes(text.encode("utf-8"))
+
+
 def load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -847,6 +860,267 @@ def expected_pending(
     return expected, section, impacts
 
 
+# Pending entries live in one fragment file per pull request (ADR-0082), so
+# two pull requests that each add an entry never touch the same lines. A
+# reviewed `assemble` writes them into CHANGELOG.md before publication.
+FRAGMENT_DIR = "changelog.d"
+FRAGMENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md")
+CHANGE_KINDS = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
+KIND_HEADING = re.compile(r"### (\S.*?)[ \t]*")
+LEGACY_MARKER = re.compile(r"<!--\s*codeflow:release-impact\b[^>]*legacy-group=")
+
+
+def is_fragment_path(path: str) -> bool:
+    directory, _, name = path.partition("/")
+    return directory == FRAGMENT_DIR and FRAGMENT_NAME.fullmatch(name) is not None
+
+
+def read_fragments(source: str | Path, *, cwd: Path) -> list[tuple[str, str]]:
+    """Every file under `changelog.d/` as (path, text), in byte order of the
+    path. `source` is a commit or tree for committed readers, or a worktree
+    path for `sync` and `assemble`. A path that is not a regular
+    `changelog.d/<name>.md` file is refused by name."""
+    found: list[tuple[str, bytes]] = []
+    if isinstance(source, Path):
+        directory = source / FRAGMENT_DIR
+        # Read only the directory git would: on a case-insensitive file
+        # system `changelog.D` also answers to `changelog.d`, and the git
+        # reader would never see it.
+        variants = [
+            name for name in os.listdir(source) if name.casefold() == FRAGMENT_DIR and name != FRAGMENT_DIR
+        ]
+        if variants:
+            fail(f"{variants[0]} must be named {FRAGMENT_DIR} exactly, as git reads it")
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            fail(f"{FRAGMENT_DIR} must be a directory of changelog fragments")
+        if directory.is_dir():
+            for path in sorted(directory.rglob("*")):
+                relative = path.relative_to(source).as_posix()
+                if path.is_dir() and not path.is_symlink():
+                    continue
+                if path.is_symlink() or not path.is_file():
+                    fail(f"changelog fragment {relative} is not a regular file")
+                found.append((relative, path.read_bytes()))
+    else:
+        # A path is read as exact bytes, never through the lossy `run`
+        # (issue 79): each invalid byte keeps its own surrogate escape, so a
+        # name that is not UTF-8 is refused by name below as misnamed.
+        args = ["git", "ls-tree", "-r", "-z", "--full-tree", source, "--", FRAGMENT_DIR]
+        result = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            detail = result.stderr.decode(errors="replace").strip() or "no output"
+            fail(f"command failed ({' '.join(args)}): {detail}")
+        for record in filter(None, result.stdout.split(b"\0")):
+            meta, _, name = record.partition(b"\t")
+            relative = os.fsdecode(name)
+            mode = meta.split()[0].decode("ascii")
+            if relative == FRAGMENT_DIR:
+                fail(f"{FRAGMENT_DIR} must be a directory of changelog fragments")
+            if mode not in {"100644", "100755"}:
+                fail(f"changelog fragment {relative} is not a regular file")
+            found.append((relative, file_at_ref(source, relative, cwd=cwd)))
+    fragments = []
+    for relative, data in sorted(found, key=lambda item: os.fsencode(item[0])):
+        if not is_fragment_path(relative):
+            fail(
+                f"changelog fragment {relative} is misnamed; a fragment is "
+                f"{FRAGMENT_DIR}/<name>.md, the name of letters, digits, '.', '_' and '-'"
+            )
+        try:
+            fragments.append((relative, data.decode("utf-8")))
+        except UnicodeDecodeError:
+            fail(f"changelog fragment {relative} is not UTF-8 text")
+    return fragments
+
+
+@dataclass(frozen=True)
+class FragmentEntry:
+    path: str
+    kind: str
+    marker: str
+    impact: str
+    text: str
+    label: str
+
+
+def fragment_entries(path: str, text: str) -> list[FragmentEntry]:
+    """The entries of one fragment, in file order, or a refusal naming it.
+    A fragment holds only kind headings, each at most once, and under each
+    one or more labelled entries, each directly after its impact marker."""
+
+    def refuse(why: str) -> NoReturn:
+        fail(f"changelog fragment {path} {why}")
+
+    if LEGACY_MARKER.search(text) or LEGACY_END in text:
+        refuse("carries a legacy-group marker; only the bounded bootstrap group carries one")
+    blocks: list[tuple[str, list[str]]] = []
+    for line in text.split("\n"):
+        if line.startswith("#"):
+            heading = KIND_HEADING.fullmatch(line)
+            if not line.startswith("### ") or heading is None:
+                refuse(
+                    f"has the heading '{line[:60]}'; a fragment holds only the kind headings "
+                    + ", ".join(f"### {kind}" for kind in CHANGE_KINDS)
+                )
+            kind = heading.group(1)
+            if kind not in CHANGE_KINDS:
+                refuse(f"has the unknown kind '### {kind}'; use one of {', '.join(CHANGE_KINDS)}")
+            if any(seen == kind for seen, _ in blocks):
+                refuse(f"repeats '### {kind}'; give each kind one heading")
+            blocks.append((kind, []))
+        elif blocks:
+            blocks[-1][1].append(line)
+        elif line.strip():
+            refuse("has text before its first kind heading; every entry sits under a heading")
+    if not blocks:
+        refuse("holds no entry; a fragment holds at least one labelled entry under a kind heading")
+    entries: list[FragmentEntry] = []
+    for kind, lines in blocks:
+        body = "\n".join(lines)
+        markers = list(IMPACT_MARKER.finditer(body))
+        if not markers:
+            refuse(f"has '### {kind}' with no entry and impact marker under it")
+        if body[: markers[0].start()].strip():
+            refuse(f"has text under '### {kind}' outside an entry; each entry follows its impact marker")
+        if len(markers) != len(re.findall(r"(?m)^- \S", body)):
+            refuse("needs one adjacent impact marker per entry")
+        for index, marker in enumerate(markers):
+            end = markers[index + 1].start() if index + 1 < len(markers) else len(body)
+            entry = body[marker.end() : end].strip()
+            if not entry.startswith("- "):
+                refuse("has an impact marker that is not directly followed by its entry")
+            try:
+                label = entry_label(entry)
+            except ReleaseError as error:
+                refuse(str(error))
+            entries.append(FragmentEntry(path, kind, marker.group(0), marker.group(1), entry, label))
+    return entries
+
+
+def compose_fragments(fragments: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """The pending section's body composed from `fragments`: the kinds in
+    their fixed order, empty kinds left out, and under each the entries by
+    fragment name, then in file order. Returns the body and the impacts."""
+    entries = [entry for path, text in fragments for entry in fragment_entries(path, text)]
+    seen: dict[str, FragmentEntry] = {}
+    for entry in entries:
+        other = seen.setdefault(label_key(entry.label), entry)
+        if other is not entry:
+            fail(
+                f"pending entry label '{entry.label}' is not unique: {other.path} and {entry.path} "
+                "both carry it; each pending entry needs its own label"
+            )
+    blocks = []
+    for kind in CHANGE_KINDS:
+        items = [f"{entry.marker}\n{entry.text}" for entry in entries if entry.kind == kind]
+        if items:
+            blocks.append(f"### {kind}\n\n" + "\n\n".join(items))
+    impacts = [entry.impact for kind in CHANGE_KINDS for entry in entries if entry.kind == kind]
+    return "\n\n".join(blocks), impacts
+
+
+@dataclass(frozen=True)
+class Pending:
+    """What `pending_text` reads: CHANGELOG.md as every check reads it, with
+    the fragments composed into its pending section, and the parts."""
+
+    text: str
+    section: str | None
+    version: str | None
+    impacts: list[str]
+    fragments: dict[str, list[str]]
+
+
+def pending_text(
+    source: str | Path,
+    baseline: str,
+    *,
+    cwd: Path,
+    lenient: bool = False,
+    assembling: bool = False,
+) -> Pending:
+    """The one reader of pending entries (ADR-0082). `source` is a commit or
+    tree, or a worktree path for `sync` and `assemble`. Without fragments it
+    returns CHANGELOG.md unchanged. With them it composes the pending section
+    under the baseline bumped once by the highest impact and inserts it
+    where `assemble` writes it, above the newest published section.
+
+    A tree holds pending entries in one carrier. Fragments beside a written
+    pending section are refused, except while `assembling`, where the
+    section must equal the composed one. `lenient` reads a broken tree as
+    far as it can, for judging a typed repair or a warning."""
+    if isinstance(source, Path):
+        written = read_source(source / "CHANGELOG.md")
+    else:
+        written = file_at_ref(source, "CHANGELOG.md", cwd=cwd).decode()
+    try:
+        fragments = read_fragments(source, cwd=cwd)
+    except ReleaseError:
+        if not lenient:
+            raise
+        return Pending(written, None, None, [], {})
+    if not fragments:
+        return Pending(written, None, None, [], {})
+    names = ", ".join(path for path, _ in fragments)
+    try:
+        body, impacts = compose_fragments(fragments)
+        highest = max(impacts, key=lambda item: IMPACT_ORDER[item])
+        if highest == "none":
+            fail(
+                f"changelog fragments ({names}) carry only `none` entries; none-only work "
+                "must not create a pending section"
+            )
+        version = bump(baseline, highest)
+        section = f"## [{version}]\n\n{body}"
+        labels = {
+            path: [entry.label for entry in fragment_entries(path, text)] for path, text in fragments
+        }
+        sections = changelog_sections(written)
+        current = next(
+            (item for item in sections if semver(item.version) > semver(baseline)), None
+        )
+        if current is not None:
+            if not assembling:
+                fail(
+                    f"CHANGELOG.md holds the pending section {current.version} and {FRAGMENT_DIR} "
+                    f"holds fragments ({names}); a tree holds pending entries in one carrier: "
+                    f"run `release.py assemble` to write the fragments into the section, or move "
+                    f"the section's entries into fragments"
+                )
+            if current.body != body:
+                fail(
+                    f"CHANGELOG.md holds the pending section {current.version}, which differs from "
+                    f"the section the fragments compose ({names}); finish `release.py assemble`, "
+                    f"or move the section's entries into fragments, before `sync`"
+                )
+            return Pending(written, section, version, impacts, labels)
+        first = re.search(r"(?m)^## \[", written)
+        at = first.start() if first else len(written)
+        return Pending(written[:at] + section + "\n\n" + written[at:], section, version, impacts, labels)
+    except ReleaseError:
+        if not lenient:
+            raise
+    # A broken tree, read as far as it goes: the raw fragments in the pending
+    # section, so their labels and markers can still be compared.
+    raw = "\n\n".join(text.strip() for _, text in fragments)
+    impacts = [match.group(1) for match in IMPACT_MARKER.finditer(raw)]
+    try:
+        sections = changelog_sections(written)
+    except ReleaseError:
+        return Pending(written + "\n\n" + raw + "\n", None, None, impacts, {})
+    current = next((item for item in sections if semver(item.version) > semver(baseline)), None)
+    if current is not None:
+        at = current.end
+        text = written[:at].rstrip() + "\n\n" + raw + "\n\n" + written[at:]
+        return Pending(text, None, None, impacts, {})
+    highest = max(impacts, key=lambda item: IMPACT_ORDER[item], default="patch")
+    version = bump(baseline, "patch" if highest == "none" else highest)
+    first = re.search(r"(?m)^## \[", written)
+    at = first.start() if first else len(written)
+    text = written[:at] + f"## [{version}]\n\n{raw}\n\n" + written[at:]
+    return Pending(text, None, None, impacts, {})
+
+
 VERSION_STAMP_PATHS = [
     "Cargo.toml",
     "Cargo.lock",
@@ -910,12 +1184,13 @@ def validate_release_tree(
     allow_attempt: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     baseline = resolve_baseline(config, state, cwd=cwd, allow_attempt=allow_attempt)
+    # Published sections and errata are read from the file; the pending
+    # target from the one reader of pending entries (ADR-0082).
     changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
     validate_published_sections(changelog, baseline, config, cwd=cwd)
     validate_errata(changelog)
-    version, pending, impacts = expected_pending(
-        changelog, baseline, config
-    )
+    composed = pending_text(ref, baseline.version, cwd=cwd)
+    version, pending, impacts = expected_pending(composed.text, baseline, config)
     stamped = validate_version_stamps(
         {path: file_at_ref(ref, path, cwd=cwd) for path in VERSION_STAMP_PATHS}
     )
@@ -927,6 +1202,7 @@ def validate_release_tree(
         "tag": f"v{version}",
         "pending": pending is not None,
         "impacts": impacts,
+        "fragments": composed.fragments,
     }
 
 
@@ -1026,7 +1302,8 @@ def check_pr(args: argparse.Namespace) -> None:
     if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
         changed = set(changed_paths(base, head, cwd=args.root))
         metadata = set(VERSION_STAMP_PATHS) | {"CHANGELOG.md", CONFIG_PATH}
-        if fields["impact"] != "none" or changed - metadata:
+        other = {path for path in changed - metadata if not matches_any(path, [f"{FRAGMENT_DIR}/**"])}
+        if fields["impact"] != "none" or other:
             fail(f"declared impact {fields['impact']} is below marker floor {floor}")
     paths = changed_paths(base, head, cwd=args.root)
     watched = sorted(
@@ -1036,14 +1313,15 @@ def check_pr(args: argparse.Namespace) -> None:
         fail("watched contract changes require compatible or breaking assessment")
     proposed = merge_tree(base, head, cwd=args.root)
     base_config, base_configuration = carried_config(base, config, cwd=args.root)
-    before_text = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
-    after_text = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
-    adopting = bool(re.search(r"(?m)^## \[Unreleased\]\s*$", before_text)) and "legacy-group=" in after_text
+    written_before = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
+    written_after = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
+    adopting = bool(re.search(r"(?m)^## \[Unreleased\]\s*$", written_before)) and "legacy-group=" in written_after
     repair: str | None = None
     if adopting:
         after = validate_release_tree(proposed, config, state, cwd=args.root)
         before_version: str | None = after["version"]
-        comparable_before = re.sub(r"(?m)^## \[Unreleased\]\s*$", "", before_text)
+        comparable_before = re.sub(r"(?m)^## \[Unreleased\]\s*$", "", written_before)
+        pending_before, pending_after = comparable_before, written_after
     else:
         try:
             before_version = validate_release_tree(base, base_config, state, cwd=args.root)["version"]
@@ -1056,7 +1334,16 @@ def check_pr(args: argparse.Namespace) -> None:
         after = validate_release_tree(proposed, config, state, cwd=args.root)
         if repair is not None:
             repair_baselines(base, proposed, paths, after["version"], repair, cwd=args.root)
-        comparable_before = before_text
+        comparable_before = written_before
+        # The pending items of both trees come through the one reader, so an
+        # entry moved between carriers with its bytes unchanged is not an
+        # edit; a broken base is read as far as it goes. Published sections
+        # and the adoption scan stay on the written file.
+        pending_before = pending_text(
+            base, after["baseline"], cwd=args.root, lenient=repair is not None
+        ).text
+        pending_after = pending_text(proposed, after["baseline"], cwd=args.root).text
+    after_text = written_after
     check_publishable(args.root, proposed, after)
     baseline = resolve_baseline(config, state, cwd=args.root)
     if repair is None:
@@ -1070,8 +1357,8 @@ def check_pr(args: argparse.Namespace) -> None:
     # A repair's published sections are held to their exact public source by
     # the proposed tree's own validation above, which lets a repair restore
     # frozen bytes and never change them.
-    before_section = pending_section(comparable_before, baseline, repair=repair is not None)
-    after_section = pending_section(after_text, baseline, repair=False)
+    before_section = pending_section(pending_before, baseline, repair=repair is not None)
+    after_section = pending_section(pending_after, baseline, repair=False)
     if before_section is None or adopting:
         before_items: dict[str, PendingItem] = {}
     elif repair is not None:
@@ -1104,7 +1391,8 @@ def check_pr(args: argparse.Namespace) -> None:
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("an added or edited major entry requires migration guidance")
     if fields["impact"] != "none":
-        if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
+        curated = "CHANGELOG.md" in paths or any(is_fragment_path(path) for path in paths)
+        if not curated or "changelog" not in fields["evidence"].casefold():
             fail("non-none impact requires curated changelog change and evidence")
     lowered = [
         after.label
@@ -1244,14 +1532,17 @@ def typed_repair(
         )
     if config != config_at_ref(head, cwd=cwd):
         fail(f"base release state is invalid ({invariant}); the head's release configuration differs")
+    # Path rules (ADR-0082): the changelog, its fragments, the coupled stamps
+    # and the repair baselines. Entry text is held by `entry_change` instead.
     allowed = {"CHANGELOG.md", *VERSION_STAMP_PATHS, *REPAIR_BASELINES}
-    other = sorted(path for path in paths if path not in allowed)
+    other = sorted(path for path in paths if path not in allowed and not is_fragment_path(path))
     if other:
         fail(
-            f"base release state is invalid ({invariant}); a repair changes only CHANGELOG.md "
-            f"and coupled version stamps, and this PR also changes: {', '.join(other[:5])}"
+            f"base release state is invalid ({invariant}); a repair changes only CHANGELOG.md, "
+            f"{FRAGMENT_DIR} fragments and coupled version stamps, and this PR also changes: "
+            f"{', '.join(other[:5])}"
         )
-    for path in sorted(set(paths) - {"CHANGELOG.md"}):
+    for path in sorted(path for path in set(paths) - {"CHANGELOG.md"} if not is_fragment_path(path)):
         before = stamp_neutral(path, file_at_optional(base, path, cwd=cwd))
         after = stamp_neutral(path, file_at_optional(proposed, path, cwd=cwd))
         if before != after:
@@ -1354,7 +1645,7 @@ def stamp_neutral(path: str, data: bytes | None) -> Any:
 
 
 def replace_workspace_version(path: Path, version: str) -> None:
-    text = path.read_text(encoding="utf-8")
+    text = read_source(path)
     section = re.search(r"(?ms)^\[workspace\.package\]\s*$.*?(?=^\[|\Z)", text)
     if not section:
         fail("Cargo.toml lacks [workspace.package]")
@@ -1363,7 +1654,7 @@ def replace_workspace_version(path: Path, version: str) -> None:
     )
     if count != 1:
         fail("workspace package must contain exactly one version")
-    path.write_text(text[: section.start()] + replacement + text[section.end() :], encoding="utf-8")
+    write_source(path, text[: section.start()] + replacement + text[section.end() :])
 
 
 def validate_metadata_paths(root: Path) -> None:
@@ -1391,14 +1682,22 @@ def updater_reports_version(output: str, version: str) -> bool:
 
 
 def sync(args: argparse.Namespace) -> None:
+    print(json.dumps(synchronize(args), sort_keys=True))
+
+
+def synchronize(args: argparse.Namespace) -> dict[str, str]:
     # Resolve and validate every metadata input before the first write.
     config, state = load_config(args.config), get_host_state(args)
     baseline = resolve_baseline(config, state, cwd=args.root)
     validate_metadata_paths(args.root)
     changelog = args.root / "CHANGELOG.md"
-    text = changelog.read_text(encoding="utf-8")
+    text = read_source(changelog)
     validate_published_sections(text, baseline, config, cwd=args.root)
-    version, pending, _ = expected_pending(text, baseline, config, strict=False)
+    # The target comes from the worktree's fragments and any written section
+    # through the one reader; a section is never written here (ADR-0082).
+    composed = pending_text(args.root, baseline.version, cwd=args.root, assembling=True)
+    version, _, _ = expected_pending(composed.text, baseline, config, strict=False)
+    pending = pending_section(text, baseline, repair=False)
     files = {path: (args.root / path).read_bytes() for path in VERSION_STAMP_PATHS}
     values = version_stamp_values(files)
     current = version if set(values.values()) == {version} else None
@@ -1411,7 +1710,7 @@ def sync(args: argparse.Namespace) -> None:
             + text[pending.body_start :]
         )
     if synced_text != text:
-        changelog.write_text(synced_text, encoding="utf-8")
+        write_source(changelog, synced_text)
     if current != version:
         replace_workspace_version(args.root / "Cargo.toml", version)
         run([args.cargo, "check", "--workspace"], cwd=args.root)
@@ -1425,7 +1724,30 @@ def sync(args: argparse.Namespace) -> None:
         )
         if stamped != version:
             fail(f"sync left stamps at {stamped}, expected {version}")
-    print(json.dumps({"status": "synchronized", "baseline": baseline.version, "version": version}, sort_keys=True))
+    return {"status": "synchronized", "baseline": baseline.version, "version": version}
+
+
+def assemble(args: argparse.Namespace) -> None:
+    """The one writer of the pending section (ADR-0082): compose the
+    worktree's fragments, write the section above the newest published one,
+    delete the fragments and run `sync`. Its pull request declares `Impact:
+    none`, since every entry keeps its label, impact and bytes. Without
+    fragments it changes nothing."""
+    config, state = load_config(args.config), get_host_state(args)
+    baseline = resolve_baseline(config, state, cwd=args.root)
+    validate_metadata_paths(args.root)
+    composed = pending_text(args.root, baseline.version, cwd=args.root, assembling=True)
+    if not composed.fragments:
+        print(json.dumps({"status": "nothing to assemble", "fragments": []}, sort_keys=True))
+        return
+    write_source(args.root / "CHANGELOG.md", composed.text)
+    for path in composed.fragments:
+        (args.root / path).unlink()
+    directory = args.root / FRAGMENT_DIR
+    if directory.is_dir() and not any(directory.iterdir()):
+        directory.rmdir()
+    result = synchronize(args)
+    print(json.dumps({**result, "status": "assembled", "fragments": sorted(composed.fragments)}, sort_keys=True))
 
 
 def check_state(args: argparse.Namespace) -> None:
@@ -1447,7 +1769,8 @@ def check_publishable(root: Path, ref: str, release: dict[str, Any]) -> None:
     if not release["pending"]:
         return
     version = release["version"]
-    text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
+    # The section the release will carry: written, or composed from fragments.
+    text = pending_text(ref, release["baseline"], cwd=root).text
     size = plan_output_size(section_bytes(text, version))
     if size > GITHUB_JOB_OUTPUT_LIMIT:
         fail(
@@ -1455,7 +1778,8 @@ def check_publishable(root: Path, ref: str, release: dict[str, Any]) -> None:
             f"{size:,} UTF-16 bytes; GitHub accepts {GITHUB_JOB_OUTPUT_LIMIT:,}"
         )
     # Rendered as the release authority will, under any repository name.
-    release_notes(root, ref, f"v{version}", "0" * 40, LONGEST_REPOSITORY)
+    section = next(item for item in changelog_sections(text) if item.version == version)
+    render_notes(section.body, f"v{version}", "0" * 40, LONGEST_REPOSITORY)
 
 
 def structural_state(config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
@@ -1599,7 +1923,8 @@ def preflight(args: argparse.Namespace) -> None:
             notes.append(
                 f"behaviour paths changed ({shown}) with no pending changelog entry added or edited "
                 "and no `Impact: none` in the PR draft (CODEFLOW_PR_DRAFT); add a labelled entry "
-                "or declare the intent. This warning never blocks; the PR job does"
+                f"in a {FRAGMENT_DIR}/<name>.md fragment or declare the intent. This warning never "
+                "blocks; the PR job does"
             )
     print(json.dumps({"status": status, "notes": notes, "host": HOST_UNCHECKED}, sort_keys=True))
     if status == "blocked":
@@ -1611,7 +1936,7 @@ def entry_changed(base: str, head: str, config: dict[str, Any], state: dict[str,
     baseline = resolve_baseline(config, state, cwd=cwd)
     items = []
     for ref in [base, head]:
-        text = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
+        text = pending_text(ref, baseline.version, cwd=cwd, lenient=True).text
         section = pending_section(text, baseline, repair=True)
         items.append(lenient_items(section) if section else {})
     change = entry_change(items[0], items[1], adopting=False)
@@ -1623,9 +1948,16 @@ def show_host_state(args: argparse.Namespace) -> None:
 
 
 def release_notes(root: Path, ref: str, tag: str, source: str, repository: str) -> str:
-    """The release body: the curated section when it fits GitHub's limit,
-    else the same section with each entry cut to its label and a link to the
-    full entries at the source commit. Fails closed when neither fits."""
+    """The release body read from CHANGELOG.md at `ref`. A source that still
+    holds a changelog fragment is refused: the reviewed `assemble` writes
+    the section before publication (ADR-0082)."""
+    fragments = read_fragments(ref, cwd=root)
+    if fragments:
+        fail(
+            f"{ref} still holds changelog fragments ({', '.join(path for path, _ in fragments)}); "
+            f"publish only a source whose pending entries a reviewed `release.py assemble` "
+            f"wrote into CHANGELOG.md"
+        )
     text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
     section = next(
         (item for item in changelog_sections(text) if item.version == tag.removeprefix("v")),
@@ -1633,7 +1965,15 @@ def release_notes(root: Path, ref: str, tag: str, source: str, repository: str) 
     )
     if section is None or not section.body:
         fail(f"CHANGELOG.md lacks curated notes for {tag}")
-    body = IMPACT_MARKER.sub("", section.body)
+    return render_notes(section.body, tag, source, repository)
+
+
+def render_notes(section: str, tag: str, source: str, repository: str) -> str:
+    """The release body for a section's text: the curated section when it
+    fits GitHub's limit, else the same section with each entry cut to its
+    label and a link to the full entries at the source commit. Fails closed
+    when neither fits."""
+    body = IMPACT_MARKER.sub("", section)
     body = body.replace(LEGACY_END, "")
     # The staging note is one paragraph however it wraps: drop it to the blank line.
     body = re.sub(r"(?m)^_Staging evidence:.*(?:\n(?![ \t]*$).*)*", "", body)
@@ -2075,6 +2415,13 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--cargo", default="cargo")
     add_host_args(prepare)
     prepare.set_defaults(func=sync)
+
+    gather = sub.add_parser(
+        "assemble", help=f"write the {FRAGMENT_DIR} fragments into CHANGELOG.md, then sync"
+    )
+    gather.add_argument("--cargo", default="cargo")
+    add_host_args(gather)
+    gather.set_defaults(func=assemble)
 
     state = sub.add_parser("check-state")
     state.add_argument("--ref", default="HEAD")
