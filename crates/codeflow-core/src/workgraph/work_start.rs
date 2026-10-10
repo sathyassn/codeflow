@@ -1663,6 +1663,10 @@ pub fn anchored_project_file(
     })
 }
 
+/// The tail of a retarget refusal, which design authority reports even when
+/// the working tree carries no block of its own.
+pub const RETARGET_REFUSAL: &str = "a rewritten target confers no authority";
+
 /// Refuse when any version of `record` that `head` reaches declares an
 /// integration target other than `target`. One walk reads that one path per
 /// commit and parses each distinct version once. A history that cannot be
@@ -1713,7 +1717,7 @@ fn refuse_retarget(
         {
             return Err(format!(
                 "an earlier version of task {task_id} declares integration target \
-                 '{declared}', not '{target}'; a rewritten target confers no authority"
+                 '{declared}', not '{target}'; {RETARGET_REFUSAL}"
             ));
         }
     }

@@ -182,7 +182,9 @@ impl CatalogInputs {
             match crate::workgraph::work_start::anchored_project_file(root, task, SELECTION) {
                 Ok(anchored) => anchored,
                 Err(reason) => {
-                    if working {
+                    // A retarget is named even with no block in the working
+                    // tree: it is the refusal an operator needs to see.
+                    if working || reason.contains(crate::workgraph::work_start::RETARGET_REFUSAL) {
                         self.catalog.authority_note =
                             Some(format!("project design authority not applied: {reason}"));
                     }

@@ -448,6 +448,14 @@ fn a_retargeted_standalone_task_cannot_borrow_an_older_lines_authority() {
         approval["open"][0]["reasons"].to_string().contains(refusal),
         "{approval}"
     );
+    // With no block left in the working tree, the refusal is still named.
+    std::fs::remove_file(project.dir.path().join(SELECTION)).unwrap();
+    let bare = project.resolve(DESIGN, 1);
+    assert_eq!(bare["participants"], json!([]), "{bare}");
+    assert!(
+        bare["open"][0]["reasons"].to_string().contains(refusal),
+        "{bare}"
+    );
 }
 
 /// A standalone task, whose record arrives with its own pull request, reads
