@@ -266,15 +266,15 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001, EPC-002, EPC-003, EPC-020]
-adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
+adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
 - `codeflow remote protect` applies the policy's `protected_branches` to the
-  provider. On GitHub it requires a PR and green CI, blocks force-push and
-  deletion, and reports anything the plan tier cannot apply.
-- `codeflow doctor` runs twenty-one health checks. They cover git hooks and CI,
-  harness wiring, policy and config, delegates and models, the repository and
-  managed files, and customization and test config.
+  provider. On GitHub it requires a PR and the required checks on an
+  up-to-date branch, blocks force-push and deletion, and reports anything
+  the plan tier cannot apply.
+- `codeflow doctor` runs twenty-two health checks on the repository and the
+  tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
