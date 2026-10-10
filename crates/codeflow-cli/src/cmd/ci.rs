@@ -3070,6 +3070,33 @@ mod tests {
         );
     }
 
+    /// Issue 79: the review row check reads the task record strictly. A
+    /// record the head holds but whose blob cannot be read refuses, never
+    /// passes as a record with no row to check; a record the head does not
+    /// hold has none.
+    #[test]
+    fn r24_review_row_check_refuses_a_record_it_cannot_read() {
+        const RECORD: &str = "project-management/tasks/TSK-001.md";
+        let body = "## Reviews\n| peer | 0123456 | approved |\n";
+        let git = super::GitPolicy::default();
+        let dir = r24_range(&[], &[("README.md", "readme\n")]);
+        assert!(
+            super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001", false).is_none()
+        );
+        let dir = r24_range(&[], &[(RECORD, "---\nid: TSK-001\n---\n")]);
+        r24_remove(dir.path(), &format!("HEAD:{RECORD}"));
+        let violation = super::review_row_check(dir.path(), &git, body, "HEAD", "TSK-001", false)
+            .expect("an unreadable record refuses");
+        assert_eq!(
+            violation.rule,
+            codeflow_core::workgraph::acceptance::BINDING_RULE
+        );
+        assert!(
+            violation.message.contains("cannot read TSK-001's record"),
+            "{}",
+            violation.message
+        );
+    }
     #[cfg(unix)]
     #[test]
     fn r22_own_preflight_reader_failures_block_with_planning_off() {
