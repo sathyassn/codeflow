@@ -26,7 +26,7 @@ A missing, empty, malformed, repeated or mismatched line is refused.
 | Summary | always | a few lines that anchor the reader (rule below) |
 | Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
 | Testing | unless the range is docs-only or light; evidence required when the range is code | tested revision and command, fenced summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` (rules below) |
-| Reviews | unless the range is light | one row per current review: reviewer, scope, verdict; `None: reason` when unreviewed |
+| Reviews | unless the range is light | one row per current review: reviewer, `whole unit at <reviewed>`, verdict; `None: reason` when unreviewed; a section present on a light range still names the bound commit or is `None:` |
 | Release impact | on a PR into a protected branch or whose range carries a breaking commit; checked whenever present | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields (rules below) |
 | Screenshots | after Changes, when a rendered surface changed | the changed surface |
 | Tests | after Testing, when an added or renamed test's name does not state what it pins | test and what it pins, about six rows; otherwise one `New tests:` line |
@@ -42,15 +42,15 @@ A missing, empty, malformed, repeated or mismatched line is refused.
 - A PR type never cancels a condition. Read the conditions from the whole
   target-to-head diff; a mixed or epic PR takes the union.
 - `codeflow ci` warns on unclosed HTML and on a Testing section with no
-  `Not tested:` line. Keep the body short by linking records instead of
-  copying them; never drop evidence to shorten it.
+  `Not tested:` line; never drop evidence to shorten a body.
 - `codeflow ci` also warns, and never blocks, when the body passes 1,000
   words as a reader sees it: HTML comments are left out, fenced blocks and
   tables count. A body grows when each review round is appended. Write it to
   its final state instead: replace it on each update, keep one results block
   at the head and one review row per reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
-  the scope and the verdict, nothing more; the verdict and its native
+  the scope as `whole unit at <reviewed>` (the acceptance block's commit, in
+  full) and the verdict, nothing more; the verdict and its native
   provenance live on the PR and findings live in the linked record. A review
   row is the provenance the quality contract requires, not the AI
   attribution the commit and PR checks block.
@@ -114,8 +114,9 @@ commit. Inspect the actual diff as well: filenames and commit subjects
 alone cannot establish behavior, risk, or completeness. For a code change,
 **Testing is evidence you already ran**: identify the tested revision and
 commands, paste their real summaries, and state their scope. A builder
-pastes its targeted tests and its `codeflow test --mode quick` run, each
-with revision and command; the pre-push hook's quick run counts when it
+pastes its targeted tests and its `codeflow test --mode quick` run,
+targeted meaning the checks that read what changed, each with revision and
+command; the pre-push hook's quick run counts when it
 covered the same tree. The full gate runs once on the landing candidate:
 the primary links it in each member's PR when the batch lands, and a
 standalone PR runs it as its own candidate. Cite a gate run by its run id
@@ -128,17 +129,20 @@ number. Do not relabel subset coverage as workspace coverage. Unsupported
 coverage is `N/A` with a technical reason; unavailable or stale evidence is
 a gap, never zero, an invented percentage, or an inferred pass. Missing
 required evidence keeps the PR draft. Name new tests and what was
-NOT tested.
+NOT tested. On a code range, `Not tested:` names the consumer checks left
+unrun and a reachable scenario class left untested, with the reason; review
+reads the line, `codeflow ci` only checks that it exists.
 Whole-flow evidence includes changed operator/CLI journeys, even without
 product UI. Docs-only means no executable behavior changed: scripts, hook
 settings, generated runtime assets, and executable examples do not qualify
 merely because they live under docs. Instruction-only changes name the doc
-checks and relevant behavioral evaluations; distinguish added cases from
-live trials actually run. Delete unused template lines, and omit a
-conditional section whose condition does not hold. After a rebase or
+checks, the derived-artifact checks that read the changed text, and relevant
+behavioral evaluations; distinguish added cases from live trials actually
+run. Delete unused template lines. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence
-before marking ready; preserve a prior review only with a reasoned
-unchanged-scope link. Lint with
+before marking ready; a prior review carries only across a clean re-merge
+of the target, as `codeflow ci` binds it; any other change gets a new
+whole-unit review at the new head. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 
@@ -167,10 +171,8 @@ stands. It gives the PR URL exactly as `gh pr create` or
 guessed. It lists each required check with its state, any missing evidence
 with its reason, every review finding in the record the quality contract's
 completion gate defines, and the next action. Who merges a green PR depends on its
-target, as `cf-ship` step 8 says: the primary merges into an `integration/`
-branch no protected-branch policy covers and says so in the report; for
-every protected target, including a protected `integration/` glob, the next
-action is a human merge.
+target, as `cf-ship` step 8 says: for every protected target, including a
+protected `integration/` glob, the next action is a human merge.
 
 Say "ready for your merge on local evidence" only when every owed required
 check has a completed green result of the same check at the PR head, locally

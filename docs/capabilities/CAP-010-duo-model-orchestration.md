@@ -31,7 +31,7 @@ model router and not the unattended pipeline, which stays single-vendor.
 The flow from brief to review:
 
 ```text
-  immutable brief + repository scope
+  immutable brief; its scope is where each seat starts
         |                       |
         v                       v
   Claude seat discovers   Codex seat discovers     (no context edge)
@@ -54,8 +54,8 @@ The flow from brief to review:
 Discovery stays separate until both outputs exist. One plan follows, and each
 unit is reviewed by a lineage other than its author's.
 
-Both seats independently discover from the same immutable brief and
-repository scope, and neither sees the other's findings first. Each seat covers:
+Both seats independently discover from the same immutable brief, whose
+scope is where each starts, and neither sees the other's findings first. Each seat covers:
 
 - source and documentation evidence
 - assumptions verified or still unresolved
@@ -462,7 +462,11 @@ completed with. It still reviews its own range.
 A task pull request may change its own criteria, and CI prints the change
 for the reviewer; a reopened task whose record is on the target keeps its
 criteria, and another task's criteria change only in its own pull request,
-a planning-only change or a checked epic line. A range touching
+a planning-only change or a checked epic line. A completed standalone task
+has no epic amendment: a range of planning records only whose `Task:` line
+names it, or a follow-up of it, may correct the wording of its criteria,
+keeping every criterion and tag, while CI prints the delta for the reviewer
+(ADR-0080). A range touching
 the adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
@@ -650,13 +654,11 @@ Independent implementation tasks use bounded, host-resource-aware parallelism:
 
 At each batch landing:
 
-- The primary inspects the resolved hunks and integration seams on product
-  paths.
-- The primary asks the other lineage to review the integration effects only
-  when it hand-resolved a product hunk or two tasks touched one hotspot.
+- The primary inspects each landing merge: a clean merge does not reopen
+  unit review; a hand-resolved product hunk returns its task to a whole-unit
+  review at its new head.
 - The primary runs one full gate on the candidate before the line moves
   (ADR-0076).
-- Unit reviews are not repeated.
 
 Missing seats degrade legibly to solo, and a mid-run failure blocks and
 escalates. Deterministic gates and the human-merged PR remain authoritative.

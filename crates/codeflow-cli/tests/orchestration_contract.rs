@@ -899,7 +899,8 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
 
     for required in [
         "Claude and Codex research, analyze, and identify risks in parallel and return their findings before seeing the other's conclusions.",
-        "Give both seats the same immutable brief and repository scope.",
+        // Issue 121: the brief's scope is where each seat starts, never a fence.
+        "Give both seats the same immutable brief; its scope is where each starts.",
         "each seat independently returns its findings",
         "Claude drafts the one plan **from its native session**",
         "Codex challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability",
@@ -935,17 +936,17 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-one health checks"),
+        normalize_whitespace(&capabilities).contains("twenty-two health checks"),
         "CAP-008 must count the policy-source doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (21): hooks, claude, codex, grok, startup-files, config"),
+        readme.contains("Health checks (22): hooks, claude, codex, grok, startup-files, config"),
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("21 checks: hooks, claude, codex, grok, startup-files, config"),
+        architecture.contains("22 checks: hooks, claude, codex, grok, startup-files, config"),
         "architecture must list the grok doctor check"
     );
     let cap_010 = normalize_whitespace(&read(
@@ -1738,7 +1739,7 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D20 agents pointer", "what it touches upstream and downstream", TSK131_MAP),
     ("D20 develop", "name the bounded impact set (quality contract)", TSK131_DEVELOP),
     ("D20 reviewer", "Require the named impact set", TSK131_REVIEWER),
-    ("D21 pre-apply", "the departure form, for a change that newly departs from the approved contract, scope, authority or risk boundary (a public contract break, a moved security boundary, scope growth, an irreversible action)", TSK131_BLOCKERS),
+    ("D21 pre-apply", "the departure form, for a change that newly departs from the approved contract, scope, authority or risk boundary (a public contract break, a moved security boundary, growth of the change's scope, an irreversible action)", TSK131_BLOCKERS),
     ("D21 form", "situation with evidence, the boundary crossed, options with cost and reversibility, and one recommendation", TSK131_BLOCKERS),
     ("D21 withheld", "the dependent action waits while authorized independent work continues", TSK131_DISCIPLINE),
     ("D21 reuse", "An already approved departure is reused and not asked again.", TSK131_BLOCKERS),
@@ -1759,8 +1760,24 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     // and asks for one holistic pass over the whole unit and its blast radius.
     ("D22 routing scope", "Every review and consult brief, same-family or cross-family, follows this contract", TSK131_FINDINGS),
     ("D22 holistic brief", "Findings from earlier rounds enter the brief as checks within that pass, never as its whole scope.", TSK131_FINDINGS),
-    // TSK-255: the brief names the change's fit to the repository.
-    ("D22 fit brief", "and its fit, meaning the neighbour it should match, what it reuses and each departure with its reason", TSK131_FINDINGS),
+    // TSK-255: a review reads the change's fit to the repository; issue 121
+    // moved the sentence to the one home of what a review reads.
+    ("D22 fit brief", "and the fit (the neighbour it should match, what it reuses, each departure with its reason", TSK131_DISCIPLINE),
+    // Issue 121: the brief names the full range and the file that defines
+    // the pass, and the verdict names its head.
+    ("D22 brief range", "A review brief names the unit, its full range as `<base>...<head>`", TSK131_FINDINGS),
+    ("D22 brief home", "It asks for the one holistic pass `.codeflow/rules/workflow-discipline.md` defines under \"Review verdicts\" and \"Ground it in evidence\"", TSK131_FINDINGS),
+    ("D22 brief head", "the verdict names the head it covers and what the pass widened", TSK131_FINDINGS),
+    ("D22 scope floor", "that scope is a floor it widens as that rule says", TSK131_DISCIPLINE),
+    ("D22 no carry", "an approval never carries forward to a head it did not cover", TSK131_DISCIPLINE),
+    ("D22 manner maintainer", "as this repository's maintainer would: would a maintainer do it this way, and each departure named with its reason;", TSK131_DISCIPLINE),
+    ("D22 manner break", "to break the answer or the change, not to confirm it;", TSK131_DISCIPLINE),
+    ("D22 manner first principles", "from first principles: does a simpler shape meet the same need;", TSK131_DISCIPLINE),
+    ("D22 manner dimensions", "across development, QA, security and performance;", TSK131_DISCIPLINE),
+    ("D22 manner consequence", "findings ordered by consequence, each with its evidence.", TSK131_DISCIPLINE),
+    ("D22 named scope", "A brief's named scope is where review or research starts, never a fence", TSK131_DISCIPLINE),
+    ("D22 widen recorded", "widen in breadth and depth as far as the result needs, and record what was widened and why", TSK131_DISCIPLINE),
+    ("D22 inquiry and authority", "Widening what is read never needs approval; widening what is changed goes through the departure form", TSK131_DISCIPLINE),
     ("D22 consult", "the smallest evidenced remedy and its verification criterion, or the options when the fix is an operator decision", TSK131_CONSULT),
     ("D23 batch", "collects the findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
     ("D23 evaluation", "evaluates each proposed remedy against the diagnosed mechanism and the impact set", TSK131_FINDINGS),
@@ -1769,8 +1786,13 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D23 conflict", "Conflicting remedies are investigated against the mechanism, the impact evidence and the accepted contract.", TSK131_FINDINGS),
     ("D23 escalation", "One consolidated decision goes to the operator in the departure form under [blocker navigation](blockers-and-gates.md) only when resolution needs operator-owned intent, authority or risk acceptance.", TSK131_FINDINGS),
     ("D23 one cycle", "Apply the accepted batch as one apply-and-verify cycle (stacked dependents from Change impact stay separate) and re-verify the impact set.", TSK131_FINDINGS),
-    ("D23 re-review", "The finder confirms each material fix on the affected scope, widened when the impact or the prior evidence is uncertain", TSK131_FINDINGS),
-    ("D23 probe rerun", "A small fix whose finding came with a failing probe is confirmed by rerunning that probe and the affected tests", TSK131_FINDINGS),
+    // Issue 121: a fix is confirmed inside the finder's next whole-unit pass;
+    // the probe rerun is the one pass that is not a round, and its home is
+    // the discipline file every tier installs.
+    ("D23 re-review", "The finder confirms each material fix inside its next pass, as \"Review verdicts\" in `.codeflow/rules/workflow-discipline.md` says.", TSK131_FINDINGS),
+    ("D23 re-review home", "The finder confirms each material fix inside its next pass, a round over the whole unit at the new head;", TSK131_DISCIPLINE),
+    ("D23 probe rerun", "a small fix whose finding came with a failing probe is confirmed by rerunning that probe and the affected tests", TSK131_DISCIPLINE),
+    ("D23 not a round", "that rerun is the one pass that is not a round", TSK131_DISCIPLINE),
     ("D23 failed cycle", "A cycle that introduces an attributable regression is a failed cycle.", TSK131_FINDINGS),
     ("D23 gates unchanged", "The required gates and the [completion](completion.md) section are unchanged.", TSK131_FINDINGS),
     // TSK-184 removed the cycle cap (change list WP3 findings row, WP4
@@ -1821,7 +1843,7 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
     // or cycle cap.
     for required in [
         "Review is one holistic pass per revision: every assigned reviewer reviews the whole change in parallel on that revision, with no minimum or maximum number of passes.",
-        "The finder confirms each material fix on the affected scope",
+        "The finder confirms each material fix inside its next pass",
         "Nits need no confirmation.",
         "That decision is never made by a round counter and never by automatic acceptance.",
     ] {
@@ -1868,7 +1890,7 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
     }
     assert!(
         normalize_whitespace(&read(TSK131_DISCIPLINE))
-            .contains("The finder confirms each material fix on the affected scope")
+            .contains("The finder confirms each material fix inside its next pass")
             && normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
                 "There is no round cap: continue while repairs produce relevant evidence"
             ),
@@ -2453,6 +2475,82 @@ fn guard_plane_count_stays_four() {
         assert!(
             !text.contains("five planes"),
             "{minimal}: a fifth guard plane appeared"
+        );
+    }
+}
+
+/// Issue 121: review and research briefs are holistic. Each rule has one
+/// home, the other files point at it, and the words that licensed a delta
+/// round, a merge-only review or a fenced research scope are gone from the
+/// instructions that carried them (records and history keep them).
+#[test]
+fn review_and_research_briefs_name_the_whole_unit_and_no_fence() {
+    const AMENDED: &[&str] = &[
+        "assets/base/rules/workflow-discipline.md",
+        "assets/base/rules/worktrees.md",
+        "assets/base/rule-map.toml",
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "assets/base/ci/pull_request_template.md",
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/research-planning.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "assets/base/agents/skills/cf-consult/SKILL.md",
+        "assets/base/agents/skills/cf-herdr/references/review-and-harvest.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/claude/agents/cf-reviewer.md",
+        "assets/base/claude/agents/cf-security-reviewer.md",
+        "assets/base/claude/skills/cf-delegate/SKILL.md",
+        "assets/base/claude/skills/cf-method/SKILL.md",
+        "assets/base/claude/skills/cf-method/references/delivery-process.md",
+        "assets/base/claude/skills/cf-method/references/issue-handling.md",
+        "docs/delivery.md",
+        "docs/capabilities/CAP-010-duo-model-orchestration.md",
+        "docs-portal/figures/delivery/architecture.json",
+    ];
+    for path in AMENDED {
+        let text = normalize_whitespace(&read(path)).to_lowercase();
+        for retired in [
+            "integration effects only",
+            "unit reviews are not repeated",
+            "review the resolved hunks",
+            "immutable brief and repository scope",
+            "exactly what to review",
+            "permitted actions/files",
+            "on the affected scope",
+            "widened when the impact or the prior evidence is uncertain",
+            "reasoned unchanged-scope link",
+            "scope (commit range)",
+        ] {
+            assert!(!text.contains(retired), "{path} still says {retired:?}");
+        }
+    }
+    for (path, required) in [
+        ("assets/base/claude/agents/cf-reviewer.md", "head: <the block's reviewed commit in full; an earlier head's approval never carries>"),
+        ("assets/base/claude/agents/cf-reviewer.md", "widened: <what the pass read beyond the brief, and why | none>"),
+        ("assets/base/claude/agents/cf-reviewer.md", "not_verified: <what this pass did not establish>"),
+        ("assets/base/claude/agents/cf-reviewer.md", "and the `head` line naming this head. Anything less is `changes_requested`."),
+        ("assets/base/claude/agents/cf-reviewer.md", "`.codeflow/rules/workflow-discipline.md` \"Review verdicts\" and \"Ground it in evidence\" define"),
+        ("assets/base/agents/skills/cf-consult/SKILL.md", "`VERDICT: approved|changes_requested at <head>`"),
+        ("assets/base/agents/skills/cf-herdr/references/review-and-harvest.md", "a verdict that names another head, a narrower range, or carries an earlier approval forward is not the unit's verdict"),
+        ("assets/base/agents/skills/cf-model-orchestrator/resources/quality/research-planning.md", "the scope as briefed and as widened with why"),
+        ("assets/base/agents/skills/cf-model-orchestrator/resources/quality/research-planning.md", "the evidence sought that would have broken the finding"),
+        ("assets/base/agents/skills/cf-ship/references/pr-evidence.md", "a prior review carries only across a clean re-merge of the target, as `codeflow ci` binds it"),
+        ("assets/base/agents/skills/cf-ship/references/pr-evidence.md", "one row per current review: reviewer, `whole unit at <reviewed>`, verdict"),
+        ("assets/base/agents/skills/cf-model-orchestrator/resources/quality/completion.md", "every unit has approved cross-lineage review of the whole unit at its `reviewed` commit"),
+        ("assets/base/claude/skills/cf-method/SKILL.md", "a hand-resolved product hunk is that task's own work and returns it to a whole-unit review at its new head"),
+        ("assets/base/claude/skills/cf-delegate/SKILL.md", "**Every delegate prompt narrows authority and data, not reading.**"),
+        ("assets/base/claude/skills/cf-method/references/issue-handling.md", "Search for the class wherever the rule reaches"),
+        ("assets/base/claude/workflows/pipeline.workflow.js", "Review the whole unit: \\`git diff ${A.base ?? 'origin/main'}...HEAD\\`"),
+        ("assets/base/claude/workflows/pipeline.workflow.js", "//   base       string?    the commit the unit's diff is taken from"),
+    ] {
+        assert!(
+            normalize_whitespace(&read(path)).contains(&normalize_whitespace(required)),
+            "{path} lost {required:?}"
         );
     }
 }

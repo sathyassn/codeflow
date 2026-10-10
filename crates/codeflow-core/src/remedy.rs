@@ -256,6 +256,10 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// A PR body whose Reviews section does not approve the commit the
+    /// task's acceptance block binds (issue 121).
+    REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
+        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
@@ -274,6 +278,10 @@ catalog! {
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
+    /// A text correction of a completed standalone task's criteria
+    /// (ADR-0080): evidence, not a refusal.
+    CRITERIA_CORRECTION = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` proves only that the correction keeps every criterion and tag of the completed task; a human reviewer confirms that the substance of each changed criterion is unchanged, so the acceptance block still holds for it";
     /// A release-line legacy criteria change, landed before the release
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
@@ -618,6 +626,13 @@ catalog! {
     /// An id registry without host rules.
     DOCTOR_REGISTRY_UNPROTECTED = Step::Codeflow("codeflow remote protect"),
         "run `codeflow remote protect` to apply the host rules for codeflow/registry";
+    /// A default branch whose live rules let a pull request merge on checks
+    /// that did not run on its current tip (TSK-261).
+    DOCTOR_REMOTE_PERIMETER = Step::Codeflow("codeflow remote protect"),
+        "run `codeflow remote protect`, or have the repository owner turn on \"Require branches to be up to date before merging\" with every check in git.required_checks in the host rules for {branch}; then `codeflow doctor --check remote-perimeter` confirms it";
+    /// Host rules doctor could not read.
+    DOCTOR_REMOTE_UNREAD = Step::Manual("read the host rules for the default branch"),
+        "read the host rules for the default branch in the host's settings and confirm they require every check in git.required_checks on an up-to-date branch; `codeflow doctor` cannot verify them here";
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";

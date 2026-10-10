@@ -410,7 +410,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "CodeFlow ADR-0076",
         "the full gate belongs to the landing candidate",
         "continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope",
-        "red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it",
+        "red: diagnose first; drop a member only when evidence blames it",
         "the PR stays draft until its required evidence exists",
         "work-start check first (identity, intent-match, currency)",
         "cleanup needs merge proof",
@@ -478,6 +478,12 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
     assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+    // Issue 121: the kernel's land row names the hand-resolved hunk, and the
+    // dependents rule lives in the file the minimal tier's land row opens.
+    let git_rules = normalized(&read(&repo_root().join("assets/base/rules/git-rules.md")));
+    assert!(git_rules.contains(
+        "a member and its dependents leave it only when evidence attributes the failure to it"
+    ));
 }
 
 /// TSK-184 routing gate: the route rule is the first always rule at the

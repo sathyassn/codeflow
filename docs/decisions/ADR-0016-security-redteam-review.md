@@ -155,3 +155,11 @@ shipped state:
 
 The secret layers are unchanged: gitleaks in CI and the pre-commit scan block
 unconditionally, exactly as decided.
+
+## Note (2026-10-08)
+
+The "Remote caveat" bullet in Consequences, that remote branch protection is
+unavailable on this repo, described the private, Free-plan repository at the
+time. The repository is public and `main` now requires a pull request, the CI
+checks and an up-to-date branch, so ADR-0081 is the current rule. (Append-only
+note; the paragraph above is unchanged.)

@@ -18,8 +18,9 @@ Four rules hold everywhere:
   status update about work already recorded, goes unrecorded.
 - Planning happens only when a brief or spec is broken into an epic and its
   tasks.
-- Review is holistic: material findings are fixed in the open task, nits are
-  recorded, and no round count or other hard number decides anything.
+- Review is one whole-unit pass ("Review verdicts" in the discipline rules):
+  material findings are fixed in the open task, nits are recorded, and no
+  round count or other hard number decides anything.
 - Only the operator adds process (section 8).
 
 ## 1. The whole flow
@@ -213,9 +214,8 @@ reviewer; another task's criteria are never changed from this PR.
  batch candidate = line tip + reviewed heads
        |
        v
- integration review: the primary inspects resolved hunks and seams
- on product paths (the other lineage only for a hand-resolved
- product hunk or a hotspot two tasks touched)
+ landing check: a clean merge carries review;
+ a hand-resolved product hunk returns its task to review
        |
        v
  <full gate, once, on the exact candidate>
@@ -249,10 +249,9 @@ reviewer; another task's criteria are never changed from this PR.
 - Batches stay small and in dependency order, so a red gate drops little.
   A red gate is diagnosed before anything is dropped: a member leaves the
   batch only when evidence attributes the failure to it.
-- The primary always inspects the resolved hunks and integration seams on
-  product paths before the gate. The other lineage reviews integration
-  effects only when the primary hand-resolved a product hunk or two tasks
-  touched one hotspot; unit reviews are not repeated.
+- The primary inspects each landing merge as the skill's batch landing
+  steps say: a clean merge does not reopen unit review; a hand-resolved product
+  hunk returns its task to a whole-unit review at the new head.
 - The PR cites the full gate by its run id and revision from its durable
   home, and the review verdict lives on the PR, so the evidence survives the
   cleanup of worktrees and build directories.
@@ -263,10 +262,8 @@ reviewer; another task's criteria are never changed from this PR.
 - Review ends when every criterion not marked deferred has evidence on the
   reviewed revision, the needed checks are green, no material finding is open
   and every nit has a disposition. No round count decides it.
-- The finder confirms a material fix on the affected scope. A small fix whose
-  finding came with a failing probe is confirmed by rerunning that probe and
-  the affected tests, with no new model turn; a judgment-dependent or widened
-  fix goes back to the finder. Nits need no confirmation.
+- The finder confirms a material fix inside its next pass, as the
+  discipline rules say under "Review verdicts"; nits need no confirmation.
 - A later task may build on a predecessor's exact reviewed head before that
   predecessor lands, named with `--on TSK-A@<sha>`. The predecessor still
   lands first; a change to it after review means rebase and recheck.
@@ -337,9 +334,11 @@ no epic, with the event that revisits it), or drop with the reason.
                 acceptance block, PR body with evidence      hooks, guards, policy, CI,
                                                              credentials or deps change)
  land           candidate SHA, full gate output cited by    primary; other lineage when
-                run id, landing merge on the line,          a product hunk was
-                cleanup with merge proof                     hand-resolved or two tasks
-                                                             touched one hotspot
+                run id, landing merge on the line,          a hand-resolved product hunk
+                cleanup with merge proof                     returns the task to a whole-
+                                                             unit review; a path two
+                                                             tasks changed is the
+                                                             primary's look
  close          epic acceptance block, one PR to main,      operator merges main
                 cleanup with merge proof
 ```

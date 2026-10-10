@@ -25,7 +25,8 @@ resources own duties and assignment, the JSON records own selectors, effort,
 internal workers and escalation. After independent discovery and before
 reconciling or approving anything, read
 [resources/quality-contract.md](resources/quality-contract.md) once per
-session, then per unit only the sections its triggers name.
+session, its every-task sections then, and per unit the sections its
+triggers name.
 If `.codeflow/model-selection.json` contains project overrides, read
 [project model overrides](references/model-overrides.md) before preflight.
 For a multi-task plan or a possible dependency/decision change, also read
@@ -221,13 +222,14 @@ binding, permission or selector changed since it ran.
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
    in the project README when present, alongside the project operating
    contract. An existing approved plan controls the target until amended.
-   Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals. Discover facts yourself and apply the clarity checklist in
-   `cf-method`; ask the operator only what `cf-method/references/autonomy.md`
-   reserves to them. A task inside an approved epic starts from the epic plan:
-   reuse it after a compact currency, acceptance, dependency and
-   planning-anchor check. When the brief concerns agentic estimates, capacity
-   or deadlines, read [estimates](references/estimates.md).
+   Pin the brief: objective, starting scope, constraints, acceptance
+   criteria, and known non-goals. Discover facts yourself and apply the
+   clarity checklist in `cf-method`; ask the operator only what
+   `cf-method/references/autonomy.md` reserves to them. A task inside an
+   approved epic starts from the epic plan: reuse it after a compact
+   currency, acceptance, dependency and planning-anchor check. When the
+   brief concerns agentic estimates, capacity or deadlines, read
+   [estimates](references/estimates.md).
 2. Identify the active host and required lane from the seat table. Set the
    current session role to `host`; every cross-family entry uses `ROLE: peer`
    and the receiving primary's default effort. Only that primary dispatches
@@ -307,12 +309,13 @@ A solo `/cf-develop` run follows [solo fallback](references/solo-fallback.md).
 
 ### 1. Independent discovery, once per brief or epic
 
-Give both seats the same immutable brief and repository scope. Before
-exchanging conclusions, each seat independently returns its findings: source
-and documentation evidence; assumptions verified or still unresolved; edge,
-error and security cases; risks to compatibility, data, UX and operations.
+Give both seats the same immutable brief; its scope is where each starts.
+Before exchanging conclusions, each seat independently returns its findings:
+source and documentation evidence; assumptions verified or still unresolved; edge,
+error and security cases; performance, scale, concurrency and resource risks;
+risks to compatibility, data, UX and operations.
 The host records both outputs without collapsing disagreements. A task inside
-an approved epic does not repeat discovery; it starts from the epic plan.
+an approved epic does not repeat discovery.
 
 ### 2. One plan, challenged once
 

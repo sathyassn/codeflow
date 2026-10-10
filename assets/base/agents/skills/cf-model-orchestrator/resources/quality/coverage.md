@@ -1,8 +1,11 @@
 ## Coverage
 
-Scenario coverage comes first: happy paths, boundaries, malformed input,
-timeouts, partial failure, authorization, concurrency/idempotency, recovery,
-and regression cases as applicable.
+The scenario classes are stated once in the workflow discipline rules, "Prove
+it at every surface". Derive the cases from the contract: for each decision
+the change adds or alters, the input or state that would make it wrong; each
+limit from both sides; each error path through its recovery rather than its
+message; and for a library, parser, state machine or CLI, one failure the
+contract does not state, unless a regression test already encodes it.
 
 Tests must be capable of failing for a material regression in the behavior they
 claim to protect. Reject tautological assertions, expectations copied from the

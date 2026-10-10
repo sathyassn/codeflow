@@ -202,6 +202,29 @@ itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
 
+## Timeouts and superseded runs
+
+A job with no `timeout-minutes` runs for up to GitHub's default six hours
+when a step stalls, and holds a runner while it does. The `secret scan` and
+`security review` jobs stop after 30 minutes and the enforcing `commit
+standards` job after 20; a timed-out job fails, never passes. The `gates`
+job has no cap, because it runs your own suite, whose length only you know;
+add one to your copy when you know it (`codeflow update` keeps your edit).
+
+`codeflow-policy.yml` runs once per pull request event, and a push followed
+by a body edit sends two events seconds apart. Pull request runs share one
+concurrency group per pull request, so the newer run cancels the older one.
+The run that judges reads the pull request's body from the API when it runs,
+not from its event, so the newest body is judged whichever run survives; for
+that, the job's token gains `pull-requests: read` and stays read-only. Push,
+schedule and dispatch runs each get a group of their own and are never
+cancelled, so a registry check is never replaced by a newer event.
+Concurrency groups are shared across the repository, so any workflow that
+names the same group can cancel the policy check; that fails closed, since
+a cancelled check never passes, and requiring approval to run workflows
+from outside collaborators (the repository's Actions settings) limits who
+can start such a workflow.
+
 ## Project setup hook
 
 The gate runs on the runner's default toolchain unless the project sets up
@@ -270,6 +293,15 @@ failing check, or land the policy alone first.
 separate **remote branch-protection** plane (`codeflow remote`) stays
 host-API-specific because branch protection is configured through each host's
 API — see CodeFlow ADR-0017.
+
+A pull request's checks test the merge of its branch with the base as it was
+when the run started, and a later landing does not run them again. Two pull
+requests each green on an older base can therefore both merge and leave the
+base red. Close that on the host: `codeflow remote protect` requires the
+checks in `git.required_checks` on a branch that is up to date with its base,
+and `codeflow doctor --check remote-perimeter` warns when the live rules do
+not. Without that host rule, whoever merges updates the branch from the base
+and waits for the fresh run first.
 
 ## Optional external add-ons
 
