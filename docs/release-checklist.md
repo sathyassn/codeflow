@@ -33,9 +33,9 @@ explanations sit in the detail table after each section, keyed by box number.
 
 Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pending entries, local checks and repairs](releasing.md#pending-entries-local-checks-and-repairs). Details: [scope and version details](#scope-and-version-details).
 
-- [ ] 1.1 The normal work PR holds reviewed pending notes, one labelled entry with an adjacent impact annotation per item, and every warranted coupled stamp change. Evidence: the PR link and `release.py check-pr` output.
+- [ ] 1.1 The normal work PR holds reviewed pending notes in its own `changelog.d/` fragment, one labelled entry with an adjacent impact annotation per item, and every warranted coupled stamp change. Evidence: the PR link and `release.py check-pr` output.
 - [ ] 1.2 The cumulative version is the verified public baseline bumped once by the highest remaining pending impact, with breaking changes and migrations explicit. Evidence: `release.py sync` output.
-- [ ] 1.3 `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, the release notes and the proposed `vX.Y.Z` tag agree. Evidence: `release.py check-pr` output.
+- [ ] 1.3 A reviewed `release.py assemble` PR (`Impact: none`) wrote every fragment into `CHANGELOG.md`, no `changelog.d/` fragment remains at the source, and `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, the release notes and the proposed `vX.Y.Z` tag agree. Evidence: the assemble PR and `release.py check-pr` output.
 - [ ] 1.4 PR validation used the current target and the actual proposed merge tree, rechecked just before the human merge. Evidence: the fresh PR CI run.
 - [ ] 1.5 Every shipped behavior change links its capability or epic and its accepted architecture decision record (ADR), and the docs describe current behavior. Evidence: those links.
 - [ ] 1.6 The notes rendered from the final assembled source were read twice before the tag, as a new user and as a user upgrading from the last release. Evidence: both reads and their fixes.

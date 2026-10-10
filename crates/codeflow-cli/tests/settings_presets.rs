@@ -558,9 +558,15 @@ fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
             allow_write, expected,
             "{name}: the sandbox may add only the cf-present state directory and the full gate's lock and evidence directories as write roots"
         );
-        assert!(
-            value["sandbox"]["filesystem"]["denyWrite"].is_null(),
-            "{name}: no preset denyWrite is expected"
+        // The only write denies are the shell startup class and the default
+        // git configuration files (TSK-242).
+        let table = actions::table();
+        let mut denied = table.startup_paths.sandbox_write_denies();
+        denied.extend(table.git_config_paths.sandbox_write_denies());
+        assert_eq!(
+            value["sandbox"]["filesystem"]["denyWrite"],
+            serde_json::json!(denied),
+            "{name}: the sandbox denies writes only to the shell startup class and the default git configuration files"
         );
     }
 }
@@ -995,10 +1001,13 @@ fn codex_rules_are_generated_from_the_action_table() {
 }
 
 /// The generator reproduces the design's reference samples from the presets
-/// the design started from, with one stated departure: the read rules are
+/// the design started from, with two stated departures: the read rules are
 /// ordered in groups (review of PR 749), so the deny array holds the same
-/// rules as the reference in a different order. Hook commands are excluded:
-/// their fail-closed form and `--contract` flag are TSK-173's.
+/// rules as the reference in a different order; and the shell startup class
+/// and the default git configuration files (TSK-242), added after the
+/// samples were taken, add their `Edit` denies and sandbox `denyWrite`
+/// entries, which are removed here before the comparison. Hook commands are excluded: their fail-closed form and
+/// `--contract` flag are TSK-173's.
 #[test]
 fn the_generator_reproduces_the_reference_samples() {
     let table = actions::table();
@@ -1038,6 +1047,14 @@ fn the_generator_reproduces_the_reference_samples() {
     for name in PRESET_FILES {
         let mut generated = read_json(&evidence(&format!("current/{name}")));
         table.apply_to_claude_preset(&mut generated);
+        let mut startup = table.startup_paths.claude_edit_denies();
+        startup.extend(table.git_config_paths.claude_edit_denies());
+        let deny = generated["permissions"]["deny"].as_array_mut().unwrap();
+        deny.retain(|rule| !startup.iter().any(|s| rule == s));
+        generated["sandbox"]["filesystem"]
+            .as_object_mut()
+            .unwrap()
+            .remove("denyWrite");
         let mut expected = read_json(&evidence(&format!("claude/{name}")));
         for value in [&mut generated, &mut expected] {
             let object = value.as_object_mut().unwrap();

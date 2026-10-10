@@ -3339,6 +3339,74 @@ mod tests {
         assert!(!clean(), "a resolved conflict");
     }
 
+    /// TSK-264 AC-12 (ADR-0082): a branch that added a changelog fragment
+    /// merges a target that landed another one as its clean re-merge, so the
+    /// review carries; two branches that insert into one shared pending
+    /// section at the same place do not.
+    #[test]
+    fn two_fragment_branches_merge_as_their_clean_re_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let entry = |label: &str| {
+            format!("<!-- codeflow:release-impact patch -->\n- **{label}.** Detail.\n")
+        };
+        let section = |entries: &[&str]| {
+            let body: Vec<String> = entries.iter().map(|label| entry(label)).collect();
+            format!(
+                "# Changelog\n\n## [2.0.1]\n\n### Fixed\n\n{}\n## [2.0.0]\n\n- public\n",
+                body.join("\n")
+            )
+        };
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        write("CHANGELOG.md", &section(&["Carried"]));
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        let repo = Repository::open(root).unwrap();
+        let tip = || {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            read_merge(&repo, &head)
+        };
+
+        for (name, label) in [("one", "One"), ("two", "Two")] {
+            git(root, &["switch", "-qc", name, "main"]);
+            write(
+                &format!("changelog.d/{name}.md"),
+                &format!("### Fixed\n\n{}", entry(label)),
+            );
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", name]);
+        }
+        git(root, &["switch", "-q", "two"]);
+        git(root, &["merge", "-q", "--no-ff", "-m", "merge one", "one"]);
+        assert_eq!(tip(), MergeReading::Clean, "two fragments");
+
+        for (name, label) in [("shared-one", "One"), ("shared-two", "Two")] {
+            git(root, &["switch", "-qc", name, "main"]);
+            write("CHANGELOG.md", &section(&["Carried", label]));
+            git(root, &["commit", "-qam", name]);
+        }
+        let merged = crate::git::command()
+            .args(["merge", "-q", "--no-ff", "shared-one"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(!merged.status.success(), "one shared section conflicts");
+        write("CHANGELOG.md", &section(&["Carried", "One", "Two"]));
+        git(root, &["commit", "-qam", "resolved"]);
+        assert!(
+            matches!(tip(), MergeReading::Changed(paths) if paths == [b"CHANGELOG.md".to_vec()]),
+            "a shared section"
+        );
+    }
+
     /// A `## Closeout` line inside a comment or a fence is not the Closeout,
     /// so the text after it stays under review; a `status:` line outside the
     /// frontmatter is reviewed text.

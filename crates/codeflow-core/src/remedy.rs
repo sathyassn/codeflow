@@ -509,14 +509,14 @@ catalog! {
     IDS_SYNC_FAILED = Step::Codeflow("codeflow ids sync"),
         "rerun `codeflow ids sync` once the authority answers";
     /// A release preflight finding short of a broken tree.
-    RELEASE_PREFLIGHT_NOTE = Step::Edit("CHANGELOG.md"),
-        "resolve what the note names (most often the `CHANGELOG.md` entry), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT_NOTE = Step::Edit("changelog.d/"),
+        "resolve what the note names (most often the pending entry, a fragment under `changelog.d/`), then rerun `python3 {script} preflight --branch {branch}`";
     /// A release preflight that could not run.
     RELEASE_PREFLIGHT_UNRUN = Step::Edit("scripts/release.py"),
         "make `python3 scripts/release.py preflight --branch {branch}` run (python3 on PATH, the script intact), then push again";
     /// A push that breaks the release tree.
-    RELEASE_PREFLIGHT = Step::Edit("CHANGELOG.md"),
-        "fix the release state the preflight names above (the `CHANGELOG.md` entry or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
+        "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
     /// A test configuration that does not load.
     TEST_CONFIG_REPAIR = Step::Edit(".codeflow/test-config.json"),
         "repair .codeflow/test-config.json, then run `codeflow test --mode quick`";
@@ -628,6 +628,16 @@ catalog! {
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
+    /// Harness settings without the shell startup class (TSK-242).
+    DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
+        "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Files the home's startup files source from outside the class.
+    DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
+        "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
+    /// `ZDOTDIR` or `XDG_CONFIG_HOME` moved away from where the denies point.
+    /// Only the operator changes them: they are set in a startup file.
+    DOCTOR_STARTUP_RELOCATED = Step::Edit("~/.zshenv"),
+        "the operator sets ZDOTDIR and XDG_CONFIG_HOME back to their defaults in ~/.zshenv or wherever they are exported, since an agent session may not edit a startup file; until then the generated rules cover only the default locations, and the operator can add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the moved files to .claude/settings.json and read entries to the Codex profile";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";

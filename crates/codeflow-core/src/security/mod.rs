@@ -14,6 +14,11 @@
 //!
 //! - [`actions`]: the action table the permission presets for Claude, Codex
 //!   and Grok are generated from (ADR-0075, TSK-171).
+//! - [`startup`]: the shell startup class, refused for native edits by
+//!   edit-guard and for shell writes by the exec-guard (issue 86, TSK-242).
+//! - `unresolved`: the closed rule both shell guards share, which refuses a
+//!   form the guard cannot read on a line that names a startup file or a user
+//!   or system git configuration write (TSK-242).
 //!
 //! The unwired v1 modules (`git` command scanning, `path`, `fileops`,
 //! `branch`, `tmp`, `network`) and the `SecurityChecker` orchestrator were
@@ -35,6 +40,8 @@ pub mod pattern;
 pub mod policy;
 pub mod privilege;
 pub mod prose;
+pub mod startup;
+pub(crate) mod unresolved;
 
 pub use policy::SecurityPolicy;
 
