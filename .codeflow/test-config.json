@@ -132,6 +132,7 @@
           "command": "cargo test --workspace --quiet"
         }
       },
+      "timeout_seconds": 3600,
       "requires": [
         "rust-build"
       ]
@@ -143,6 +144,17 @@
       "modes": {
         "quick": {
           "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
+        }
+      },
+      "requires": []
+    },
+    {
+      "name": "contract-scans",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "quick": {
+          "command": "cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet"
         }
       },
       "requires": []
@@ -279,6 +291,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
         }
@@ -396,6 +411,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"(cd docs-portal && node scripts/workflow.mjs verify)\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }

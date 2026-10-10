@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-one health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-two health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,11 +19,12 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-one checks fall into six groups by the surface each one reads.
+The twenty-two checks fall into six groups by the surface each one reads.
 
-- **Git hooks and CI.** `hooks` and `ci-perimeter` read the hook subcommands
-  of the installed binary, git's active hooks directory and the scaffolded CI
-  workflow.
+- **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
+  `remote-perimeter` read the hook subcommands of the installed binary, git's
+  active hooks directory, the scaffolded CI workflow and, through `gh`, the
+  host rules of the default branch.
 - **Each harness's wiring.** `claude`, `codex` and `grok` look for each
   harness CLI on PATH and for its project hook files. `startup-files` reads
   the project's Claude settings and Codex profile for the shell startup
@@ -57,9 +58,9 @@ failed check never hides the others. Each line starts with a status badge.
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
 check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
 `policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
-`id-registry` and `adopter-fit`. The other twelve warn at most.
+`id-registry` and `adopter-fit`. The other thirteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-one names and exits 0.
+- `codeflow doctor --list` prints the twenty-two names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -81,6 +82,7 @@ Each row below is one check, in the order doctor prints it.
 | `delegate-roundtrip` | Drives the `codeflow` on PATH through a synthetic delegate lifecycle (init, ready, arm, accepted, terminal) in a private temporary directory outside the repository, removed afterwards | Fail: `codeflow` is not on PATH, the temporary workspace could not be created, or a lifecycle stage failed. The message names the stage | Install the current `codeflow` build on PATH and rerun. The check passes only against an installed build that has the lifecycle ([capabilities](capabilities.md)) |
 | `repo-integrity` | `git rev-parse --is-bare-repository`, the `.git` entry, and `git worktree list` against the protected branches in `policy.json` | Fail: `core.bare=true` on a repository that has a working tree, or a protected branch is checked out in a linked worktree | Run `git config core.bare false`. Switch the named worktree to its feature branch |
 | `ci-perimeter` | The CI workflow recorded at install, by default `.github/workflows/codeflow-ci.yml` | Warn: its Install codeflow step is still the shipped placeholder, so the CI test and validate gates fail red and enforce nothing. Ok when no workflow exists | Replace the placeholder step with the release installer or a from-source build |
+| `remote-perimeter` | Through `gh`, the GitHub `origin`'s default branch: the rules its rulesets apply (`gh api repos/<owner>/<repo>/rules/branches/<branch>`), its classic protection and the bypass lists of the rules that require checks, against `git.required_checks` | Warn: the branch requires no checks, no rule that requires checks requires the branch to be up to date, a name in `git.required_checks` is not required, or every rule that requires a listed name, or the up-to-date setting, lets administrators or listed actors bypass it. Note: no GitHub `origin`, no `gh`, a policy file that does not parse, a `git.required_checks` list the schema refuses (empty, a blank name or the wrong type) or a misspelt key in its place, or the host rules, the classic protection or a bypass list that decides the answer cannot be read. Only a 404 counts as no classic protection; any other failure to read it is a note unless the rulesets alone meet the policy. A schema error on another key does not stop the check; doctor names it beside the answer | Run `codeflow remote protect`, or have the repository owner turn on "Require branches to be up to date before merging" with the named checks. Without it, two pull requests each green on an older base can merge and leave the branch red |
 | `managed-drift` | Each managed-region file in `.codeflow/manifest.json`, hashing the block between its codeflow markers against the recorded hash | Warn: a listed region was edited inside its markers, and the next `codeflow update` will regenerate it and lose the edit | Move the edit outside the markers, where the content is project-owned |
 | `customization` | `docs/product.md` and `docs/architecture.md` for scaffold placeholders such as `{{PRODUCT_PURPOSE}}`, and `AGENTS.md` for its placeholder comment | Warn: a listed file still holds a placeholder, or one of the two docs is missing. Ok when neither doc exists, as on the minimal tier | Run `/cf-customize` |
 | `instructions` | The `AGENTS.md` chain Codex loads for each directory that holds one, from the root down to that directory | Warn: a chain is over Codex's 32 KiB instruction limit, so Codex cuts its end, where the project section lives. Ok when there is no `AGENTS.md` | Move project detail out of the project section of `AGENTS.md` into files it points at |

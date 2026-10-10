@@ -42,7 +42,7 @@ The stages, in order, with the actor for each:
 |---|---|---|
 | Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry, in the PR's own fragment under `changelog.d/` |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor |
-| Merge | A human | PR CI checks the actual proposed merge tree, and the human merger requires the fresh check |
+| Merge | A human | PR CI checks the actual proposed merge tree; `main` requires an up-to-date branch (ADR-0081), and where `doctor` warns that it does not, the human merger requires the fresh check |
 | Dispatch | A human with current write, maintain or admin permission | A dry run passes, then a dispatch with the `vX.Y.Z` tag |
 | Local-artifact authority job | The generated workflow | Checks the dispatch rules, source, version, notes and prior results, then creates or resumes an empty draft |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |
@@ -70,8 +70,13 @@ Merge:
 - Main-push and integration-line CI repeat the state check without writing.
 - These release jobs live in `codeflow-release.yml`, outside the managed
   `codeflow-ci.yml` that every adopter receives. No scaffold installs them.
-- Without strict branch protection a stale clean merge is still possible, so
-  the human merger must require the fresh check.
+- A PR check tests the merge with `main` as it was when the run started, so
+  a green from an older `main` says nothing about the current one. Under
+  ADR-0081 the `main` ruleset requires branches to be up to date before
+  merging, a setting the operator turns on: a PR that is behind is updated
+  and its checks run again before it can merge. `codeflow doctor --check
+  remote-perimeter` reads whether the setting is on; while it warns, the
+  human merger must require the fresh check.
 
 Dispatch:
 
