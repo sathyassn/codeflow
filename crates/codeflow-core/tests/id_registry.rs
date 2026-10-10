@@ -2103,3 +2103,116 @@ fn property_issued_numbers_exceed_every_number_ever_added_and_never_repeat() {
         "the walk issued enough numbers: {issued:?}"
     );
 }
+
+// --- Issue 94: no record write through a link --------------------------------
+
+/// `ids backfill` writes no `uid` through a linked `project-management`.
+#[cfg(unix)]
+#[test]
+fn backfill_never_writes_through_a_linked_record_root() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    write_record(&a, "TSK-001", None);
+    commit_all(&a, "legacy record");
+    git(&a, &["push", "-q", "origin", "main"]);
+    seed::seed(&a, None).unwrap();
+    // The working tree's records now live behind a link, as a branch that
+    // commits one would leave them.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::rename(a.join("project-management"), outside.path().join("pm")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("pm"), a.join("project-management")).unwrap();
+    let outside_record = outside.path().join("pm/tasks/TSK-001.md");
+    let before = std::fs::read(&outside_record).unwrap();
+    let error = seed::backfill(&a).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("project-management is a symbolic link"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&outside_record).unwrap(), before);
+}
+
+/// `ids retarget` rewrites no tracked link under `docs/`, and the renumbered
+/// record lands only beneath the root.
+#[cfg(unix)]
+#[test]
+fn retarget_never_writes_through_a_tracked_link() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    git(&a, &["checkout", "-q", "-b", "task/links", "main"]);
+    write_record(&a, "TSK-005", Some(&new_uid()));
+    let outside = tempfile::tempdir().unwrap();
+    let note = outside.path().join("note.md");
+    std::fs::write(&note, "see TSK-005\n").unwrap();
+    std::fs::create_dir_all(a.join("docs")).unwrap();
+    std::os::unix::fs::symlink(&note, a.join("docs/note.md")).unwrap();
+    std::fs::write(a.join("docs/plain.md"), "see TSK-005\n").unwrap();
+    commit_all(&a, "records and a tracked link");
+    let moved = seed::retarget(&a, &RegId::parse("TSK-005").unwrap()).unwrap();
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "see TSK-005\n");
+    let plain = std::fs::read_to_string(a.join("docs/plain.md")).unwrap();
+    assert_eq!(plain, format!("see {}\n", moved.to));
+    assert!(std::fs::symlink_metadata(a.join("docs/note.md"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(!a.join("project-management/tasks/TSK-005.md").exists());
+    assert!(moved.path.is_file());
+}
+
+/// `ids retarget` refuses a file already at the new number before it
+/// changes any file in the tree.
+#[test]
+fn retarget_refuses_an_existing_destination_before_changing_anything() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    // The registry binds this record's uid to TSK-002, so retarget moves it
+    // there, where another file already sits.
+    let bound = task(&a, "bound").unwrap();
+    assert_eq!(bound.id.to_string(), "TSK-002");
+    git(&a, &["checkout", "-q", "-b", "task/collide", "main"]);
+    let source = write_record(&a, "TSK-005", Some(&bound.uid));
+    std::fs::create_dir_all(a.join("docs")).unwrap();
+    std::fs::write(a.join("docs/plain.md"), "see TSK-005\n").unwrap();
+    commit_all(&a, "a record and a link to it");
+    let occupied = a.join("project-management/tasks/TSK-002.md");
+    std::fs::write(&occupied, "someone else's file\n").unwrap();
+    let before = [
+        std::fs::read(&source).unwrap(),
+        std::fs::read(a.join("docs/plain.md")).unwrap(),
+        std::fs::read(&occupied).unwrap(),
+    ];
+    let error = seed::retarget(&a, &RegId::parse("TSK-005").unwrap()).unwrap_err();
+    assert!(error.to_string().contains("exists"), "{error}");
+    let after = [
+        std::fs::read(&source).unwrap(),
+        std::fs::read(a.join("docs/plain.md")).unwrap(),
+        std::fs::read(&occupied).unwrap(),
+    ];
+    assert_eq!(after, before);
+}
+
+/// A destination that is tracked but absent on disk is not taken for a
+/// link: the renumbered record keeps its old id in `former_ids`.
+#[test]
+fn retarget_keeps_former_ids_when_the_destination_is_tracked_but_absent() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    let bound = task(&a, "bound").unwrap();
+    git(&a, &["checkout", "-q", "-b", "task/absent", "main"]);
+    write_record(&a, "TSK-005", Some(&bound.uid));
+    let destination = write_record(&a, "TSK-002", None);
+    commit_all(&a, "a record and a tracked destination");
+    std::fs::remove_file(&destination).unwrap();
+    let moved = seed::retarget(&a, &RegId::parse("TSK-005").unwrap()).unwrap();
+    assert_eq!(moved.to.to_string(), "TSK-002");
+    let text = std::fs::read_to_string(&destination).unwrap();
+    assert!(
+        text.contains("id: TSK-002") && text.contains("former_ids: [TSK-005]"),
+        "{text}"
+    );
+}
