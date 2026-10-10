@@ -1822,11 +1822,19 @@ pub fn anchored_project_file(
         .and_then(|r| r.peel_to_commit())
         .map_err(|e| e.to_string())?;
     let record = format!("project-management/tasks/{task_id}.md");
-    let entry = head
+    // Only a record the head does not hold is uncommitted (issue 79): a
+    // tree that cannot be read is an error.
+    let entry = match head
         .tree()
         .map_err(|e| e.to_string())?
         .get_path(Path::new(&record))
-        .map_err(|_| format!("task {task_id} not committed"))?;
+    {
+        Ok(entry) => entry,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            return Err(format!("task {task_id} not committed"))
+        }
+        Err(e) => return Err(format!("cannot read task {task_id} at HEAD: {e}")),
+    };
     if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
         return Err("task record must be a regular file".into());
     }
@@ -1843,12 +1851,23 @@ pub fn anchored_project_file(
     // target it declares there, so a rewritten target cannot borrow another
     // line's file, and a standalone record arriving with its own pull
     // request is judged at the head. Only the target's file is then read.
-    let branch = repo
-        .head()
-        .ok()
-        .filter(git2::Reference::is_branch)
-        .and_then(|reference| reference.shorthand().ok().map(str::to_owned))
-        .ok_or("design authority is read only on the task's own branch")?;
+    // The branch name is read exactly (issue 79): a head that cannot be read
+    // is an error, and a name that is not UTF-8 is refused by its bytes,
+    // never read as a lookalike branch.
+    let reference = repo.head().map_err(|e| e.to_string())?;
+    if !reference.is_branch() {
+        return Err("design authority is read only on the task's own branch".into());
+    }
+    let shorthand = crate::git::name::reference_shorthand(&reference);
+    let branch = shorthand
+        .rule_text()
+        .map_err(|_| {
+            format!(
+                "design authority is read only on the task's own branch, and {} is not UTF-8",
+                shorthand.display()
+            )
+        })?
+        .to_owned();
     let base = check_work_start_for_branch(repo_root, task_id, &target, &branch)
         .map_err(|e| e.to_string())?
         .merge_base;
@@ -1860,11 +1879,18 @@ pub fn anchored_project_file(
     // Accepted as a standalone record new at the head: the target does not
     // carry it, so only a record that never declared another target counts.
     // A retarget is not a new arrival.
-    if tree.get_path(Path::new(&record)).is_err() {
-        refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
+    // Absence is git's not-found answer only (issue 79): a tree that cannot
+    // be read refuses, never reads as a target without the file.
+    match tree.get_path(Path::new(&record)) {
+        Ok(_) => {}
+        Err(e) if e.code() == git2::ErrorCode::NotFound => {
+            refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
+        }
+        Err(e) => return Err(format!("cannot read {record} on {target}: {e}")),
     }
     let content = match tree.get_path(Path::new(path)) {
-        Err(_) => None,
+        Err(e) if e.code() == git2::ErrorCode::NotFound => None,
+        Err(e) => return Err(format!("cannot read {path} on {target}: {e}")),
         Ok(entry) => {
             if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
                 return Err(format!("{path} on {target} must be a regular file"));
