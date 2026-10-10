@@ -709,8 +709,10 @@ fn work_checks<'a>(
 /// (issue 121): a review row naming an earlier head is the approval of a
 /// head the review did not cover. The record is read at `head`; no active
 /// block means the task is still in progress, and a light range may leave
-/// the Reviews section out or record none. The row check is `review_names_revision`, the
-/// one `work claim --on` uses.
+/// the Reviews section out or record none. The row check is the strict
+/// `review_names_revision` (the full commit, a verdict cell of exactly
+/// `approved` or `approve`); `work claim --on` reads its pin with the
+/// permissive `reviewed_revisions` (prose verdicts, abbreviations).
 fn review_row_check(
     root: &Path,
     git: &GitPolicy,
