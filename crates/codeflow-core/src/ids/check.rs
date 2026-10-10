@@ -32,13 +32,15 @@ impl Report {
 
 /// The registry ref to read: the fetched authority copy, else the local
 /// branch (a repository with no remote).
-#[must_use]
-pub fn registry_ref(git: &Git) -> Option<String> {
+///
+/// # Errors
+/// Returns an error when Git cannot inspect either registry ref.
+pub fn registry_ref(git: &Git) -> Result<Option<String>, IdsError> {
     let tracking = tracking_ref(AUTHORITY);
-    if git.rev(&tracking).is_some() {
-        return Some(tracking);
+    if git.rev(&tracking)?.is_some() {
+        return Ok(Some(tracking));
     }
-    git.rev(REGISTRY_REF).map(|_| REGISTRY_REF.to_string())
+    Ok(git.rev(REGISTRY_REF)?.map(|_| REGISTRY_REF.to_string()))
 }
 
 /// `ids check`: the registry's growth and damage rules, reconciled with the
@@ -55,7 +57,10 @@ pub fn check(git: &Git, registry: Option<&str>) -> Result<Report, IdsError> {
         report.blocks.push(IdsError::Shallow.to_string());
         return Ok(report);
     }
-    let Some(registry) = registry.map(str::to_string).or_else(|| registry_ref(git)) else {
+    let Some(registry) = (match registry {
+        Some(value) => Some(value.to_string()),
+        None => registry_ref(git)?,
+    }) else {
         report.blocks.push(
             "no `codeflow/registry` found: CI fetches it explicitly; a maintainer seeds it once with `codeflow ids seed`"
                 .to_string(),
@@ -124,6 +129,10 @@ fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsE
         for copy in &records.copies {
             let entry = ledger.entry(&copy.id);
             let verdict = match (&copy.uid, entry) {
+                (_, None) if ledger.holds(&copy.id) => format!(
+                    "{} on {name} is held by an invalid registry entry; repair the registry before landing it (R-8)",
+                    copy.id
+                ),
                 (_, None) => {
                     unplaced
                         .entry(copy.id.to_string())
@@ -204,7 +213,7 @@ struct Added {
 
 /// The record texts a range's merge rule reads, fetched in one
 /// `git cat-file --batch` rather than a process per record.
-struct Texts(HashMap<String, Vec<u8>>);
+struct Texts(HashMap<String, String>);
 
 impl Texts {
     fn read(git: &Git, wanted: &[(&str, &str)]) -> Result<Texts, IdsError> {
@@ -212,13 +221,22 @@ impl Texts {
             .iter()
             .map(|(rev, path)| format!("{rev}:{path}"))
             .collect();
-        git.blobs(&specs).map(Texts)
+        git.blobs(&specs)?
+            .into_iter()
+            .map(|(key, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| {
+                    IdsError::Git(format!("record {key} is not valid UTF-8: {error}"))
+                })?;
+                Ok((key, text))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map(Texts)
     }
 
     /// The `uid` of the record at `path` in `rev`, if it has one.
     fn uid_at(&self, rev: &str, path: &str) -> Option<String> {
         let text = self.0.get(&format!("{rev}:{path}"))?;
-        frontmatter_value(&String::from_utf8_lossy(text), "uid")
+        frontmatter_value(text, "uid")
     }
 }
 
@@ -233,7 +251,11 @@ impl Texts {
 /// Returns an error when git fails.
 pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError> {
     let mut report = Report::default();
-    let merge_base = git.run(&["merge-base", base, head])?.trim().to_string();
+    let merge_base = git
+        .run(&["merge-base", base, head])?
+        .strip_suffix('\n')
+        .unwrap_or("")
+        .to_string();
     let mut args = vec![
         "diff",
         "--name-status",
@@ -244,11 +266,12 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
         "--",
     ];
     args.extend_from_slice(&RECORD_ROOTS);
-    let diff = git.run(&args)?;
+    let diff = git.run_bytes(&args)?;
     let mut added_paths: Vec<(RegId, String)> = Vec::new();
     let mut removed: HashMap<RegId, String> = HashMap::new();
     let mut modified: Vec<(RegId, String)> = Vec::new();
-    let mut fields = z_fields(&diff);
+    let fields = z_fields(&diff);
+    let mut fields = fields.iter().map(String::as_str);
     while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
         let Some(id) = record_id_from_path(path) else {
             continue;
@@ -357,7 +380,7 @@ fn bind(
     added: &[Added],
     report: &mut Report,
 ) -> Result<(), IdsError> {
-    let Some(registry) = registry_ref(git) else {
+    let Some(registry) = registry_ref(git)? else {
         report.blocks.push(format!(
             "{} record(s) added but no `codeflow/registry` was fetched: CI must fetch it explicitly with full history (R-20)",
             added.len()
@@ -416,8 +439,8 @@ fn scan(
     added: &[Added],
     report: &mut Report,
 ) -> Result<(), IdsError> {
-    let head_sha = git.rev(head).unwrap_or_default();
-    let ledger = match registry_ref(git) {
+    let head_sha = git.rev(head)?.unwrap_or_default();
+    let ledger = match registry_ref(git)? {
         Some(registry) => Ledger::read(git, &registry)?,
         None => Ledger::default(),
     };
@@ -464,4 +487,68 @@ fn scan(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_record_uid_cache_refuses_undecodable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nuid: caf\xff\n---\n",
+            )],
+        );
+        assert!(super::Texts::read(
+            &super::Git::new(dir.path()),
+            &[("HEAD", "project-management/tasks/TSK-001.md")]
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+
+    #[test]
+    fn r22_uid_reader_missing_base_refuses_but_absent_uid_is_legacy() {
+        let (dir, repo, _) = repository(TASK, b"---\nid: TSK-001\n---\n");
+        let git = Git::new(dir.path());
+        let path = std::str::from_utf8(TASK).unwrap();
+        let texts = Texts::read(&git, &[("HEAD", path)]).unwrap();
+        assert!(texts.uid_at("HEAD", path).is_none());
+        remove_blob(&repo, b"---\nid: TSK-001\n---\n");
+        assert!(Texts::read(&git, &[("HEAD", path)]).is_err());
+    }
+
+    #[test]
+    fn r22_uid_edit_missing_base_cannot_be_backfill() {
+        let (dir, repo, base) = repository(TASK, b"---\nid: TSK-001\n---\n");
+        let head = crate::git::add_commit(&repo, &[(TASK, TEXT)]);
+        remove_blob(&repo, b"---\nid: TSK-001\n---\n");
+        assert!(matches!(
+            merge_rule(&Git::new(dir.path()), &base.to_string(), &head.to_string()),
+            Err(IdsError::Git(_))
+        ));
+    }
+
+    #[test]
+    fn r22_invalid_first_registry_entry_blocks_landing_copy() {
+        let (dir, repo, _) = repository(b"ids/TSK/001.toml", b"broken = [");
+        let git = Git::new(dir.path());
+        let ledger = Ledger::read(&git, "HEAD").unwrap();
+        crate::git::add_commit(&repo, &[(TASK, TEXT)]);
+        let mut report = Report::default();
+        reconcile(&git, &ledger, &mut report).unwrap();
+        assert!(!report.blocks.is_empty(), "{report:?}");
+        let mut absent = Report::default();
+        reconcile(&git, &Ledger::default(), &mut absent).unwrap();
+        assert!(absent.blocks.is_empty());
+        assert!(!absent.warns.is_empty());
+    }
 }

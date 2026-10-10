@@ -410,7 +410,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "CodeFlow ADR-0076",
         "the full gate belongs to the landing candidate",
         "continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope",
-        "red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it",
+        "red: diagnose first; drop a member only when evidence blames it",
         "the PR stays draft until its required evidence exists",
         "work-start check first (identity, intent-match, currency)",
         "cleanup needs merge proof",
@@ -478,6 +478,12 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
     assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+    // Issue 121: the kernel's land row names the hand-resolved hunk, and the
+    // dependents rule lives in the file the minimal tier's land row opens.
+    let git_rules = normalized(&read(&repo_root().join("assets/base/rules/git-rules.md")));
+    assert!(git_rules.contains(
+        "a member and its dependents leave it only when evidence attributes the failure to it"
+    ));
 }
 
 /// TSK-184 routing gate: the route rule is the first always rule at the
@@ -759,9 +765,9 @@ struct Legacy {
 }
 
 impl AssetSource for Legacy {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
         match self.overrides.get(path) {
-            Some(value) => value.clone(),
+            Some(value) => Ok(value.clone()),
             None => self.current.read(path),
         }
     }
@@ -771,7 +777,13 @@ fn legacy_source() -> Legacy {
     let fixtures =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy-root-contracts");
     let current = assets();
-    let manifest = String::from_utf8(current.read("base/scaffold-manifest.toml").unwrap()).unwrap();
+    let manifest = String::from_utf8(
+        current
+            .read("base/scaffold-manifest.toml")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     // The previous manifest: one AGENTS entry for standard and full, and no
     // references.
     let full_entry = "[[entry]]\nsrc = \"AGENTS.full.md.tmpl\"\ndest = \"AGENTS.md\"\nownership = \"managed-region\"\nregion = \"markdown\"\ntiers = [\"full\"]\ntemplate = true\n\n";

@@ -31,7 +31,13 @@ pub struct ValidateArgs {
 }
 
 pub fn run(args: &ValidateArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let mut failed = false;
 
     failed |= !validate_policy(&root);
@@ -165,22 +171,33 @@ fn validate_policy(root: &Path) -> bool {
 fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     let base = path.map_or_else(|| root.join("project-management"), Path::to_path_buf);
 
-    if !base.exists() {
-        println!(
-            "validate: {} absent — no records to validate at this tier",
-            base.display()
-        );
-        return true;
-    }
+    let metadata = match std::fs::metadata(&base) {
+        Ok(metadata) => metadata,
+        // Absent only when the name itself is missing: the root is the
+        // discovered repository root, and a dangling link cannot be read.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && path.is_none()
+                && std::fs::symlink_metadata(&base)
+                    .is_err_and(|leaf| leaf.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            println!(
+                "validate: {} absent — no records to validate at this tier",
+                base.display()
+            );
+            return true;
+        }
+        Err(error) => {
+            eprintln!("validate: cannot read {}: {error}", base.display());
+            return false;
+        }
+    };
 
-    let files = if base.is_file() {
+    let files = if metadata.is_file() {
         // An explicitly named file must be validatable — silently skipping it
         // and reporting "0 record(s) clean" would be a false green.
-        let name = base
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        if !name.starts_with("TSK-") && !name.starts_with("EPC-") && !name.starts_with("SPC-") {
+        let name = base.file_name().unwrap_or_default().as_encoded_bytes();
+        if !name.starts_with(b"TSK-") && !name.starts_with(b"EPC-") && !name.starts_with(b"SPC-") {
             eprintln!(
                 "validate: {} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated",
                 base.display()
@@ -189,7 +206,16 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         }
         vec![base.clone()]
     } else {
-        collect_record_files(&base)
+        match collect_record_files(&base) {
+            Ok(files) => files,
+            Err(error) => {
+                eprintln!(
+                    "validate: cannot read records under {}: {error}",
+                    base.display()
+                );
+                return false;
+            }
+        }
     };
 
     if files.is_empty() {
@@ -202,15 +228,12 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     let mut checked = 0usize;
 
     for file in files {
-        let name = file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let result = if name.starts_with("TSK-") {
+        let name = file.file_name().unwrap_or_default().as_encoded_bytes();
+        let result = if name.starts_with(b"TSK-") {
             validate_task(&file, &opts)
-        } else if name.starts_with("EPC-") {
+        } else if name.starts_with(b"EPC-") {
             validate_epic(&file, &opts)
-        } else if name.starts_with("SPC-") {
+        } else if name.starts_with(b"SPC-") {
             validate_spec(&file, &opts)
         } else {
             continue;
@@ -247,27 +270,23 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
 }
 
 /// Recursively collect `EPC-*`/`SPC-*`/`TSK-*` markdown files.
-fn collect_record_files(dir: &Path) -> Vec<PathBuf> {
+fn collect_record_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    let mut paths = std::fs::read_dir(dir)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
     paths.sort();
     for path in paths {
-        if path.is_dir() {
-            out.extend(collect_record_files(&path));
+        if std::fs::metadata(&path)?.is_dir() {
+            out.extend(collect_record_files(&path)?);
         } else if path.extension().is_some_and(|ext| ext == "md") {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            if name.starts_with("TSK-") || name.starts_with("EPC-") || name.starts_with("SPC-") {
+            let name = path.file_name().unwrap_or_default().as_encoded_bytes();
+            if name.starts_with(b"TSK-") || name.starts_with(b"EPC-") || name.starts_with(b"SPC-") {
                 out.push(path);
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// The docs-integrity lint. Returns `true` when clean.
@@ -298,6 +317,26 @@ fn run_docs_lint(root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A record home behind a dangling link cannot be read; it is never a
+    /// tier without records. A missing home still validates clean.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_record_home_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::validate_records(dir.path(), None));
+        std::os::unix::fs::symlink("gone", dir.path().join("project-management")).unwrap();
+        assert!(!super::validate_records(dir.path(), None));
+    }
+
+    #[test]
+    fn r16_unreadable_record_directory_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("records");
+        std::fs::write(&file, "not a directory").unwrap();
+        assert!(super::collect_record_files(&file).is_err());
+    }
+
     use std::path::{Path, PathBuf};
 
     use codeflow_core::validate::portal::lookups::{

@@ -132,7 +132,7 @@ pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<Capabilit
     let lines: Vec<&str> = masked.lines().collect();
     let mut i = 0;
     while i < lines.len() {
-        let trimmed = lines[i].trim();
+        let trimmed = lines[i].trim_matches([' ', '\t']);
         let closing = match trimmed {
             "```yaml" | "```yml" => "```",
             "~~~yaml" | "~~~yml" => "~~~",
@@ -144,7 +144,7 @@ pub fn parse_capabilities(content: &str) -> (Vec<CapabilityEntry>, Vec<Capabilit
         let fence_line = i + 1; // 1-based
         let block_start = i + 1;
         let mut j = block_start;
-        while j < lines.len() && lines[j].trim() != closing {
+        while j < lines.len() && lines[j].trim_matches([' ', '\t']) != closing {
             j += 1;
         }
         let block = lines[block_start..j].join("\n");

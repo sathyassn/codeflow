@@ -186,7 +186,13 @@ fn update(
 /// `codeflow update --pin <version>`: pin that release and its archive
 /// digests for CI (sathyassn/codeflow#47). Returns the exit code.
 fn pin_release(root: &std::path::Path, version: &str) -> i32 {
-    let base = scaffold::release_pin::release_url();
+    let base = match scaffold::release_pin::release_url() {
+        Ok(base) => base,
+        Err(error) => {
+            eprintln!("codeflow update --pin: error: {error}");
+            return 1;
+        }
+    };
     match scaffold::release_pin::pin_release(
         root,
         version,
@@ -207,7 +213,13 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
 /// Plain `init` and `update` switch nothing in a folder that holds nested
 /// repositories; they name `codeflow init --workspace` instead.
 fn print_workspace_hint(root: &std::path::Path) {
-    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    let policy = match codeflow_core::hooks::policy::Policy::load(root) {
+        Ok(policy) => policy.git,
+        Err(error) => {
+            eprintln!("codeflow: cannot read workspace policy: {error}");
+            return;
+        }
+    };
     if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
         println!("{hint}");
     }
@@ -222,7 +234,9 @@ fn prepare_workspace(
     if !workspace {
         return Ok(None);
     }
-    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    let policy = codeflow_core::hooks::policy::Policy::load(root)
+        .map_err(anyhow::Error::msg)?
+        .git;
     Ok(Some(root_checkout::prepare_branch(root, &policy)?))
 }
 

@@ -69,8 +69,9 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 
 ## Reviews
 
-<!-- One row per current review: reviewer (human or tool), scope (commit
-     range), verdict. Findings live in the linked record. A row is review
+<!-- One row per current review: reviewer (human or tool), scope
+     (`whole unit at <reviewed>`, the acceptance block's commit in full),
+     verdict. Findings live in the linked record. A row is review
      provenance, not authorship attribution. "None: reason" if unreviewed. -->
 
 | Reviewer | Scope | Verdict |

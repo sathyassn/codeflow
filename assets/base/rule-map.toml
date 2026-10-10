@@ -447,7 +447,7 @@ key = "land"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "land a batch on the integration line"
-action = "reviewed heads go on a candidate in dependency order; review the resolved hunks; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it; green: the line moves to the gated tree"
+action = "reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = "cf-method", section = "Managing a body of work", must_open = true, reason = "landing modes and drift control" }]
 
 [[moment]]
@@ -455,7 +455,7 @@ key = "land"
 group = "delivery"
 tiers = ["minimal"]
 when = "land a batch on the integration line"
-action = "reviewed heads go on a candidate in dependency order; review the resolved hunks; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it; green: the line moves to the gated tree"
+action = "reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree"
 see = [{ target = ".codeflow/rules/git-rules.md", section = "Bodies of work" }]
 
 [[moment]]

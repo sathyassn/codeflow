@@ -69,7 +69,13 @@ pub fn run(args: &WorkArgs) -> i32 {
 }
 
 fn next(epic: Option<&str>, as_json: bool) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let mut backlog = match readiness::backlog(&root) {
         Ok(backlog) => backlog,
         Err(error) => {
@@ -99,7 +105,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
             &root,
             &entry.task_id,
             &entry.target,
-            &|branch, sha, named| {
+            &|branch, sha, covers| {
                 let repository = repositories
                     .get_or_init(|| {
                         codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
@@ -107,7 +113,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
                     .as_ref()
                     .map_err(Clone::clone)?
                     .repository(branch)?;
-                reviewed(&root, &repository, branch, sha, named)
+                reviewed(&root, &repository, branch, sha, covers)
             },
         ) {
             let noun = if pins.len() == 1 {
@@ -194,7 +200,13 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
 }
 
 fn claim(task_id: &str, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     if !on.is_empty() {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
             eprintln!("work claim: error: {error}");
@@ -240,7 +252,13 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
 /// the command succeeds; CI reports the same finding at the same level. An
 /// unreadable tracking state always blocks.
 fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     // An undeterminable tracking state blocks whatever the level says, as in
     // CI's `work.tracking_state`.
     if let Err(error) = durable_work_tracking_enabled(&root) {
@@ -253,7 +271,13 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         );
         return 1;
     }
-    let (policy, _armed) = Policy::load_effective(&root);
+    let (policy, _armed) = match Policy::load_effective(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let level = policy.git.work_planning_level();
     let Err(findings) = plan_check(&root, task_id, target, on) else {
         return 0;
@@ -288,9 +312,10 @@ fn plan_check(
         return Err(findings);
     }
 
-    let declared = target
-        .map(str::to_string)
-        .or_else(|| declared_work_target(root, task_id));
+    let declared = match target {
+        Some(target) => Some(target.to_string()),
+        None => declared_work_target(root, task_id).map_err(|error| vec![error.to_string()])?,
+    };
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
         Err(error) => return Err(vec![error.to_string()]),
@@ -329,8 +354,8 @@ fn resolve_pins(
     root: &std::path::Path,
     on: &[String],
 ) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
-    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, named| {
-        review_lookup(root, branch, sha, named)
+    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, covers| {
+        review_lookup(root, branch, sha, covers)
     })
 }
 
@@ -340,39 +365,67 @@ pub(super) fn review_lookup(
     root: &std::path::Path,
     branch: &str,
     sha: &str,
-    named: &dyn Fn() -> Vec<String>,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
 ) -> Result<bool, String> {
     let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
-    reviewed(root, &repository, branch, sha, named)
+    reviewed(root, &repository, branch, sha, covers)
 }
 
 /// Whether the pull request of `branch` in `repository` has `sha` as its
-/// head and an approving review row naming one of `named()`: the head
-/// itself, or a commit the head follows only by the predecessor's status
-/// and Closeout. The names are read only once that pull request is found.
+/// head, from the same owner and repository, and an approving review row
+/// naming a revision that `covers` accepts: the head itself, or a commit
+/// the head follows only by the predecessor's status and Closeout. The
+/// revisions are judged only once that pull request is found.
 fn reviewed(
     root: &std::path::Path,
     repository: &str,
     branch: &str,
     sha: &str,
-    named: &dyn Fn() -> Vec<String>,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
+    // review_repository returns HOST/OWNER/NAME for gh's --repo argument.
+    // GitHub owner and repository names are case-insensitive, so a remote URL
+    // may differ in case from the API's canonical login and name.
+    let mut parts = repository.rsplit('/');
+    let name = parts.next().unwrap_or_default();
+    let owner = parts.next().unwrap_or_default();
+    if name.is_empty() || owner.is_empty() {
+        return Err("predecessor has no repository identity".into());
+    }
     if proof["headRefName"].as_str() != Some(branch)
         || proof["headRefOid"].as_str() != Some(sha)
         || proof["isCrossRepository"].as_bool() != Some(false)
-        || proof["headRepository"]["nameWithOwner"].as_str()
-            != repository.split_once('/').map(|(_, repo)| repo)
+        || !proof["headRepository"]["name"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(name))
+        || !proof["headRepositoryOwner"]["login"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(owner))
     {
-        return Err("predecessor PR identity or tip differs from the pin; rebase on its new reviewed head and recheck".into());
+        return Err(format!("predecessor PR identity or tip differs from the pin {sha}; rebase on its new reviewed head and recheck"));
     }
-    let (policy, _) = Policy::load_effective(root);
+    let (policy, _) = Policy::load_effective(root)?;
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
-    let body = proof["body"].as_str().unwrap_or_default();
-    Ok(named()
-        .iter()
-        .any(|revision| super::ci::pr_body::review_names_revision(body, &headings[0], revision)))
+    let body = proof["body"]
+        .as_str()
+        .ok_or("cannot read predecessor review body")?;
+    let revisions = super::ci::pr_body::reviewed_revisions(body, &headings[0]);
+    for revision in &revisions {
+        if covers(revision).map_err(|error| {
+            format!("cannot verify reviewed revision {revision} for pin {sha}: {error}")
+        })? {
+            return Ok(true);
+        }
+    }
+    if !revisions.is_empty() {
+        return Err(format!(
+            "no review names pin {sha}, or a commit it follows only by the predecessor's status and Closeout; approved revisions {} do not cover it; cannot verify review for this pin",
+            revisions.join(", ")
+        ));
+    }
+    Ok(false)
 }
 
 /// Bound provider lifetime and response size; a regular output file means a
@@ -395,7 +448,7 @@ fn pr_review(
             "--repo",
             repository,
             "--json",
-            "body,headRefName,headRefOid,isCrossRepository,headRepository",
+            "body,headRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner",
         ])
         .current_dir(root)
         .stdin(Stdio::null())

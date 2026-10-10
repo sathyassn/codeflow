@@ -303,7 +303,17 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
         // the current working directory. To keep results stable across CWDs,
         // we temporarily set CWD to project_dir via `chdir` — no, that's
         // racy. Instead, prefix the pattern with project_dir.
-        let absolute = project_dir.join(pattern).to_string_lossy().to_string();
+        // OS text rule (issue 79): the glob crate takes text, so a project
+        // folder that is not valid UTF-8 is an error, not a lossy lookalike.
+        let joined = project_dir.join(pattern);
+        let absolute = joined
+            .to_str()
+            .ok_or_else(|| {
+                TestingError::Io(std::io::Error::other(
+                    "the project folder is not valid UTF-8, so structural globs cannot run",
+                ))
+            })?
+            .to_string();
         let glob_iter =
             glob::glob_with(&absolute, options).map_err(|e| TestingError::ConfigInvalid {
                 path: PathBuf::from("structural.source_glob/test_glob"),
@@ -321,15 +331,67 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
                 continue;
             }
             if let Ok(rel) = path.strip_prefix(project_dir) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let rel_str = crate::portable_path::slashed(rel);
                 collected.push(rel_str);
             }
         }
+        refuse_names_that_are_not_text(project_dir, pattern)?;
     }
 
     collected.sort();
     collected.dedup();
     Ok(collected)
+}
+
+/// The `glob` crate's iterator skips a file whose name is not valid UTF-8
+/// without a word, so a source or a test of that name would leave a passing
+/// check unseen. Matching such a name needs bytes, which the crate does not
+/// offer, so the check refuses (OS text rule, issue 79): the walk covers
+/// everything under the pattern's literal folder, links followed as the
+/// iterator follows them.
+fn refuse_names_that_are_not_text(project_dir: &Path, pattern: &str) -> Result<(), TestingError> {
+    // A literal file path names one file: no other name can match it.
+    if !pattern.contains(['*', '?', '[']) {
+        return Ok(());
+    }
+    let mut base = PathBuf::new();
+    for part in pattern.split('/') {
+        if part.contains(['*', '?', '[']) {
+            break;
+        }
+        base.push(part);
+    }
+    let mut stack = vec![project_dir.join(&base)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(dir) = stack.pop() {
+        let Ok(canonical) = dir.canonicalize() else {
+            continue;
+        };
+        if !seen.insert(canonical) {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(TestingError::Io(error)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(TestingError::Io)?;
+            let path = entry.path();
+            let name = crate::git::GitName::from_os_str(entry.file_name().as_os_str());
+            if name.rule_text().is_err() {
+                return Err(TestingError::Io(std::io::Error::other(format!(
+                    "structural globs cannot run: the name `{}` under `{}` is not valid UTF-8",
+                    name.display(),
+                    crate::git::GitName::from_os_str(base.as_os_str()).display()
+                ))));
+            }
+            if path.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +522,40 @@ mod tests {
             tags: Vec::new(),
             test_files: Vec::new(),
         }
+    }
+
+    /// Round eight on issue 79: the `glob` iterator skips a file whose name is
+    /// not valid UTF-8, so the check refuses where such a file could hide a
+    /// source or a test, even beneath a linked folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_not_utf8_stops_the_check_instead_of_hiding() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(&root.join("src/alpha.sh"), "# alpha");
+        write(&root.join("tests/test-alpha.sh"), "# test");
+        write(&root.join("elsewhere/real.txt"), "x");
+        std::os::unix::fs::symlink("../elsewhere", root.join("src/link")).unwrap();
+        assert!(
+            validate_target(&sample_target(), root)
+                .unwrap()
+                .unwrap()
+                .pass
+        );
+        // A pattern that is one literal file never needs a folder walk.
+        let mut literal = sample_target();
+        literal.structural.as_mut().unwrap().source_glob = vec!["src/alpha.sh".to_string()];
+        assert!(validate_target(&literal, root).unwrap().unwrap().pass);
+        let odd = root
+            .join("elsewhere")
+            .join(std::ffi::OsStr::from_bytes(b"caf\xe9.sh"));
+        if fs::write(&odd, "# odd").is_err() {
+            return; // this volume refuses names that are not UTF-8
+        }
+        let error = validate_target(&sample_target(), root).unwrap_err();
+        assert!(error.to_string().contains("caf\\xe9.sh"), "{error}");
+        assert!(error.to_string().contains("not valid UTF-8"), "{error}");
     }
 
     #[test]

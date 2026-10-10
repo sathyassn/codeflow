@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::entry::{Entry, Kind, RegId};
-use super::git::{z_fields, Git};
+use super::git::{z_records, Git};
 use super::IdsError;
 
 /// The first addition of one registry path.
@@ -75,7 +75,7 @@ impl Ledger {
     ///
     /// Returns an error when git fails on an existing history.
     pub fn read(git: &Git, rev: &str) -> Result<Ledger, IdsError> {
-        let Some(tip) = git.rev(rev) else {
+        let Some(tip) = git.rev(rev)? else {
             return Ok(Ledger::default());
         };
         let commits = raw_history(git, &tip)?;
@@ -88,7 +88,16 @@ impl Ledger {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let blobs = git.blobs(&added)?;
+        let blobs = git
+            .blobs(&added)?
+            .into_iter()
+            .map(|(oid, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| {
+                    IdsError::Git(format!("registry blob {oid} is not valid UTF-8: {error}"))
+                })?;
+                Ok((oid, text))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>, IdsError>>()?;
         let mut ledger = Ledger {
             tip: Some(tip.clone()),
             commits: commits.len(),
@@ -125,7 +134,7 @@ impl Ledger {
     /// The bookkeeping never depends on the verdict: a number a broken
     /// commit introduced (a counterfeit restore, a merge tree) stays used,
     /// so it can never be issued again (R-7, R-9).
-    fn apply(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
+    fn apply(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, String>) {
         let fresh: Vec<&Change> = commit
             .changes
             .iter()
@@ -135,7 +144,7 @@ impl Ledger {
         for change in fresh {
             let entry = blobs
                 .get(&change.blob)
-                .and_then(|bytes| Entry::parse(&change.path, &String::from_utf8_lossy(bytes)).ok());
+                .and_then(|text| Entry::parse(&change.path, text).ok());
             self.first.insert(
                 change.path.clone(),
                 FirstAdd {
@@ -147,7 +156,7 @@ impl Ledger {
         }
     }
 
-    fn judge(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
+    fn judge(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, String>) {
         let sha = commit.sha.as_str();
         if commit.parents > 1 {
             self.violations.push(Finding::new(
@@ -164,7 +173,7 @@ impl Ledger {
             return;
         }
         if let Some(named) = commit.subject.strip_prefix("restore: ") {
-            let named: BTreeSet<&str> = named.split_whitespace().collect();
+            let named: BTreeSet<&str> = named.split(' ').filter(|part| !part.is_empty()).collect();
             let problems = self.restore_problems(commit, &named, blobs);
             for problem in problems {
                 self.violations.push(Finding::new(sha, problem));
@@ -199,7 +208,7 @@ impl Ledger {
         &mut self,
         sha: &str,
         change: &Change,
-        blobs: &std::collections::HashMap<String, Vec<u8>>,
+        blobs: &std::collections::HashMap<String, String>,
     ) {
         let path = change.path.as_str();
         if RegId::from_registry_path(path).is_none() {
@@ -217,9 +226,9 @@ impl Ledger {
         }
         let text = blobs
             .get(&change.blob)
-            .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+            .map(String::as_str)
             .unwrap_or_default();
-        if let Err(problems) = Entry::parse(path, &text) {
+        if let Err(problems) = Entry::parse(path, text) {
             for problem in problems {
                 self.violations.push(Finding::new(sha, problem));
             }
@@ -230,7 +239,7 @@ impl Ledger {
         &self,
         commit: &RawCommit,
         named: &BTreeSet<&str>,
-        blobs: &std::collections::HashMap<String, Vec<u8>>,
+        blobs: &std::collections::HashMap<String, String>,
     ) -> Vec<String> {
         let mut problems = Vec::new();
         for change in &commit.changes {
@@ -257,9 +266,9 @@ impl Ledger {
             if change.blob != first.blob {
                 let text = blobs
                     .get(&change.blob)
-                    .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                    .map(String::as_str)
                     .unwrap_or_default();
-                let rebinds = match (Entry::parse(path, &text).ok(), first.entry.as_ref()) {
+                let rebinds = match (Entry::parse(path, text).ok(), first.entry.as_ref()) {
                     (Some(new), Some(old)) => new.uid != old.uid,
                     _ => false,
                 };
@@ -355,12 +364,16 @@ impl Ledger {
         let Some(tip) = &self.tip else {
             return Ok(Vec::new());
         };
-        let Some(exclude) = exclude.filter(|sha| git.rev(sha).is_some()) else {
+        let resolved = match exclude {
+            Some(sha) => git.rev(sha)?.map(|_| sha),
+            None => None,
+        };
+        let Some(exclude) = resolved else {
             return Ok(self.violations.clone());
         };
         let in_range: HashSet<String> = git
             .run(&["rev-list", tip, &format!("^{exclude}")])?
-            .lines()
+            .split_terminator('\n')
             .map(str::to_string)
             .collect();
         Ok(self
@@ -382,7 +395,7 @@ pub fn short(sha: &str) -> &str {
 /// NUL-delimited raw records. A merge lists its changes against its first
 /// parent, so a file only the merge tree introduces is still seen.
 fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
-    let log = git.run(&[
+    let log = git.run_bytes(&[
         "log",
         "--reverse",
         "--topo-order",
@@ -395,31 +408,31 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         "--format=%x1e%H%x1f%P%x1f%s",
         tip,
     ])?;
+    parse_raw_history(&log)
+}
+
+fn parse_raw_history(log: &[u8]) -> Result<Vec<RawCommit>, IdsError> {
     let mut commits = Vec::new();
-    for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut fields = z_fields(record);
+    for record in z_records(log) {
+        let mut fields = record.iter().map(String::as_str);
         let header = fields.next().unwrap_or_default();
         let mut parts = header.split('\x1f');
-        let sha = parts.next().unwrap_or_default().trim().to_string();
-        let parents = parts.next().unwrap_or_default().split_whitespace().count();
+        let sha = parts.next().unwrap_or_default().to_string();
+        let parents = parts
+            .next()
+            .unwrap_or_default()
+            .split(' ')
+            .filter(|part| !part.is_empty())
+            .count();
         let subject = parts.next().unwrap_or_default().to_string();
         let mut changes = Vec::new();
-        while let Some(meta) = fields.next() {
-            let Some(meta) = meta.strip_prefix(':') else {
-                continue;
-            };
-            let Some(path) = fields.next() else {
-                break;
-            };
-            let meta: Vec<&str> = meta.split_whitespace().collect();
-            let [_old_mode, mode, _old_blob, blob, status] = meta.as_slice() else {
-                continue;
-            };
+        for change in super::inventory::raw_fields(fields)? {
+            // Registry history uses first-parent diffs, never combined records.
             changes.push(Change {
-                mode: (*mode).to_string(),
-                blob: (*blob).to_string(),
-                status: status.chars().next().unwrap_or('?'),
-                path: path.to_string(),
+                mode: change.mode,
+                blob: change.blob,
+                status: change.status,
+                path: change.path,
             });
         }
         commits.push(RawCommit {
@@ -430,4 +443,60 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         });
     }
     Ok(commits)
+}
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_registry_refuses_undecodable_issuer() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let entry = super::Entry::issued(
+            super::RegId::canonical(super::Kind::Tsk, 1),
+            super::super::entry::new_uid(),
+            "task",
+            "RAW_ISSUER",
+            "main",
+        );
+        let mut bytes = entry.render().into_bytes();
+        let at = bytes
+            .windows(b"RAW_ISSUER".len())
+            .position(|part| part == b"RAW_ISSUER")
+            .unwrap();
+        bytes[at] = 0xff;
+        crate::git::add_commit(&repo, &[(b"ids/TSK/001.toml", &bytes)]);
+        match super::Ledger::read(&super::Git::new(dir.path()), "HEAD") {
+            Err(_) => {}
+            Ok(ledger) => assert!(
+                !ledger.violations.is_empty(),
+                "undecodable issuer must not be a valid registry entry"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+    #[test]
+    fn r22_ledger_missing_blob_refuses_and_missing_ref_is_empty() {
+        let (dir, repo, _) = repository(b"ids/TSK/001.toml", b"broken = [");
+        let git = Git::new(dir.path());
+        assert!(!Ledger::read(&git, "refs/heads/absent").unwrap().exists());
+        remove_blob(&repo, b"broken = [");
+        assert!(matches!(Ledger::read(&git, "HEAD"), Err(IdsError::Git(_))));
+    }
+    #[test]
+    fn r22_registry_malformed_raw_history_refuses() {
+        for record in [
+            "garbage\0path\0",
+            ":000000 100644 old new\0path\0",
+            ":000000 100644 old new A\0",
+        ] {
+            let log = format!("\x1eabc\x1f\x1fsubject\0{record}");
+            assert!(parse_raw_history(log.as_bytes()).is_err());
+        }
+        assert!(parse_raw_history(b"").unwrap().is_empty());
+    }
 }

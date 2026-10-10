@@ -104,11 +104,13 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_RETARGET", Runs),
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
+    ("REVIEW_ROW_BINDING", Runs),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
+    ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
@@ -232,6 +234,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
+    ("REGISTRY_ROOT_UNREADABLE", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];
 
@@ -2546,10 +2549,10 @@ fn clears_doctor_policy_decision() {
     write(&root, ".codeflow/policy.json", "{ not json");
     prove(
         "DOCTOR_POLICY_DECISION",
-        "git.pr_sections effective level",
+        "cannot read policy",
         || {
             let out = doctor(&root, "adopter-fit");
-            if out.starts_with("warn") {
+            if out.starts_with("FAIL") {
                 out
             } else {
                 String::new()

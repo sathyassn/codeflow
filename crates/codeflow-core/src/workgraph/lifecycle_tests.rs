@@ -716,6 +716,372 @@ fn an_epic_own_block_does_not_replace_a_live_serving_task() {
     );
 }
 
+// R-62 with R-33 (sathyassn/codeflow#106): an `(after release)` criterion is
+// closed by the epic block's `deferred` line even when a task serves it, since
+// that task is the follow-up and can only run after the epic has landed.
+
+const AFTER_RELEASE: &str =
+    "- AC-1 When released, adopters shall report fewer failed installs (after release)";
+const SERVES_AC1: &str =
+    "- AC-1 When the nightly scan runs, the system shall report no advisory (serves EPC-001 AC-1)";
+
+/// A task outside the epic: a follow-up runs after the epic has landed, and
+/// the epic closes only when its own tasks are terminal.
+fn follow_up(id: &str, status: &str, criteria: &str, closeout: &str) -> String {
+    task(id, status, criteria, closeout).replace(
+        "epic_id: EPC-001\nstandalone_reason: null",
+        "epic_id: null\nstandalone_reason: \"runs after the epic lands\"",
+    )
+}
+
+fn plan_after_release(criteria: &str, tasks: &[(&str, String)]) -> Repo {
+    let repo = Repo::new();
+    repo.write(EPIC_PATH, &epic("planning", "", criteria));
+    for (id, record) in tasks {
+        repo.write(&format!("project-management/tasks/{id}.md"), record);
+    }
+    repo.commit("plan");
+    repo
+}
+
+/// The epic's own block with one result line per `(id, result)`.
+fn epic_results(repo: &Repo, results: &[(&str, &str)], follow_ups: &str) -> String {
+    let mut lines = vec![
+        "acceptance:".to_string(),
+        format!("  reviewed: {}", "a".repeat(40)),
+        "  review: session:abc@sha256:00".to_string(),
+        "  criteria:".to_string(),
+    ];
+    lines.extend(
+        results
+            .iter()
+            .map(|(id, result)| format!("    {id}: {result}")),
+    );
+    lines.push("  journey: none | n/a".to_string());
+    lines.push("  not_verified: none".to_string());
+    lines.push(format!("  follow_ups: {follow_ups}"));
+    lines.push("  verdict: approved".to_string());
+    repo.reviewed(&(lines.join("\n") + "\n"))
+}
+
+fn close_with(repo: &Repo, results: &[(&str, &str)], follow_ups: &str) -> Result<(), VerbError> {
+    let close = StatusChange {
+        acceptance: Some(epic_results(repo, results, follow_ups)),
+        ..change("complete")
+    };
+    set_status(repo.root(), RecordKind::Epic, "EPC-001", &close).map(drop)
+}
+
+const DEFERRED_TO_TSK_002: &str =
+    "deferred | owner: coordinator; window: the first nightly run after release; follow-up: TSK-002";
+
+/// The defect: a todo follow-up that serves the criterion made the epic's
+/// valid `deferred` line unreachable. The verb and the same hand edit agree.
+#[test]
+fn an_after_release_criterion_closes_as_deferred_to_its_open_serving_follow_up() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        )],
+    );
+    let written = verb_and_hand_agree(&repo, EPIC_PATH, || {
+        close_with(&repo, &[("AC-1", DEFERRED_TO_TSK_002)], "TSK-002")
+    });
+    assert!(written.contains("AC-1: deferred | owner: coordinator;"));
+}
+
+/// Each refusal keeps its message: the deferral opens only the case it names.
+#[test]
+#[allow(clippy::too_many_lines)] // One table holds every refusal.
+fn the_deferred_line_does_not_close_what_it_does_not_name() {
+    let after_release_open = [(
+        "TSK-002",
+        follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+    )];
+    let named_task_does_not_serve = [
+        (
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        ),
+        (
+            "TSK-003",
+            follow_up(
+                "TSK-003",
+                "todo",
+                "- AC-1 When x, the system shall y.",
+                "Pending.",
+            ),
+        ),
+    ];
+    let cancelled_beside_open = [
+        (
+            "TSK-002",
+            follow_up(
+                "TSK-002",
+                "cancelled",
+                SERVES_AC1,
+                "- cancelled: replaced\n- scope: moved to TSK-003",
+            ),
+        ),
+        (
+            "TSK-003",
+            follow_up("TSK-003", "todo", SERVES_AC1, "Pending."),
+        ),
+    ];
+    let not_open_follow_up = "no complete serving task verified it, and the epic's acceptance block does not defer it to an open serving task";
+    for (what, criterion, tasks, result, follow_ups, needle) in [
+        (
+            "a criterion that is not after-release",
+            EPIC_CRITERION,
+            &after_release_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-002",
+            "AC-1 is unverified: no complete serving task verified it",
+        ),
+        (
+            "a line naming a task that does not serve it while another open task does",
+            AFTER_RELEASE,
+            &named_task_does_not_serve[..],
+            "deferred | owner: coordinator; window: next release; follow-up: TSK-003",
+            "TSK-003",
+            not_open_follow_up,
+        ),
+        (
+            "a line naming a cancelled serving task beside an open one",
+            AFTER_RELEASE,
+            &cancelled_beside_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-002",
+            not_open_follow_up,
+        ),
+        (
+            "a follow-up the block does not list",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-009",
+            "AC-1's follow-up TSK-002 is not listed in `follow_ups`",
+        ),
+        (
+            "a line without its window",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | owner: coordinator; follow-up: TSK-002",
+            "TSK-002",
+            "AC-1 is deferred without its window",
+        ),
+        (
+            "a line without its owner",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | window: next release; follow-up: TSK-002",
+            "TSK-002",
+            "AC-1 is deferred without its owner",
+        ),
+        (
+            "a line without a follow-up",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | owner: coordinator; window: next release",
+            "TSK-002",
+            "AC-1 is deferred without a follow-up task",
+        ),
+        (
+            "an after-release criterion recorded as verified",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "verified | the nightly scan",
+            "TSK-002",
+            "is observable only after release and is never `verified` at build time",
+        ),
+    ] {
+        let repo = plan_after_release(criterion, tasks);
+        let refused = refusal(close_with(&repo, &[("AC-1", result)], follow_ups));
+        assert!(refused.contains(needle), "{what}: {refused}");
+    }
+
+    // With no block at all the epic does not close, and says what would.
+    let repo = plan_after_release(AFTER_RELEASE, &after_release_open);
+    let refused = refusal(close_epic(&repo));
+    assert!(refused.contains(not_open_follow_up), "{refused}");
+    assert!(refused.contains("follow-up: TSK-NNN"), "{refused}");
+}
+
+const CANCELLED_CLOSEOUT: &str = "- cancelled: replaced\n- scope: moved elsewhere";
+
+/// Every task that serves an after-release criterion is cancelled, so no
+/// open serving task exists to defer to. A structurally valid line that names
+/// the cancelled task closes nothing (R-33), unlike the own-block close of a
+/// criterion that is not after-release.
+#[test]
+fn a_deferred_line_naming_the_cancelled_serving_task_does_not_close() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "cancelled", SERVES_AC1, CANCELLED_CLOSEOUT),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", DEFERRED_TO_TSK_002)],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("does not defer it to an open serving task"),
+        "{refused}"
+    );
+}
+
+/// The same state with a line that names a task that does not serve the
+/// criterion: one that exists and is open, and one that is no record at all.
+#[test]
+fn a_deferred_line_naming_a_non_serving_task_does_not_close_beside_cancelled_servers() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[
+            (
+                "TSK-002",
+                follow_up("TSK-002", "cancelled", SERVES_AC1, CANCELLED_CLOSEOUT),
+            ),
+            (
+                "TSK-003",
+                follow_up(
+                    "TSK-003",
+                    "todo",
+                    "- AC-1 When x, the system shall y.",
+                    "Pending.",
+                ),
+            ),
+        ],
+    );
+    for task in ["TSK-003", "TSK-009"] {
+        let line =
+            format!("deferred | owner: coordinator; window: next release; follow-up: {task}");
+        let refused = refusal(close_with(&repo, &[("AC-1", &line)], task));
+        assert!(
+            refused.contains("does not defer it to an open serving task"),
+            "{task}: {refused}"
+        );
+    }
+}
+
+// A criterion tagged `(journey)` and `(after release)` is deferred because it
+// is observable only after release (R-62), so its deferral does not require
+// the journey to have run; a journey criterion that is not after-release does.
+#[test]
+fn a_deferred_after_release_journey_criterion_does_not_force_a_verified_journey() {
+    let both = "- AC-1 (journey) When released, adopters shall report fewer failed installs (after release)";
+    let open = [(
+        "TSK-002",
+        follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+    )];
+    let repo = plan_after_release(both, &open);
+    // `epic_results` records `journey: none | n/a`.
+    let written = verb_and_hand_agree(&repo, EPIC_PATH, || {
+        close_with(&repo, &[("AC-1", DEFERRED_TO_TSK_002)], "TSK-002")
+    });
+    assert!(written.contains("AC-1: deferred | owner: coordinator;"));
+
+    // A non-deferred outcome is still refused, on its own message.
+    let repo = plan_after_release(both, &open);
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", "verified | the nightly scan")],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("is observable only after release and is never `verified`"),
+        "{refused}"
+    );
+
+    // A journey criterion that is not after-release still needs the journey.
+    let repo = plan_after_release(
+        &format!("{AFTER_RELEASE}\n- AC-2 (journey) On a fresh init, the system shall work."),
+        &open,
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[
+            ("AC-1", DEFERRED_TO_TSK_002),
+            ("AC-2", "verified | cargo test AC-2"),
+        ],
+        "TSK-002",
+    ));
+    assert!(refused.contains("`journey` must be `verified"), "{refused}");
+}
+
+/// A block that lists other criteria but omits the after-release one
+/// proves nothing about it.
+#[test]
+fn an_own_block_that_omits_the_after_release_criterion_is_refused() {
+    let repo = plan_after_release(
+        &format!("{AFTER_RELEASE}\n- AC-2 When used, the system shall work."),
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-2", "verified | cargo test AC-2")],
+        "none: nothing left",
+    ));
+    assert!(refused.contains("acceptance block omits AC-1"), "{refused}");
+}
+
+/// The deferral names the open serving task among several; a later serving
+/// task that is complete and verified still decides on its own result.
+#[test]
+fn a_complete_serving_task_still_decides_an_after_release_criterion() {
+    let verified = fenced(&block(&["AC-1"], "none | n/a"));
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "complete", SERVES_AC1, &verified),
+        )],
+    );
+    close_epic(&repo).unwrap();
+
+    // The follow-up named in the deferral may sit beside a verified one.
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[
+            (
+                "TSK-002",
+                follow_up("TSK-002", "complete", SERVES_AC1, &verified),
+            ),
+            (
+                "TSK-003",
+                follow_up("TSK-003", "todo", SERVES_AC1, "Pending."),
+            ),
+        ],
+    );
+    close_epic(&repo).unwrap();
+
+    // A complete task whose result does not verify it leaves it unverified.
+    let unrun = verified.replace("verified | cargo test AC-1", "failed | not run");
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "complete", SERVES_AC1, &unrun),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", DEFERRED_TO_TSK_002)],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("does not defer it to an open serving task"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn an_epic_criterion_served_by_a_complete_task_beside_a_cancelled_one_closes() {
     let (repo, _) = project();
@@ -774,7 +1140,7 @@ fn epic_close_counts_the_closing_epic_as_the_last_spec_consumer() {
     repo.commit("plan");
     close_epic_with_block(&repo).unwrap();
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
 
@@ -855,7 +1221,7 @@ fn spec_state_is_derived_from_its_consumers() {
         "project-management/specs/SPC-001.md",
         &spec("SPC-001", "approved", ""),
     );
-    let graph = || Graph::from_worktree(repo.root());
+    let graph = || Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(
         spec_state(&graph(), "SPC-001"),
         Some(SpecState::NoDeliveringConsumer)
@@ -964,7 +1330,7 @@ fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
         if state == "implemented" {
             repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
             repo.commit("consumer complete");
-            let graph = Graph::from_worktree(repo.root());
+            let graph = Graph::from_worktree(repo.root()).unwrap();
             assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
         }
         let before = repo.read(SPEC);
@@ -1077,7 +1443,7 @@ fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
     );
     repo.write(TASK_PATH, &escaped("complete"));
     repo.commit("consumer complete");
-    let graph = Graph::from_worktree(repo.root());
+    let graph = Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
     let reopen = StatusChange {
         reason: Some("regression".into()),
@@ -1110,7 +1476,7 @@ fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
         repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
         repo.write(&path, &consumer("TSK-001", "complete", "SPC-001"));
         repo.commit("ship with a nested legacy record path");
-        let graph = Graph::from_worktree(repo.root());
+        let graph = Graph::from_worktree(repo.root()).unwrap();
         assert_eq!(
             spec_state(&graph, "SPC-001"),
             Some(SpecState::Implemented),
@@ -1912,7 +2278,7 @@ fn an_approved_spec_with_done_consumers_is_healthy_and_real_mismatches_warn() {
     );
     let base = repo.commit("approved spec, consumers done");
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
     let healthy = validate_lifecycle(repo.root());
@@ -1944,7 +2310,7 @@ fn a_spec_without_a_complete_consumer_is_not_implemented() {
     repo.write(EPIC_PATH, &epic("archived", "SPC-001", EPIC_CRITERION));
     repo.write(TASK_PATH, &consumer("TSK-001", "cancelled", "SPC-001"));
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Open)
     );
 }
@@ -3057,14 +3423,17 @@ fn the_single_string_baseline_still_works() {
     );
     let commit = repo.commit("records");
     repo.set_baseline(&commit);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit.clone()]);
+    assert_eq!(
+        recorded_baseline(repo.root()).unwrap(),
+        vec![commit.clone()]
+    );
     assert!(matches!(
         Baseline::load(repo.root()),
         Baseline::Available { .. }
     ));
     assert!(validate_lifecycle(repo.root()).is_clean());
     repo.set_baselines(&[&commit, &commit]);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit]);
+    assert_eq!(recorded_baseline(repo.root()).unwrap(), vec![commit]);
     assert!(validate_lifecycle(repo.root()).is_clean());
 }
 
@@ -3142,4 +3511,342 @@ fn recompletion_preserves_the_anchored_acceptance_even_with_equal_active_block()
             assert!(!verdict.is_clean(), "{fault} must refuse the recompletion");
         }
     }
+}
+
+/// Review finding on issue 79: a task branch whose name is not valid UTF-8
+/// was dropped, so a task with live work on it read as having none.
+#[test]
+fn a_task_branch_that_is_not_utf8_is_active_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = crate::git::repo_with_refs(dir.path(), &[b"refs/heads/task/TSK-001-caf\xe9"]);
+    let record = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        // A target that resolves nowhere, so the tip has not "landed".
+        &task("TSK-001", "todo", CRITERIA, "")
+            .replace("integration_target: main", "integration_target: nowhere"),
+    )
+    .unwrap();
+    assert!(has_active_branch(&repo, &record, &["task/".to_string()]));
+}
+
+/// Issue 79: the graph of a revision is read through a tree that holds a
+/// directory whose name is not valid UTF-8. git2's own walk stopped there
+/// with an error; the record beside it is read and the odd name is no record.
+#[test]
+fn a_revision_graph_is_read_beside_a_directory_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let text: &[u8] = b"---\nid: TSK-003\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: late\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n";
+    let (repo, _) = crate::git::repo_with_tree(
+        dir.path(),
+        &[
+            (b"project-management/tasks/TSK-003.md", text),
+            (b"project-management/tasks\xff/TSK-004.md", text),
+            (b"src/dir\xff/f.rs", b"x"),
+        ],
+    );
+    let graph = Graph::from_revision(&repo, "main").expect("the walk reads the whole tree");
+    assert!(graph.get("TSK-003", RecordKind::Task).is_some());
+    assert!(graph.get("TSK-004", RecordKind::Task).is_none());
+}
+
+/// Issue 79: the paths a range changes keep two names that differ only in an
+/// invalid byte apart, and valid text is unchanged.
+#[test]
+fn changed_paths_keep_a_lookalike_name_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    let second = crate::git::add_commit(
+        &repo,
+        &[(b"caf\xe9", b"1"), ("caf\u{fffd}".as_bytes(), b"2")],
+    );
+    let paths = changed_paths(&repo, &first.to_string(), Some(&second.to_string())).unwrap();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains(&"caf\u{fffd}".to_string()));
+    assert!(paths.contains(&GitName::from_bytes(b"caf\xe9").storage_key()));
+}
+
+#[test]
+fn baseline_entries_keep_exact_config_values() {
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::String("abc\u{a0}".into()),
+    );
+    let value = toml::Value::Table(table);
+    assert_eq!(
+        super::baseline_entries(Some(&value)).unwrap(),
+        ["abc\u{a0}"]
+    );
+}
+
+#[test]
+fn unreadable_baseline_config_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) =
+        crate::git::repo_with_tree(dir.path(), &[(b".codeflow/project.toml", b"#\xff")]);
+    assert!(super::baseline_at(&repo, oid).is_err());
+    assert!(matches!(
+        super::range_baseline(dir.path(), &repo, oid, Some("HEAD")).0,
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn unreadable_checked_out_baseline_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(dir.path().join(".codeflow/project.toml"), b"#\xff").unwrap();
+    assert!(recorded_baseline(dir.path()).is_err());
+    assert!(matches!(Baseline::load(dir.path()), Baseline::Refused(_)));
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::Array(vec![toml::Value::Integer(1)]),
+    );
+    assert!(super::baseline_entries(Some(&toml::Value::Table(table))).is_err());
+}
+
+#[test]
+fn r16_unreadable_worktree_record_refuses_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("project-management/tasks/TSK-001.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"---\nid: TSK-001\n---\n# bad\xff").unwrap();
+    let verdict = validate_lifecycle(dir.path());
+    assert!(
+        !verdict.errors.is_empty(),
+        "unreadable record must not vanish: {verdict:?}"
+    );
+}
+
+#[test]
+fn r16_unreadable_revision_record_refuses_graph_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(
+            b"project-management/specs/SPC-001.md",
+            b"---\nid: SPC-001\nstatus: implemented\n---\n#\xff",
+        )],
+    );
+    assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
+    assert!(super::shipped_in_history(&repo, oid, "SPC-001").is_err());
+}
+#[test]
+fn r17_working_context_distinguishes_no_repository_from_broken_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    git2::Repository::init(dir.path()).unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    assert_eq!(
+        super::super::work_start::default_work_target(dir.path()).unwrap(),
+        None
+    );
+    std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+    assert!(super::working_context(dir.path()).is_err());
+    assert!(super::super::work_start::default_work_target(dir.path()).is_err());
+}
+
+#[test]
+fn r22_baseline_refuses_malformed_repository_but_keeps_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(Baseline::load(dir.path()), Baseline::NotRecorded));
+    let fixture = Repo::new();
+    fixture.set_baseline(&"1".repeat(40));
+    fs::write(fixture.root().join(".git/config"), "[broken").unwrap();
+    assert!(matches!(
+        Baseline::load(fixture.root()),
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn r22_baseline_refuses_unreadable_graph_but_keeps_missing_object() {
+    let fixture = Repo::new();
+    fixture.write(TASK_PATH, "---\nid: [broken\n---\n");
+    let head = fixture.commit("broken record");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let oid = git2::Oid::from_str(&head).unwrap();
+    assert!(matches!(
+        Baseline::from_entries(&repo, &["1".repeat(40)], Some(oid)),
+        Baseline::Unavailable(_)
+    ));
+    assert!(matches!(
+        Baseline::from_entries(&repo, &[head], Some(oid)),
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn r22_baseline_refuses_corrupt_existing_object() {
+    let fixture = Repo::new();
+    let head = fixture.commit("base");
+    let oid = git2::Oid::from_str(&head).unwrap();
+    let object = fixture
+        .root()
+        .join(".git/objects")
+        .join(&head[..2])
+        .join(&head[2..]);
+    fs::remove_file(&object).unwrap();
+    fs::write(object, b"not a zlib object").unwrap();
+    let repo = Repository::open(fixture.root()).unwrap();
+    assert!(matches!(
+        Baseline::from_entries(&repo, &[head], Some(oid)),
+        Baseline::Refused(_)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn r22_baseline_dangling_project_is_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    assert!(recorded_baseline(dir.path()).unwrap().is_empty());
+    std::os::unix::fs::symlink("missing", dir.path().join(".codeflow/project.toml")).unwrap();
+    assert!(recorded_baseline(dir.path()).is_err());
+}
+
+#[test]
+fn r22_non_utf8_epic_folder_cannot_hide_historical_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let blob = repo.blob(b"---\nid: TSK-001\nstatus: todo\n---\n").unwrap();
+    let mut tasks = repo.treebuilder(None).unwrap();
+    tasks.insert("TSK-001.md", blob, 0o100_644).unwrap();
+    let mut epic = repo.treebuilder(None).unwrap();
+    epic.insert("tasks", tasks.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut epics = repo.treebuilder(None).unwrap();
+    epics
+        .insert(&b"EPC-001-\xff"[..], epic.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut pm = repo.treebuilder(None).unwrap();
+    pm.insert("epics", epics.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut root = repo.treebuilder(None).unwrap();
+    root.insert("project-management", pm.write().unwrap(), 0o040_000)
+        .unwrap();
+    let tree = repo.find_tree(root.write().unwrap()).unwrap();
+    let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, "odd folder", &tree, &[])
+        .unwrap();
+    assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
+    assert!(shipped_in_history(&repo, oid, "SPC-001").is_err());
+}
+
+#[test]
+fn r22_recorded_baseline_missing_in_unborn_repository_stays_unavailable() {
+    let fixture = Repo::new();
+    fixture.set_baseline(&"1".repeat(40));
+    assert!(
+        matches!(Baseline::load(fixture.root()), Baseline::Unavailable(_)),
+        "{:?}",
+        Baseline::load(fixture.root())
+    );
+}
+
+#[test]
+fn r22_baseline_controls_keep_unborn_and_empty_graph() {
+    let fixture = Repo::new();
+    assert!(matches!(
+        Baseline::load(fixture.root()),
+        Baseline::NotRecorded
+    ));
+    let head = fixture.commit("empty graph");
+    let repo = Repository::open(fixture.root()).unwrap();
+    assert!(Graph::from_revision(&repo, &head)
+        .unwrap()
+        .records
+        .is_empty());
+    assert!(!shipped_in_history(&repo, git2::Oid::from_str(&head).unwrap(), "SPC-001").unwrap());
+    assert!(matches!(
+        Baseline::from_entries(
+            &repo,
+            std::slice::from_ref(&head),
+            Some(git2::Oid::from_str(&head).unwrap())
+        ),
+        Baseline::Available { .. }
+    ));
+}
+
+#[test]
+fn r22_record_path_controls_exclude_non_record_names() {
+    assert!(
+        record_path_text(&GitName::from_bytes(b"project-management/ref\xff"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(record_path_text(&GitName::from_bytes(
+        b"project-management/epics/\xff/tasks/notes.md"
+    ))
+    .unwrap()
+    .is_none());
+    assert_eq!(
+        record_path_text(&GitName::from_text(TASK_PATH)).unwrap(),
+        Some(TASK_PATH)
+    );
+}
+
+#[test]
+fn r22_spec_history_refuses_missing_base_but_keeps_empty_history() {
+    let fixture = Repo::new();
+    let base = fixture.commit("empty history");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let path = "project-management/specs/SPC-001.md";
+    let content = spec("SPC-001", "approved", "");
+    let mut before = Graph::default();
+    before.insert(RecordKind::Spec, path, &content).unwrap();
+    let mut after = Graph::default();
+    after
+        .insert(
+            RecordKind::Spec,
+            path,
+            &format!("{content}\nChanged behavior.\n"),
+        )
+        .unwrap();
+    let (_, absent) = shipped_specs(&repo, &base, &before, &after);
+    assert!(absent.is_empty(), "{absent:?}");
+    let (_, problems) = shipped_specs(&repo, &"1".repeat(40), &before, &after);
+    assert_eq!(
+        problems.len(),
+        1,
+        "missing base must not erase the freeze proof obligation"
+    );
+    assert!(problems[0].1.contains("cannot read the history"));
+}
+
+#[test]
+fn r22_baseline_ancestry_refuses_unreadable_objects_but_keeps_identity() {
+    let fixture = Repo::new();
+    let head = fixture.commit("present");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let head = git2::Oid::from_str(&head).unwrap();
+    assert!(format!("{:?}", contains(&repo, head, head)).contains("true"));
+    let tree = repo.find_commit(head).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    let unrelated = repo
+        .commit(None, &signature, &signature, "unrelated", &tree, &[])
+        .unwrap();
+    assert!(format!("{:?}", contains(&repo, head, unrelated)).contains("false"));
+    let missing = git2::Oid::from_str(&"1".repeat(40)).unwrap();
+    assert!(format!("{:?}", contains(&repo, head, missing)).starts_with("Err("));
+}
+
+/// Issue 79: `follow_up_of` keeps a whitespace character other than a
+/// space or tab, so a lookalike never names the task it resembles.
+#[test]
+fn follow_up_of_keeps_a_lookalike_apart_from_the_task() {
+    let text =
+        "---\nid: TSK-002\ntitle: Follow up\nstatus: todo\nfollow_up_of: \"TSK-001\u{a0}\"\n---\n";
+    let record = RecordView::parse(
+        RecordKind::Task,
+        "project-management/tasks/TSK-002.md",
+        text,
+    )
+    .unwrap();
+    assert_eq!(record.follow_up_of.as_deref(), Some("TSK-001\u{a0}"));
 }
