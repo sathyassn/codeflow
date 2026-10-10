@@ -3,6 +3,7 @@
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
+use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
 use codeflow_core::remote::{provider_for, ProtectionPlan};
 
@@ -37,8 +38,9 @@ pub enum RemoteCommand {
 ///
 /// # Errors
 ///
-/// Returns an error for unreadable repository, policy or tracking state, or
-/// environment problems such as a missing gh outside dry-run.
+/// Returns an error for unreadable repository, policy or tracking state,
+/// when the policy file fails the schema (before anything is planned or
+/// sent), or for environment problems such as a missing gh outside dry-run.
 pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     let RemoteCommand::Protect { provider, dry_run } = &args.command;
 
@@ -47,9 +49,26 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         .context("cannot locate repository; repair .codeflow paths before applying protection")?
         .unwrap_or(cwd);
     let policy_path = root.join(".codeflow/policy.json");
-    let mut plan = match ProtectionPlan::from_policy_file(&policy_path) {
-        Ok(plan) => plan,
-        Err(error) => return Err(anyhow::Error::msg(error)),
+    // The plan reads the protection fields and the schema judges the whole
+    // file: a policy either one cannot read or refuses (a blank
+    // `git.required_checks` entry included) is refused here, before any
+    // request to the host, with every reason each gives.
+    let read = ProtectionPlan::from_policy_file(&policy_path);
+    let schema = policy_schema::validate_policy(&root);
+    let mut plan = match (read, schema) {
+        (Ok(plan), Ok(())) => plan,
+        (read, schema) => {
+            if let Err(error) = read {
+                eprintln!("remote protect: {error}");
+            }
+            for error in schema.err().unwrap_or_default() {
+                eprintln!("remote protect: policy error: {error}");
+            }
+            anyhow::bail!(
+                "{} is invalid or cannot be read, so no rules were planned or applied (see `codeflow policy explain`)",
+                policy_path.display()
+            );
+        }
     };
     // Only a policy proven missing gives the defaults; an unreadable one
     // was refused above.

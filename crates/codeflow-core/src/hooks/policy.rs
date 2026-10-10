@@ -32,6 +32,16 @@ pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
 /// against a glob is refused, never allowed or read as detached.
 pub const NON_UTF8_BRANCH: &str = "\0not-valid-utf8";
 
+/// The status checks a protected branch requires when the policy names
+/// none: the job `name:` values of the shipped `codeflow-ci.yml`, the
+/// default of [`GitPolicy::required_checks`].
+pub const DEFAULT_REQUIRED_CHECKS: &[&str] = &[
+    "codeflow gates",
+    "secret scan",
+    "security review",
+    "commit standards",
+];
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -226,6 +236,12 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// The status check names a protected branch requires before merging,
+    /// on a branch that is up to date with its base (`codeflow remote
+    /// protect`, `codeflow doctor --check remote-perimeter`). Default
+    /// [`DEFAULT_REQUIRED_CHECKS`], the shipped CI job names. The shipped
+    /// policy file does not list it, so an older binary never meets the key.
+    pub required_checks: Vec<String>,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
@@ -424,6 +440,10 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            required_checks: DEFAULT_REQUIRED_CHECKS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",

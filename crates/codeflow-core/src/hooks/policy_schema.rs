@@ -92,7 +92,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 66] = [
+pub const SCHEMA: [KeySpec; 67] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -236,6 +236,18 @@ pub const SCHEMA: [KeySpec; 66] = [
         notes: "Origin and the target's fetch remote always count. Empty by default; \
                 other remote branches are reported as information. Named remotes \
                 must be configured when work claim lists their branches. The \
+                shipped policy file does not list it, so an older binary never \
+                meets the key.",
+    },
+    KeySpec {
+        path: "git.required_checks",
+        kind: KeyKind::StringList,
+        valid: "a non-empty array of status check names, none blank",
+        purpose: "Status checks a protected branch requires before merging, on a branch that is up to date with its base.",
+        notes: "Defaults to the shipped CI job names: codeflow gates, secret scan, \
+                security review and commit standards. `codeflow remote protect` \
+                requires them with up-to-date branches, and `codeflow doctor \
+                --check remote-perimeter` warns when the live rules do not. The \
                 shipped policy file does not list it, so an older binary never \
                 meets the key.",
     },
@@ -979,6 +991,28 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 }
             }
         }
+        "git.required_checks" => {
+            let entries = value.as_array().map_or(&[][..], Vec::as_slice);
+            if value.is_array() && entries.is_empty() {
+                errors.push(PolicyError {
+                    key: path.to_string(),
+                    message: format!(
+                        "{path} is empty, so a protected branch would require no check; \
+                         name at least one check, or remove the key for the shipped CI job names"
+                    ),
+                });
+            }
+            for entry in entries.iter().filter_map(Value::as_str) {
+                if entry.trim().is_empty() {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!(
+                            "blank check name in {path}; name each check as its CI job reports it"
+                        ),
+                    });
+                }
+            }
+        }
         "git.worktree_locations" => {
             for entry in value
                 .as_array()
@@ -1429,6 +1463,60 @@ mod tests {
             assert!(
                 errors.iter().all(|error| error.key == "git.claim_remotes"),
                 "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn required_checks_default_to_the_shipped_ci_jobs_and_refuse_bad_lists() {
+        // Absent, the key validates and yields the four shipped job names.
+        let text = r#"{"git":{"protected_branches":["main"]}}"#;
+        validate_policy_str(text).unwrap();
+        let policy: Policy = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            policy.git.required_checks,
+            [
+                "codeflow gates",
+                "secret scan",
+                "security review",
+                "commit standards"
+            ]
+        );
+        // A set list replaces the default.
+        let text = r#"{"git":{"required_checks":["build","windows"]}}"#;
+        validate_policy_str(text).unwrap();
+        let policy: Policy = serde_json::from_str(text).unwrap();
+        assert_eq!(policy.git.required_checks, ["build", "windows"]);
+        // A non-string entry, a bare string, an empty list and a blank name
+        // are refused under the key.
+        for list in [r#""build""#, "[1]", r#"["build", 2]"#, "[]", r#"[" "]"#] {
+            let text = format!(r#"{{"git":{{"required_checks":{list}}}}}"#);
+            let errors = validate_policy_str(&text).unwrap_err();
+            assert!(
+                !errors.is_empty() && errors.iter().all(|e| e.key == "git.required_checks"),
+                "{list}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_shipped_or_installed_policy_file_names_required_checks() {
+        // Issue 118: a key added after 3.0.0 lives in the schema and the code
+        // default only, so an older pinned binary never meets it.
+        for (path, text) in [
+            (
+                "assets/base/policy.json",
+                include_str!("../../../../assets/base/policy.json"),
+            ),
+            (
+                ".codeflow/policy.json",
+                include_str!("../../../../.codeflow/policy.json"),
+            ),
+        ] {
+            let value: Value = serde_json::from_str(text).unwrap();
+            assert!(
+                lookup(&value, "git.required_checks").is_none(),
+                "{path} names git.required_checks"
             );
         }
     }

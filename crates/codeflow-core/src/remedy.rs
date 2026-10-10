@@ -618,6 +618,13 @@ catalog! {
     /// An id registry without host rules.
     DOCTOR_REGISTRY_UNPROTECTED = Step::Codeflow("codeflow remote protect"),
         "run `codeflow remote protect` to apply the host rules for codeflow/registry";
+    /// A default branch whose live rules let a pull request merge on checks
+    /// that did not run on its current tip (TSK-261).
+    DOCTOR_REMOTE_PERIMETER = Step::Codeflow("codeflow remote protect"),
+        "run `codeflow remote protect`, or have the repository owner turn on \"Require branches to be up to date before merging\" with every check in git.required_checks in the host rules for {branch}; then `codeflow doctor --check remote-perimeter` confirms it";
+    /// Host rules doctor could not read.
+    DOCTOR_REMOTE_UNREAD = Step::Manual("read the host rules for the default branch"),
+        "read the host rules for the default branch in the host's settings and confirm they require every check in git.required_checks on an up-to-date branch; `codeflow doctor` cannot verify them here";
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";

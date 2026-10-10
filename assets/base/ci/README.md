@@ -271,6 +271,15 @@ separate **remote branch-protection** plane (`codeflow remote`) stays
 host-API-specific because branch protection is configured through each host's
 API — see CodeFlow ADR-0017.
 
+A pull request's checks test the merge of its branch with the base as it was
+when the run started, and a later landing does not run them again. Two pull
+requests each green on an older base can therefore both merge and leave the
+base red. Close that on the host: `codeflow remote protect` requires the
+checks in `git.required_checks` on a branch that is up to date with its base,
+and `codeflow doctor --check remote-perimeter` warns when the live rules do
+not. Without that host rule, whoever merges updates the branch from the base
+and waits for the fresh run first.
+
 ## Optional external add-ons
 
 The GitHub workflow also runs two pinned external tools; add them to any wrapper

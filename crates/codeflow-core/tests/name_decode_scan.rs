@@ -1491,6 +1491,46 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // A blank check-name test: the name is kept untrimmed, and a wider whitespace set only refuses more names as blank.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "policy_list",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A blank check-name test: the name is kept untrimmed, and a wider whitespace set only refuses more names as blank.
+    (
+        "crates/codeflow-core/src/hooks/policy_schema.rs",
+        "validate_root_checkout_key",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A blank check-name test: the name is kept untrimmed, and a wider whitespace set only refuses more names as blank.
+    (
+        "crates/codeflow-core/src/remote.rs",
+        "ProtectionPlan::from_policy_file",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A ruleset answer that does not parse reads as Null, which has no bypass list, so bypass_of returns Bypass::Unknown and the check notes it as unread, never as bound.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "bypass_of",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // A gh answer that does not parse reads as Null, so the check returns a note that names no default branch or no readable rules, never a pass.
+    (
+        "crates/codeflow-core/src/doctor/remote_perimeter.rs",
+        "check",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // An unread settings file pushes a named finding into missing, and startup_files::check reports any finding as a warning, never a pass.
     (
         "crates/codeflow-core/src/doctor/startup_files.rs",
