@@ -827,7 +827,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "930ffb37808b33aef52326b9b81702ad809821cc9b057231ba36271812ec6b76",
+      "sha256": "38b3dfc31a40943bfce68a9eba940be5e93491d48b26af683dc596a99c7bc44d",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
