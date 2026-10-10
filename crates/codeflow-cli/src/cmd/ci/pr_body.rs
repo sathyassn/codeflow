@@ -355,6 +355,37 @@ pub(super) fn find_section(body: &str, name: &str) -> SectionState {
     }
 }
 
+/// A current review row names the exact revision and an approving verdict.
+/// Fences, quotes, examples and HTML comments cannot supply the evidence.
+pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> bool {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return false;
+    };
+    rendered_text(section.content(), false, false)
+        .lines()
+        .any(|line| {
+            let cells: Vec<_> = line
+                .split('|')
+                .map(str::trim)
+                .filter(|cell| !cell.is_empty())
+                .collect();
+            cells.len() >= 3
+                && cells.last().is_some_and(|verdict| {
+                    matches!(
+                        verdict.to_ascii_lowercase().as_str(),
+                        "approved" | "approve"
+                    )
+                })
+                && cells[1..cells.len() - 1].iter().any(|scope| {
+                    scope
+                        .split(|c: char| !c.is_ascii_hexdigit())
+                        .any(|token| token == sha)
+                })
+        })
+}
+
 /// Revisions named by approving rows in the visible Reviews section.
 /// Fences, quotes, examples and HTML comments cannot supply the evidence.
 /// A verdict may be `approved` or prose beginning `approve at ...`, as in
