@@ -731,9 +731,16 @@ fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
         ),
         "the enforcing workflow must subscribe pull_request_target to edited"
     );
-    assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}"));
-    let body_uses = workflow.matches("github.event.pull_request.body").count();
-    assert_eq!(body_uses, 1, "the PR body is read only through env");
+    // TSK-254: the body is read from the API when the job runs, so the
+    // newest body is judged whichever run survives the concurrency group,
+    // and it reaches `codeflow ci` only through env, from a step output.
+    assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
+    assert_eq!(workflow.matches("steps.body.outputs.text").count(), 1);
+    assert_eq!(
+        workflow.matches("github.event.pull_request.body").count(),
+        0,
+        "the event's copy of the body may be stale"
+    );
 }
 
 #[test]

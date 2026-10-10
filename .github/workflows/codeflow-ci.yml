@@ -38,10 +38,19 @@ jobs:
   # full-mode target in .codeflow/test-config.json; scripts/gate-parity.py
   # refuses a target no part names. The `codeflow gates` job below is the one
   # verdict that branch rules and the release authority read.
+  #
+  # Every job carries a timeout, so a stalled step frees its runner instead
+  # of holding one of the account's concurrent job slots for GitHub's default
+  # six hours (TSK-254). Each is sized from the job's observed p95 and maximum
+  # over 2026-10-04 to 2026-10-07 with headroom: a gate part peaked at 20.6
+  # minutes outside the Playwright step and a Windows test partition at 27.2,
+  # so both get 45. A timed-out job fails, so its verdict fails, never passes.
+  # scripts/gate-parity.py refuses a job without one.
   gates:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: codeflow gates (${{ matrix.part }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -102,26 +111,71 @@ jobs:
       - name: Install exact npm for the owned presentation renderer
         run: npm install --global npm@11.17.0
 
-      # The present browser checks launch Firefox and WebKit through
-      # Playwright's own builds, which a clean runner does not have. The
-      # renderer's locked playwright-core installs them, so the browsers match
-      # the version both Node workspaces lock (checked equal here). Every part
-      # gets the same environment the single gate had.
+      # The present browser checks launch Chromium, Firefox and WebKit through
+      # Playwright's own builds, which a clean runner does not have. Only the
+      # present part runs a target that launches a browser (present-browser),
+      # so only it installs them (TSK-254); a target elsewhere that needed one
+      # would fail, never pass. The renderer's locked playwright-core installs
+      # them, so the browsers match the version both Node workspaces lock
+      # (checked equal here).
       - name: Read the locked Playwright version
+        if: matrix.part == 'present'
         id: playwright
         run: |
           present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
           portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
           test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
           echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
+        if: matrix.part == 'present'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      # The browsers' system libraries come from apt, and apt's download from
+      # the Ubuntu mirror is what stalled: 126 MB at 62 kB/s for 34 minutes on
+      # run 435, and 48 minutes to over three hours on four other parts the
+      # same evening. The runner image lacks about 180 of those packages, so
+      # the step cannot skip them. apt keeps what it downloads in this cache
+      # and reuses it, so a run fetches only the package lists and what
+      # changed since. Only the exact key restores, with no fallback to an
+      # older entry; the key names the runner image and the Playwright
+      # version. apt verifies the archives it downloads against the signed
+      # package lists, and the lists are always fetched fresh.
+      - uses: actions/cache@v6
+        if: matrix.part == 'present'
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+      # Each attempt is bounded at 10 minutes (a healthy install takes 0.7
+      # minutes at the median and 2.4 at p95) and a failed or stalled attempt
+      # is retried once. The system-library install runs as root under its
+      # own timeout, so the timeout can stop apt-get itself.
       - name: Install Playwright browsers from the lockfile
+        if: matrix.part == 'present'
+        timeout-minutes: 25
         run: |
           npm ci --ignore-scripts --prefix crates/codeflow-present/web
-          crates/codeflow-present/web/node_modules/.bin/playwright-core install --with-deps chromium firefox webkit
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit &&
+              sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
 
       # One instrumented suite owns Linux test and coverage evidence.
       - name: Install nextest and llvm-cov
@@ -173,6 +227,7 @@ jobs:
     name: codeflow gates
     needs: gates
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Every part of the full gate passed
         shell: bash
@@ -194,6 +249,7 @@ jobs:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: windows tests (${{ matrix.partition }} of 6)
     runs-on: windows-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -230,6 +286,7 @@ jobs:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: windows checks (fmt, doc, clippy, Node)
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
@@ -279,6 +336,7 @@ jobs:
     name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -306,6 +364,7 @@ jobs:
     name: windows
     needs: [windows, windows-tests, windows-journeys]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Every Windows job passed
         shell: bash
@@ -323,6 +382,7 @@ jobs:
   secret-scan:
     name: secret scan
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -790,6 +850,7 @@ jobs:
   gitleaks-canary:
     name: gitleaks allowlist canary
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -806,6 +867,7 @@ jobs:
   security-review:
     name: security review
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
