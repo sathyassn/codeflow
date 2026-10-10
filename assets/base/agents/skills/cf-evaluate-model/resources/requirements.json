@@ -963,7 +963,7 @@
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
             "research, analyze, and identify risks in parallel and return their findings before seeing the other's conclusions",
-            "Give both seats the same immutable brief and repository scope",
+            "Give both seats the same immutable brief; its scope is where each starts.",
             "each seat independently returns its findings",
             "Codex challenges that plan against its own findings",
             "There is no second plan and no reconciliation round"
@@ -1684,7 +1684,7 @@
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",
             "assembles reviewed heads into a small batch candidate in dependency order",
             "one full gate on that exact candidate",
-            "Unit reviews are not repeated",
+            "does not reopen unit review",
             "Boundaries are unchanged",
             "An explicit operator request about the landing shape is valid input and is honoured, but it cannot waive the clarity, safety, review or protected-branch conditions."
           ]

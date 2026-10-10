@@ -232,11 +232,13 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   accepted change is in this task's execution base, by merge or an explicit
   reviewed port. A predecessor complete only on another line is not here yet,
   and an unfetched line is unknown, never met. Before that, a task may be
-  claimed and started on the predecessor's exact reviewed head, named with
+  claimed and started on the predecessor's reviewed head, named with
   `--on TSK-NNN@<sha>`: the tool checks the pin structurally (an ancestor of
   HEAD, on the predecessor's branch, still its tip, and named by a review row,
-  or following the commit the review names only by the predecessor's status
-  and Closeout), which is not authentication of the review. Each push of the
+  in full or by a unique abbreviation of at least 7 characters, or following
+  the commit the review names only by single-parent commits that change only
+  the status and Closeout of the predecessor's own record), which is not
+  authentication of the review. Each push of the
   new branch judges the commits up to the pin as the predecessor's own
   reviewed pull request. CI still requires the predecessor complete at the
   merge base when the task lands, so the stack lands in order.
@@ -307,7 +309,12 @@ from every version of its record in the target's history, so a later edit
 or deletion there does not undo the landing; before that, a reopen inside
 its own pull request may change them, also when the target already records
 the task. A history that cannot prove the task never landed (a shallow
-clone, for one) refuses the change.
+clone, for one) refuses the change. A completed standalone task has
+no epic amendment, so its criteria wording (a typo, a person's name) is
+corrected by a pull request of planning records only, off its own task
+branch, whose `Task:` line names the task or a follow-up of it: every
+criterion and tag stays, CI prints the delta, the reviewer confirms the
+meaning is unchanged, and the task stays complete (ADR-0080).
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
@@ -316,10 +323,16 @@ complete; nobody writes it. An epic closes with `codeflow epic status EPC-NNN
 complete --acceptance <file>` once every task is terminal and every criterion
 is verified. A cancelled task never verifies a criterion: one that only
 cancelled tasks serve, like one no task serves, is verified in the epic's own
-acceptance block with its evidence. That block binds as a task's does: it
-names the reviewed commit, after which only the epic's status and Closeout
-change, and a waiver names the planning amendment of that criterion that
-the reviewed commit contains. When it does not bind, correct the block and
+acceptance block with its evidence. An `(after release)` criterion that a
+task serves is deferred there instead, as `deferred | owner: <who>; window:
+<when>; follow-up: TSK-NNN`, with the follow-up a serving task that is still
+open and listed in `follow_ups`. File that follow-up outside the epic, which
+closes only when its own tasks are terminal. A complete serving task's
+`verified` or `waived` result still decides, and a follow-up that does not
+serve the criterion, or is complete or cancelled, defers nothing. That block
+binds as a task's does: it names the reviewed commit, after which only the
+epic's status and Closeout change, and a waiver names the planning amendment
+of that criterion that the reviewed commit contains. When it does not bind, correct the block and
 have it reviewed: an open epic reruns `codeflow epic status EPC-NNN complete
 --acceptance <file>`, and an epic the pull request already completes gets
 the corrected block in its Closeout in that pull request, since an epic is
@@ -515,6 +528,9 @@ checklist theater. A record instantiates only what is specific:
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in
   the description;
+- a working default or fail-closed interim state that another task, a
+  reviewer or a later session relies on, with its evidence, what reverses or
+  clears it and its status (`autonomy.md`, "While a question is open");
 - the acceptance block with evidence per criterion, and routed follow-ups.
 
 Implementation discoveries follow one boundary:

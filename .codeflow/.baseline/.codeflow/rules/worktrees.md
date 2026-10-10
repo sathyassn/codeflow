@@ -161,10 +161,10 @@ batches, and serialize each landing: one candidate at a time. Before review,
 each builder merges the current line into the task branch and resolves the
 conflicts there. The primary assembles reviewed task heads on a candidate
 from the line tip in dependency order, resolves any remaining conflicts
-there, and reviews the resolved hunks and integration seams on product
-paths; the other lineage reviews those integration effects only when the
-primary hand-resolved a product hunk or two tasks touched one hotspot. Unit
-reviews are not repeated. Then one full gate runs on the exact candidate
+there, and inspects each landing merge: a clean merge does not reopen unit
+review; a hand-resolved product hunk returns its task to a whole-unit
+review at its new head (cf-method "Land in batches" where installed). Then
+one full gate runs on the exact candidate
 and is attached to the PRs it covers; a standalone PR is its own
 candidate. A red gate is diagnosed first: a member and its dependents are
 dropped only when evidence attributes the failure to it, and a shared

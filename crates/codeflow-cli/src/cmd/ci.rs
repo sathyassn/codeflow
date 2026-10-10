@@ -145,8 +145,8 @@ pub struct CiArgs {
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub workflow sets it from
-/// `github.event.pull_request.body`).
+/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
+/// it from the pull request's current body, read by its `body` step).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// A violation tagged with the commit it came from (`None` for branch-name and
@@ -564,11 +564,40 @@ pub fn run(args: &CiArgs) -> i32 {
     } else {
         Vec::new()
     };
+    // One checked tree diff decides what the body may leave out (TSK-135).
+    // Asked only with a body. A range or project paths that cannot be read
+    // stop the run, never a guessed class.
+    let change = match (pr_body.as_ref(), base_sha.as_deref()) {
+        (None, _) => None,
+        (Some(_), None) => Some(ChangeClass::CODE),
+        (Some(_), Some(base)) => {
+            let inventory = match change_class::range_inventory(&root, base, &head) {
+                Ok(inventory) => inventory,
+                Err(error) => {
+                    eprintln!("codeflow ci: {error}");
+                    return 2;
+                }
+            };
+            // The target side's paths come from the policy authority.
+            let project = match change_class::project_paths(
+                &root,
+                authority.as_ref().map_or(base, Authority::sha),
+            ) {
+                Ok(project) => project,
+                Err(error) => {
+                    eprintln!("codeflow ci: {error}");
+                    return 2;
+                }
+            };
+            Some(change_class::classify(Some(&inventory), &project))
+        }
+    };
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
         pr_context,
+        change.is_some_and(|class| class.light),
         &names,
         &base_candidates,
         &head,
@@ -606,31 +635,7 @@ pub fn run(args: &CiArgs) -> i32 {
     }
     if let Some(body) = &pr_body {
         let body = adopter::supply_sections(adoption.profile.as_ref(), body);
-        // One checked tree diff decides what the body may leave out; a range
-        // that could not be listed is code (TSK-135).
-        let class = match base_sha.as_deref() {
-            None => ChangeClass::CODE,
-            Some(base) => {
-                let inventory = match change_class::range_inventory(&root, base, &head) {
-                    Ok(inventory) => inventory,
-                    Err(error) => {
-                        eprintln!("codeflow ci: {error}");
-                        return 2;
-                    }
-                };
-                let project = match change_class::project_paths(
-                    &root,
-                    authority.as_ref().map_or(base, Authority::sha),
-                ) {
-                    Ok(project) => project,
-                    Err(error) => {
-                        eprintln!("codeflow ci: {error}");
-                        return 2;
-                    }
-                };
-                change_class::classify(Some(&inventory), &project)
-            }
-        };
+        let class = change.unwrap_or(ChangeClass::CODE);
         // The hosted workflows pass the base as a commit id, so the branch
         // the pull request merges into (`--into`, or the host's PR-target
         // environment) decides protection as much as a named base does.
@@ -772,14 +777,17 @@ fn release_of(
 
 /// Pull request classification (TSK-104), which needs the body, and
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
-/// range: a completion is bound to the head it lands with. Returns whether
-/// the pull request is tracked work (TSK-133's visible-workgraph check).
+/// range: a completion is bound to the head it lands with. A tracked body
+/// also names that reviewed commit in an approving Reviews row (issue 121).
+/// `light` is the range's change class. Returns whether the pull request is
+/// tracked work (TSK-133's visible-workgraph check).
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
     pr_context: bool,
+    light: bool,
     names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
@@ -876,6 +884,16 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    if let (Some(body), Some(classification::Class::Tracked { task_id })) =
+        (pr_body, class.as_ref())
+    {
+        if let Some(violation) = review_row_check(root, git, body, head, task_id, light) {
+            tagged.push(TaggedViolation {
+                sha: None,
+                violation,
+            });
+        }
+    }
     matches!(
         class,
         Some(
@@ -891,6 +909,64 @@ fn range_tracks_work(root: &Path, range: &classification::Range<'_>) -> Result<b
     let checkout_and_base = classification::tracking_on(root, Some(range))?;
     let head = codeflow_core::workgraph::durable_work_tracking_enabled_at(root, range.head)?;
     Ok(checkout_and_base || head)
+}
+
+/// A completed task's PR body approves the commit its acceptance block binds
+/// (issue 121): a review row naming an earlier head is the approval of a
+/// head the review did not cover. The record is read at `head`; no active
+/// block means the task is still in progress, and a light range may leave
+/// the Reviews section out or record none. The row check is the strict
+/// `review_names_revision` (the full commit, a verdict cell of exactly
+/// `approved` or `approve`); `work claim --on` reads its pin with the
+/// permissive `reviewed_revisions` (prose verdicts, abbreviations).
+fn review_row_check(
+    root: &Path,
+    git: &GitPolicy,
+    body: &str,
+    head: &str,
+    task_id: &str,
+    light: bool,
+) -> Option<Violation> {
+    use codeflow_core::workgraph::record_text::acceptance_blocks;
+    let path = format!("project-management/tasks/{task_id}.md");
+    // OS text rule (issue 79): the record is read strictly. One that cannot
+    // be read or is not UTF-8 refuses; only a record the head does not hold
+    // has no row to check.
+    let record = match codeflow_core::workgraph::acceptance::text_at(root, head, &path) {
+        Ok(Some(record)) => record,
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(Violation::new(
+                codeflow_core::workgraph::acceptance::BINDING_RULE,
+                git.work_records_level(),
+                format!("cannot read {task_id}'s record to check its review row: {error}"),
+                codeflow_core::remedy::REVIEW_ROW_BINDING.with(&[("sha", head)]),
+            ))
+        }
+    };
+    let reviewed = acceptance_blocks(&record)
+        .into_iter()
+        .filter(|block| !block.is_superseded())
+        .filter_map(|block| block.parsed.ok())
+        .next_back()?
+        .reviewed;
+    let heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
+    // A light range may leave Reviews out or record `None: <reason>`; a row
+    // that names any other commit is still the wrong approval.
+    if light && pr_body::reviews_record_none(body, &heading) {
+        return None;
+    }
+    if pr_body::review_names_revision(body, &heading, &reviewed) {
+        return None;
+    }
+    Some(Violation::new(
+        codeflow_core::workgraph::acceptance::BINDING_RULE,
+        git.work_records_level(),
+        format!(
+            "{task_id}'s acceptance block binds the reviewed commit {reviewed}, and the {heading} section has no row approving it"
+        ),
+        codeflow_core::remedy::REVIEW_ROW_BINDING.with(&[("sha", &reviewed)]),
+    ))
 }
 
 /// The durable-record rows of the dispatch, in their append-only order
@@ -1339,7 +1415,7 @@ fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
         &task_id,
         &target.target,
         head,
-        &|branch, sha, named| super::work::review_lookup(root, branch, sha, named),
+        &|branch, sha, covers| super::work::review_lookup(root, branch, sha, covers),
     ) {
         Ok(pins) => {
             for pin in &pins {
@@ -2993,6 +3069,7 @@ mod tests {
             "{note}"
         );
     }
+
     #[cfg(unix)]
     #[test]
     fn r22_own_preflight_reader_failures_block_with_planning_off() {

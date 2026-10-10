@@ -7,6 +7,7 @@ mod absence;
 mod bounded_file;
 pub mod capability;
 pub mod ceremony;
+mod contained;
 pub mod delegate;
 pub mod doctor;
 pub mod error;

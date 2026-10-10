@@ -382,7 +382,13 @@ Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,
 EPC-002`, only for a planning amendment; `codeflow ci` then prints one
 `work.planning_amendment` note per change, grouped by epic, and refuses a
-change to a record of an epic the line does not name (ADR-0078).
+change to a record of an epic the line does not name (ADR-0078). A
+pull request of planning records only whose `Task:` line names a completed
+standalone task, or a follow-up of it, may correct the wording of that
+task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
+note and still refuses an added, removed, renumbered or reordered
+criterion, a changed tag or checkbox form, or an added list item that is
+no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It requires the checks in
 `git.required_checks` (by default the shipped CI job names) on a branch that
@@ -439,6 +445,14 @@ passes.
   blocked.
 - After landing, clean linked worktrees that have the target checked out are
   reset to the tested tip, and a dirty one is reported.
+
+A `work start --on` pin names the predecessor branch tip. Its Reviews section
+must approve that tip or an ancestor whose later commits touch only the
+predecessor's own task record, and in it only its status and Closeout.
+Every intervening commit is checked, so a
+change followed by a revert still requires review, and a merge after the
+review is refused. The repository owner,
+name and branch must match; cross-repository pull requests are refused.
 
 ### Remember notes
 

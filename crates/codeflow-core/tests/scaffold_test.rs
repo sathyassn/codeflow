@@ -1998,7 +1998,7 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
 
 fn kept_steps_are_warned_about(steps: &str, named: &str) {
     const SHIPPED: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
-    const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
+    const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    timeout-minutes: 30\n    steps:\n      \
                             - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
     isolate_git();
     let (_p, root) = project_dir();
@@ -2064,7 +2064,7 @@ fn kept_steps_are_warned_about(steps: &str, named: &str) {
 #[test]
 fn update_says_a_renamed_scan_step_needs_review() {
     const SHIPPED: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
-    const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
+    const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    timeout-minutes: 30\n    steps:\n      \
                             - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
     const SCAN: &str = "      - name: gitleaks\n";
     isolate_git();

@@ -31,6 +31,8 @@
 //                         (review/security/qa changes_requested -> build). Counts
 //                         the initial build, so N permits N-1 reworks. Default 3.
 //   dir        string?    working-directory context added to stage prompts.
+//   base       string?    the commit the unit's diff is taken from
+//                         (default: the integration target, 'origin/main').
 //
 // Runtime contract: plain JS executed as an async-function body — no imports,
 // no Date.now/Math.random. `await agent(prompt, opts)` is a fresh-context
@@ -68,10 +70,15 @@ if (A.maxRework !== undefined && (!Number.isInteger(A.maxRework) || A.maxRework 
 if (A.dir !== undefined && typeof A.dir !== 'string') {
   throw new Error('pipeline: A.dir must be a string');
 }
+if (A.base !== undefined && (typeof A.base !== 'string' || A.base.trim() === '')) {
+  throw new Error('pipeline: A.base must be a non-empty string');
+}
 
 const TASK = A.task;
 const CRITERIA = A.criteria.map((c) => `- ${c}`).join('\n');
 const WHERE = A.dir ? `Working directory: ${A.dir}.` : '';
+// What every review stage reads: the whole unit at one head, never a delta.
+const UNIT = `Review the whole unit: \`git diff ${A.base ?? 'origin/main'}...HEAD\`, every touched file and its blast radius, with the scope and manner .codeflow/rules/workflow-discipline.md "Review verdicts" defines; findings from earlier stages are checks within that pass, never its scope.`;
 const MAX_REWORK = A.maxRework ?? 3;
 // Named presets. This Claude workflow can run fresh-context Claude agents but
 // cannot reach either native interactive peer lane. The assurance preset is
@@ -128,6 +135,7 @@ const gate = (name, charge, { role, rule, schema } = {}) => ({
     `Acceptance criteria:\n${CRITERIA}`,
     `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
     charge,
+    UNIT,
     role ?? 'Role (.claude/agents/cf-reviewer.md): independent evaluator, read-only on code — never fix anything; every claim in the verdict needs evidence.',
     'Judge ONLY on what you observe: run the gates and the code yourself; cite file:line or command output per finding.',
     rule ?? "Return verdict 'approved' only if every criterion is verified and no blocker or major finding remains; otherwise 'changes_requested' with one finding string per issue.",
@@ -230,6 +238,7 @@ const STAGES = {
       `Acceptance criteria:\n${CRITERIA}`,
       `Builder summary:\n${ctx.buildSummary || '(not captured)'}`,
       'Genuine cross-vendor consult is interactive-only (the cf-consult skill, CodeFlow ADR-0023); this unattended stage cannot reach that lane, so perform a rigorous independent second read yourself in this fresh context.',
+      UNIT,
       'Review the built diff against the criteria, cite file:line, and challenge the builder summary rather than trusting it — verify each point against the actual diff.',
       "Return verdict 'changes_requested' ONLY for substantive defects you can confirm; otherwise 'approved'. One finding string per issue.",
     ].filter(Boolean).join('\n\n'),

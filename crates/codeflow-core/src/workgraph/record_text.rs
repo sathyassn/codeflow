@@ -60,6 +60,18 @@ impl Criterion {
         text.starts_with(tag) || closing.ends_with(tag)
     }
 
+    /// What a text correction of a completed criterion keeps (ADR-0080):
+    /// every tag the parser reads and the listed or checkbox form.
+    #[must_use]
+    pub fn tags(&self) -> CriterionTags {
+        CriterionTags {
+            journey: self.is_journey(),
+            after_release: self.is_after_release(),
+            serves: self.serves(),
+            checkbox: self.checkbox.is_some(),
+        }
+    }
+
     /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
@@ -74,6 +86,19 @@ impl Criterion {
         (parts.next().is_none() && is_criterion_id(criterion))
             .then(|| (epic.to_string(), criterion.to_string()))
     }
+}
+
+/// The tags of one criterion ([`Criterion::tags`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CriterionTags {
+    /// `(journey)` opens or closes the criterion.
+    pub journey: bool,
+    /// `(after release)` opens or closes the criterion.
+    pub after_release: bool,
+    /// The epic criterion named by `(serves EPC-NNN AC-m)`.
+    pub serves: Option<(String, String)>,
+    /// The legacy checkbox form, ticked or not.
+    pub checkbox: bool,
 }
 
 /// The parsed `## Acceptance Criteria` section.
@@ -1250,7 +1275,13 @@ pub fn check_block(
             ));
         }
     }
-    if criteria.iter().any(Criterion::is_journey) && outcome_word(&block.journey) != "verified" {
+    // A journey criterion that is also after-release is deferred because it
+    // is observable only after release (R-62): the journey has not run.
+    if criteria
+        .iter()
+        .any(|criterion| criterion.is_journey() && !criterion.is_after_release())
+        && outcome_word(&block.journey) != "verified"
+    {
         problems.push(
             "the record has a journey criterion; `journey` must be `verified | <path exercised>`"
                 .to_string(),
@@ -1277,6 +1308,26 @@ pub fn check_block(
         ));
     }
     problems
+}
+
+/// The non-empty value of `name` in a `deferred` result's evidence, which
+/// reads `owner: <who>; window: <when>; follow-up: TSK-NNN`.
+fn deferral_field<'r>(result: &'r CriterionResult, name: &str) -> Option<&'r str> {
+    result
+        .evidence
+        .split(';')
+        // Spaces and tabs separate the fields (issue 79): another whitespace
+        // character is part of the value.
+        .filter_map(|part| part.trim_matches([' ', '\t']).strip_prefix(name))
+        .map(|value| value.trim_start_matches(':').trim_matches([' ', '\t']))
+        .find(|value| !value.trim().is_empty())
+}
+
+/// The follow-up task a `deferred` result names (R-62), when it reads
+/// `follow-up: <value>`. The value is not checked to be a task id here.
+#[must_use]
+pub fn deferred_follow_up(result: &CriterionResult) -> Option<&str> {
+    deferral_field(result, "follow-up")
 }
 
 /// The value of `follow_ups` with one pair of matching YAML quotes removed
@@ -1307,23 +1358,15 @@ fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) 
             result.outcome
         )];
     }
-    let field = |name: &str| {
-        result
-            .evidence
-            .split(';')
-            .filter_map(|part| part.trim_matches([' ', '\t']).strip_prefix(name))
-            .map(|value| value.trim_start_matches(':').trim_matches([' ', '\t']))
-            .find(|value| !value.trim().is_empty())
-    };
     let mut problems = Vec::new();
     for name in ["owner", "window"] {
-        if field(name).is_none() {
+        if deferral_field(result, name).is_none() {
             problems.push(format!(
                 "{id} is deferred without its {name}; record {shape}"
             ));
         }
     }
-    match field("follow-up") {
+    match deferred_follow_up(result) {
         Some(task) if crate::workgraph::is_valid_task_format_id(task) => {
             if !follow_ups
                 .split(',')
