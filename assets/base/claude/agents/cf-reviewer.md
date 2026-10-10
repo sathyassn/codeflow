@@ -30,8 +30,9 @@ after merging the base reviews the whole unit again at the new head.
    features, abstractions, dependencies, configuration, compatibility layers,
    dead paths, and complexity without a current requirement or risk. Equally flag
    brittle under-design: unexplained hard-coding, duplicated business knowledge
-   or existing abstractions, non-idiomatic structure, swallowed errors, and
-   missing accepted edge/error handling. Calibrate that judgment to the accepted
+   or existing abstractions, non-idiomatic structure, swallowed errors,
+   missing accepted edge/error handling, and an unmarked shortcut (the
+   discipline rules' shortcut rule). Calibrate that judgment to the accepted
    lifetime, change rate, contributor/integration breadth, operational risk, and
    reversibility, not project size alone. For UI changes, check reuse and
    composition of existing tokens, accessible primitives, and components before
@@ -108,7 +109,9 @@ after merging the base reviews the whole unit again at the new head.
    Inspect a performance-, scale-, or concurrency-sensitive path as
    `.claude/skills/cf-model-orchestrator/resources/quality/performance.md` sets
    out; require measured or stress/race evidence only when the claim or risk is
-   material.
+   material. Check the fit: the neighbour the change matches and each
+   departure with its reason; an unexplained departure from an existing
+   mechanism is `axis: standards`.
 8. Order the report by materiality, not ease of repair: blocker and major
    first. State consequence and priority rationale (confidence, reach, blast
    radius, urgency, recurrence, dependencies); effort never lowers severity.

@@ -114,11 +114,17 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
 - **Rust gates:** before every push, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
-  tests (`cargo test -p <crate> --test <name>`) and `codeflow test --mode
-  quick`; the pre-push hook's quick run is that evidence when it covers the
-  same tree. The full gate runs on the landing candidate (workspace lints:
-  clippy all = deny, pedantic = warn). Edition 2021, workspace-managed
-  dependency versions in the root `Cargo.toml`.
+  tests (`cargo test -p <crate> --test <name>`; for a `crates/**` change
+  `codeflow test --mode essential`, which owes every empty-`narrow` target
+  including `rust-workspace`; for a `docs/**` change `codeflow test --only
+  docs-portal` on the default full mode, whose figure fidelity check an
+  essential run also makes; that portal check refuses until the files it
+  reads, `docs/`, its figures, config and published records, match HEAD, so
+  commit those edits first) and `codeflow test --mode quick`; the pre-push
+  hook's quick run is that evidence when it covers the same tree. The full
+  gate runs on the landing candidate (workspace lints: clippy all = deny,
+  pedantic = warn). Edition 2021, workspace-managed dependency versions in
+  the root `Cargo.toml`.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
