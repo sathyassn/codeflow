@@ -149,6 +149,17 @@
       "requires": []
     },
     {
+      "name": "contract-scans",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "quick": {
+          "command": "cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet"
+        }
+      },
+      "requires": []
+    },
+    {
       "name": "rust-doctest",
       "enabled": true,
       "runner": "custom",

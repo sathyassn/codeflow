@@ -25,8 +25,10 @@ missing plane without relaxing task safety or review. The local planes are
 fast feedback that an agent on the host can edit or skip; required CI and
 remote rules are the server-side boundary, and only where they are
 configured for the actor's permissions. Arm the remote plane with
-`codeflow remote protect` where the host supports it, then read the live
-rules before claiming that boundary. An override env (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) is not
+`codeflow remote protect` where the host supports it: it requires the
+checks in `git.required_checks` on a branch that is up to date with its
+base. Then read the live rules (`codeflow doctor --check remote-perimeter`)
+before claiming that boundary. An override env (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) is not
 authentication and creates no boundary. Headless task execution remains
 prohibited (CodeFlow ADR-0018), whether or not a harness runs hooks in that
 mode; that prohibition is instruction-only, and CodeFlow cannot technically
@@ -91,7 +93,11 @@ missing automation for adoption rather than silently enabling publication.
 **Protected branches** (`main`/`master` plus policy globs): never commit,
 merge, push, force-push, delete, or hard-reset on them. Work lands by
 exactly two paths: a PR with evidenced-green checks merged by a human, or
-`codeflow integrate <branch> --into <target>`. Never set override envs
+`codeflow integrate <branch> --into <target>`. A check is evidence only for
+the base it ran against, so a PR is ready to merge when its required checks
+ran on the current target tip; where the host does not require up-to-date
+branches, merge the target into the branch and wait for the fresh run
+before reporting the PR ready. Never set override envs
 (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens), which is laundering, and never
 `gh pr merge --delete-branch` (it can corrupt the root repo). The pushed
 branch is deleted later, in cleanup after merge proof (`worktrees.md`

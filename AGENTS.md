@@ -144,8 +144,10 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   repo's daily path. Keep release state in each work PR; see
   `docs/releasing.md`. Tasks never publish or move tags.
 - **Remote protection on `main`:** pull requests are required and force
-  pushes and deletion are blocked. Whether CI is a required status check and
-  whether the rules bind administrators are repository settings that can
-  change, so read the live rules before relying on them
-  (`gh api repos/sathyassn/codeflow/branches/main/protection`). Where CI is not
-  required, the human who merges confirms that CI is green; never merge on red.
+  pushes and deletion are blocked. Whether CI is a required status check,
+  whether a branch must be up to date with `main` (ADR-0081) and whether the
+  rules bind administrators are repository settings that can change, so read
+  the live rules before relying on them (`codeflow doctor --check
+  remote-perimeter`). Where CI is not required, the human who merges confirms
+  that CI is green; where branches need not be up to date, that it ran on the
+  current `main`; never merge on red.
