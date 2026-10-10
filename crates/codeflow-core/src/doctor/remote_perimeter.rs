@@ -200,7 +200,7 @@ fn policy_list(root: &Path) -> Result<(Vec<String>, String), String> {
         || errors.iter().any(|e| e.key == "policy.json")
     {
         return untrusted(format!(
-            "the policy file does not parse, so the built-in defaults stand in for it: {}",
+            "the policy file does not parse, so enforcement refuses it and no list is in force: {}",
             text(&all)
         ));
     }
@@ -698,10 +698,10 @@ mod tests {
     #[test]
     fn an_untrusted_required_checks_list_notes_before_any_host_call() {
         // The host strictly requires one other check for everyone. An empty
-        // list would leave no policy name to find missing, and a file that
-        // does not parse, or names the key wrongly, loads the defaults in
-        // place of the intended list, so each must stop the check before
-        // `gh` is asked anything instead of passing it.
+        // list would leave no policy name to find missing, a file that does
+        // not parse is refused by enforcement, and a misnamed key loads the
+        // defaults in place of the intended list, so each must stop the
+        // check before `gh` is asked anything instead of passing it.
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
             CALLS.fetch_add(1, Ordering::SeqCst);
