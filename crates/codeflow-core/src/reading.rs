@@ -59,8 +59,10 @@ pub type SkillFiles = BTreeMap<String, String>;
 // ---------------------------------------------------------------------------
 
 /// Guideline for the per-task reading chain: what one full implementation
-/// task reads after the kernel. Reported, never a failure.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 128 * KIB;
+/// task reads after the kernel. Reported, never a failure. TSK-263 raised it
+/// from 128 KiB: the scenario, consumer-check and shortcut duties reach every
+/// task, so they sit in the chain rather than behind a trigger.
+pub const READING_CHAIN_GUIDELINE_BYTES: usize = 130 * KIB;
 
 /// Guideline for a skill that owns cross-lineage routing or orchestration.
 pub const ROUTING_SKILL_GUIDELINE_BYTES: usize = 29 * KIB;
@@ -81,7 +83,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-customize", 22 * KIB + 512),
     ("cf-delegate", 20 * KIB + 512),
     ("cf-design", 20 * KIB),
-    ("cf-develop", 5 * KIB + 256),
+    ("cf-develop", 5 * KIB + 512),
     ("cf-docs-portal", 9 * KIB + 128),
     ("cf-editorial-review", 7 * KIB),
     ("cf-estimate", 6 * KIB),
@@ -100,7 +102,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
 pub const ARTIFACT_GUIDELINES: &[(&str, usize)] = &[
     ("CLAUDE.md.tmpl", 6 * KIB),
     ("CLAUDE.minimal.md.tmpl", 3 * KIB),
-    ("claude/agents/cf-reviewer.md", 10 * KIB + 256),
+    ("claude/agents/cf-reviewer.md", 10 * KIB + 512),
     ("claude/agents/cf-security-reviewer.md", 12 * KIB),
 ];
 
@@ -594,6 +596,13 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         PERFORMANCE,
         "For a performance-, scale-, or concurrency-sensitive path",
         "only for a performance-, scale-, or concurrency-sensitive path",
+    ),
+    // TSK-263: the design step reads the trigger only when its path meets it.
+    conditional(
+        "cf-model-orchestrator/resources/quality/design-implementation.md",
+        PERFORMANCE,
+        "If the path meets the trigger in",
+        "only for a path that meets the performance trigger",
     ),
     conditional(
         "cf-model-orchestrator/resources/quality/verification.md",

@@ -217,7 +217,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
@@ -390,7 +390,14 @@ note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
 no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
-another provider prints the manual checklist.
+another provider prints the manual checklist. It requires the checks in
+`git.required_checks` (by default the shipped CI job names) on a branch that
+is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
+the live rules first: every active repository ruleset that already targets the
+branch is updated in place, never duplicated, and a classic protection update keeps the
+settings it does not own, such as conversation resolution. A live read that
+fails or does not parse writes nothing for that branch. `codeflow doctor
+--check remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes
 

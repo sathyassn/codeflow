@@ -114,11 +114,17 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
 - **Rust gates:** before every push, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
-  tests (`cargo test -p <crate> --test <name>`) and `codeflow test --mode
-  quick`; the pre-push hook's quick run is that evidence when it covers the
-  same tree. The full gate runs on the landing candidate (workspace lints:
-  clippy all = deny, pedantic = warn). Edition 2021, workspace-managed
-  dependency versions in the root `Cargo.toml`.
+  tests (`cargo test -p <crate> --test <name>`; for a `crates/**` change
+  `codeflow test --mode essential`, which owes every empty-`narrow` target
+  including `rust-workspace`; for a `docs/**` change `codeflow test --only
+  docs-portal` on the default full mode, whose figure fidelity check an
+  essential run also makes; that portal check refuses until the files it
+  reads, `docs/`, its figures, config and published records, match HEAD, so
+  commit those edits first) and `codeflow test --mode quick`; the pre-push
+  hook's quick run is that evidence when it covers the same tree. The full
+  gate runs on the landing candidate (workspace lints: clippy all = deny,
+  pedantic = warn). Edition 2021, workspace-managed dependency versions in
+  the root `Cargo.toml`.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
@@ -138,8 +144,10 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   repo's daily path. Keep release state in each work PR; see
   `docs/releasing.md`. Tasks never publish or move tags.
 - **Remote protection on `main`:** pull requests are required and force
-  pushes and deletion are blocked. Whether CI is a required status check and
-  whether the rules bind administrators are repository settings that can
-  change, so read the live rules before relying on them
-  (`gh api repos/sathyassn/codeflow/branches/main/protection`). Where CI is not
-  required, the human who merges confirms that CI is green; never merge on red.
+  pushes and deletion are blocked. Whether CI is a required status check,
+  whether a branch must be up to date with `main` (ADR-0081) and whether the
+  rules bind administrators are repository settings that can change, so read
+  the live rules before relying on them (`codeflow doctor --check
+  remote-perimeter`). Where CI is not required, the human who merges confirms
+  that CI is green; where branches need not be up to date, that it ran on the
+  current `main`; never merge on red.

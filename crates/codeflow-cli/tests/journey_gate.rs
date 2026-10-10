@@ -367,6 +367,7 @@ fn the_quick_gate_runs_only_the_light_targets() {
     assert_eq!(
         quick,
         [
+            "contract-scans",
             "gate-parity",
             "herdr-delivery",
             "repository-update-noop",

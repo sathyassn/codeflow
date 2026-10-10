@@ -240,9 +240,9 @@ const STAGES = {
     schema: VERDICT,
     prompt: () => [
       `Final verification gate for: ${TASK}`, WHERE,
-      'Run the affected targeted checks, then `codeflow test --mode quick --strict` and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
+      'Run the affected targeted checks, then `codeflow test --mode essential --strict` when a target in `.codeflow/test-config.json` defines an `essential` mode, else `codeflow test --mode quick --strict`; say which ran and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
       `Then check every acceptance criterion one by one, citing evidence per criterion in findings:\n${CRITERIA}`,
-      "Verdict 'approved' only when targeted checks and the quick gate ran green (never on a NoTargets/no-op run) and every criterion is met. The primary runs the full gate once on the exact landing candidate.",
+      "Verdict 'approved' only when targeted checks and that gate ran green (never on a NoTargets/no-op run) and every criterion is met. The primary runs the full gate once on the exact landing candidate.",
     ].filter(Boolean).join('\n\n'),
   },
 };
