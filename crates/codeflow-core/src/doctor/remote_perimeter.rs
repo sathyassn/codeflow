@@ -170,7 +170,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
 /// The `git.required_checks` list to judge, with a suffix naming the
 /// policy's other schema errors (empty when there are none), or the note
 /// for a list that cannot be trusted. It cannot when the file does not
-/// parse (the loader puts the defaults in its place), when the schema
+/// parse (enforcement refuses it, so no list is in force), when the schema
 /// refuses the key itself (an empty list names no check to find missing and
 /// would pass whenever some other strict rule binds everyone), or when an
 /// unknown key looks like a misspelt `required_checks` (the intended list

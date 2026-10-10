@@ -201,9 +201,11 @@ The rule:
   the two listed matcher exceptions in the scan.
 - **Plumbing answers keep names exact.** The id registry's git runner reads text
   answers strictly and name lists as bytes: a name that is not UTF-8 becomes its
-  storage key, which no record or registry path equals, and a file it must
-  rewrite is addressed by its exact bytes. Where a platform cannot hold a name
-  (native Windows), the key alone stands for the entry.
+  storage key, which no record or registry path equals. A renumber refuses,
+  before any write, when a tracked file it reads for links (under `docs/` or a
+  record root) has a name that is not UTF-8, because the contained walk
+  addresses names as text. Where a platform cannot hold a name (native
+  Windows), the key alone stands for the entry.
 - **Tree walks read names as bytes.** git2's `Tree::walk` stops with an error
   at a directory whose name is not UTF-8; `git::walk_tree` reads the entries
   as bytes. A record path is valid text, so a path that is not UTF-8 is not a
