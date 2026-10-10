@@ -94,6 +94,448 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Rules with no key
+
+`security.shell_startup` is enforced by exec-guard and edit-guard. It
+refuses a write to a shell startup file, or a write that can place one, in an
+agent session (issue 86, TSK-242). The class and the sandbox containment
+per harness are in
+[enforcement planes](architecture/enforcement-planes.md#shell-startup-files);
+the forms the guards refuse follow here. No key relaxes it at any integrity level; the operator edits their own
+startup files outside the agent session.
+
+### What security.shell_startup refuses
+
+The guards read a line as the commands it runs: the body of a shell `-c`,
+an `eval` and the string `env -S` splits (`--split-string`, `-S'cmd'`, at
+blanks and at env's `\_` escape) are judged like the same commands at the
+top of the line, each nested body in turn, up to eight levels; deeper text
+refuses the line (review round 14). A literal the line assigned before the
+use is filled in, so `CMD='...'; sh -c "$CMD"`, `eval "$CMD"` and `$CMD`
+as the command word are read as the commands the literal holds (review
+round 15). git-guard reads them the same way. That reading covers the
+command a launcher runs: the string `flock FILE -c` (also `-cCMD` and
+`--command=CMD`), `script -c` and `watch` hand to a shell, the commands
+`parallel` builds from its template and `:::` inputs, the command words
+after `flock FILE`, `script FILE` (BSD and macOS), `setsid` and
+`unbuffer`, git or a command string run by `xargs` or `find -exec`, and
+the command after a launcher under its GNU name (`gtimeout`, `gnice`,
+`gnohup`, `gstdbuf`, `genv`).
+
+The programs that can run a command form an open set, so the guards do
+not list them. They close the set from the other side (the closed rule,
+TSK-242): on a line that names a startup file, every program must be one
+the guard reads, and a form it cannot resolve refuses, naming the form:
+
+- an expansion used as the command word with no literal assigned before
+  it (`$CMD`, `${X:-sh}`, `$(...)`), which covers `eval "$X"` and
+  `sh -c "$X"`;
+- a shell given a script file or reading its commands from standard
+  input (`bash r.sh`, `| sh`);
+- `xargs` or `find -exec` running a program that is not a data reader,
+  since its arguments come from input or from the file tree, and
+  `parallel`, whose commands come from a template (`{}`, `{1}`, an `-I`
+  string) and its inputs;
+- `flock`, `script`, `watch`, `setsid` or `unbuffer` with a command the
+  reader does not parse;
+- a GNU-prefixed launcher, and a search path set for the command
+  (`PATH=...` in any letter case, since Windows reads `Path` as `PATH`,
+  and `env -P`);
+- a writer option the guard does not list: `rsync`, `scp`, `tar`, `zip`,
+  `unzip`, `curl`, `wget`, `patch` and `install` have options that run a
+  program or read a configuration, so only the options the guard lists
+  pass and any other refuses (`zip -TT`, `rsync --rsync-path`, `tar -I`,
+  `scp -S`, `curl -K`, `wget -e`, `patch -g`, `install -s`), with no
+  keyword list to extend (review round 16). A letter that takes a value
+  takes the next word only when that word is not an option itself, since
+  the tar dialects disagree on which letters take one (review round 18).
+  The table records each long option's arity and the options whose value
+  is a file the program writes (`rsync --log-file`, `curl --trace`, `wget
+  -o`, `zip -lf`, `tar -f` when it creates or adds to an archive, so
+  `tar -tf` and `tar -xf` read theirs), and every option that takes a word
+  takes it before the destination is chosen, so `rsync -a SRC ~/.zshrc
+  --exclude foo` writes the startup file and refuses (review round 22).
+  One judge reads every writer the table lists, once, with the line's
+  option environment, and both guards call it: exec-guard against the
+  startup and user git configuration classes, git-guard against the
+  integrity paths and the repository git configuration. It judges the
+  copy's destination, each written path from the command line or the
+  option environment (`TAR_OPTIONS="--file=$HOME/.zshrc" tar -c .`,
+  `ZIPOPT="-O $HOME/.zshrc"`), each as spelled and joined with the
+  writer's directory options in program order (`patch -d DIR -o ../x`
+  writes `DIR/../x`), an option the table does not list, and where the
+  call places files it does not name, so `ditto`, `scp`, `curl -o` and
+  `tar -cf` onto `.git/config` refuse on git-guard as `cp` does. With an
+  option the table does not list, any operand could be the destination,
+  so each is judged as one, and a test fails when a table entry is not
+  judged by both guards (review round 23);
+- a writer's option environment: a variable the line sets that the writer
+  reads as more options (`ZIPOPT`, `ZIP` and `ZIP_OPTS` for `zip`, `UNZIP`,
+  `UNZIPOPT` and `UNZIP_OPTS` for `unzip`, `TAR_OPTIONS` for `tar`) is
+  judged by the same list, so `ZIPOPT='-T -TT cmd'` refuses; a variable that
+  names a program, a configuration or a file the writer uses refuses
+  whatever its value (`RSYNC_RSH`, `RSYNC_CONNECT_PROG`, `RSYNC_SHELL` and
+  `SSH_ASKPASS` for `rsync`, `SSH_ASKPASS` for `scp`, `TAPE`, `TAR_READER_OPTIONS` and
+  `TAR_WRITER_OPTIONS` for `tar`, `CURL_HOME`, `XDG_CONFIG_HOME`,
+  `SSLKEYLOGFILE` and `QLOGDIR` for `curl`, `WGETRC` and `SYSTEM_WGETRC`
+  for `wget`, `PATCH_GET`, `SIMPLE_BACKUP_SUFFIX`, `VERSION_CONTROL` and
+  `PATCH_VERSION_CONTROL` for `patch`, `STRIPBIN`, `SIMPLE_BACKUP_SUFFIX`
+  and `VERSION_CONTROL` for `install`). Each writer's table entry declares
+  both lists, and a test fails on an entry that declares neither without
+  a reason (review round 18);
+- any other program the guard does not know to run nothing of its own,
+  such as `npm`, `make`, `tmux`, `ssh`, an interpreter or `trap`.
+
+The guard reads data readers used as one, `git`, `gh`, the writers whose
+targets it judges (`cp`, `mv`, `tee`, `tar`, `curl` and the like) when it
+knows every option given, shells and `eval` with a body it reads, builtins,
+and `source` of the startup file itself. Only the command word counts as
+an expansion, so a resolved read keeps its verdict (`grep "$PAT"
+~/.zshrc`, `sh -c 'grep "$PAT" ~/.zshrc'`). The rule needs the file named
+on the line; a spelling that names none is a residual, listed below. Its
+cost is an ordinary line that names a startup file and runs a program the
+guard does not read, such as `source ~/.zshrc && npm test`; run that
+program in a call that does not name the file. The task record lists the
+measured refusals. `ssh HOST CMD`, `tmux`, `screen` and `make --eval` were
+residuals the guard did not judge; beside a named file they now refuse as
+programs it does not read.
+
+The guards refuse under `security.shell_startup`, whatever the integrity
+level:
+
+- a redirect, copy, link, move, in-place edit, `tee`, `dd` or interpreter
+  call that names a file of the class, in any spelling the guard expands
+  (`~`, `$HOME`, `${HOME}`, `$ZDOTDIR`, braces, globs, case) and through
+  symbolic links;
+- an archive, sync, download or checkout that writes into the home, `/etc`
+  or a startup directory, where it can place a file it does not name. The
+  directory comes from the same reading as the writer options above:
+  clustered and attached letters (`tar -xC$HOME`, `patch -d$HOME`), tar's
+  dashless keys and the option environment (`UNZIP="-d $HOME"`,
+  `TAR_OPTIONS="-C $HOME"`), each writer's entry naming the options that
+  carry a directory. A placing program the guard has no entry for
+  (`7z`, `cpio`, `stow`) refuses when the call names the home, `/etc` or a
+  startup directory, since any of its options could carry it there (review
+  round 19). An option a writer's entry does not list is read past, so a
+  directory after it still counts, and a call that carries such an option
+  refuses when it names one of those places
+  (`tar -x --no-mac-metadata -C$HOME`, review round 20). Every option that
+  changes where a file lands is either a judged directory (rsync's
+  `--backup-dir`, `--partial-dir` and `-T`/`--temp-dir`) or left out of the
+  entry, so it refuses the same way: renames by pattern (`tar -s`,
+  `--transform`), path prefixes and suffixes (`patch -B`, `-Y`, `-z`,
+  `install -B`, `-S`, `rsync --suffix`), `rsync -R` and `--files-from`, and
+  `zip -b`. Options that add no directory themselves stay listed (`tar
+  --strip-components`, `tar -P`, `unzip -j`, `patch -p`, `wget -nd`), but a
+  name an archive, a diff or a server supplies can still leave the judged
+  directory; that is the content residual listed below (review round 22).
+  A relative written path is judged both as spelled and joined with the
+  writer's directory (`curl -o` with `--output-dir`, `patch -o` and `-r`
+  with `-d`). The option variables are
+  read before the command line, so the command-line directory is the one
+  that holds, as GNU tar and Info-ZIP apply them (review round 21). Tar's
+  mode comes from the same reading, so an archive name attached to `-f` is
+  never read as a mode letter;
+- a path the guard cannot resolve near the class, such as `~/$NAME`;
+- code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
+  class file once the line's own literal assignments are filled in
+  (`p=src/.envrc; python3 -c "open('$p','a')"`), and such code that carries
+  an expansion the guard cannot read on a line that names a class file;
+- a staged run: a line that names a class file and produces text (a pipe,
+  a heredoc, a process substitution or a file the call writes) refuses
+  unless every program on it is a data reader used as one. The allowlist is
+  `cat`, `grep`, `ls`, `jq`, `find` without `-exec` and the other read-only
+  programs of the module, the filters `sort`, `uniq`, `cut`, `tr`, `paste`,
+  `column`, `fold`, `nl`, `tac`, `rev`, `comm`, `join`, `xxd`, `base64` and
+  `tee`, `git` other than `apply`, `am`, a command-running `-c`, a
+  repository `config` write and a path list read from input
+  (`--pathspec-from-file`, `--stdin`, `-p`), `awk` with an inline program,
+  and `sed` by a flag scan. A reader with a write or exec path of its own is
+  refused in that use: `awk` with `-f`, `-i`, `-E`, `-e`, `system`, a pipe,
+  `>>`, a `>` after `print` or an `@`; `sed` with `-f`, an `e`, `w` or `r` command,
+  or a `w` or `e` flag on `s///`; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
+  Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, a
+  variable that picks the program (`PATH`, `GIT_*`, `PAGER`) and any
+  program or option the guard does not know are refused; the commands an
+  `env -S` string holds are held to the same rule.
+  The refusal names the program: read the class file in its own call. The
+  rule also refuses ordinary lines that only read, such as `cp b.txt
+  docs/a.txt` or `cargo test` after a redirect of a class file, `| vim -`,
+  `awk '/a|b/ {print}'` and `sed 's|a|b|'`; the task record lists them. The
+  line must name the file; a script written in one call and run in another
+  stays a residual. This replaces a list of programs that run text, which an
+  unlisted spelling always escaped;
+- a command-valued setting that names a class file, on any line, with or
+  without produced text: a global `git -c`, `--config-env` or `--exec-path=`
+  whose value names a class file or, on a line that names one, cannot be
+  read, and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`, `LESSOPEN`,
+  `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`,
+  `GIT_ASKPASS`, `GIT_CONFIG_VALUE_n` and similar variables, set on the call
+  or exported (`GIT_EDITOR='echo x >> ~/.zshrc' git commit`). The value is
+  read after the line's own assignments are filled in, including those that
+  only use `$HOME`, `${HOME}`, `$ZDOTDIR`, `$XDG_CONFIG_HOME` or an earlier
+  assigned name (`F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'`). An innocent
+  value (`-c color.ui=never`, `EDITOR=vim`) changes nothing. On a staged line
+  a git setting is judged by its key, for `-c`, `--config-env` (`=` or a
+  separate word) and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` alike, with the
+  one key classification git-guard also uses: a key known to run nothing
+  (`color.*`, `user.*`, `diff.renames`, `log.date`, `core.commentChar`,
+  `clean.requireForce`, a `pager.<command>` boolean, a
+  `submodule.<name>.update` set to one of git's own modes, and similar)
+  passes; a key known to run a command (`core.pager`, `core.fsmonitor`,
+  `core.gitProxy`, `alias.*`, `remote.<name>.uploadpack`, and
+  `include.path`, which pulls in any key) must hold an ordinary viewer or
+  tool; any other key refuses. A command-valued variable on a staged line
+  must start with a viewer, editor, ssh or diff tool (`vim`, `less`, `code`,
+  `ssh`, `diff`) followed only by plain flags that name no class file, no
+  shell character and nothing that runs code (`code -w`, `vim -R`,
+  `ssh -o BatchMode=yes`). `less` and `diff` take their own letters that
+  need no value, run together (`less -RF`, `diff -u`), and never less's
+  `-o`, `-k` or `+command` or diff's `-l`; other tools take one letter per
+  word, and `vim -S x`, `vim -u x`, `vim -c cmd`, `vim +cmd`, `sh r.sh` and
+  `ssh -o ProxyCommand=sh` refuse. `--exec-path=DIR` with an empty or
+  unknown directory refuses on a staged line; without `=`, `--exec-path`
+  takes no value, so the next word is read as the subcommand. The variables
+  that pick the program itself (`PATH`, `SHELL`, `LD_*`,
+  `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_EXEC_PATH`,
+  `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`) refuse
+  whatever the value, because a value can point at a program or a
+  configuration file the call wrote;
+- quoting is decoded before any of these checks reads a word: ANSI-C
+  `$'\x2ezshrc'` (hex, octal, `\u`, `\U`, `\c` and the letter escapes),
+  locale `$"..."`, and adjacent quoted pieces (`'.zs''hrc'`, `.z"s"hrc`);
+- `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
+  `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
+  zsh launch counts as reading them unless it turns them off with `-f` or
+  `--no-rcs` and carries no `+` option, `-o` or other long option;
+- `ln`, `cp -s` or `cp -l` whose named source or destination is a class
+  file, resolved from the command's working directory through the ordinary
+  path check; the guard does not interpret link text from its landing place;
+- a copy into a target directory spelled `-t DIR`, `-tDIR` or the exact
+  `--target-directory`, when the named file lands in the class;
+- `rg` without `--no-config`, since its configuration file can name a
+  `--pre` program, and `sed` unless its options change no file and its
+  script is only addressed print commands.
+
+The backstop reads text, not a parse of copier behavior. For reviewers, a
+new copier option is a residual, not a new member of the startup class.
+
+### Git settings that can run a program
+
+git-guard refuses a user- or system-scope git setting that is not known to
+run nothing, under `git.hook_integrity`, in every form the guard reads
+(direct, through a launcher it parses or one under its GNU name, inside a
+shell `-c` or `eval` body or an `env -S` string, with the line's earlier
+literals filled in). The closed rule above guards it too: a line that
+names such a write and carries a form the guard cannot resolve refuses,
+naming the form. A line names one with a default user or system git
+configuration path (`~/.gitconfig`, `~/.config/git/config`, a `gitconfig`
+in any `etc` directory, a `git/config` below a configuration directory), a
+`GIT_CONFIG` variable, or `git config` with `--global`, `--system`,
+`--file` or `--blob` and a key not known to run nothing or no key the
+line shows: `printf ... | xargs git config`, `tmux new-session -d 'git
+config --global alias.x !id'` and `parallel ' {1}' ::: 'git config ...'`
+refuse, while `gtimeout 5 git config --global user.name x` passes. A
+setting git-guard refuses is: a key that runs a program, such as
+an alias, `core.pager`, `credential.helper`, `difftool.<tool>.path` or
+`gpg.ssh.defaultKeyCommand`, and any key the classification does not know,
+such as `safe.directory` or `init.templateDir`. The known-safe keys
+(`user.*`, `color.*`, `init.defaultBranch`, `pull.rebase`,
+`push.autoSetupRemote`, `core.autocrlf`, `commit.gpgsign` and the others in
+`security/git.rs`) pass, and so do the switches beside the tool programs
+(`difftool.prompt`, `mergetool.keepBackup`, `pager.<command>`) and
+`core.fsmonitor`, whose boolean starts git's own monitor, set to a boolean
+as git parses one: `true`, `false`, `yes`, `no`, `on`, `off`, empty, or a
+number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
+Any other value is a program git runs, so `core.fsmonitor 08` refuses
+(`08` is no octal number) while `true` and `0x10` pass (review round 13);
+keys match by exact name. Repository-scope settings, unsets and
+reads pass. git has many keys that run a program and adds more, so a list
+of them always missed one (review round ten); an unknown key costs a
+refusal the operator can clear by setting it by hand.
+
+exec-guard judges the default user and system git configuration files
+(`git_config_paths`) as a second class of the startup check, under
+`git.hook_integrity` at its level (review round 16). Every form the
+startup section lists refuses for them too, with a message that names a
+user or system git config file: a redirect, a writer that targets one
+(`curl -o`, `wget -O`, `ditto`, `patch`, `tar -cf`, `scp`, `touch`), a
+relative `.gitconfig` where the directory is unknown (`cd "$HOME" &&
+printf x >> .gitconfig`), a `git -c` or `GIT_CONFIG_VALUE_n` value that
+names one, a staged run and the closed rule. Which file a `git config`
+write opens and whether its key runs anything stay git-guard's judgment,
+so `git config --file ~/.gitconfig user.name x` passes. Both guards judge
+`install` as a copy: only its destination is written (the last operand,
+or each source's name in a `-t` directory), so `install -m 644
+~/.gitconfig /tmp/bak` passes and `install /tmp/x ~/.gitconfig` refuses
+(review round 19). The cost matches
+the startup class: text that names the file given to a program that is not
+a reader refuses, such as a `git commit -m` message that mentions
+`~/.gitconfig`; pass that text in a file (`git commit -F`). A bare
+`git/config` token, the XDG file below a configuration directory, counts
+the same way and refuses in that text too; it ends the path it names, so
+`src/git/config.rs` and a `git/config/` directory are other paths and pass
+(review round 17).
+
+A write into a file counts as user or system scope unless the file is a
+repository's own configuration: a `config` or `config.worktree` in a git
+directory, a `.gitmodules` or a `.lfsconfig`, judged through its symbolic
+links. git reads its system file under the prefix it was built with
+(`/opt/homebrew/etc/gitconfig`, `/usr/local/etc/gitconfig`, a source
+build's `~/etc/gitconfig`) and every file a configuration includes, so a
+list of user and system files always missed one (review round eleven).
+`--file`, `-f`, `--blob` and, for a call with no scope option, the file
+`GIT_CONFIG` names are judged this way. The cost is a refusal for a project
+fixture or scratch file given a key not known to run nothing. edit-guard
+refuses a native edit of a `gitconfig` in any `etc` directory with the
+user's own files, which include the `.gitconfig` of every home a shell of
+this user may read: `HOME`, and `USERPROFILE` where it names another
+directory. exec-guard refuses a shell write only to the default paths in
+`git_config_paths` and those homes' files. For a `gitconfig` under another
+prefix (`~/etc/gitconfig`, `/opt/local/etc/gitconfig`), git-guard refuses a
+redirect into it and edit-guard a native edit; a write by any other program
+(`curl -o`, `cp`, `tar`) is the residual AC-6 names, held by the sandbox
+where that path is outside the writable root (review rounds 17 and 18).
+
+A default, `--local` or `--worktree` write is judged by the file git opens:
+the `config` of the git directory the call selects (through `-C`,
+`--git-dir`, `GIT_DIR` on the line or in the environment the hook runs in,
+a worktree's or submodule's `.git` file, and the payload's working
+directory), and with `--worktree` also that worktree's `config.worktree`.
+A `GIT_COMMON_DIR` or `GIT_WORK_TREE` on the line or in the hook's
+environment leaves that file unplaced, so such a key refuses. git follows a symbolic link there, so a key not known to
+run nothing refuses when that file, through its links, is not a
+repository's own configuration (review round twelve): a submodule's
+`.git/modules/<name>/config`, a bare git directory's `config` or an
+existing `.git/config` that links to the user's file. A git directory the
+call names that the guard cannot open is not shown to be a repository's
+own by a `.git` in its name, so such a key refuses, as it does for a call
+whose repository the guard cannot locate (`cd "$D"`). A drive path
+(`C:\repo`), a UNC path (`\\server\share`) and, on Windows, a Git Bash
+drive path (`/c/repo`) given as the git directory, to `-C` or to `cd` is
+absolute, never joined onto the directory before it (review round 14). The file
+is read only for a key not known to run nothing, at the cost of one
+repository lookup on that hook call. As a second layer, `ln`, `cp`, `mv` and `rsync` may not put
+a file in place of the `config` or `config.worktree` of any git directory,
+so a link made on the same line as the write is refused before git follows
+it. A link made by an interpreter or another program on the same line
+stays outside the text guard; the write it serves is caught on a later
+call whose git directory the hook can see. A git directory exported in an
+earlier tool call (`export GIT_DIR=...`) lives only in that tool shell,
+which the hook does not inherit, so a later plain `git config` there is
+judged against the repository the hook sees and stays outside the text
+guard (review round 13).
+
+Every guard that reads a git command line skips the same global options
+that take the next word as their value (`-C`, `-c`, `--git-dir`,
+`--work-tree`, `--namespace`, `--config-env`, `--attr-source`,
+`--shallow-file`), so a value is never read as the subcommand (issue 120).
+
+### What the startup backstop leaves open
+
+- **Every harness, the environment.** A writer's option environment
+  exported in an earlier tool call is invisible to the hook, which judges
+  one call. Variables that change only output, locale or proxy settings
+  (`LANG`, `TMPDIR`, `POSIXLY_CORRECT`, `QUOTING_STYLE`, `PATCH_VERBOSE`,
+  `DONTSTRIP`, `RSYNC_PASSWORD`, `RSYNC_PROXY`, curl's and wget's proxy and
+  certificate variables) are not judged: none of them runs a program or
+  names a file the writer writes. `SIMPLE_BACKUP_SUFFIX` and
+  `VERSION_CONTROL`, which name the backup file of `cp`, `mv`, `ln`,
+  `install` and `patch`, refuse with those writers.
+- **Every harness, content the guard does not read.** The guard reads the
+  command line, not the files a program reads. A name an archive member,
+  a diff or a peer supplies can leave the directory the guard judged: an
+  absolute member name under `tar -P` or `ditto -x`, an absolute or `..`
+  path in a diff under `patch -p0`, a name a server chooses (`curl -J`,
+  `wget --content-disposition`, `wget -x`) and a name the peer chooses
+  under `scp -T`, which turns off scp's own check of that name. These
+  stay open when the line names no protected place; the sandbox holds
+  them when the resolved path is outside the writable root, and a nested
+  `.envrc` inside it stays open (review round 22).
+
+- **Every harness.** The text guard does not inspect links inside a copied
+  or moved tree, judge link text from where it lands, emulate dereference
+  and preserve option semantics, or recognize long-option prefixes beyond
+  exact names. Everything built at run time on a line that names no
+  protected target remains outside it, including a path assembled by a
+  program from pieces (`python3 -c` joining `"."+"zsh"+"rc"`, kept as an
+  allowed regression), a path an interpreter reads from an environment
+  variable exported in an earlier call, a script written in one call and
+  run in another, and a git location (`GIT_DIR`, `GIT_COMMON_DIR`)
+  exported in an earlier tool call, which the hook never sees. The same
+  shape on a line that names the target (`export p=~/.zshrc; python3 -c
+  'open(os.environ["p"])'`) is refused by the closed rule.
+- **Every harness, the closed rule.** A spelling the guard does not read
+  and that names no protected target on the line is a named residual: a
+  review finding of that shape is recorded, not a blocker, while a form
+  this page says the guard reads is still a blocker when it slips
+  through. The sandbox holds such a write when the resolved path is
+  outside the writable root or matches a deny. These stay open: a path
+  inside a writable root; an include file in the workspace that a user
+  configuration pulls in (issue 88); a code-running key set at repository
+  scope, which an allowed `git status` then runs; a workspace symbolic
+  link to a protected file, which no sandbox was tested against; a seat
+  with no sandbox; Claude's unsandboxed retry, since the presets set
+  `allowUnsandboxedCommands` and the `security.sandbox_retry` keys are not
+  read yet; commands in `excludedCommands`; `sandbox.filesystem.disabled`
+  set at user, managed or CLI scope; native Windows Claude; Grok's
+  Windows stub; and a hard-linked repository `config` on a git that
+  writes the file in place (git 2.53.0 replaces it and breaks the link).
+- **Git configuration files.** The action table's `git_config_paths`
+  holds the default user and system files: `~/.gitconfig`,
+  `~/.config/git/config`, `/etc/gitconfig`, `/usr/local/etc/gitconfig` and
+  `/opt/homebrew/etc/gitconfig`. Claude gets `Edit` denies and sandbox
+  `denyWrite` entries for them and Codex gets read-only entries, which
+  `codeflow doctor` checks. git reads its system file under the prefix it
+  was built with, so another prefix, a relocated `XDG_CONFIG_HOME` or
+  `GIT_CONFIG_GLOBAL` has no entry; git-guard and edit-guard judge those
+  by scope instead. Grok gets no entry: a Grok deny blocks reads too, and
+  git reads these files on every command; its `workspace` profile already
+  leaves the home unwritable to a seat launched in its worktree, while a
+  git configuration file inside that working directory stays writable.
+  The cost of the entries for ordinary work is the Claude `Edit` deny and
+  a writable root that contains one of the files. `git config --global`
+  of a safe key from a sandboxed Bash in the project was already outside
+  the writable root, git-guard allows that key, and the operator's own
+  shell is outside every harness sandbox. `gh auth setup-git`, `git lfs
+  install` and `git maintenance` rewrite the global file and were not
+  run here. The sandboxes on all three
+  harnesses hold writes into the unwritable home; an unsandboxed seat stays
+  open. Relocated startup files and writable workspace paths have the
+  limits listed below. An interpreter call whose code names a startup file
+  is refused even when it only reads; read with `cat` or `grep` instead.
+  A dotfile-manager symlink can be backed up with `cp -a ~/.zshrc backup`;
+  its preservation semantics are left to the sandbox.
+- **Claude Code.** The generated denies name the default locations. A
+  `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
+  Claude's file tools do not run edit-guard, so a native `Write` there is
+  not refused. On macOS Claude merges the `Edit` denies into the sandbox
+  write deny, so a nested `.envrc` written from Bash is held there too. On
+  Linux and WSL2 a wildcard `denyWrite` entry is skipped, so `.envrc` in an
+  arbitrary directory is an `Edit` deny only and a nested one written from
+  Bash is refused by exec-guard, not by the sandbox.
+- **Codex.** The profile keeps the home and `/etc` entries and the
+  workspace root's `.envrc` read only. A nested `.envrc`, including one in
+  a linked worktree or a temporary directory, is writable to the profile
+  (probed on Codex 0.160.0) and left to the guards. Like Claude's denies,
+  the entries name the default locations, so a `ZDOTDIR` or
+  `XDG_CONFIG_HOME` moved elsewhere is writable to the profile. A
+  `--sandbox` flag or the operator's own profile override replaces these
+  entries.
+- **Grok Build.** Its `workspace` sandbox leaves the home unwritable (not
+  probed in this task), which covers a moved `ZDOTDIR` or
+  `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
+  Grok deny also blocks reads; the guards refuse it.
+- **Windows.** A PowerShell profile under a redirected `Documents` folder,
+  such as one in OneDrive, is outside the class. On native Windows Claude
+  Code has no Bash sandbox, so the class rests on the `Edit` denies for its
+  file tools and on the guards; the Codex read-only entries and Grok's
+  workspace sandbox were not probed there.
+- **Sourced files.** The guards do not follow what a startup file sources.
+
+<!-- No table here: the portal's row count for this page expects every table
+to be generated from the schema or checked against the hook dispatcher. -->
+
 ## Prose the exec-guard certifies
 
 The exec-guard's privilege, headless-peer and dangerous-command checks match

@@ -6,12 +6,12 @@ This file is the **encoding** reference (envelope, fields, limits) and comes
 last: judgment about structure is settled before it. Encode **this session's**
 subject.
 
-The machine contract is
-`.codeflow/schemas/present/document-v1.schema.json`, and
-`.codeflow/schemas/present/document-v2.schema.json` for a
-`schema_version: 2` document (see "Schema version 2" below). The runtime is
-authoritative for semantic and byte limits. Schema validity never means the
-page is a good present.
+Write a `schema_version: 2` document. Its machine contract is
+`.codeflow/schemas/present/document-v2.schema.json` (see "Schema version 2"
+below); version 1,
+`.codeflow/schemas/present/document-v1.schema.json`, is what a 3.0.0 binary
+reads. The runtime is authoritative for semantic and byte limits. Schema
+validity never means the page is a good present.
 
 ## Envelope
 
@@ -19,7 +19,7 @@ Every document is a closed JSON object, version 1 or 2:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "title": "Review the account recovery plan",
   "language": "en",
   "provenance": {
@@ -167,6 +167,25 @@ so a reviewer can comment on one node or arrow and a reader always sees what a
 figure is. A version 1 document renders as before, except that an `html`
 block's `title` now shows as a visible title line.
 
+- **Write every stage for review.** Every `html` stage carries a `title`
+  and a one-sentence `caption` that states its takeaway. Add a
+  `description` when the figure needs context a reader would otherwise
+  lack; skip it when the title and caption already carry the point. Name
+  every part a reviewer may want to comment on with `data-cf-target`, or
+  put it in a `data-cf-group`, labelled by `data-cf-label` or a
+  `data-cf-for` text. Geometry inside `defs`, `marker`, `clipPath`, `mask`,
+  `pattern` and `symbol` needs no name, because no gesture reaches it. Name
+  the drawing with an SVG `<title>`, never a `role="img"` wrapper, which
+  hides its named parts from assistive technology.
+- **Unnamed parts.** A reviewer can still click a part nothing names. Its
+  note reads `Unnamed part of <block label>`, where the block label is the
+  stage title (the block id when it has none) cut to 40 characters, and
+  falls back to the block once the stage changes, so name parts for notes
+  to survive revisions.
+  `codeflow present check` warns about a stage with unnamed parts, a
+  version 1 stage without its title or caption, and named parts inside
+  `role="img"`; it reads the authored HTML, so a shape a style sheet hides
+  still counts. `open` and `update` print the same warnings and proceed.
 - **Framing.** The runtime numbers figures and tables separately, in
   document order through disclosures and tabs, and draws "Figure N · title"
   above each. A `figure` block takes its title and caption from its

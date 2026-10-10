@@ -4,6 +4,7 @@ crates/codeflow-cli/tests/remedy_clearing/records.rs	join("clone")	2	Fixture dir
 crates/codeflow-core/src/hooks/git_guard.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/deletion.rs	"clone"	2	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/headless.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
+crates/codeflow-core/src/security/startup.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/tests/git_spawn_contract.rs	"Command::new(\"git-clone\").args([src, dst]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.arg(\"clone\");"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"--no-pager\",\"clone\",src,dst]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
