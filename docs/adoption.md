@@ -232,7 +232,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | What still runs | Tests, the secret scan, AI attribution, emoji, the dash rule, the release declaration, and PR sections at their configured level; `sections` only supplies the headings the bot body leaves out |
 | Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request, the actor is `unknown` whatever `--actor` says, and no profile applies |
 | `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none. A profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
-| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, so a bot's unit name is refused there. A dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump. The bot's pull request is closed once that task lands |
+| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, or every epic a planning amendment changes (`EPC-001, EPC-002`), so a bot's unit name is refused there. A dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump. The bot's pull request is closed once that task lands |
 
 **A PR template you already have.**
 
@@ -471,11 +471,12 @@ With no remote, `codeflow integrate` replaces the pull request.
    push. Keep `codeflow test --mode quick` and `codeflow validate --docs` green
    before push, and merge the current integration line into the branch before
    asking for review, so conflicts surface in the task.
-4. **Open one PR for the whole task.** Its body carries a `Task:` line naming
-   the task, or the epic for a planning-only change, the template sections,
+4. **Open one PR for the whole task.** Its body carries a `Task:` line
+   (`TSK-NNN`; `EPC-NNN` for the breakdown PR and the PR to main; each epic a
+   planning amendment changes, as `EPC-001, EPC-002`), the template sections,
    and the test evidence with revision and command. `codeflow ci` refuses a PR
-   that names no task and no epic. The Release impact section is required
-   only into a protected branch or with a breaking commit.
+   naming neither. The Release impact section is required only into a
+   protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
    whole change once, and a material finding is fixed in the same PR. The
    reviewed head lands with the next batch on the integration line. When
@@ -493,10 +494,9 @@ With no remote, `codeflow integrate` replaces the pull request.
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
-The PR shows green required checks, and a human merges it. [How work moves to
-main](delivery.md) covers how a batch of reviewed tasks lands with one full
-gate, how an epic closes into `main`, and what happens when something changes
-midway.
+[How work moves to main](delivery.md) covers how a batch of reviewed tasks
+lands with one full gate, how an epic closes into `main`, and what happens
+when something changes midway.
 
 ### Related guides
 

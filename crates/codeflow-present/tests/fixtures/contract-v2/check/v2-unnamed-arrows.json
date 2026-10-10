@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "title": "One named box beside unnamed arrows",
+  "blocks": [
+    {
+      "type": "html",
+      "id": "handoff",
+      "title": "How a note reaches the agent",
+      "caption": "The page sends the note to the service, which writes it to the ledger.",
+      "html": "<svg viewBox='0 0 480 120' role='group' aria-label='Note handoff'><title>Note handoff</title><defs><marker id='head' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto'><path d='M0 0 L10 5 L0 10 Z'/></marker></defs><rect data-cf-target='service' x='180' y='40' width='120' height='40'/><text x='240' y='65' text-anchor='middle'>Service</text><line x1='20' y1='60' x2='178' y2='60' marker-end='url(#head)'/><line x1='300' y1='60' x2='458' y2='60' marker-end='url(#head)'/><line x1='240' y1='80' x2='240' y2='110'/><g data-cf-target='none'><rect x='0' y='0' width='480' height='120' fill='none'/></g><g aria-label='Ledger'><rect x='400' y='40' width='60' height='40'/></g></svg>"
+    }
+  ]
+}

@@ -7,6 +7,10 @@
 // enclosing" climbs from an entity to its block; the service must accept
 // every entity note, store its own label, a PNG crop and crop_check where
 // it cannot measure, and keep the v1 feedback stream free of entity data.
+// Each keyboard stop of the stage is announced by its label (TSK-259); after
+// an update its named parts re-anchor by id, and an unnamed part pinned on
+// the schema_version 1 copy is labelled "Unnamed part of" its stage and
+// falls back to the block.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -20,6 +24,8 @@ const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
 const codeflow = codeflowBinary(repoRoot);
 const fixture = join(webRoot, "../tests/fixtures/contract-v2/documents/delivery-v2.json");
+const fixtureV1 = join(webRoot, "../tests/fixtures/contract-v2/check/delivery-v1.json");
+const VIEWPORT = { width: 1280, height: 900 };
 
 // Each target: how to find it, the entity it must resolve to, the label the
 // service gives it, and where on it a pointer lands.
@@ -49,6 +55,7 @@ const environment = {
 };
 const run = (args) => execFileSync(codeflow, args, { cwd: project, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
 let sessionId = null;
+let v1SessionId = null;
 let context = null;
 try {
   for (const directory of [project, environment.HOME, environment.TMPDIR, environment.XDG_STATE_HOME, join(root, "profile")]) await mkdir(directory, { recursive: true });
@@ -65,7 +72,7 @@ try {
     executablePath: await findBrowser(),
     headless: true,
     hasTouch: true,
-    viewport: { width: 1280, height: 900 },
+    viewport: VIEWPORT,
     args: ["--disable-background-networking", "--disable-component-update", "--disable-default-apps", "--disable-sync", "--no-default-browser-check", "--no-first-run"],
   });
   const page = context.pages()[0] ?? await context.newPage();
@@ -108,6 +115,29 @@ try {
       }
     }
   }
+  // Accessible names (TSK-259): every entity of the stage the keyboard
+  // reaches is announced by its label, from the aria-label the service
+  // writes, and a group entity is a group; read from Chrome's accessibility
+  // tree, not the attribute.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Accessibility.enable");
+  const stops = await page.evaluate(() => [...document.querySelectorAll("[data-cf-block-id='stage-registry'] [data-cf-entity]")]
+    .map((element) => ({ id: element.getAttribute("data-cf-entity"), label: element.getAttribute("data-cf-entity-label"), tag: element.localName })));
+  assert.equal(stops.length, 12, JSON.stringify(stops));
+  await armPickElement(page);
+  const announced = [];
+  for (const stop of stops) {
+    await focusByKeyboard(page, `[data-cf-block-id='stage-registry'] [data-cf-entity='${stop.id}']`);
+    const { result } = await cdp.send("Runtime.evaluate", { expression: "document.activeElement" });
+    const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { objectId: result.objectId, fetchRelatives: false });
+    const node = nodes.at(-1);
+    announced.push({ id: stop.id, name: node?.name?.value ?? null, role: node?.role?.value ?? null, ignored: node?.ignored ?? null });
+    assert.equal(node?.name?.value, stop.label, `${stop.id}: ${JSON.stringify(announced.at(-1))}`);
+    assert.equal(node.ignored, false, stop.id);
+    if (stop.tag === "g") assert.equal(node.role?.value, "group", `${stop.id}: ${JSON.stringify(announced.at(-1))}`);
+  }
+  await page.keyboard.press("Escape");
+  await page.locator("#cf-present-document[data-cf-capture-mode]").waitFor({ state: "detached" });
   // A drawing shown at a different scale on each axis (T118-3): stretched to
   // about 0.3 px per unit vertically, the stroke padding must hold inside the
   // service's 8 unit tolerance on that axis, or the submit below is refused.
@@ -186,14 +216,27 @@ try {
   assert.equal(stored.at(-1).entity_selector, undefined, "the block note carried an entity");
   // A new revision re-anchors every note and says so when a note moved or
   // lost its part (B1): file-a is relabelled, reject-b is removed.
-  const revised = JSON.parse(await readFile(fixture, "utf8"));
-  const registry = revised.blocks.find((block) => block.id === "stage-registry");
-  registry.html = registry.html
+  // The revision edits the stage's text in place, so every other block keeps
+  // its bytes and its digest (a JSON round trip in JavaScript would rewrite
+  // the figure's numbers).
+  const source = await readFile(fixture, "utf8");
+  const registry = JSON.parse(source).blocks.find((block) => block.id === "stage-registry");
+  const html = registry.html
     .replace(">writes TSK-100.md<", ">writes the TSK-100 file<")
     .replace(/<line data-cf-target='reject-b'[^>]*><\/line><text data-cf-for='reject-b'[^>]*>[^<]*<\/text>/u, "");
-  assert.ok(!registry.html.includes("reject-b") && registry.html.includes("TSK-100 file"), "the revision did not change the stage");
-  await writeFile(join(project, "delivery-2.json"), `${JSON.stringify(revised, null, 2)}\n`);
+  assert.ok(!html.includes("reject-b") && html.includes("TSK-100 file"), "the revision did not change the stage");
+  const revisedText = source.replace(JSON.stringify(registry.html), JSON.stringify(html));
+  assert.notEqual(revisedText, source, "the revision did not reach the document");
+  await writeFile(join(project, "delivery-2.json"), revisedText);
   run(["present", "update", sessionId, join(project, "delivery-2.json")]);
+  // The figure's block is unchanged, so its marks hold; the changed stage's
+  // named parts are found again by id (AC-7 of TSK-259).
+  const anchors = reviewNotes(sessionId).filter((note) => note.entity_selector)
+    .map((note) => ({ entity: note.entity_selector.entity_id, state: note.anchor.state }));
+  const stateOf = (entity) => [...new Set(anchors.filter((anchor) => anchor.entity === entity).map((anchor) => anchor.state))];
+  assert.deepEqual(stateOf("s3"), ["entity_anchored"], JSON.stringify(anchors));
+  for (const entity of ["file-a", "agent-a", "push-a"]) assert.deepEqual(stateOf(entity), ["entity_reanchored"], `${entity}: ${JSON.stringify(anchors)}`);
+  assert.deepEqual(stateOf("reject-b"), ["block_fallback"], JSON.stringify(anchors));
   await page.reload({ waitUntil: "domcontentloaded" });
   // Earlier feedback lives in the review rail.
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
@@ -219,13 +262,89 @@ try {
     .map((line) => line.innerText));
   assert.ok(exportedTitles.includes("Figure 2 · How a task number is issued"), JSON.stringify(exportedTitles));
   assert.ok(exportedTitles.includes("Figure 5 · From a question to a release"), JSON.stringify(exportedTitles));
+  const unnamed = await unnamedPartOnV1(page);
+  const browserVersion = context.browser()?.version() ?? (await page.evaluate(() => navigator.userAgent));
+  process.stdout.write(`cf-present entity checks ran in Chrome ${browserVersion} at ${VIEWPORT.width} x ${VIEWPORT.height}: ${stops.length} registry stops announced by their labels from the accessibility tree; figure marks entity_anchored and stage parts entity_reanchored after an update; ${unnamed}\n`);
   process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, the keyboard resuming after a highlight replaced its line, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
 } finally {
   if (context) await context.close().catch(() => undefined);
-  if (sessionId) {
-    try { run(["present", "close", sessionId]); } catch { /* the service may already be gone */ }
+  for (const id of [sessionId, v1SessionId].filter(Boolean)) {
+    try { run(["present", "close", id]); } catch { /* the service may already be gone */ }
   }
   await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
+// Every review note stored for a session, each with its anchor on the
+// current revision, read without delivering anything.
+function reviewNotes(id) {
+  return run(["present", "responses", "list", id, "--kind", "review"]).trim().split("\n").filter(Boolean)
+    .flatMap((line) => JSON.parse(line).notes);
+}
+
+// The schema_version 1 copy of the delivery document: a click on an arrow
+// in a stage nothing names is labelled "Unnamed part of" the stage, cut to
+// 48 characters on the chip and composer and whole in the rail, stored with
+// no quote and a crop, and falls back to the block once the stage changes.
+async function unnamedPartOnV1(page) {
+  const document = join(project, "delivery-v1.json");
+  await writeFile(document, await readFile(fixtureV1, "utf8"));
+  const opened = run(["present", "open", document, "--no-launch"]);
+  v1SessionId = opened.match(/session ([0-9a-f-]+) ready/u)?.[1] ?? null;
+  const bootstrap = opened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
+  if (!v1SessionId || !bootstrap) throw new Error(`could not parse present open output: ${opened}`);
+  const port = JSON.parse(run(["present", "list"])).find((session) => session.id === v1SessionId)?.service_port;
+  await page.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
+  await page.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+  const full = "Unnamed part of What a task stores, and what is computed";
+  const cut = full.slice(0, 48).trimEnd();
+  const line = page.locator("[data-cf-block-id='stage-lifecycle'] svg line").first();
+  await line.scrollIntoViewIfNeeded();
+  await armComment(page);
+  const box = await line.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const chip = page.getByTestId("float-chip");
+  await chip.waitFor({ timeout: 10_000 });
+  const chipText = await chip.innerText();
+  assert.ok(chipText.includes(cut) && !chipText.includes(full), `the chip shows ${JSON.stringify(chipText)}`);
+  await page.getByTestId("float-comment").click();
+  const composer = page.getByTestId("composer");
+  await composer.waitFor();
+  const composed = await composer.innerText();
+  assert.ok(composed.includes(cut) && !composed.includes(full), `the composer shows ${JSON.stringify(composed.slice(0, 200))}`);
+  await page.getByTestId("composer-text").fill("Unnamed: this arrow should be named.");
+  await page.getByTestId("composer-save").click();
+  await composer.waitFor({ state: "detached" });
+  const rail = await page.getByTestId("note-row").last().innerText();
+  assert.ok(rail.includes(full), `the rail shows ${JSON.stringify(rail)}`);
+  await page.getByLabel("Verdict").selectOption("approve_with_notes");
+  await page.getByRole("button", { name: "Submit review" }).click();
+  await page.getByRole("status").getByText(/Review received/u).waitFor({ timeout: 60_000 });
+  const [stored] = reviewNotes(v1SessionId);
+  assert.equal(stored.element_selector?.label, full, JSON.stringify(stored));
+  assert.equal(stored.element_selector.tag_name, "line");
+  assert.equal(stored.entity_selector, undefined);
+  assert.equal(stored.excerpt?.text, undefined, JSON.stringify(stored.excerpt?.text));
+  assert.ok(stored.excerpt?.image?.media_type, "the unnamed part lost its crop");
+  assert.equal(stored.anchor.state, "element_anchored", JSON.stringify(stored.anchor));
+  const revised = JSON.parse(await readFile(fixtureV1, "utf8"));
+  const lifecycle = revised.blocks.find((block) => block.id === "stage-lifecycle");
+  lifecycle.html = lifecycle.html.replace(">unblock<", ">unblock: reason<");
+  assert.ok(lifecycle.html.includes("unblock: reason"), "the revision did not change the stage");
+  await writeFile(join(project, "delivery-v1-2.json"), `${JSON.stringify(revised, null, 2)}\n`);
+  run(["present", "update", v1SessionId, join(project, "delivery-v1-2.json")]);
+  const [moved] = reviewNotes(v1SessionId);
+  assert.deepEqual(moved.anchor, { state: "block_fallback", block_id: "stage-lifecycle", reason: "the element changed and the note has no quote to search" });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+  await armComment(page);
+  const earlier = page.getByTestId("feedback-history");
+  await earlier.waitFor({ timeout: 20_000 });
+  await earlier.locator("summary").click();
+  const notices = await earlier.innerText();
+  assert.match(notices, /Shown on the block: the element changed and the note has no quote to search/u, notices.slice(0, 2_000));
+  assert.doesNotMatch(notices, /Moved: /u, notices.slice(0, 2_000));
+  return "an unnamed arrow on the v1 copy labelled as an unnamed part, stored with no quote and a crop, then shown on the block after an update";
 }
 
 async function variantOf(page) {

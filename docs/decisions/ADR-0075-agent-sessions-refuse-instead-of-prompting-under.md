@@ -501,3 +501,64 @@ unqualified until the items listed under "Still to establish" are proven,
 so no Grok seat builds until then. The rule is stated in the transport
 rule's "First-run prompts" (`cf-model-orchestrator/resources/routing/transport.md`,
 ADR-0077).
+
+## Amendment, 2026-10-05: builders run in cf-builder, and shell startup files are guarded
+
+The operator decided on 2026-10-05 (TSK-242, issue 86) to close a hole the
+guards cannot close alone. A function or alias planted in a shell startup
+file, such as `git() { ... }` in `~/.zshrc`, runs under every later command,
+while the guards judge each command by the name it spells.
+
+1. **D1 changes.** A Codex builder seat launches with
+   `--ask-for-approval never -c default_permissions="cf-builder"` and no
+   `--sandbox` flag, from the main checkout root. Full access is retired
+   for builders. The spike of 2026-09-29 ran fetch, worktree add, commit and
+   builds unattended under that profile; a push to a remote outside the
+   workspace root is denied, and a push to a hosted remote is not yet
+   verified, so a builder whose push fails reports it and the caller
+   pushes. The transport rule states the launch.
+2. **Containment comes from the sandboxes.** The action table's
+   `startup_paths` generates Claude's `Edit` denies and sandbox `denyWrite`
+   entries and the read-only entries of the Codex `cf-guard` profile, which
+   `cf-builder` extends. Grok's `workspace` sandbox already leaves the home
+   unwritable; a nested `.envrc` has no Grok rule, since a Grok deny also
+   blocks reads. The table's `git_config_paths` adds the default user and
+   system git configuration files (`~/.gitconfig`, `~/.config/git/config`,
+   `/etc/gitconfig`, `/usr/local/etc/gitconfig`,
+   `/opt/homebrew/etc/gitconfig`) to the same Claude and Codex entries
+   (2026-10-09); Grok gets none, since git reads them on every command.
+   Another install prefix, a relocated configuration, a seat with no
+   sandbox, Claude's unsandboxed retry, `excludedCommands`,
+   `sandbox.filesystem.disabled` and native Windows Claude are residuals.
+3. **The guards are a bounded text backstop, with no relief.** exec-guard
+   and edit-guard refuse visible writes under `security.shell_startup`,
+   which has no policy key and holds at every integrity level: the operator
+   edits their own startup files. Named sources and destinations of `ln`,
+   `cp -s` and `cp -l` use the ordinary path check. git-guard refuses user-
+   and system-scope git keys not known to run nothing, so an unknown key
+   refuses with the ones that run a program; a file that is not a
+   repository's own configuration counts as that scope, since git reads
+   its system file under any install prefix and every included file. A
+   default, `--local` or `--worktree` write is judged by the file git
+   opens, through its symbolic links, and a link, copy or move may not put
+   a file in place of a git directory's configuration. The guard does not inspect
+   a link inside a copied or moved tree, judge link text from where it
+   lands, emulate dereference and preserve option semantics, or recognize
+   long-option prefixes beyond exact names. The programs that can run a
+   command are an open set, so the guards close it from the other side
+   (2026-10-09): on a line that names a startup file or a user or system
+   git configuration write, a form the guard cannot resolve refuses, such
+   as an expansion used as the command word, a command read from input or
+   built from a template, or a program it does not know to run nothing.
+   Everything built at run time on a line that names no target remains
+   outside it. The sandboxes on all three harnesses hold writes
+   into the unwritable home; an unsandboxed seat stays open. The limits for
+   relocated startup files and writable workspace paths are listed in
+   `docs/policy-reference.md`. For reviewers, a new copier
+   option is a residual, not a new member of the startup class.
+4. **No run-time source following.** The guards do not read what a startup
+   file sources. `codeflow doctor --check startup-files` lists the files the
+   home's startup files source from outside the class.
+
+The sibling file classes found in the same sweep are tracked as issues 87
+to 91.
