@@ -41,7 +41,7 @@ pub fn run_wizard(
     }
 
     // Step 2: Detect stacks
-    let detected = detect::detect_stacks(repo_root);
+    let detected = detect::detect_stacks(repo_root)?;
     let mut targets: Vec<TargetConfig> = Vec::new();
 
     if detected.is_empty() {

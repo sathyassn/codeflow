@@ -665,3 +665,212 @@ fn an_epic_closed_on_the_release_line_binds_its_own_block() {
         judged.findings
     );
 }
+
+/// Review finding on issue 79: tree and change paths were keyed by a lossy
+/// spelling, so `caf` plus an invalid byte and `caf` plus a real U+FFFD were
+/// one path and a change to one hid behind the other.
+#[test]
+fn paths_that_differ_only_in_an_invalid_byte_stay_two_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let blob = repo.blob(b"x").unwrap();
+    let mut inner = repo.treebuilder(None).unwrap();
+    inner.insert(&b"f"[..], blob, 0o100_644).unwrap();
+    let inner = inner.write().unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    builder.insert(&b"caf\xe9"[..], blob, 0o100_644).unwrap();
+    builder
+        .insert("caf\u{fffd}".as_bytes(), blob, 0o100_644)
+        .unwrap();
+    builder.insert(&b"dir\xff"[..], inner, 0o040_000).unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let entries = tree_entries(&repo, &tree).unwrap();
+    let keys: Vec<_> = entries.keys().map(String::as_str).collect();
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert!(keys.contains(&"caf\u{fffd}"));
+    assert!(keys.iter().any(|key| key.starts_with("caf\u{fffd}\0")));
+    assert!(
+        entries
+            .keys()
+            .any(|key| crate::git::GitName::from_storage_key(key).bytes() == b"dir\xff/f"),
+        "a file under a directory that is not valid UTF-8 is walked, with its exact path"
+    );
+}
+
+/// Whether a branch is a release branch changes ownership and acceptance
+/// rules, and the release pattern is a glob that needs text, so a checked-out
+/// branch whose name is not valid UTF-8 refuses instead of being guessed.
+/// Windows cannot hold the name as a ref path, so libgit2 fails to read the
+/// branch there and the scope refuses on that read instead.
+#[test]
+fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::git::repo_with_refs(dir.path(), &[b"refs/heads/integration/release-\xe9"]);
+    std::fs::write(
+        dir.path().join(".git").join("HEAD"),
+        b"ref: refs/heads/integration/release-\xe9\n",
+    )
+    .unwrap();
+    let error = checkout_scope(dir.path(), None).unwrap_err();
+    let reason = if cfg!(windows) {
+        "cannot read current branch"
+    } else {
+        "not valid UTF-8"
+    };
+    assert!(error.contains(reason), "{error}");
+}
+
+/// Round six on issue 79: a path under `project-management/` whose name is not
+/// valid UTF-8 is no planning record, so a direct commit adding one is release
+/// integration work that needs an owner, and the message shows the name as
+/// escapes, never as the key with its NUL.
+#[cfg(unix)]
+#[test]
+fn a_direct_commit_of_a_record_name_that_is_not_utf8_is_not_planning_only() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let fx = Fx::new();
+    fx.release_importing(LINE_A);
+    let published = fx.git(&["rev-parse", &format!("origin/{RELEASE}")]);
+    assert_eq!(published.len(), 40);
+    let blob = fx.git(&["hash-object", "-w", "src/lib.rs"]);
+    let name = std::ffi::OsStr::from_bytes(b"project-management/tasks/TSK-002\xff.md");
+    let spec = std::ffi::OsString::from(format!("100644,{blob},"));
+    let mut cacheinfo = spec;
+    cacheinfo.push(name);
+    let out = crate::git::command()
+        .current_dir(&fx.root)
+        .args(["update-index", "--add", "--cacheinfo"])
+        .arg(&cacheinfo)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    fx.git(&["commit", "-q", "-m", "chore: add a record"]);
+    let judged = fx.judged(&[]).unwrap();
+    assert!(
+        judged
+            .path
+            .iter()
+            .all(|line| !line.contains("planning records only")),
+        "{:?}",
+        judged.path
+    );
+    assert!(
+        judged
+            .findings
+            .iter()
+            .any(|finding| finding.message.contains("TSK-002\\xff.md")),
+        "{:?}",
+        judged.findings
+    );
+    assert!(judged
+        .findings
+        .iter()
+        .all(|finding| !finding.message.contains('\0')));
+}
+
+/// Round ten on issue 79: an `origin` whose URL is not valid UTF-8 names a
+/// destination whose policy cannot be asked, so the scope refuses instead of
+/// being judged under the built-in pattern as if there were no `origin`.
+#[test]
+fn a_release_scope_refuses_an_origin_url_that_is_not_utf8() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    crate::git::repo_with_refs(dir.path(), &[]);
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join(".git").join("config"))
+        .unwrap();
+    config
+        .write_all(b"[remote \"origin\"]\n\turl = file:///caf\xff\n")
+        .unwrap();
+    let error = checkout_scope(dir.path(), None).unwrap_err();
+    assert!(error.contains("not valid UTF-8"), "{error}");
+}
+
+#[test]
+fn transition_oid_keeps_unicode_whitespace() {
+    let mut table = toml::Table::new();
+    table.insert(
+        "integration/EPC-001".into(),
+        toml::Value::String(format!("{}\u{a0}", "a".repeat(40))),
+    );
+    assert!(super::parse_table("cutoff", &toml::Value::Table(table)).is_err());
+}
+
+#[test]
+fn r16_invalid_config_comment_refuses_release_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(b".codeflow/project.toml", b"# bad\xff\nstack = 'rust'\n")],
+    );
+    assert!(super::config_at(&repo, oid, &mut std::collections::HashMap::new()).is_err());
+}
+
+#[test]
+fn r16_historical_record_errors_do_not_equal_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(
+            b"project-management/tasks/TSK-001.md",
+            b"---\nid: TSK-001\n---\n# bad\xff",
+        )],
+    );
+    assert!(super::record_at(&repo, oid, "project-management/tasks/TSK-001.md").is_err());
+    assert!(super::record_at(&repo, git2::Oid::ZERO_SHA1, "missing.md").is_err());
+    assert!(super::record_at(&repo, oid, "missing.md")
+        .unwrap()
+        .is_none());
+    assert!(super::landing_on_line(&repo, git2::Oid::ZERO_SHA1, &|_| Ok(false)).is_err());
+}
+
+#[test]
+fn r22_advertisement_refuses_invalid_oid_and_keeps_empty_remote() {
+    assert!(from_advertisement("fixture", "").unwrap().heads.is_empty());
+    let oid = "a".repeat(40);
+    assert!(from_advertisement(
+        "fixture",
+        &format!("ref: refs/heads/main\tHEAD\n{oid}\trefs/heads/main\n")
+    )
+    .is_ok());
+    for line in [
+        "bad\trefs/heads/main\n",
+        "bad\tHEAD\n",
+        "bad\trefs/tags/v1\n",
+        "malformed\n",
+    ] {
+        assert!(from_advertisement("fixture", line).is_err(), "{line:?}");
+    }
+}
+
+#[test]
+fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    assert!(checkout_scope(dir.path(), None).is_ok());
+    let mut config = repo.config().unwrap();
+    config.set_str("remote.origin.url", "unused").unwrap();
+    config
+        .set_str(
+            "remote.origin.fetch",
+            "refs/heads/*:refs/remotes/origin/main",
+        )
+        .unwrap();
+    assert!(repo.find_remote("origin").is_err());
+    assert!(checkout_scope(dir.path(), None).is_err());
+}
+
+#[test]
+fn r22_own_landing_ancestry_refuses_missing_object_and_keeps_unrelated() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    assert!(own_review_reaches(&repo, oid, oid).unwrap());
+    let tree = repo.find_commit(oid).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("test", "test@example.com").unwrap();
+    let unrelated = repo
+        .commit(None, &signature, &signature, "unrelated", &tree, &[])
+        .unwrap();
+    assert!(!own_review_reaches(&repo, unrelated, oid).unwrap());
+    assert!(own_review_reaches(&repo, Oid::from_str(&"a".repeat(40)).unwrap(), oid).is_err());
+}

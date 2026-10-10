@@ -338,9 +338,20 @@ pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> Str
 
 /// The project's tier from `.codeflow/project.toml`, or `None` when the file
 /// or the key is missing or unreadable.
-#[must_use]
-pub fn project_tier(root: &Path) -> Option<Tier> {
-    read_project_toml(root)?.get("tier")?.as_str()?.parse().ok()
+///
+/// # Errors
+/// The project settings cannot be read or their tier is invalid.
+pub fn project_tier(root: &Path) -> Result<Option<Tier>, String> {
+    let project = read_project_toml(root)?;
+    let Some(value) = project.as_ref().and_then(|p| p.get("tier")) else {
+        return Ok(None);
+    };
+    let text = value
+        .as_str()
+        .ok_or("cannot read project tier: expected text")?;
+    text.parse()
+        .map(Some)
+        .map_err(|error| format!("cannot read project tier: {error}"))
 }
 
 /// Whether a session-start source is one after which the rules are gone
@@ -398,7 +409,11 @@ pub fn session_guidance_with(root: &Path, source: &str, kernel: &str) -> Option<
     if !source_needs_guidance(source) {
         return None;
     }
-    let tier = project_tier(root)?;
+    let tier = match project_tier(root) {
+        Ok(Some(tier)) => tier,
+        Ok(None) => return None,
+        Err(error) => return Some(error),
+    };
     let kernel = Kernel::parse(kernel).ok()?;
     Some(guidance_block(
         &kernel,
@@ -427,11 +442,19 @@ pub fn payload_prompt(payload: &str) -> Option<String> {
 /// means no reminder.
 #[must_use]
 pub fn prompt_reminder_with(root: &Path, payload: &str, kernel: &str) -> Option<String> {
-    if !Policy::load(root).guidance.prompt_reminders.is_active() {
+    let policy = match Policy::load(root) {
+        Ok(policy) => policy,
+        Err(error) => return Some(format!("cannot read reminder policy: {error}")),
+    };
+    if !policy.guidance.prompt_reminders.is_active() {
         return None;
     }
     let trigger = classify(&payload_prompt(payload)?)?;
-    let tier = project_tier(root)?;
+    let tier = match project_tier(root) {
+        Ok(Some(tier)) => tier,
+        Ok(None) => return None,
+        Err(error) => return Some(error),
+    };
     let kernel = Kernel::parse(kernel).ok()?;
     reminder_line(&kernel, tier, trigger)
 }

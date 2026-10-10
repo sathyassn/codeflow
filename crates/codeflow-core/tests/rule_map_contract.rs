@@ -759,9 +759,9 @@ struct Legacy {
 }
 
 impl AssetSource for Legacy {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
         match self.overrides.get(path) {
-            Some(value) => value.clone(),
+            Some(value) => Ok(value.clone()),
             None => self.current.read(path),
         }
     }
@@ -771,7 +771,13 @@ fn legacy_source() -> Legacy {
     let fixtures =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy-root-contracts");
     let current = assets();
-    let manifest = String::from_utf8(current.read("base/scaffold-manifest.toml").unwrap()).unwrap();
+    let manifest = String::from_utf8(
+        current
+            .read("base/scaffold-manifest.toml")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     // The previous manifest: one AGENTS entry for standard and full, and no
     // references.
     let full_entry = "[[entry]]\nsrc = \"AGENTS.full.md.tmpl\"\ndest = \"AGENTS.md\"\nownership = \"managed-region\"\nregion = \"markdown\"\ntiers = [\"full\"]\ntemplate = true\n\n";

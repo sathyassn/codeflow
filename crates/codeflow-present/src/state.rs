@@ -2336,7 +2336,10 @@ pub(crate) fn parse_launch_recovery_name(name: &str, path: &Path) -> Result<Opti
 fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<FeedbackEvent>> {
     let mut events = Vec::new();
     for (index, line) in raw.split_inclusive('\n').enumerate() {
-        let value = line.strip_suffix('\n').unwrap_or(line);
+        // LF commits an append record. Never parse an uncommitted tail.
+        let Some(value) = line.strip_suffix('\n') else {
+            break;
+        };
         if value.is_empty() {
             continue;
         }
@@ -2358,7 +2361,6 @@ fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<Feed
                 }
                 events.push(event);
             }
-            Err(_) if !line.ends_with('\n') => break,
             Err(error) => {
                 return Err(PresentError::CorruptState(format!(
                     "{} line {}: {error}",
@@ -3638,7 +3640,7 @@ fn canonical_path_identity(path: &Path) -> Vec<u8> {
     #[cfg(not(any(unix, windows)))]
     {
         let mut identity = b"fallback\0".to_vec();
-        identity.extend_from_slice(path.as_os_str().to_string_lossy().as_bytes());
+        identity.extend_from_slice(path.as_os_str().as_encoded_bytes());
         identity
     }
 }
@@ -4012,7 +4014,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Resul
 /// Read one stored revision. A record that fails typed parsing only because
 /// its document holds diagram blocks in their pre-removal shape loads as the
 /// read-only retired kind; the file is never rewritten, and any other failure
-/// keeps its own error.
+/// keeps its own error. The unproven alternate parse returns the original
+/// error to `SessionStore::revision` and its sibling revision readers, which refuse.
 fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
     let bytes = read_state_bytes(path, limits::MAX_REVISION_STATE_BYTES)?;
     let error = match serde_json::from_slice::<RevisionRecord>(&bytes) {
@@ -4182,11 +4185,12 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
         .parent()
         .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
     ensure_safe_dir(parent)?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        Uuid::new_v4()
-    ));
+    // The temporary name keeps the file name's exact bytes (OS text rule,
+    // issue 79), so it sits beside the file and never names another one.
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(path.file_name().unwrap_or_default());
+    temporary_name.push(format!(".{}.tmp", Uuid::new_v4()));
+    let temporary = parent.join(temporary_name);
     let result = (|| {
         let mut file = open_private_create_new(&temporary)?;
         serde_json::to_writer_pretty(&mut file, value)?;

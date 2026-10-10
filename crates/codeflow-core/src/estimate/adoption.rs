@@ -41,19 +41,27 @@ pub enum Home {
 /// Read the adoption record of the repository at `repo_root`.
 #[must_use]
 pub fn read(repo_root: &Path) -> Adoption {
-    if std::fs::symlink_metadata(repo_root.join(ADOPTION_PATH)).is_err() {
-        return Adoption::Absent;
+    // Only a proven missing record is no adoption (issue 79); one that
+    // cannot be inspected is reported, never read as absent.
+    match crate::absence::proven_absent(&repo_root.join(ADOPTION_PATH)) {
+        Ok(true) => return Adoption::Absent,
+        Ok(false) => {}
+        Err(error) => {
+            return Adoption::Invalid(format!("{ADOPTION_PATH} cannot be inspected: {error}"))
+        }
     }
     // Read through the confined root, so a symlinked `.codeflow` cannot
     // redirect the read outside the repository.
     let bytes = std::fs::canonicalize(repo_root)
-        .ok()
-        .and_then(|root| crate::bounded_file::ConfinedRoot::open(&root).ok())
-        .and_then(|root| root.read(Path::new(ADOPTION_PATH), MAX_ADOPTION_BYTES).ok());
-    let Some(bytes) = bytes else {
-        return Adoption::Invalid(format!(
-            "{ADOPTION_PATH} is not a regular file of at most 64 KiB inside the repository"
-        ));
+        .and_then(|root| crate::bounded_file::ConfinedRoot::open(&root))
+        .and_then(|root| root.read(Path::new(ADOPTION_PATH), MAX_ADOPTION_BYTES));
+    let bytes = match bytes {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Adoption::Invalid(format!(
+                "{ADOPTION_PATH} is not a regular file of at most 64 KiB inside the repository ({error})"
+            ))
+        }
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return Adoption::Invalid(format!("{ADOPTION_PATH} is not JSON"));
@@ -89,15 +97,36 @@ fn home(repo_root: &Path, root: &str) -> Home {
         Ok(_) => {
             return Home::Unusable(format!("root `{root}` is not a directory"));
         }
-        Err(_) => return Home::Missing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Home::Missing,
+        Err(error) => return Home::Unusable(format!("root `{root}` cannot be read: {error}")),
     }
+    // A forecast directory or entry that cannot be read leaves the home
+    // unusable (issue 79), never a home with fewer forecasts.
+    let unreadable = |what: &str, error: std::io::Error| {
+        Home::Unusable(format!(
+            "{what} under `{root}/forecasts` cannot be read: {error}"
+        ))
+    };
+    let names = match real_dirs(&dir.join("forecasts")) {
+        Ok(names) => names,
+        Err(error) => return unreadable("the forecasts directory", error),
+    };
     let mut found: Vec<(String, u64, String)> = Vec::new();
-    for name in real_dirs(&dir.join("forecasts")) {
-        let Some(entries) = std::fs::read_dir(dir.join("forecasts").join(&name)).ok() else {
-            continue;
+    for name in names {
+        let entries = match std::fs::read_dir(dir.join("forecasts").join(&name)) {
+            Ok(entries) => entries,
+            Err(error) => return unreadable(&format!("`{name}`"), error),
         };
-        for entry in entries.filter_map(Result::ok) {
-            let file = entry.file_name().to_string_lossy().into_owned();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => return unreadable(&format!("an entry of `{name}`"), error),
+            };
+            // A frozen forecast is named `v<N>.json`, which is ASCII, so a
+            // name that is not UTF-8 is no forecast.
+            let Ok(file) = entry.file_name().into_string() else {
+                continue;
+            };
             let Some(version) = file
                 .strip_prefix('v')
                 .and_then(|rest| rest.strip_suffix(".json"))
@@ -105,8 +134,10 @@ fn home(repo_root: &Path, root: &str) -> Home {
             else {
                 continue;
             };
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                continue;
+            match entry.file_type() {
+                Ok(kind) if kind.is_file() => {}
+                Ok(_) => continue,
+                Err(error) => return unreadable(&format!("`{name}/{file}`"), error),
             }
             if found.len() == MAX_FORECAST_FILES {
                 return Home::Unusable(format!(
@@ -127,21 +158,41 @@ fn home(repo_root: &Path, root: &str) -> Home {
     }
 }
 
-/// Subdirectories of `dir` that are real directories, by name.
-fn real_dirs(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    if !std::fs::symlink_metadata(dir).is_ok_and(|metadata| metadata.is_dir()) {
-        return Vec::new();
+/// Subdirectories of `dir` that are real directories, by name; none when
+/// `dir` is missing or is not a real directory.
+///
+/// # Errors
+///
+/// A directory or entry that cannot be read.
+fn real_dirs(dir: &Path) -> std::io::Result<Vec<String>> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
     }
-    let mut names: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .collect();
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        // A forecast name is a path segment the report writes back as
+        // text; a directory whose name is not UTF-8 may hold forecasts, so
+        // it refuses rather than hiding them (issue 79).
+        let name = entry.file_name().into_string().map_err(|name| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the forecast directory `{}` has a name that is not UTF-8",
+                    crate::git::GitName::from_bytes(name.as_encoded_bytes()).display()
+                ),
+            )
+        })?;
+        names.push(name);
+    }
     names.sort();
-    names
+    Ok(names)
 }
 
 /// `root` joined to the repository, when it is relative, plain and crosses

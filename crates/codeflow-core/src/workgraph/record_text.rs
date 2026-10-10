@@ -8,6 +8,14 @@
 
 use std::fmt;
 
+/// Remove one physical Markdown line ending from a raw split-inclusive line.
+/// Callers pass source lines, never a value already parsed from a line.
+pub(crate) fn without_line_ending(line: &str) -> &str {
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(line)
+}
+
 /// One acceptance criterion of a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Criterion {
@@ -47,7 +55,7 @@ impl Criterion {
     /// after a closing tag (`... (journey).`) does not hide it; a tag
     /// inside the text is not a tag.
     fn has_tag(&self, tag: &str) -> bool {
-        let text = self.text.trim();
+        let text = self.text.trim_matches([' ', '\t']);
         let closing = text.trim_end_matches(['.', ',', ';', ':']);
         text.starts_with(tag) || closing.ends_with(tag)
     }
@@ -58,7 +66,9 @@ impl Criterion {
         let start = self.text.find("(serves ")?;
         let rest = &self.text[start + "(serves ".len()..];
         let end = rest.find(')')?;
-        let mut parts = rest[..end].split_whitespace();
+        let mut parts = rest[..end]
+            .split([' ', '\t'])
+            .filter(|part| !part.is_empty());
         let epic = parts.next()?;
         let criterion = parts.next()?;
         (parts.next().is_none() && is_criterion_id(criterion))
@@ -161,7 +171,7 @@ fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
         return None;
     }
     let length = rest.bytes().take_while(|byte| *byte == marker).count();
-    let info = rest[length..].trim();
+    let info = rest[length..].trim_matches([' ', '\t']);
     (length >= 3 && !(marker == b'`' && info.contains('`'))).then_some((marker, length, info))
 }
 
@@ -175,17 +185,13 @@ fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
 pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
     use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-    let lines: Vec<&str> = lines
-        .iter()
-        .map(|line| line.trim_end_matches('\r'))
-        .collect();
     if lines.is_empty() {
         return Vec::new();
     }
     let text = lines.join("\n");
     let mut starts = Vec::with_capacity(lines.len());
     let mut offset = 0;
-    for line in &lines {
+    for line in lines {
         starts.push(offset);
         offset += line.len() + 1;
     }
@@ -269,7 +275,7 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
                 scanned.info.clone_from(info);
             }
             if let Some((_, text)) = headings.iter().find(|(at, _)| *at == index) {
-                scanned.heading = Some(text.trim().to_string());
+                scanned.heading = Some(text.trim_matches([' ', '\t']).to_string());
             }
             scanned
         })
@@ -279,12 +285,12 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
 /// The number of lines the frontmatter takes, fences included (0 without
 /// a closed frontmatter).
 pub(crate) fn frontmatter_len(lines: &[&str]) -> usize {
-    (lines.first().map(|line| line.trim_end()) == Some("---"))
+    (lines.first().map(|line| line.trim_end_matches([' ', '\t'])) == Some("---"))
         .then(|| {
             lines
                 .iter()
                 .skip(1)
-                .position(|line| line.trim_end() == "---")
+                .position(|line| line.trim_end_matches([' ', '\t']) == "---")
         })
         .flatten()
         .map_or(0, |index| index + 2)
@@ -303,7 +309,7 @@ pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
 /// (`## Closeout`), heading included. Only a heading the Markdown parser
 /// reports opens or ends a section, never text that merely reads `## `.
 pub(crate) fn section_span(lines: &[ScannedLine], heading: &str) -> Option<(usize, usize)> {
-    let name = heading.strip_prefix("## ")?.trim();
+    let name = heading.strip_prefix("## ")?.trim_matches([' ', '\t']);
     let start = lines
         .iter()
         .position(|line| line.heading.as_deref() == Some(name))?;
@@ -374,7 +380,7 @@ fn section_markdown(body: &str, heading: &str) -> Option<String> {
                 if scanned[index].kind == LineKind::Hidden {
                     ""
                 } else {
-                    lines[index].trim_end_matches('\r')
+                    lines[index]
                 }
             })
             .collect::<Vec<_>>()
@@ -447,7 +453,7 @@ fn has_entry(markdown: &str) -> bool {
 
 /// Whether inline HTML is one of the template's placeholder tokens.
 fn is_template_token(html: &str) -> bool {
-    let html = html.trim().to_lowercase();
+    let html = html.trim_matches([' ', '\t']).to_lowercase();
     html == "<output>" || html == "<path>"
 }
 
@@ -458,7 +464,7 @@ fn is_entry(text: &str) -> bool {
     if lower.contains("<output>") || lower.contains("<path>") {
         return false;
     }
-    let visible = text.trim_start();
+    let visible = text.trim_start_matches([' ', '\t']);
     let visible = ["[ ]", "[x]", "[X]"]
         .iter()
         .find_map(|checkbox| visible.strip_prefix(checkbox))
@@ -605,7 +611,10 @@ fn names_file(segment: &str) -> bool {
 }
 
 fn collapse(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.split([' ', '\t', '\r', '\n'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Parse the criteria of `## Acceptance Criteria`: listed `- AC-n ...` lines
@@ -631,7 +640,7 @@ pub fn parse_criteria(body: &str) -> CriteriaList {
             }
         }
         let line = scanned.visible;
-        if line.trim().is_empty() {
+        if line.trim_matches([' ', '\t']).is_empty() {
             continue;
         }
         if let Some(item) = line.strip_prefix("- ") {
@@ -677,8 +686,8 @@ fn parse_criterion_item(item: &str, position: usize) -> Result<Option<Criterion>
     } else {
         (None, item)
     };
-    let rest = rest.trim();
-    let (first, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    let rest = rest.trim_matches([' ', '\t']);
+    let (first, tail) = rest.split_once([' ', '\t']).unwrap_or((rest, ""));
     if is_criterion_id(first) {
         return Ok(Some(Criterion {
             id: first.to_string(),
@@ -724,15 +733,15 @@ pub struct Blocker {
 fn keyed_bullets(lines: &[String], keys: &[&str]) -> Vec<(String, String)> {
     let mut found = Vec::new();
     for line in lines {
-        let Some(item) = line.trim_start().strip_prefix("- ") else {
+        let Some(item) = line.trim_start_matches([' ', '\t']).strip_prefix("- ") else {
             continue;
         };
         let Some((key, value)) = item.split_once(':') else {
             continue;
         };
-        let key = key.trim().to_ascii_lowercase();
+        let key = key.trim_matches([' ', '\t']).to_ascii_lowercase();
         if keys.contains(&key.as_str()) {
-            found.push((key, value.trim().to_string()));
+            found.push((key, value.trim_matches([' ', '\t']).to_string()));
         }
     }
     found
@@ -826,10 +835,10 @@ pub fn historical_acceptance(body: &str) -> Option<String> {
     let lines = section_text(body, "## Closeout")?;
     let mut items: Vec<String> = Vec::new();
     for line in &lines {
-        let trimmed = line.trim_start();
+        let trimmed = line.trim_start_matches([' ', '\t']);
         if let Some(item) = trimmed.strip_prefix("- ") {
             items.push(item.to_string());
-        } else if line.starts_with(char::is_whitespace) && !trimmed.is_empty() {
+        } else if line.starts_with([' ', '\t']) && !trimmed.is_empty() {
             if let Some(last) = items.last_mut() {
                 last.push(' ');
                 last.push_str(trimmed);
@@ -840,7 +849,9 @@ pub fn historical_acceptance(body: &str) -> Option<String> {
     }
     items.iter().find_map(|item| {
         let (key, value) = item.split_once(':')?;
-        if !key.trim().eq_ignore_ascii_case("acceptance")
+        if !key
+            .trim_matches([' ', '\t'])
+            .eq_ignore_ascii_case("acceptance")
             || !value.contains(HISTORICAL_EVIDENCE_UNAVAILABLE)
         {
             return None;
@@ -935,7 +946,7 @@ fn parse_result_line(
             "criterion line must be `AC-n: <outcome> | <evidence>`",
         )
     })?;
-    let id = id.trim();
+    let id = id.trim_matches([' ', '\t']);
     if !is_criterion_id(id) || entry.starts_with(' ') {
         return Err(block_error(
             number,
@@ -945,7 +956,10 @@ fn parse_result_line(
     let (outcome, evidence) = value
         .split_once('|')
         .ok_or_else(|| block_error(number, format!("{id} must read `<outcome> | <evidence>`")))?;
-    let (outcome, evidence) = (outcome.trim(), evidence.trim());
+    let (outcome, evidence) = (
+        outcome.trim_matches([' ', '\t']),
+        evidence.trim_matches([' ', '\t']),
+    );
     if outcome.is_empty() || evidence.is_empty() {
         return Err(block_error(
             number,
@@ -974,7 +988,7 @@ fn parse_key_line(number: usize, line: &str) -> Result<(&'static str, &str), Acc
         .iter()
         .find(|known| **known == key)
         .ok_or_else(|| block_error(number, format!("unknown key `{}`", truncate(key, 30))))?;
-    Ok((known, value.trim()))
+    Ok((known, value.trim_matches([' ', '\t'])))
 }
 
 /// Parse the inside of a fenced acceptance block (the lines between the
@@ -985,15 +999,20 @@ fn parse_key_line(number: usize, line: &str) -> Result<(&'static str, &str), Acc
 ///
 /// Returns the first structural problem with its 1-based line number.
 pub fn parse_acceptance(text: &str) -> Result<AcceptanceBlock, AcceptanceError> {
-    let mut lines = text
-        .lines()
+    parse_acceptance_lines(text.lines())
+}
+
+fn parse_acceptance_lines<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Result<AcceptanceBlock, AcceptanceError> {
+    let mut lines = lines
         .enumerate()
-        .map(|(index, line)| (index + 1, line.trim_end_matches('\r')))
-        .filter(|(_, line)| !line.trim().is_empty());
+        .map(|(index, line)| (index + 1, line))
+        .filter(|(_, line)| !line.trim_matches([' ', '\t']).is_empty());
     let (first_line, header) = lines
         .next()
         .ok_or_else(|| block_error(1, "empty acceptance block"))?;
-    let superseded = match header.trim_end() {
+    let superseded = match header.trim_end_matches([' ', '\t']) {
         "acceptance:" => false,
         "acceptance_superseded:" => true,
         other => {
@@ -1111,15 +1130,13 @@ pub struct FencedAcceptance {
 }
 
 impl FencedAcceptance {
-    /// Whether the block is (or, when malformed, is headed as) superseded.
+    /// Whether a valid block is superseded. Malformed blocks remain active so
+    /// the lifecycle validator refuses their parse error.
     #[must_use]
     pub fn is_superseded(&self) -> bool {
         match &self.parsed {
             Ok(block) => block.superseded,
-            Err(_) => self
-                .inner
-                .trim_start()
-                .starts_with("acceptance_superseded:"),
+            Err(_) => false,
         }
     }
 }
@@ -1146,9 +1163,10 @@ pub fn acceptance_blocks(body: &str) -> Vec<FencedAcceptance> {
             }
             LineKind::FenceClose => {
                 let inner = current.take().unwrap_or_default().join("\n");
-                let head = inner.trim_start();
+                let head = inner.trim_start_matches([' ', '\t', '\r', '\n']);
                 if head.starts_with("acceptance:") || head.starts_with("acceptance_superseded:") {
-                    let parsed = parse_acceptance(&inner);
+                    // section already removed physical CRLF framing; a content CR remains content.
+                    let parsed = parse_acceptance_lines(inner.split('\n'));
                     blocks.push(FencedAcceptance { inner, parsed });
                 }
             }
@@ -1243,7 +1261,7 @@ pub fn check_block(
         || {
             follow_ups
                 .split(',')
-                .all(|id| crate::workgraph::is_valid_task_format_id(id.trim()))
+                .all(|id| crate::workgraph::is_valid_task_format_id(id.trim_matches([' ', '\t'])))
         },
         |reason| !reason.trim().is_empty(),
     );
@@ -1267,7 +1285,7 @@ pub fn check_block(
 /// `"none: <reason>"` or `'none: <reason>'`. Both spellings mean the same,
 /// and a record written either way stays valid.
 fn follow_ups_value(raw: &str) -> &str {
-    let value = raw.trim();
+    let value = raw.trim_matches([' ', '\t']);
     ['"', '\'']
         .into_iter()
         .find_map(|quote| {
@@ -1275,7 +1293,7 @@ fn follow_ups_value(raw: &str) -> &str {
                 .strip_prefix(quote)
                 .and_then(|inner| inner.strip_suffix(quote))
         })
-        .map_or(value, str::trim)
+        .map_or(value, |inner| inner.trim_matches([' ', '\t']))
 }
 
 /// A criterion observable only after release (R-62) is `deferred` with an
@@ -1293,9 +1311,9 @@ fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) 
         result
             .evidence
             .split(';')
-            .filter_map(|part| part.trim().strip_prefix(name))
-            .map(|value| value.trim_start_matches(':').trim())
-            .find(|value| !value.is_empty())
+            .filter_map(|part| part.trim_matches([' ', '\t']).strip_prefix(name))
+            .map(|value| value.trim_start_matches(':').trim_matches([' ', '\t']))
+            .find(|value| !value.trim().is_empty())
     };
     let mut problems = Vec::new();
     for name in ["owner", "window"] {
@@ -1307,7 +1325,10 @@ fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) 
     }
     match field("follow-up") {
         Some(task) if crate::workgraph::is_valid_task_format_id(task) => {
-            if !follow_ups.split(',').any(|listed| listed.trim() == task) {
+            if !follow_ups
+                .split(',')
+                .any(|listed| listed.trim_matches([' ', '\t']) == task)
+            {
                 problems.push(format!(
                     "{id}'s follow-up {task} is not listed in `follow_ups`"
                 ));
@@ -1323,12 +1344,31 @@ fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) 
 /// The outcome word before `|` in a `<outcome> | <detail>` value.
 #[must_use]
 pub fn outcome_word(value: &str) -> &str {
-    value.split('|').next().unwrap_or_default().trim()
+    value
+        .split('|')
+        .next()
+        .unwrap_or_default()
+        .trim_matches([' ', '\t'])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acceptance_syntax_preserves_unicode_whitespace_in_values() {
+        let criteria = parse_criteria(
+            "## Acceptance Criteria\n\n- AC-1 A result (serves EPC-001\u{a0}AC-1)\n",
+        );
+        assert!(criteria.items[0].serves().is_none());
+        assert_eq!(
+            parse_key_line(1, "  reviewed: abc\u{a0}").unwrap().1,
+            "abc\u{a0}"
+        );
+        assert!(parse_result_line(1, "AC-1\u{a0}: verified | evidence").is_err());
+        assert_eq!(outcome_word("approved\u{a0} | evidence"), "approved\u{a0}");
+        assert!(fence_marker("```yaml\u{a0}").is_some_and(|(_, _, info)| info == "yaml\u{a0}"));
+    }
 
     const RECORD: &str = "---\nid: TSK-001\n---\n\n## Acceptance Criteria\n\n\
 <!-- guidance -->\n\n- AC-1 When a thing happens, the system shall act.\n  More text.\n\
@@ -1779,5 +1819,17 @@ their sources, or the `init_e2e` case that renders them (journey).";
             let rendered = render_acceptance(&original);
             assert_eq!(parse_acceptance(&rendered), Ok(original), "{rendered}");
         }
+    }
+    #[test]
+    fn r16_line_framing_is_removed_once() {
+        assert_eq!(without_line_ending("value\r\n"), "value");
+        assert_eq!(without_line_ending("value\n\n"), "value\n");
+        assert_eq!(without_line_ending("value\r\r\n"), "value\r");
+        let lines: Vec<_> = "---\r\r\nid: TSK-001\r\n---\r\n".lines().collect();
+        assert_eq!(
+            frontmatter_len(&lines),
+            0,
+            "a content CR is not another line delimiter"
+        );
     }
 }

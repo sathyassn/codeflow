@@ -20,7 +20,11 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={}", root.join(input).display());
     }
-    let supplied = std::env::var("CODEFLOW_SOURCE_REVISION").ok();
+    let supplied = std::env::var_os("CODEFLOW_SOURCE_REVISION").map(|value| {
+        value
+            .into_string()
+            .expect("CODEFLOW_SOURCE_REVISION must be UTF-8")
+    });
     // A build script runs no hook, so its git is a plain process.
     let git = || std::process::Command::new("git");
     let (revision, dirty, metadata) = source_identity::revision(&root, supplied.as_deref(), &git);

@@ -114,3 +114,24 @@ impl Standing {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod r22_fixture {
+    pub const TASK: &[u8] = b"project-management/tasks/TSK-001.md";
+    pub const TEXT: &[u8] = b"---\nid: TSK-001\nuid: 00000000-0000-4000-8000-000000000001\n---\n";
+
+    pub fn repository(
+        path: &[u8],
+        text: &[u8],
+    ) -> (tempfile::TempDir, git2::Repository, git2::Oid) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let commit = crate::git::add_commit(&repo, &[(path, text)]);
+        (dir, repo, commit)
+    }
+
+    pub fn remove_blob(repo: &git2::Repository, text: &[u8]) {
+        let oid = repo.blob(text).unwrap().to_string();
+        std::fs::remove_file(repo.path().join("objects").join(&oid[..2]).join(&oid[2..])).unwrap();
+    }
+}

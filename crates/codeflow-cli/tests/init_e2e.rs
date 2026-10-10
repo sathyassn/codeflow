@@ -640,7 +640,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)), &root).unwrap();
+        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
@@ -2078,7 +2078,7 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         .join(".claude/skills/cf-model-orchestrator/resources/quality/findings.md")
         .is_file());
     let mut installed = SkillFiles::new();
-    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed);
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed).unwrap();
     let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
     assert!(chain.errors.is_empty(), "{:?}", chain.errors);
     assert!(!chain
@@ -2861,4 +2861,60 @@ fn init_standard_completes_in_a_repository_with_many_folders() {
     let err = std::fs::read_to_string(tmp.path().join("init.err")).unwrap_or_default();
     assert!(status.success(), "init failed: {err}");
     assert!(root.join(".codeflow/policy.json").is_file());
+}
+
+fn r20_init_broken_include(unreadable: bool) {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    git_stdout(dir.path(), &["init", "-q"]);
+    let include = dir.path().join("included-config");
+    std::fs::write(
+        &include,
+        if unreadable {
+            "[core]\n hooksPath = own-hooks\n"
+        } else {
+            "[broken\n"
+        },
+    )
+    .unwrap();
+    #[cfg(unix)]
+    if unreadable {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&include, std::fs::Permissions::from_mode(0o0)).unwrap();
+    }
+    let config = dir.path().join(".git/config");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config)
+        .unwrap();
+    writeln!(file, "[include]\n path = {}", include.display()).unwrap();
+    let before = std::fs::read(&config).unwrap();
+    let output = codeflow(dir.path(), &["init", "--minimal", "--yes"]);
+    #[cfg(unix)]
+    if unreadable {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&include, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(!output.status.success(), "init must refuse");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    assert!(
+        !dir.path().join(".codeflow/git-hooks").exists(),
+        "init must refuse before wiring hooks: {}",
+        output_text(&output)
+    );
+    assert!(
+        !dir.path().join(".codeflow/project.toml").exists(),
+        "failed query must not select an adoption default"
+    );
+}
+
+#[test]
+fn r20_init_refuses_malformed_included_config() {
+    r20_init_broken_include(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_init_refuses_unreadable_included_config() {
+    r20_init_broken_include(true);
 }

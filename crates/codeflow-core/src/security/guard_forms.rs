@@ -1810,3 +1810,48 @@ pub const HELP_PAIRS: &[(&str, &str)] = &[
         "codex exec --help; claude -p hi",
     ),
 ];
+
+/// Space-containing operands must reach deletion judgment as whole paths.
+#[allow(dead_code)] // Shared by several harnesses; fixture tests live in deletion.
+pub const SPACED_INPUT_FORMS: &[&str] = &[
+    r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -0 rm -rf --",
+    r#"printf '"{fixture}/space name/../../../etc"' | xargs rm -rf"#,
+    r"printf '{fixture}/space name/../../../etc\n' | parallel rm -rf",
+];
+
+/// Round 19 xargs option and replacement probes, with fixture-backed operands.
+#[allow(dead_code)]
+pub const XARGS_OPTION_FORMS: &[(&str, bool)] = &[
+    (
+        r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -t0 rm -rf --",
+        false,
+    ),
+    (
+        r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -0t rm -rf --",
+        false,
+    ),
+    (
+        r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -rt0 rm -rf --",
+        false,
+    ),
+    (
+        r"printf '%s\n' '{fixture}/space name/../../../etc' | xargs -I '{}' rm -rf '{}'",
+        false,
+    ),
+    (
+        r"printf '%s\n' '{fixture}/space name/../../../etc' | xargs -I{} rm -rf {}",
+        false,
+    ),
+    (
+        r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -0 -I{} rm -rf {}",
+        false,
+    ),
+    (
+        r"printf '%s\n' '{fixture}/space name/../../../etc' | xargs -I{} rm -rf prefix{}",
+        true,
+    ),
+    (
+        r"printf '%s\n' '{fixture}/ordinary' | xargs -n 1 rm -rf",
+        true,
+    ),
+];

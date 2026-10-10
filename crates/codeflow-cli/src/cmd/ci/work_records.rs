@@ -27,9 +27,19 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
+    let resolved_base = match super::resolve_base(root, base_candidates) {
+        Ok(value) => value,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
+    };
     let outcome = check(
         root,
-        super::resolve_base(root, base_candidates).as_deref(),
+        resolved_base.as_deref(),
         head,
         authority,
         on_line,
@@ -136,7 +146,7 @@ pub(super) fn check(
     }
 }
 
-fn block(message: String) -> Violation {
+pub(super) fn block(message: String) -> Violation {
     Violation::always_blocking(
         "work.records",
         message,

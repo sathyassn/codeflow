@@ -426,7 +426,7 @@ pub fn validate_portal_with(
             return report;
         }
     };
-    let requested = normalized_portal_root.to_string_lossy().replace('\\', "/");
+    let requested = crate::portable_path::slashed(&normalized_portal_root);
     if !paths_equal(&adoption.root, &requested) {
         report.issues.push(format!(
             "requested portal root {requested:?} does not match adopted root {:?}",
@@ -485,7 +485,7 @@ pub fn validate_portal_with(
             .push("repository commit is not a full Git object ID".into());
     }
     match git_text_bounded(repo_root, &["rev-parse", "--verify", "HEAD^{commit}"], 1024) {
-        Ok(head) if head.trim() == evidence.repository.commit => {}
+        Ok(head) if head.strip_suffix('\n').unwrap_or(&head) == evidence.repository.commit => {}
         Ok(_) => report
             .issues
             .push("evidence repository commit does not match HEAD".into()),
@@ -537,10 +537,8 @@ pub fn validate_portal_with(
         return report;
     }
     let repository = repo_root.to_path_buf();
-    let config_source_path = normalized_portal_root
-        .join("portal.config.json")
-        .to_string_lossy()
-        .replace('\\', "/");
+    let config_source_path =
+        crate::portable_path::slashed(&normalized_portal_root.join("portal.config.json"));
     let authoritative_config = match git_batch_blobs(
         &repository,
         &evidence.repository.commit,
@@ -1039,10 +1037,8 @@ pub fn validate_portal_with(
     }
     // The inline scripts the runtime emits, as committed at the evidenced
     // commit, with the pre-paint script for the configured theme.
-    let runtime_scripts_path = normalized_portal_root
-        .join(figures::RUNTIME_SCRIPTS_FILE)
-        .to_string_lossy()
-        .replace('\\', "/");
+    let runtime_scripts_path =
+        crate::portable_path::slashed(&normalized_portal_root.join(figures::RUNTIME_SCRIPTS_FILE));
     let runtime_scripts = git_batch_blobs(
         &repository,
         &evidence.repository.commit,
@@ -2116,6 +2112,10 @@ fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRec
         let metadata = std::str::from_utf8(&raw[..separator]).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
         })?;
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. The
+        // path is judged for portability and collisions, and published, so a
+        // path that is not valid UTF-8 is a finding about the tree, and a
+        // lossy spelling could merge two different paths into one.
         let path = std::str::from_utf8(&raw[separator + 1..]).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
         })?;
@@ -2359,6 +2359,18 @@ fn verify_reserved_public_inventory(
     }
 }
 
+fn reserved_file_size(entry: &std::fs::DirEntry, child: &Path) -> Result<u64, String> {
+    entry
+        .metadata()
+        .map(|metadata| metadata.len())
+        .map_err(|error| {
+            format!(
+                "cannot read reserved public metadata {}: {error}",
+                child.display()
+            )
+        })
+}
+
 #[allow(clippy::too_many_arguments)] // Recursive bounded walker carries one shared budget and report.
 fn collect_reserved_public_files(
     portal: &Path,
@@ -2437,7 +2449,12 @@ fn collect_reserved_public_files(
             }
         } else if kind.is_file() {
             *file_count += 1;
-            *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
+            let Ok(size) = reserved_file_size(&entry, &child)
+                .inspect_err(|error| report.issues.push(error.clone()))
+            else {
+                return false;
+            };
+            *bytes = bytes.saturating_add(size);
             let Some(text) = portable_relative_path(&child) else {
                 report.issues.push(format!(
                     "reserved public output path is unsafe: {}",
@@ -2839,7 +2856,6 @@ fn verify_pagefind_language(
     let hash = record
         .get("hash")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
         .filter(|hash| !hash.is_empty());
     if hash.is_none() {
         report.issues.push(format!(
@@ -2869,7 +2885,6 @@ fn verify_pagefind_language(
     if let Some(wasm) = record
         .get("wasm")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
         .filter(|wasm| !wasm.is_empty())
     {
         require_pagefind_artifact(
@@ -2972,6 +2987,20 @@ fn normalize_markdown_source(value: &str) -> Cow<'_, str> {
     }
 }
 
+fn fragment_source<'a>(
+    page: &Page,
+    source_blobs: &'a BTreeMap<String, Vec<u8>>,
+) -> Result<&'a str, String> {
+    let error = || {
+        format!(
+            "{} fragment source is unreadable or not valid UTF-8",
+            page.source_path
+        )
+    };
+    let bytes = source_blobs.get(&page.source_path).ok_or_else(error)?;
+    std::str::from_utf8(bytes).map_err(|_| error())
+}
+
 fn verify_portal_fragments(
     portal: &Path,
     pages: &[Page],
@@ -2988,11 +3017,12 @@ fn verify_portal_fragments(
     let mut built_budget_reported = false;
     let mut fragment_links = 0_usize;
     for page in pages.iter().filter(|page| !page.stale) {
-        let Some(source) = source_blobs
-            .get(&page.source_path)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        else {
-            continue;
+        let source = match fragment_source(page, source_blobs) {
+            Ok(source) => source,
+            Err(error) => {
+                report.issues.push(error);
+                continue;
+            }
         };
         let normalized = normalize_markdown_source(source);
         let body = markdown_body(&normalized);
@@ -3032,8 +3062,14 @@ fn verify_portal_fragments(
             {
                 None
             } else {
-                decode_percent(link_path)
-                    .and_then(|decoded| resolve_source_link(&page.source_path, &decoded))
+                let Some(decoded) = decode_percent(link_path) else {
+                    report.issues.push(format!(
+                        "{} contains unreadable percent-encoded path: {destination}",
+                        page.source_path
+                    ));
+                    continue;
+                };
+                resolve_source_link(&page.source_path, &decoded)
             };
             let Some(target_source) = target_source else {
                 continue;
@@ -3051,21 +3087,18 @@ fn verify_portal_fragments(
                 continue;
             };
             let expected = format!("id=\"{}\"", escape_html_attribute(&fragment));
-            if !built_cache.contains_key(*target_route) {
-                let loaded = load_fragment_artifact(
-                    portal,
-                    target_route,
-                    &mut remaining_built_bytes,
-                    &mut built_budget_reported,
-                    report,
-                );
-                built_cache.insert((*target_route).to_string(), loaded);
-            }
-            if !built_cache
-                .get(*target_route)
-                .and_then(Option::as_ref)
-                .is_some_and(|html| html.contains(&expected))
-            {
+            let loaded = built_cache
+                .entry((*target_route).to_string())
+                .or_insert_with(|| {
+                    load_fragment_artifact(
+                        portal,
+                        target_route,
+                        &mut remaining_built_bytes,
+                        &mut built_budget_reported,
+                        report,
+                    )
+                });
+            if !loaded.as_ref().is_some_and(|html| html.contains(&expected)) {
                 report.issues.push(format!(
                     "{} fragment does not resolve to a built portal anchor: {destination}",
                     page.source_path
@@ -3355,7 +3388,9 @@ fn safe_join(
     label: &str,
     report: &mut PortalValidationReport,
 ) -> Option<PathBuf> {
-    let text = relative.to_string_lossy();
+    // OS text rule (issue 79): a portal path is portable text, so one that is
+    // not valid UTF-8 is not safe, and is shown with an escape.
+    let text = relative.to_str().unwrap_or("\\");
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
         || text.contains('\\')
@@ -3370,7 +3405,7 @@ fn safe_join(
     {
         report.issues.push(format!(
             "{label} is not a safe relative path: {}",
-            relative.display()
+            crate::git::GitName::from_os_str(relative.as_os_str()).display()
         ));
         return None;
     }
@@ -3407,6 +3442,8 @@ fn safe_path_text(value: &str) -> bool {
         && value.split('/').all(portable_segment)
 }
 
+// Kept strict for the reason given at the `ls-tree` decode (issue 79): a
+// segment that is not valid UTF-8 is not a portable path, so it yields `None`.
 fn portable_relative_path(path: &Path) -> Option<String> {
     let mut segments = Vec::new();
     for component in path.components() {
@@ -3736,7 +3773,11 @@ fn read_bounded_text(path: &Path, maximum_bytes: u64) -> std::io::Result<String>
 }
 
 fn normalized_relative(path: &Path) -> Option<PathBuf> {
-    if path.as_os_str().is_empty() || path.is_absolute() || path.to_string_lossy().contains('\\') {
+    // A portal path is portable text; one that is not valid UTF-8 is not.
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path.to_str().is_none_or(|text| text.contains('\\'))
+    {
         return None;
     }
     let mut normalized = PathBuf::new();
@@ -3747,7 +3788,7 @@ fn normalized_relative(path: &Path) -> Option<PathBuf> {
             _ => return None,
         }
     }
-    let text = normalized.to_string_lossy().replace('\\', "/");
+    let text = crate::portable_path::slashed(&normalized);
     (!normalized.as_os_str().is_empty() && text.split('/').all(portable_segment))
         .then_some(normalized)
 }
@@ -3877,9 +3918,22 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
 }
 
 fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return BTreeSet::new();
-    };
+    // IDs and their delimiters are ASCII. Preserve those bytes exactly and
+    // mark every non-ASCII byte with a character strict_id cannot accept.
+    // Damage in the body therefore cannot hide an intact id or create one.
+    let text: String = bytes
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(bytes)
+        .iter()
+        .map(|&byte| {
+            if byte.is_ascii() {
+                char::from(byte)
+            } else {
+                '\u{fffd}'
+            }
+        })
+        .collect();
+    let text = text.as_str();
     let mut recovered = BTreeSet::new();
     let mut first_recovered = None;
     for line in text
@@ -3889,24 +3943,24 @@ fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> 
         .replace('\r', "\n")
         .lines()
     {
-        let Some(value) = line.trim_start().strip_prefix("id:") else {
+        let Some(value) = line.trim_start_matches([' ', '\t']).strip_prefix("id:") else {
             continue;
         };
-        let value = value.trim_start();
+        let value = value.trim_start_matches([' ', '\t']);
         let candidate =
             if let Some(quote) = value.chars().next().filter(|c| matches!(c, '\'' | '"')) {
                 let rest = &value[quote.len_utf8()..];
                 let Some(end) = rest.find(quote) else {
                     continue;
                 };
-                let trailing = rest[end + quote.len_utf8()..].trim();
+                let trailing = rest[end + quote.len_utf8()..].trim_matches([' ', '\t']);
                 if !trailing.is_empty() && !trailing.starts_with('#') {
                     continue;
                 }
                 &rest[..end]
             } else {
-                let end = value.find(char::is_whitespace).unwrap_or(value.len());
-                let trailing = value[end..].trim();
+                let end = value.find([' ', '\t']).unwrap_or(value.len());
+                let trailing = value[end..].trim_matches([' ', '\t']);
                 if !trailing.is_empty() && !trailing.starts_with('#') {
                     continue;
                 }
@@ -5894,7 +5948,7 @@ mod tests {
             ),
             (
                 r#"{"version":"1.5.2","languages":{"en":{"hash":"  ","page_count":165}}}"#,
-                "language en has no non-empty hash string",
+                "language en needs dist/pagefind/pagefind.  .pf_meta",
             ),
             (
                 r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7"}}}"#,
@@ -6062,5 +6116,99 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.contains("not a regular directory")));
+    }
+
+    /// Kept strict (issue 79): a tree path that is not valid UTF-8 is a
+    /// finding about the published tree, not a name to spell lossily.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_path_that_is_not_utf8_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100_644,
+                uid: 0,
+                gid: 0,
+                file_size: 4,
+                id: repo.blob(b"data").unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: b"docs/caf\xe9.md".to_vec(),
+            })
+            .unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
+            .unwrap();
+        let Err(error) = git_tree_records(dir.path(), &commit.to_string()) else {
+            panic!("a tree path that is not UTF-8 is refused");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        let segment = std::ffi::OsStr::from_bytes(b"caf\xe9");
+        assert!(portable_relative_path(Path::new("docs").join(segment).as_path()).is_none());
+        assert_eq!(
+            portable_relative_path(Path::new("docs/cafe.md")).as_deref(),
+            Some("docs/cafe.md")
+        );
+    }
+
+    /// Issue 79: a portal path is portable text, so one that is not valid
+    /// UTF-8 is not safe, and is never read as its lossy spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_portal_path_that_is_not_utf8_is_not_a_relative_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let odd = Path::new(std::ffi::OsStr::from_bytes(b"docs/caf\xe9"));
+        assert!(normalized_relative(odd).is_none());
+        assert!(normalized_relative(Path::new("docs/cafe")).is_some());
+        let mut report = PortalValidationReport::default();
+        let root = Path::new("/nonexistent-root");
+        assert!(safe_join(root, odd, "the portal", &mut report).is_none());
+        assert!(
+            report.issues[0].contains(r"docs/caf\xe9"),
+            "{:?}",
+            report.issues
+        );
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_pagefind_artifact_names_keep_unicode_space() {
+        let value = serde_json::json!({"hash":"abc\u{a0}","wasm":"en\u{a0}","page_count":1});
+        let mut report = super::PortalValidationReport::default();
+        let artifacts = std::collections::BTreeSet::from([
+            "dist/pagefind/pagefind.abc.pf_meta".to_string(),
+            "dist/pagefind/wasm.en.pagefind".to_string(),
+        ]);
+        super::verify_pagefind_language("en", &value, &artifacts, &mut report);
+        assert_eq!(report.issues.len(), 2, "{:?}", report.issues);
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_unavailable_ids_keep_filename_and_valid_lines() {
+        assert!(recover_unavailable_ids(b"", "docs/capabilities.md").is_empty());
+        assert!(
+            recover_unavailable_ids(b"\xff", "project-management/tasks/TSK-238.md")
+                .contains("TSK-238")
+        );
+        assert!(
+            recover_unavailable_ids(b"id: CAP-001\n\xff", "docs/capabilities.md")
+                .contains("CAP-001")
+        );
     }
 }

@@ -232,9 +232,7 @@ fn a_base_git_refuses_is_reported_with_git_s_cause() {
     let said = said(&out);
     assert_ne!(out.status.code(), Some(0), "{said}");
     assert!(
-        said.contains(
-            "could not resolve a base ref (tried: main): git refused it: fatal: replacement"
-        ),
+        said.contains("cannot read revision main: fatal: replacement"),
         "{said}"
     );
     assert!(!said.contains("fetch the base branch"), "{said}");
@@ -331,5 +329,66 @@ fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
     assert!(
         same.contains("it is the hosted verdict only when"),
         "{same}"
+    );
+}
+
+/// The object id git resolves `spec` to in `root`.
+fn object_of(root: &Path, spec: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", spec])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{spec}");
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// Delete the loose object `id`, as a damaged or partial clone lacks it.
+fn remove_object(root: &Path, id: &str) {
+    std::fs::remove_file(root.join(".git/objects").join(&id[..2]).join(&id[2..])).unwrap();
+}
+
+/// Issue 79, end to end: a head policy that cannot be read stops the run
+/// before any check, never read as no policy and passed over.
+#[test]
+fn r24_a_head_policy_that_cannot_be_read_stops_the_run() {
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#,
+    ));
+    let root = dir.path();
+    write(
+        root,
+        POLICY,
+        r#"{"git": {"security_review": "off", "dep_audit": "warn"}}"#,
+    );
+    commit(root, "chore: relax the security review");
+    remove_object(root, &object_of(root, &format!("HEAD:{POLICY}")));
+    let out = ci(root);
+    let text = said(&out);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("cannot read head configuration"), "{text}");
+}
+
+/// Issue 79, end to end: a head tree that cannot be read stops the run,
+/// never read as the setup hook removed.
+#[test]
+fn r24_a_head_tree_that_cannot_be_read_stops_the_run() {
+    let dir = fixture(None);
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, ".codeflow/ci-setup.sh", "export X=1\n");
+    commit(root, "ci: add the setup hook");
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
+    write(root, ".codeflow/ci-setup.sh", "export X=2\n");
+    commit(root, "ci: edit the setup hook");
+    remove_object(root, &object_of(root, "HEAD:.codeflow"));
+    let out = ci(root);
+    let text = said(&out);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("cannot read head configuration"), "{text}");
+    assert!(
+        !text.contains("this change removes .codeflow/ci-setup.sh"),
+        "{text}"
     );
 }

@@ -118,6 +118,7 @@ pub fn skill_catalog(assets: &dyn AssetSource) -> Result<Generated, String> {
     for (name, (src, tiers, trees)) in &skills {
         let text = assets
             .read(&format!("base/{src}"))
+            .map_err(|error| format!("cannot read skill {name}: {error}"))?
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .ok_or_else(|| format!("skill {name} source base/{src} is unreadable"))?;
         let description = skill_description(&text)

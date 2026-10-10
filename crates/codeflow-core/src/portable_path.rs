@@ -47,13 +47,19 @@ pub fn without_verbatim(path: PathBuf) -> PathBuf {
 /// `path` as text with `/` separators: how a repository-relative path is
 /// shown and matched. A backslash is a separator only on Windows; elsewhere
 /// it is part of a file name and stays.
+///
+/// OS text rule (issue 79): the text is a key, never a lossy spelling. A
+/// path that is not valid UTF-8 keeps its exact bytes in the key
+/// ([`crate::git::GitName::storage_key`]), so two different paths never
+/// share one and valid text is unchanged. Show a key to a person with
+/// [`crate::git::display_key`].
 #[must_use]
 pub fn slashed(path: &Path) -> String {
-    let text = path.to_string_lossy();
+    let key = crate::git::GitName::from_os_str(path.as_os_str()).storage_key();
     if cfg!(windows) {
-        text.replace('\\', "/")
+        key.replace('\\', "/")
     } else {
-        text.into_owned()
+        key
     }
 }
 
@@ -68,14 +74,23 @@ pub fn user_home() -> Option<PathBuf> {
 /// when it names another directory, each kept only as an absolute path. On
 /// Windows a Git Bash `HOME` spelled `/c/Users/u` reads as `C:\Users\u`,
 /// and where it differs from `USERPROFILE` both are homes: bash reads
-/// `HOME`, native programs the profile (TSK-242 review round 13).
+/// `HOME`, native programs the profile (TSK-242 review round 13). With
+/// neither set, the home is the account's own, as bash reads it from the
+/// password database for `~` (TSK-238 review round 22).
 #[must_use]
 pub fn user_homes() -> Vec<PathBuf> {
-    homes_from(
+    let homes = homes_from(
         std::env::var_os("HOME"),
         std::env::var_os("USERPROFILE"),
         cfg!(windows),
-    )
+    );
+    if homes.is_empty() {
+        return std::env::home_dir()
+            .filter(|home| home.is_absolute())
+            .into_iter()
+            .collect();
+    }
+    homes
 }
 
 /// The first of [`homes_from`] for this platform, so the order is testable
@@ -97,24 +112,31 @@ pub fn homes_from(
     windows: bool,
 ) -> Vec<PathBuf> {
     let mut homes: Vec<PathBuf> = Vec::new();
+    // OS text rule (issue 79): a value is read as text only when it is
+    // text. One that is not is never a Git Bash drive path, and it equals
+    // another home only byte for byte, so two homes never fold into one.
+    let fold = |text: &str| {
+        let text = text.replace('\\', "/");
+        let text = text.trim_end_matches('/');
+        if windows {
+            text.to_lowercase()
+        } else {
+            text.to_string()
+        }
+    };
     for value in [home, profile].into_iter().flatten() {
-        let text = value.to_string_lossy();
-        let path = match git_bash_drive_path(&text).filter(|_| windows) {
+        let drive = value
+            .to_str()
+            .and_then(git_bash_drive_path)
+            .filter(|_| windows);
+        let path = match drive {
             Some(path) => path,
             None if Path::new(&value).is_absolute() => PathBuf::from(&value),
             None => continue,
         };
-        let same = |other: &PathBuf| {
-            let fold = |p: &Path| {
-                let text = p.to_string_lossy().replace('\\', "/");
-                let text = text.trim_end_matches('/');
-                if windows {
-                    text.to_lowercase()
-                } else {
-                    text.to_string()
-                }
-            };
-            fold(other) == fold(&path)
+        let same = |other: &PathBuf| match (other.to_str(), path.to_str()) {
+            (Some(other), Some(path)) => fold(other) == fold(path),
+            _ => other.as_os_str() == path.as_os_str(),
         };
         if !homes.iter().any(same) {
             homes.push(path);
@@ -127,6 +149,12 @@ pub fn homes_from(
 /// `C:\Users\u` and `/c` is `C:\`. `None` for any other text.
 #[must_use]
 pub fn git_bash_drive_path(text: &str) -> Option<PathBuf> {
+    git_bash_drive_text(text).map(PathBuf::from)
+}
+
+/// [`git_bash_drive_path`] as text: `/c/Users/u` is `C:\Users\u`.
+#[must_use]
+pub fn git_bash_drive_text(text: &str) -> Option<String> {
     let rest = text.strip_prefix('/')?;
     let mut chars = rest.chars();
     let letter = chars.next().filter(char::is_ascii_alphabetic)?;
@@ -135,15 +163,32 @@ pub fn git_bash_drive_path(text: &str) -> Option<PathBuf> {
         return None;
     }
     let below = tail.trim_start_matches('/').replace('/', "\\");
-    Some(PathBuf::from(format!(
-        "{}:\\{below}",
-        letter.to_ascii_uppercase()
-    )))
+    Some(format!("{}:\\{below}", letter.to_ascii_uppercase()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 79: two homes whose names differ only in bytes that are not
+    /// UTF-8 share one lossy spelling, but they are two homes.
+    #[cfg(unix)]
+    #[test]
+    fn homes_that_are_not_text_compare_by_their_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        let a = std::ffi::OsString::from_vec(b"/home/caf\xe9".to_vec());
+        let b = std::ffi::OsString::from_vec(b"/home/caf\xff".to_vec());
+        for windows in [false, true] {
+            assert_eq!(
+                homes_from(Some(a.clone()), Some(b.clone()), windows),
+                [PathBuf::from(&a), PathBuf::from(&b)]
+            );
+            assert_eq!(
+                homes_from(Some(a.clone()), Some(a.clone()), windows),
+                [PathBuf::from(&a)]
+            );
+        }
+    }
 
     #[test]
     fn the_home_is_home_else_userprofile_when_absolute() {

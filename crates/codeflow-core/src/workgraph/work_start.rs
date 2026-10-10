@@ -9,9 +9,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use git2::{Oid, Repository, TreeWalkMode, TreeWalkResult};
+use git2::{Oid, Repository};
 use thiserror::Error;
 
+use crate::git::GitName;
 use crate::workgraph::deps::{parse_dependencies, Dependency, DependencyKind};
 use crate::workgraph::{
     is_canonical_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id,
@@ -245,15 +246,38 @@ pub(crate) struct AnchoredTask {
 ///
 /// `origin/main` wins when present, then `origin/master`, `main`, and
 /// `master`.
-#[must_use]
-pub fn default_work_target(repo_root: &Path) -> Option<String> {
-    let repo = Repository::discover(repo_root).ok()?;
+///
+/// # Errors
+///
+/// Returns an error if an existing conventional target or its repository cannot be read.
+pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
+    let Some(repo) = crate::hooks::repo::open(repo_root).map_err(WorkStartError::Repository)?
+    else {
+        return Ok(None);
+    };
     for target in ["origin/main", "origin/master", "main", "master"] {
-        if target_reference(&repo, target).is_some() {
-            return Some(target.to_string());
+        let reference = if target.starts_with("origin/") {
+            format!("refs/remotes/{target}")
+        } else {
+            format!("refs/heads/{target}")
+        };
+        if reference_commit(&repo, &reference)?.is_some() {
+            return Ok(Some(target.to_string()));
         }
     }
-    None
+    Ok(None)
+}
+
+fn reference_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, WorkStartError> {
+    let reference = match repo.find_reference(name) {
+        Ok(reference) => reference,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
+    reference
+        .peel_to_commit()
+        .map(|commit| Some(commit.id()))
+        .map_err(|error| WorkStartError::Repository(error.to_string()))
 }
 
 /// Resolve a declared target to an available local or remote-tracking ref.
@@ -262,11 +286,20 @@ pub fn default_work_target(repo_root: &Path) -> Option<String> {
 /// checkouts that expose only `origin/main` can verify the same task. A
 /// diverged local branch resolves to the local branch here; callers that
 /// anchor work use [`resolve_work_target_checked`], which refuses it.
-#[must_use]
-pub fn resolve_work_target(repo_root: &Path, declared: Option<&str>) -> Option<String> {
+/// Unreadable target state returns an error; a missing conventional default
+/// is represented separately as `None`.
+///
+/// # Errors
+///
+/// Returns an error if the repository, target or configured upstream cannot be read.
+pub fn resolve_work_target(
+    repo_root: &Path,
+    declared: Option<&str>,
+) -> Result<Option<String>, WorkStartError> {
     match resolve_work_target_checked(repo_root, declared) {
-        Ok(resolved) => resolved.map(|resolved| resolved.target),
-        Err(_) => declared.map(str::to_owned),
+        Ok(resolved) => Ok(resolved.map(|resolved| resolved.target)),
+        Err(WorkStartError::DivergedTarget { .. }) => Ok(declared.map(str::to_owned)),
+        Err(error) => Err(error),
     }
 }
 
@@ -292,40 +325,35 @@ pub fn resolve_work_target_checked(
     repo_root: &Path,
     declared: Option<&str>,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
-    let Some(target) = declared.filter(|value| !value.trim().is_empty()) else {
-        return Ok(default_work_target(repo_root).map(|target| ResolvedWorkTarget { target }));
+    let Some(target) = declared.filter(|value| !value.is_empty()) else {
+        return Ok(default_work_target(repo_root)?.map(|target| ResolvedWorkTarget { target }));
     };
     let plain = |target: String| Ok(Some(ResolvedWorkTarget { target }));
-    let Ok(repo) = Repository::discover(repo_root) else {
-        return plain(target.to_string());
-    };
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let Some(candidates) = target_reference_names(target) else {
         return plain(target.to_string());
-    };
-    let resolves = |name: &str| {
-        repo.find_reference(name)
-            .and_then(|reference| reference.peel_to_commit())
-            .ok()
-            .map(|commit| commit.id())
     };
     // A bare name with a local branch: that branch, unless it is strictly
     // behind the upstream Git has configured for it.
     let local_ref = format!("refs/heads/{target}");
     if candidates.first() == Some(&local_ref) {
-        if let Some(local_id) = resolves(&local_ref) {
+        if let Some(local_id) = reference_commit(&repo, &local_ref)? {
             return local_or_upstream(&repo, target, &local_ref, local_id);
         }
     }
     // Otherwise the first candidate that resolves: an exact full ref, or
     // `origin/<name>` in a checkout with no local branch (a CI clone).
-    match candidates
-        .iter()
-        .find(|candidate| resolves(candidate).is_some())
-    {
-        Some(found) if target.starts_with("refs/") => plain(found.clone()),
-        Some(found) => plain(reference_display_name(found)),
-        None => plain(target.to_string()),
+    for found in candidates {
+        if reference_commit(&repo, &found)?.is_some() {
+            return if target.starts_with("refs/") {
+                plain(found)
+            } else {
+                plain(reference_display_name(&found))
+            };
+        }
     }
+    plain(target.to_string())
 }
 
 /// The local branch `local`, or its configured upstream when the local
@@ -345,24 +373,29 @@ fn local_or_upstream(
             target: local.to_string(),
         }))
     };
-    let Some(upstream_ref) = repo
-        .branch_upstream_name(local_ref)
-        .ok()
-        .and_then(|name| name.as_str().ok().map(str::to_owned))
-        .or_else(|| {
+    let upstream_ref = match repo.branch_upstream_name(local_ref) {
+        Ok(name) => Some(
+            name.as_str()
+                .map_err(|error| {
+                    WorkStartError::Repository(format!(
+                        "configured upstream is not valid UTF-8: {error}"
+                    ))
+                })?
+                .to_owned(),
+        ),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
             let remote = format!("refs/remotes/origin/{local}");
-            repo.find_reference(&remote).ok().map(|_| remote)
-        })
-    else {
+            reference_commit(repo, &remote)?.map(|_| remote)
+        }
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
+    let Some(upstream_ref) = upstream_ref else {
         return keep();
     };
-    let Some(upstream_id) = repo
-        .find_reference(&upstream_ref)
-        .and_then(|reference| reference.peel_to_commit())
-        .ok()
-        .map(|commit| commit.id())
-    else {
-        return keep();
+    let Some(upstream_id) = reference_commit(repo, &upstream_ref)? else {
+        return Err(WorkStartError::Repository(format!(
+            "configured upstream {upstream_ref} does not resolve"
+        )));
     };
     if upstream_id == local_id {
         return keep();
@@ -391,7 +424,6 @@ fn local_or_upstream(
 /// durable records.
 #[must_use]
 pub fn is_stable_work_target(target: &str) -> bool {
-    let target = target.trim();
     target_reference_names(target).is_some()
         && !looks_like_full_object_id(target)
         && !logical_target(target).starts_with("task/")
@@ -537,22 +569,29 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
             return Ok(true);
         }
     }
-    let Ok(entry) = tree.get_path(Path::new("project-management")) else {
-        return Ok(false);
+    // Only a tree without the directory has no records; a read failure is
+    // the error, never tracking off (issue 79).
+    let entry = match tree.get_path(Path::new("project-management")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(error) => return Err(format!("{revision}: {}", error.message())),
     };
     let home = repo
         .find_tree(entry.id())
         .map_err(|_| format!("{revision}: project-management is not a directory"))?;
     let mut found = false;
-    home.walk(TreeWalkMode::PreOrder, |root, entry| {
-        let path = format!("project-management/{root}{}", entry.name().unwrap_or(""));
+    crate::git::walk_tree(&repo, &home, &mut |name, _| {
+        // A record path is valid text; any other name is not a record.
+        let Ok(text) = name.rule_text() else {
+            return crate::git::Walk::Continue;
+        };
+        let path = format!("project-management/{text}");
         if record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
             found = true;
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
-        TreeWalkResult::Ok
+        crate::git::Walk::Continue
     })
-    .or_else(|error| if found { Ok(()) } else { Err(error) })
     .map_err(|error| error.to_string())?;
     Ok(found)
 }
@@ -592,7 +631,37 @@ pub fn check_epic_line_with_adoptions(
     base: &str,
     head: &str,
 ) -> Result<(String, super::line_adoption::AdoptionReport), String> {
-    let epic_id = super::line_adoption::epic_id(branch)?;
+    match epic_line_proof(repo_root, branch, base_ref, base, head)? {
+        EpicLineProof::Verified(epic, adoptions) => Ok((epic, adoptions)),
+        EpicLineProof::NotLine(reason) => Err(reason),
+    }
+}
+
+/// A readable line can fail the epic criteria without a reader failing.
+#[derive(Debug)]
+pub enum EpicLineProof {
+    /// The epic line, with the direct commits its landed entries adopt.
+    Verified(String, super::line_adoption::AdoptionReport),
+    NotLine(String),
+}
+
+/// Obtain the epic-line evidence, preserving a negative proof as a value.
+///
+/// # Errors
+/// Repository, revision, record or history evidence could not be read,
+/// including the epic's `line_adoptions` when a direct commit needs them.
+pub fn epic_line_proof(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<EpicLineProof, String> {
+    // The name grammar reads nothing, so its refusal is a negative proof.
+    let epic_id = match super::line_adoption::epic_id(branch) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineProof::NotLine(reason)),
+    };
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let commit = |revision: &str| {
         repo.revparse_single(revision)
@@ -615,13 +684,20 @@ pub fn check_epic_line_with_adoptions(
     // range and the first-parent walk.
     let at_base = records_at(target_tip)?;
     let at_head = records_at(head_commit.id())?;
-    let epic = at_base
+    let Some(epic) = at_base
         .get(epic_id)
         .or_else(|| at_head.get(epic_id))
         .filter(|record| record.kind == RecordKind::Epic)
-        .ok_or_else(|| format!("'{branch}' names {epic_id}, which has no epic record"))?;
+    else {
+        return Ok(EpicLineProof::NotLine(format!(
+            "'{branch}' names {epic_id}, which has no epic record"
+        )));
+    };
     if matches!(epic.status.as_str(), "cancelled" | "archived") {
-        return Err(format!("{epic_id} is {}", epic.status));
+        return Ok(EpicLineProof::NotLine(format!(
+            "{epic_id} is {}",
+            epic.status
+        )));
     }
     let bound = at_head.values().chain(at_base.values()).any(|record| {
         record.kind == RecordKind::Task
@@ -632,15 +708,18 @@ pub fn check_epic_line_with_adoptions(
                 .is_some_and(|target| logical_target(target) == branch)
     });
     if !bound {
-        return Err(format!("no task of {epic_id} targets '{branch}'"));
+        return Ok(EpicLineProof::NotLine(format!(
+            "no task of {epic_id} targets '{branch}'"
+        )));
     }
-    let destination =
-        default_work_target(repo_root).ok_or("no main or master branch to land the line on")?;
+    let destination = default_work_target(repo_root)
+        .map_err(|error| error.to_string())?
+        .ok_or("no main or master branch to land the line on")?;
     if logical_target(base_ref) != logical_target(&destination) {
-        return Err(format!(
+        return Ok(EpicLineProof::NotLine(format!(
             "'{branch}' lands on '{}', not '{base_ref}'",
             logical_target(&destination)
-        ));
+        )));
     }
     let adoptions = super::line_adoption::check_range(
         repo_root,
@@ -650,9 +729,14 @@ pub fn check_epic_line_with_adoptions(
         &head_commit.id().to_string(),
     )?;
     if let Some(refusal) = adoptions.refusal(branch, epic_id) {
-        return Err(refusal);
+        // Entries that cannot be read leave the direct commits unproven,
+        // which is a reader failure, never a line proven not to qualify.
+        if adoptions.record_error.is_some() {
+            return Err(refusal);
+        }
+        return Ok(EpicLineProof::NotLine(refusal));
     }
-    Ok((epic_id.to_string(), adoptions))
+    Ok(EpicLineProof::Verified(epic_id.to_string(), adoptions))
 }
 
 /// Whether a stable target resolves to a real local or remote-tracking branch.
@@ -663,7 +747,7 @@ pub fn work_target_resolves(repo_root: &Path, target: &str) -> bool {
     }
     Repository::discover(repo_root)
         .ok()
-        .is_some_and(|repo| target_reference(&repo, target).is_some())
+        .is_some_and(|repo| target_reference(&repo, target).is_ok_and(|target| target.is_some()))
 }
 
 /// Read a task's declared integration target from the visible checkout.
@@ -671,17 +755,25 @@ pub fn work_target_resolves(repo_root: &Path, target: &str) -> bool {
 /// This is intentionally read-only. It accepts canonical flat records and the
 /// historical nested task layout so hooks and CI can share the same target
 /// selection without owning harness- or branch-management state.
-#[must_use]
-pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
+///
+/// # Errors
+///
+/// Returns an error if the task inventory or matching record cannot be read.
+pub fn declared_work_target(
+    repo_root: &Path,
+    task_id: &str,
+) -> Result<Option<String>, WorkStartError> {
     let pm_root = repo_root.join("project-management");
-    crate::workgraph::layout::task_record_files(&pm_root)
-        .into_iter()
-        .find(|path| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| stem == task_id)
-        })
-        .and_then(|path| declared_work_target_at(&path))
+    let files = crate::workgraph::layout::task_record_files(&pm_root)
+        .map_err(|error| WorkStartError::InvalidGraph(error.to_string()))?;
+    match files.into_iter().find(|path| {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem == task_id)
+    }) {
+        Some(path) => declared_work_target_at(&path),
+        None => Ok(None),
+    }
 }
 
 /// Read a work branch's target from the pushed revision, not the checkout.
@@ -697,7 +789,7 @@ pub fn declared_work_target_at_revision(
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
-    let Some(suffix) = work_branch_suffix(repo_root, branch) else {
+    let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
     let repo = Repository::discover(repo_root)
@@ -719,17 +811,19 @@ pub fn declared_work_target_at_revision(
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
         .max_by_key(|record| record.id.len())
         .and_then(|record| record.integration_target.as_deref())
-        .filter(|target| !target.trim().is_empty())
-        .map(|target| logical_target(target.trim()).to_owned()))
+        .filter(|target| !target.is_empty())
+        .map(|target| logical_target(target).to_owned()))
 }
 
 /// The `integration_target` the task record at `path` declares.
-pub(crate) fn declared_work_target_at(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|content| parse_record(&content, RecordKind::Task).ok())
-        .and_then(|record| record.integration_target)
-        .filter(|target| !target.trim().is_empty())
+pub(crate) fn declared_work_target_at(path: &Path) -> Result<Option<String>, WorkStartError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        WorkStartError::InvalidGraph(format!("cannot read {}: {error}", path.display()))
+    })?;
+    let record = parse_record(&content, RecordKind::Task).map_err(WorkStartError::InvalidGraph)?;
+    Ok(record
+        .integration_target
+        .filter(|target| !target.is_empty()))
 }
 
 /// Branch prefixes that never carry a task id: planning branches create
@@ -738,20 +832,24 @@ const NON_WORK_PREFIXES: [&str; 2] = ["plan/", "integration/"];
 
 /// The part of `branch` after a sanctioned work prefix: any policy branch
 /// prefix except `plan/` and `integration/` (SPC-013 R-110).
-fn work_branch_suffix<'b>(repo_root: &Path, branch: &'b str) -> Option<&'b str> {
-    work_suffix(&work_prefixes(repo_root), branch)
+fn work_branch_suffix<'b>(
+    repo_root: &Path,
+    branch: &'b str,
+) -> Result<Option<&'b str>, WorkStartError> {
+    Ok(work_suffix(&work_prefixes(repo_root)?, branch))
 }
 
 /// The sanctioned work prefixes of the project's policy: every
 /// `git.branch_prefixes` entry except `plan/` and `integration/`.
-pub(crate) fn work_prefixes(repo_root: &Path) -> Vec<String> {
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
-    policy
+pub(crate) fn work_prefixes(repo_root: &Path) -> Result<Vec<String>, WorkStartError> {
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)
+        .map_err(WorkStartError::InvalidGraph)?;
+    Ok(policy
         .git
         .branch_prefixes
         .into_iter()
         .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
-        .collect()
+        .collect())
 }
 
 /// The part of `branch` after one of `prefixes`.
@@ -761,29 +859,62 @@ pub(crate) fn work_suffix<'b>(prefixes: &[String], branch: &'b str) -> Option<&'
         .find_map(|prefix| branch.strip_prefix(prefix.as_str()))
 }
 
+/// [`work_suffix`] over exact bytes: the part of `branch` after one of
+/// `prefixes`, whatever the rest of the name holds.
+pub(crate) fn work_suffix_name(prefixes: &[String], branch: &GitName) -> Option<GitName> {
+    prefixes
+        .iter()
+        .find_map(|prefix| branch.strip_prefix(prefix.as_bytes()))
+}
+
+/// The longest of `ids` that `suffix` starts with, followed by `-`, read from
+/// bytes: `task/TSK-1-caf\xe9` still claims `TSK-1`.
+pub(crate) fn carried_task_id_name(
+    suffix: &GitName,
+    ids: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    ids.iter()
+        .filter(|id| suffix.starts_with(format!("{id}-").as_bytes()))
+        .max_by_key(|id| id.len())
+        .cloned()
+}
+
 /// Resolve the durable task id a work branch carries,
 /// `<prefix>/TSK-NNN-<slug>` on any sanctioned work prefix (`task/`, `fix/`,
 /// `feat/`, `spike/` and the rest of `git.branch_prefixes`).
 ///
 /// The visible workgraph is the source of truth, which avoids baking legacy
 /// or future id shapes into branch parsing.
-#[must_use]
-pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
-    let suffix = work_branch_suffix(repo_root, branch)?;
-    carried_task_id(suffix, &visible_task_ids(repo_root))
+///
+/// # Errors
+///
+/// Returns an error if work prefixes or the task inventory cannot be read.
+pub fn task_id_from_branch(
+    repo_root: &Path,
+    branch: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
+        return Ok(None);
+    };
+    Ok(carried_task_id(suffix, &visible_task_ids(repo_root)?))
 }
 
 /// The task ids of the record files visible in the checkout.
-fn visible_task_ids(repo_root: &Path) -> std::collections::BTreeSet<String> {
-    crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
-        .into_iter()
-        .filter_map(|path| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(str::to_owned)
-        })
-        .filter(|id| is_valid_task_format_id(id))
-        .collect()
+fn visible_task_ids(
+    repo_root: &Path,
+) -> Result<std::collections::BTreeSet<String>, WorkStartError> {
+    Ok(
+        crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
+            .map_err(|error| WorkStartError::InvalidGraph(error.to_string()))?
+            .into_iter()
+            .filter_map(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_owned)
+            })
+            .filter(|id| is_valid_task_format_id(id))
+            .collect(),
+    )
 }
 
 /// The longest of `ids` that `suffix` starts with, followed by `-`.
@@ -805,7 +936,7 @@ type TaskPaths = Result<BTreeMap<String, String>, String>;
 /// walks the refs and the record files again per branch.
 pub(crate) struct PinBranches {
     /// Task id, then branch name without its remote, then the tips it has.
-    tips: BTreeMap<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>,
+    tips: BTreeMap<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>,
     /// A branch of the task whose tip could not be read.
     unreadable: BTreeMap<String, String>,
     /// The task records the graph at a revision holds, by id with their
@@ -821,22 +952,28 @@ impl PinBranches {
     /// # Errors
     /// Returns the reason the branches cannot be listed.
     pub(crate) fn read(repo: &Repository, root: &Path) -> Result<Self, String> {
-        let prefixes = work_prefixes(root);
-        let ids = visible_task_ids(root);
-        let mut tips = BTreeMap::<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>::new();
+        let prefixes = work_prefixes(root).map_err(|error| error.to_string())?;
+        let ids = visible_task_ids(root).map_err(|error| error.to_string())?;
+        let mut tips =
+            BTreeMap::<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>::new();
         let mut unreadable = BTreeMap::new();
+        let remotes = crate::git::name::remote_names(repo).map_err(|e| e.to_string())?;
         for branch in repo.branches(None).map_err(|e| e.to_string())? {
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
-            let Some(name) = branch.name().map_err(|e| e.to_string())? else {
-                continue;
-            };
+            // OS text rule (issue 79): the name is exact bytes, matched
+            // against work prefixes and task ids by prefix, so a branch that
+            // is not valid UTF-8 neither fails the listing nor hides a claim
+            // on its task.
+            let name = crate::git::name::branch_name(&branch).map_err(|e| e.to_string())?;
             let name = if kind == git2::BranchType::Remote {
-                name.split_once('/').map_or(name, |(_, name)| name)
+                // `<remote>/<branch>`: a remote name may hold `/`, so the
+                // configured remotes decide where the branch starts.
+                crate::git::tracking_branch(&name, &remotes).unwrap_or(name)
             } else {
                 name
             };
-            let Some(task_id) =
-                work_suffix(&prefixes, name).and_then(|suffix| carried_task_id(suffix, &ids))
+            let Some(task_id) = work_suffix_name(&prefixes, &name)
+                .and_then(|suffix| carried_task_id_name(&suffix, &ids))
             else {
                 continue;
             };
@@ -844,7 +981,7 @@ impl PinBranches {
                 Ok(commit) => {
                     tips.entry(task_id)
                         .or_default()
-                        .entry(name.to_string())
+                        .entry(name)
                         .or_default()
                         .insert(commit.id());
                 }
@@ -883,7 +1020,7 @@ impl PinBranches {
     fn of(
         &self,
         task_id: &str,
-    ) -> Result<impl Iterator<Item = (&String, &std::collections::BTreeSet<Oid>)>, String> {
+    ) -> Result<impl Iterator<Item = (&GitName, &std::collections::BTreeSet<Oid>)>, String> {
         if let Some(error) = self.unreadable.get(task_id) {
             return Err(error.clone());
         }
@@ -902,7 +1039,7 @@ impl PinBranches {
     ///
     /// # Errors
     /// Refuses a pin that is not the unique predecessor branch tip.
-    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<String, String> {
+    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<GitName, String> {
         let matching: Vec<_> = self
             .of(&pin.task_id)?
             .filter(|(_, tips)| tips.contains(&pin.revision))
@@ -978,7 +1115,7 @@ impl PinBranches {
         &self,
         repo: &Repository,
         pin: &ReviewedPin,
-    ) -> Result<String, String> {
+    ) -> Result<GitName, String> {
         let name = self.pin_name(pin)?;
         self.pin_holds_record(repo, pin)?;
         Ok(name)
@@ -988,17 +1125,26 @@ impl PinBranches {
 /// The task id a work branch carries, read from the records at `head`
 /// rather than the checkout: CI judges a pull request head from a base
 /// checkout, where the head's own standalone record is not on disk.
-#[must_use]
-pub fn task_id_from_branch_at(repo_root: &Path, branch: &str, head: &str) -> Option<String> {
-    let suffix = work_branch_suffix(repo_root, branch)?;
-    let repo = Repository::discover(repo_root).ok()?;
+///
+/// # Errors
+///
+/// Returns an error if work prefixes, the revision or its task records cannot be read.
+pub fn task_id_from_branch_at(
+    repo_root: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
+        return Ok(None);
+    };
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     let tree = repo
         .revparse_single(head)
         .and_then(|object| object.peel_to_commit())
         .and_then(|commit| commit.tree())
-        .ok()?;
-    records_from_tree(&repo, &tree)
-        .ok()?
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    Ok(records_from_tree(&repo, &tree)?
         .into_iter()
         .filter(|(id, record)| {
             record.kind == RecordKind::Task
@@ -1006,19 +1152,24 @@ pub fn task_id_from_branch_at(repo_root: &Path, branch: &str, head: &str) -> Opt
                 && suffix.starts_with(&format!("{id}-"))
         })
         .map(|(id, _)| id)
-        .max_by_key(String::len)
+        .max_by_key(String::len))
 }
 
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
 /// whether or not a record for it is visible. A branch that claims an id the
 /// workgraph does not hold is refused rather than treated as untracked.
-#[must_use]
-pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> bool {
-    work_branch_suffix(repo_root, branch).is_some_and(|suffix| {
-        suffix
-            .strip_prefix("TSK-")
-            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-    })
+///
+/// # Errors
+///
+/// Returns an error if work prefixes or the task inventory cannot be read.
+pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> Result<bool, WorkStartError> {
+    Ok(
+        work_branch_suffix(repo_root, branch)?.is_some_and(|suffix| {
+            suffix
+                .strip_prefix("TSK-")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        }),
+    )
 }
 
 /// A reviewed predecessor pin. The lookup names its exact branch and commit;
@@ -1104,12 +1255,15 @@ pub(crate) fn reviewed_pins_in(
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
-        // Read only when a pull request with this head is found.
+        // The hosted review is found by branch name, which needs text.
+        let branch_text = branch.rule_text().map_err(|error| error.to_string())?;
+        // Read only when a pull request with this head is found. A record
+        // path that cannot be read names only the pin itself, the strict side.
         let named = || match branches.record_path(repo, &pin) {
             Ok(Some(path)) => reviewable_revisions(repo, &pin, &path),
             _ => vec![pin.revision.to_string()],
         };
-        if !lookup(&branch, &revision.to_string(), &named)? {
+        if !lookup(branch_text, &revision.to_string(), &named)? {
             return Err(format!(
                 "no review names {task_id}@{sha}, or a commit it follows only by {task_id}'s status and Closeout; cannot verify review for this pin"
             ));
@@ -1146,7 +1300,8 @@ pub(crate) fn reviewable_revisions(
         let Ok(parent) = commit.parent_id(0) else {
             break;
         };
-        let Some(content) = super::acceptance::blob_at(repo, cursor, path) else {
+        // An unreadable record stops the walk: fewer revisions are named.
+        let Ok(Some(content)) = super::acceptance::blob_at(repo, cursor, path) else {
             break;
         };
         if commit.parent_count() != 1
@@ -1160,7 +1315,7 @@ pub(crate) fn reviewable_revisions(
     named
 }
 
-fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
+fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
     PinBranches::once(&mut None, repo)?.pin_branch(repo, pin)
 }
 
@@ -1212,12 +1367,10 @@ pub fn check_work_start_on(
     let head = repo
         .head()
         .map_err(|e| WorkStartError::Repository(e.to_string()))?;
-    let branch = head
-        .shorthand()
-        .map_err(|e| WorkStartError::Repository(e.to_string()))?;
-    if task_id_from_branch(root, branch).as_deref() != Some(task_id) {
+    let branch = head_branch_text(&head, task_id)?;
+    if task_id_from_branch(root, &branch)?.as_deref() != Some(task_id) {
         return Err(WorkStartError::Branch {
-            branch: branch.into(),
+            branch: branch.clone(),
             task_id: task_id.into(),
         });
     }
@@ -1238,16 +1391,28 @@ pub fn check_work_start_on(
             )));
         }
     }
-    let branch = repo
-        .head()
-        .ok()
-        .and_then(|r| r.shorthand().ok().map(str::to_string))
-        .unwrap_or_default();
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
     let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;
     report.branch = branch;
     Ok(report)
+}
+
+/// The checked-out branch as text for the work-start rules.
+///
+/// OS text rule (issue 79): the rules match the branch against sanctioned work
+/// prefixes and the task id, which need text. A branch that is not valid UTF-8
+/// is refused as not carrying the task, with its escaped name shown, instead
+/// of being matched on a lossy spelling.
+fn head_branch_text(head: &git2::Reference<'_>, task_id: &str) -> Result<String, WorkStartError> {
+    let name = crate::git::name::reference_shorthand(head);
+    match name.rule_text() {
+        Ok(text) => Ok(text.to_string()),
+        Err(_) => Err(WorkStartError::Branch {
+            branch: name.display().to_string(),
+            task_id: task_id.to_string(),
+        }),
+    }
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -1267,10 +1432,7 @@ pub fn check_work_start(
     let head = repo
         .head()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let branch = head
-        .shorthand()
-        .map(str::to_owned)
-        .map_err(|_| WorkStartError::Repository("HEAD is detached".to_string()))?;
+    let branch = head_branch_text(&head, task_id)?;
     check_work_start_for_branch(repo_root, task_id, target, &branch)
 }
 
@@ -1297,7 +1459,7 @@ pub fn check_work_start_for_branch(
         )));
     }
     let expected = format!("{task_id}-");
-    if !work_branch_suffix(repo_root, branch).is_some_and(|suffix| suffix.starts_with(&expected)) {
+    if !work_branch_suffix(repo_root, branch)?.is_some_and(|suffix| suffix.starts_with(&expected)) {
         return Err(WorkStartError::Branch {
             branch: branch.to_string(),
             task_id: task_id.to_string(),
@@ -1327,7 +1489,8 @@ pub fn check_work_start_anchored(
     let branch = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| head_branch_text(&head, task_id))
+        .transpose()?
         .unwrap_or_default();
     check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
 }
@@ -1419,15 +1582,22 @@ pub fn stacked_pins(
         {
             continue;
         }
-        let contained: std::collections::BTreeSet<Oid> = PinBranches::once(&mut branches, &repo)?
-            .tips_of(&dependency.id)?
-            .into_iter()
-            .filter(|tip| {
-                (*tip == head_id || repo.graph_descendant_of(head_id, *tip).unwrap_or(false))
-                    && *tip != merge_base
-                    && !repo.graph_descendant_of(merge_base, *tip).unwrap_or(false)
+        // A tip the head contains and the target does not. An ancestry
+        // that cannot be read refuses (issue 79), never reads as "no".
+        let descends = |of: Oid, ancestor: Oid| {
+            repo.graph_descendant_of(of, ancestor).map_err(|error| {
+                format!("cannot read the ancestry of {ancestor} from {of}: {error}")
             })
-            .collect();
+        };
+        let mut contained = std::collections::BTreeSet::new();
+        for tip in PinBranches::once(&mut branches, &repo)?.tips_of(&dependency.id)? {
+            if (tip == head_id || descends(head_id, tip)?)
+                && tip != merge_base
+                && !descends(merge_base, tip)?
+            {
+                contained.insert(tip);
+            }
+        }
         match contained.len() {
             0 => {}
             1 => values.push(format!(
@@ -1488,7 +1658,8 @@ fn check_task_anchor(
         let current = match head {
             Some(_) => super::lifecycle::Graph::from_revision(&repo, &head_id.to_string())
                 .map_err(WorkStartError::InvalidGraph)?,
-            None => super::lifecycle::Graph::from_worktree(repo_root),
+            None => super::lifecycle::Graph::from_worktree(repo_root)
+                .map_err(WorkStartError::InvalidGraph)?,
         };
         if let (Some(old), Some(now)) = (base.records.get(task_id), current.records.get(task_id)) {
             if now.status == "todo" || super::lifecycle::is_recompletion(Some(old), now) {
@@ -1590,11 +1761,17 @@ fn anchored_records(
     target: &str,
     head_id: Oid,
 ) -> Result<(String, BTreeMap<String, Record>), WorkStartError> {
-    let target_commit =
-        target_reference(repo, target).ok_or_else(|| WorkStartError::Target(target.to_string()))?;
-    let merge_base = repo
-        .merge_base(head_id, target_commit.id())
-        .map_err(|_| WorkStartError::MergeBase(target.to_string()))?;
+    let target_commit = target_reference(repo, target)?
+        .ok_or_else(|| WorkStartError::Target(target.to_string()))?;
+    // Only git's "not found" means the two have no common ancestor; any
+    // other error is a history that could not be read.
+    let merge_base = match repo.merge_base(head_id, target_commit.id()) {
+        Ok(merge_base) => merge_base,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Err(WorkStartError::MergeBase(target.to_string()))
+        }
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
     let commit = repo
         .find_commit(merge_base)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
@@ -1623,7 +1800,7 @@ fn standalone_at_head(
         .ok_or_else(|| WorkStartError::Repository("no working tree".into()))?;
     // The branch names the task by shape; the record itself is read at the
     // head, which need not be the checkout (CI judges from the base).
-    let carries = work_branch_suffix(root, branch)
+    let carries = work_branch_suffix(root, branch)?
         .is_some_and(|suffix| suffix.starts_with(&format!("{task_id}-")));
     if !carries {
         return Err(WorkStartError::TaskNotAnchored(task_id.into()));
@@ -1763,7 +1940,7 @@ fn validate_task_structure(
     match task
         .integration_target
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.is_empty())
     {
         Some(declared_target) if logical_target(declared_target) != logical_target(target) => {
             return Err(WorkStartError::TargetMismatch {
@@ -1924,7 +2101,7 @@ fn code_dependency(
     else {
         return Err(incomplete());
     };
-    let Some(tip) = target_reference(repo, line) else {
+    let Some(tip) = target_reference(repo, line)? else {
         return Err(WorkStartError::DependencyLineUnknown {
             task_id: task_id.to_string(),
             dependency: dependency.to_string(),
@@ -1977,7 +2154,7 @@ fn pinned_dependency(
         .get(&dependency.id)
         .and_then(|record| record.integration_target.clone())
         .unwrap_or_else(|| target.to_string());
-    let Some(tip) = target_reference(repo, &line) else {
+    let Some(tip) = target_reference(repo, &line)? else {
         return Err(WorkStartError::DependencyLineUnknown {
             task_id: task_id.to_string(),
             dependency: dependency.id.clone(),
@@ -2005,6 +2182,25 @@ fn pinned_dependency(
     }
 }
 
+/// Why an object id does not resolve to a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommitLookup {
+    /// It is not an object id, names no object here, is ambiguous, or names
+    /// an object that is not a commit.
+    Unresolved(String),
+    /// The object is here but cannot be read (issue 79): no answer about it.
+    Unreadable(String),
+}
+
+impl CommitLookup {
+    /// The reason, as the lookup's callers show it.
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::Unresolved(reason) | Self::Unreadable(reason) => reason,
+        }
+    }
+}
+
 /// Resolve a pin through the object database, never through refs: a tag or
 /// branch named like the pin cannot redirect it. An abbreviated id must be
 /// unambiguous and name a commit.
@@ -2012,19 +2208,57 @@ pub(crate) fn commit_by_object_id<'repo>(
     repo: &'repo Repository,
     pin: &str,
 ) -> Result<git2::Commit<'repo>, String> {
-    let prefix = git2::Oid::from_str(pin).map_err(|_| "not an object id".to_string())?;
+    lookup_commit_by_object_id(repo, pin).map_err(CommitLookup::reason)
+}
+
+/// [`commit_by_object_id`], telling an id that names no commit here from an
+/// object that cannot be read, which git reports alike when only the
+/// commit lookup is asked.
+pub(crate) fn lookup_commit_by_object_id<'repo>(
+    repo: &'repo Repository,
+    pin: &str,
+) -> Result<git2::Commit<'repo>, CommitLookup> {
+    let unreadable = |error: git2::Error| {
+        CommitLookup::Unreadable(format!("cannot read object {pin}: {}", error.message()))
+    };
+    let prefix = git2::Oid::from_str(pin)
+        .map_err(|_| CommitLookup::Unresolved("not an object id".to_string()))?;
+    let odb = repo.odb().map_err(unreadable)?;
     let full = if pin.len() == 40 {
         prefix
     } else {
-        repo.odb()
-            .and_then(|odb| odb.exists_prefix(prefix, pin.len()))
-            .map_err(|error| match error.code() {
-                git2::ErrorCode::Ambiguous => "an ambiguous abbreviated object id".to_string(),
-                _ => "not an object in this repository".to_string(),
-            })?
+        match odb.exists_prefix(prefix, pin.len()) {
+            Ok(full) => full,
+            Err(error) if error.code() == git2::ErrorCode::Ambiguous => {
+                return Err(CommitLookup::Unresolved(
+                    "an ambiguous abbreviated object id".to_string(),
+                ))
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                return Err(CommitLookup::Unresolved(
+                    "not an object in this repository".to_string(),
+                ))
+            }
+            Err(error) => return Err(unreadable(error)),
+        }
     };
-    repo.find_commit(full)
-        .map_err(|_| "not a commit in this repository".to_string())
+    // Only an object the database proves absent is unresolved; one it
+    // holds but cannot read is no answer.
+    let kind = match odb.read_header(full) {
+        Ok((_, kind)) => kind,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Err(CommitLookup::Unresolved(
+                "not a commit in this repository".to_string(),
+            ))
+        }
+        Err(error) => return Err(unreadable(error)),
+    };
+    if kind != git2::ObjectType::Commit {
+        return Err(CommitLookup::Unresolved(
+            "not a commit in this repository".to_string(),
+        ));
+    }
+    repo.find_commit(full).map_err(unreadable)
 }
 
 pub(crate) fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
@@ -2092,60 +2326,69 @@ pub(crate) fn records_from_tree_matching(
     let odb = repo
         .odb()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let walk_result = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+    let walk_result = crate::git::walk_tree(repo, tree, &mut |name, entry| {
         if failure.is_some() {
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
-        let Ok(name) = entry.name() else {
-            return TreeWalkResult::Ok;
+        // A record path is valid text; a name that is not UTF-8 is never one,
+        // and a tree with such a name is not walked into for records.
+        let Ok(path) = name.rule_text() else {
+            return if entry.kind() == Some(git2::ObjectType::Tree) {
+                crate::git::Walk::SkipTree
+            } else {
+                crate::git::Walk::Continue
+            };
         };
-        let path = format!("{root}{name}");
         // Only the record paths are read (SPC-013 R-103): a tree elsewhere
         // is never loaded, so a partial clone that lacks it still reads.
         if entry.kind() == Some(git2::ObjectType::Tree) {
             return if path == RECORDS_ROOT || path.starts_with(&format!("{RECORDS_ROOT}/")) {
-                TreeWalkResult::Ok
+                crate::git::Walk::Continue
             } else {
-                TreeWalkResult::Skip
+                crate::git::Walk::SkipTree
             };
         }
-        let Some(kind) = record_kind_for_tree_path(&path) else {
-            return TreeWalkResult::Ok;
+        let Some(kind) = record_kind_for_tree_path(path) else {
+            return crate::git::Walk::Continue;
         };
-        if !include(&path, kind) {
-            return TreeWalkResult::Ok;
+        if !include(path, kind) {
+            return crate::git::Walk::Continue;
         }
         // A record's size is read from its object header before its bytes,
         // so a hostile tip cannot make every reader load it.
-        if odb
-            .read_header(entry.id())
-            .is_ok_and(|(size, _)| u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES))
-        {
+        let size = match odb.read_header(entry.id()) {
+            Ok((size, _)) => size,
+            Err(error) => {
+                failure = Some(format!("{path}: cannot read record size: {error}"));
+                return crate::git::Walk::Stop;
+            }
+        };
+        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
             failure = Some(format!(
                 "{path}: record exceeds the 4 MiB bound for a work record"
             ));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
         let Ok(blob) = repo.find_blob(entry.id()) else {
             failure = Some(format!("{path}: cannot read blob"));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         };
         let Ok(content) = std::str::from_utf8(blob.content()) else {
             failure = Some(format!("{path}: record is not UTF-8"));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         };
         match parse_record(content, kind) {
             Ok(record) => {
                 if records.insert(record.id.clone(), record).is_some() {
                     failure = Some(format!("{path}: duplicate work id"));
-                    TreeWalkResult::Abort
+                    crate::git::Walk::Stop
                 } else {
-                    TreeWalkResult::Ok
+                    crate::git::Walk::Continue
                 }
             }
             Err(error) => {
                 failure = Some(format!("{path}: {error}"));
-                TreeWalkResult::Abort
+                crate::git::Walk::Stop
             }
         }
     });
@@ -2194,8 +2437,7 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
         specs: strings(&data, "specs")?,
         depends_on: dependencies(&data)?,
         work_type: string(&data, "work_type"),
-        awaiting_selection: string(&data, "awaiting_selection")
-            .filter(|path| !path.trim().is_empty()),
+        awaiting_selection: string(&data, "awaiting_selection").filter(|path| !path.is_empty()),
         blocker_reason: blocker_reason(content),
         line_adoptions: if kind == RecordKind::Epic {
             super::line_adoption::parse(data.get(key("line_adoptions")))?
@@ -2208,14 +2450,23 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
 pub(crate) fn target_reference<'repo>(
     repo: &'repo Repository,
     target: &str,
-) -> Option<git2::Commit<'repo>> {
-    target_reference_names(target)?
-        .into_iter()
-        .find_map(|name| repo.find_reference(&name).ok()?.peel_to_commit().ok())
+) -> Result<Option<git2::Commit<'repo>>, WorkStartError> {
+    let Some(candidates) = target_reference_names(target) else {
+        return Ok(None);
+    };
+    for name in candidates {
+        if let Some(oid) = reference_commit(repo, &name)? {
+            return repo
+                .find_commit(oid)
+                .map(Some)
+                .map_err(|error| WorkStartError::Repository(error.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
-    if target.is_empty() || target.trim() != target || logical_target(target) == "HEAD" {
+    if target.is_empty() || logical_target(target) == "HEAD" {
         return None;
     }
     let candidates = if target.starts_with("refs/heads/") || target.starts_with("refs/remotes/") {
@@ -2262,7 +2513,7 @@ fn frontmatter(content: &str) -> Option<&str> {
         .or_else(|| content.strip_prefix("---\n"))?;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == "---" {
+        if super::record_text::without_line_ending(line) == "---" {
             return Some(&rest[..offset]);
         }
         offset += line.len();
@@ -2331,7 +2582,7 @@ pub fn review_repository(root: &std::path::Path, branch: &str) -> Result<String,
 /// remote-tracking branch names are listed once, not once per branch.
 pub struct ReviewRepositories {
     repo: Repository,
-    remote_branches: Result<Vec<String>, String>,
+    remote_branches: Result<Vec<GitName>, String>,
 }
 
 impl ReviewRepositories {
@@ -2348,9 +2599,11 @@ impl ReviewRepositories {
                 .map_err(|error| error.to_string())?
             {
                 let (candidate, _) = candidate.map_err(|error| error.to_string())?;
-                if let Some(name) = candidate.name().map_err(|error| error.to_string())? {
-                    names.push(name.to_string());
-                }
+                // OS text rule (issue 79): exact names, compared with a branch
+                // byte for byte.
+                names.push(
+                    crate::git::name::branch_name(&candidate).map_err(|error| error.to_string())?,
+                );
             }
             Ok(names)
         })();
@@ -2367,15 +2620,44 @@ impl ReviewRepositories {
     /// Refuses missing or ambiguous hosted repository identity.
     pub fn repository(&self, branch: &str) -> Result<String, String> {
         let repo = &self.repo;
-        let config = repo.config().map_err(|error| error.to_string())?;
+        // `get_bytes` reads a snapshot, not the live configuration.
+        let config = repo
+            .config()
+            .and_then(|mut config| config.snapshot())
+            .map_err(|error| error.to_string())?;
         let mut names = std::collections::BTreeSet::new();
-        if let Ok(name) = config.get_string(&format!("branch.{branch}.remote")) {
-            names.insert(name);
+        // OS text rule (issue 79): an unset setting is absent, but a value
+        // that is not valid UTF-8 names a remote this check cannot look up,
+        // so it is a refusal, never a fall back to `origin`.
+        match config.get_bytes(&format!("branch.{branch}.remote")) {
+            Ok(bytes) => {
+                let name = GitName::from_bytes(bytes);
+                let text = name.rule_text().map_err(|error| {
+                    format!(
+                        "cannot verify review for this pin: the configured remote is not valid UTF-8 ({})",
+                        error.display()
+                    )
+                })?;
+                names.insert(text.to_string());
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(error.to_string()),
         }
         let suffix = format!("/{branch}");
         for candidate in self.remote_branches.as_ref().map_err(Clone::clone)? {
-            if let Some(name) = candidate.strip_suffix(&suffix) {
-                names.insert(name.to_string());
+            if let Some(remote) = candidate.bytes().strip_suffix(suffix.as_bytes()) {
+                // OS text rule (issue 79): the remote names the hosted
+                // repository, an identity. One that is not valid UTF-8 cannot
+                // be looked up, so the answer is a refusal, never another
+                // remote's repository.
+                let remote = GitName::from_bytes(remote);
+                let remote = remote.rule_text().map_err(|error| {
+                    format!(
+                        "cannot verify review for this pin: a remote name is not valid UTF-8 ({})",
+                        error.display()
+                    )
+                })?;
+                names.insert(remote.to_string());
             }
         }
         if names.is_empty() {
@@ -2423,7 +2705,116 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 
 #[cfg(test)]
 mod tests {
+    /// Issue 79: an object id that names no commit is told apart from a
+    /// commit object that cannot be read, which the lookup used to report
+    /// alike as "not a commit in this repository".
+    #[test]
+    fn r24_an_unreadable_commit_is_not_reported_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(dir.path(), &[(b"a.txt", b"a\n")]);
+        let blob = repo.blob(b"not a commit").unwrap();
+        let id = head.to_string();
+        assert!(super::commit_by_object_id(&repo, &id).is_ok());
+        assert!(super::commit_by_object_id(&repo, &id[..12]).is_ok());
+        assert_eq!(
+            super::commit_by_object_id(&repo, &blob.to_string())
+                .err()
+                .as_deref(),
+            Some("not a commit in this repository")
+        );
+        assert_eq!(
+            super::commit_by_object_id(&repo, &"1".repeat(40))
+                .err()
+                .as_deref(),
+            Some("not a commit in this repository")
+        );
+        assert_eq!(
+            super::commit_by_object_id(&repo, &"1".repeat(12))
+                .err()
+                .as_deref(),
+            Some("not an object in this repository")
+        );
+        let object = repo.path().join("objects").join(&id[..2]).join(&id[2..]);
+        std::fs::remove_file(&object).unwrap();
+        std::fs::write(&object, b"not zlib data").unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        for pin in [id.as_str(), &id[..12]] {
+            let error = super::commit_by_object_id(&repo, pin)
+                .err()
+                .unwrap_or_default();
+            assert!(error.starts_with("cannot read object"), "{pin}: {error}");
+        }
+    }
+
     use super::*;
+
+    /// Round 23: only git's "not found" from the merge-base walk is a
+    /// missing common ancestor; a history object that cannot be read is a
+    /// repository error, which blocks as unreadable tracking state.
+    #[test]
+    fn r23_merge_base_reader_errors_are_repository_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"1")]);
+        crate::git::add_commit(&repo, &[(b"a", b"2")]);
+        let who = git2::Signature::now("Test", "test@example.com").unwrap();
+        let (side, orphan) = {
+            let parent = repo.find_commit(first).unwrap();
+            let tree = parent.tree().unwrap();
+            let side = repo
+                .commit(None, &who, &who, "side", &tree, &[&parent])
+                .unwrap();
+            let orphan = repo.commit(None, &who, &who, "orphan", &tree, &[]).unwrap();
+            (side, orphan)
+        };
+        drop(repo);
+
+        // The control: no common ancestor is the semantic merge-base error.
+        let repo = Repository::open(dir.path()).unwrap();
+        assert!(matches!(
+            anchored_records(&repo, "main", orphan),
+            Err(WorkStartError::MergeBase(_))
+        ));
+        drop(repo);
+
+        // The shared parent's loose object is damaged, so the walk cannot
+        // read it.
+        let hex = first.to_string();
+        let object = dir
+            .path()
+            .join(".git")
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]);
+        let mut permissions = fs::metadata(&object).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&object, permissions).unwrap();
+        fs::write(&object, b"not a zlib stream").unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        match anchored_records(&repo, "main", side) {
+            Err(WorkStartError::Repository(_)) => {}
+            other => panic!("expected a repository error, got {other:?}"),
+        }
+        drop(repo);
+        // A missing ancestor object is also an unreadable history, never a
+        // missing common ancestor.
+        fs::remove_file(&object).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        match anchored_records(&repo, "main", side) {
+            Err(WorkStartError::Repository(_)) => {}
+            other => panic!("expected a repository error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn r16_declared_target_does_not_hide_unreadable_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("project-management/tasks/TSK-001.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"---\nid: TSK-001\n---\n#\xff").unwrap();
+        assert!(declared_work_target(dir.path(), "TSK-001").is_err());
+    }
+
     use std::fs;
     #[cfg(unix)]
     use std::process::Command;
@@ -2453,6 +2844,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::set_permissions(&self.path, self.original.clone());
         }
+    }
+
+    const TASK_TEXT: &[u8] = b"---\nid: TSK-003\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: late\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n";
+
+    /// Issue 79: git2's `Tree::walk` gives the parent path as text and aborts
+    /// the whole walk at a directory whose name is not UTF-8. A record next to
+    /// such a directory, at the root or under `project-management`, is still
+    /// read, and a directory with that name is never taken for a record path.
+    #[test]
+    fn records_are_read_beside_a_directory_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"project-management/tasks/TSK-003.md", TASK_TEXT),
+                (b"project-management/notes\xff/TSK-004.md", TASK_TEXT),
+                (b"src/dir\xff/f.rs", b"x"),
+                (b"project-management/tasks/TSK-005\xff.md", TASK_TEXT),
+            ],
+        );
+        let tree = repo.find_commit(commit).unwrap().tree().unwrap();
+        let records = records_from_tree(&repo, &tree).expect("the walk reaches the record");
+        assert_eq!(records.keys().collect::<Vec<_>>(), ["TSK-003"]);
+        let home = tree.get_path(Path::new("project-management")).unwrap();
+        assert!(home.kind() == Some(git2::ObjectType::Tree));
     }
 
     #[test]
@@ -2603,7 +3019,10 @@ mod tests {
                 task_id: task_id.into(),
                 revision,
             };
-            assert_eq!(branches.pin_branch(&repo, &pin).unwrap(), branch);
+            assert_eq!(
+                branches.pin_branch(&repo, &pin).unwrap(),
+                GitName::from_text(branch)
+            );
         }
         assert_eq!(branches.task_paths.borrow().len(), 1);
     }
@@ -2666,7 +3085,7 @@ mod tests {
             "spike/TSK-002-probe",
         ] {
             assert_eq!(
-                task_id_from_branch(dir.path(), branch).as_deref(),
+                task_id_from_branch(dir.path(), branch).unwrap().as_deref(),
                 Some("TSK-002"),
                 "{branch}"
             );
@@ -2676,11 +3095,15 @@ mod tests {
             assert_eq!(report.work_type.as_deref(), Some("feat"));
         }
         for branch in ["plan/TSK-002-graph", "integration/TSK-002-line", "fix/typo"] {
-            assert_eq!(task_id_from_branch(dir.path(), branch), None, "{branch}");
+            assert_eq!(
+                task_id_from_branch(dir.path(), branch).unwrap(),
+                None,
+                "{branch}"
+            );
         }
-        assert!(branch_claims_task_id(dir.path(), "fix/TSK-404-ghost"));
-        assert!(!branch_claims_task_id(dir.path(), "fix/typo"));
-        assert!(!branch_claims_task_id(dir.path(), "plan/TSK-404-new"));
+        assert!(branch_claims_task_id(dir.path(), "fix/TSK-404-ghost").unwrap());
+        assert!(!branch_claims_task_id(dir.path(), "fix/typo").unwrap());
+        assert!(!branch_claims_task_id(dir.path(), "plan/TSK-404-new").unwrap());
         assert!(matches!(
             check_work_start_for_branch(dir.path(), "TSK-002", "main", "fix/TSK-001-other"),
             Err(WorkStartError::Branch { .. })
@@ -2759,7 +3182,9 @@ mod tests {
     fn declared_target_is_read_from_current_record() {
         let dir = fixture();
         assert_eq!(
-            declared_work_target(dir.path(), "TSK-002").as_deref(),
+            declared_work_target(dir.path(), "TSK-002")
+                .unwrap()
+                .as_deref(),
             Some("main")
         );
     }
@@ -2816,6 +3241,49 @@ mod tests {
             );
         }
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_configured_upstream_never_falls_back_to_origin() {
+        let dir = tracking_fixture(false, true);
+        let repo = Repository::open(dir.path()).unwrap();
+        let oid = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let mut packed = format!("{oid} refs/heads/upstream-").into_bytes();
+        packed.extend_from_slice(b"\xff\n");
+        std::fs::write(repo.path().join("packed-refs"), packed).unwrap();
+        let config_path = repo.path().join("config");
+        let mut config = std::fs::read(&config_path).unwrap();
+        config.extend_from_slice(
+            b"\n[branch \"main\"]\nremote = .\nmerge = refs/heads/upstream-\xff\n",
+        );
+        std::fs::write(config_path, config).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let upstream = repo.branch_upstream_name("refs/heads/main").unwrap();
+        assert!(
+            upstream.as_str().is_err(),
+            "fixture must exercise failed decoding"
+        );
+        assert!(resolve_work_target_checked(dir.path(), Some("main")).is_err());
+        assert!(resolve_work_target(dir.path(), Some("main")).is_err());
+    }
+
+    #[test]
+    fn target_names_preserve_unicode_whitespace() {
+        let dir = fixture();
+        for name in ["release\u{a0}", "\u{a0}"] {
+            git(dir.path(), &["branch", name]);
+            assert!(is_stable_work_target(name));
+            let resolved = resolve_work_target_checked(dir.path(), Some(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(resolved.target, name);
+            assert!(
+                target_reference(&Repository::open(dir.path()).unwrap(), name)
+                    .unwrap()
+                    .is_some()
+            );
+        }
     }
 
     #[test]
@@ -2884,7 +3352,10 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.target, "refs/heads/origin/main");
         let repo = Repository::discover(dir.path()).unwrap();
-        let anchored = target_reference(&repo, &resolved.target).unwrap().id();
+        let anchored = target_reference(&repo, &resolved.target)
+            .unwrap()
+            .unwrap()
+            .id();
         let local_upstream = repo
             .find_reference("refs/heads/origin/main")
             .unwrap()
@@ -2934,7 +3405,9 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.target, "refs/remotes/origin/main");
         assert_eq!(
-            resolve_work_target(dir.path(), Some("main")).as_deref(),
+            resolve_work_target(dir.path(), Some("main"))
+                .unwrap()
+                .as_deref(),
             Some("refs/remotes/origin/main")
         );
     }
@@ -2970,7 +3443,9 @@ mod tests {
         );
         // The unchecked resolver keeps its old answer for non-anchoring callers.
         assert_eq!(
-            resolve_work_target(dir.path(), Some("main")).as_deref(),
+            resolve_work_target(dir.path(), Some("main"))
+                .unwrap()
+                .as_deref(),
             Some("main")
         );
     }
@@ -2983,7 +3458,9 @@ mod tests {
             &["update-ref", "refs/remotes/origin/release", "HEAD"],
         );
         assert_eq!(
-            resolve_work_target(dir.path(), Some("release")).as_deref(),
+            resolve_work_target(dir.path(), Some("release"))
+                .unwrap()
+                .as_deref(),
             Some("origin/release")
         );
         git(
@@ -2991,7 +3468,9 @@ mod tests {
             &["update-ref", "refs/remotes/upstream/release", "HEAD"],
         );
         assert_eq!(
-            resolve_work_target(dir.path(), Some("refs/remotes/upstream/release")).as_deref(),
+            resolve_work_target(dir.path(), Some("refs/remotes/upstream/release"))
+                .unwrap()
+                .as_deref(),
             Some("refs/remotes/upstream/release")
         );
         assert!(work_target_resolves(dir.path(), "release"));
@@ -3391,6 +3870,67 @@ permission_preset = "strict"
         let error = check_work_start(dir.path(), "TSK-002", "main").unwrap_err();
         assert!(matches!(error, WorkStartError::InvalidGraph(_)));
         assert!(error.to_string().contains("duplicate work id"));
+    }
+
+    /// Review finding on issue 79: a remote whose name is not valid UTF-8 and
+    /// that carries the branch cannot name a hosted repository, so the lookup
+    /// refuses instead of choosing another remote.
+    #[test]
+    fn a_remote_that_is_not_utf8_has_no_hosted_repository_to_guess() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_refs(dir.path(), &[b"refs/remotes/caf\xe9/task/TSK-001-x"]);
+        let repositories = ReviewRepositories::open(dir.path()).unwrap();
+        let error = repositories.repository("task/TSK-001-x").unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Round six on issue 79: a `branch.<name>.remote` that is not valid UTF-8
+    /// is a refusal, never a fall back to `origin` (another repository).
+    #[test]
+    fn a_configured_remote_that_is_not_utf8_is_refused_not_replaced_by_origin() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_refs(dir.path(), &[b"refs/heads/task/TSK-001-x"]);
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(
+                b"[remote \"origin\"]\n\turl = https://github.com/wrong/owner.git\n\
+                  [branch \"task/TSK-001-x\"]\n\tremote = caf\xff\n",
+            )
+            .unwrap();
+        let repositories = ReviewRepositories::open(dir.path()).unwrap();
+        let error = repositories.repository("task/TSK-001-x").unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Review finding on issue 79: one branch whose name is not valid UTF-8
+    /// failed the whole listing of work branches. It is read as `GitName` bytes.
+    #[test]
+    fn a_branch_that_is_not_utf8_does_not_fail_the_branch_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/task/TSK-001-caf\xe9", b"refs/heads/other\xff"],
+        );
+        assert!(PinBranches::read(&repo, dir.path()).is_ok());
+    }
+    #[test]
+    fn r16_unreadable_local_target_cannot_fall_back_to_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        repo.reference("refs/remotes/origin/main", oid, true, "fixture")
+            .unwrap();
+        std::fs::create_dir_all(repo.path().join("refs/heads")).unwrap();
+        std::fs::write(
+            repo.path().join("refs/heads/main"),
+            "1111111111111111111111111111111111111111\n",
+        )
+        .unwrap();
+        assert!(target_reference(&repo, "main").is_err());
+        assert!(resolve_work_target_checked(dir.path(), Some("main")).is_err());
     }
 
     /// TSK-248 AC-1 (issue 85): a direct commit on an epic line is accepted

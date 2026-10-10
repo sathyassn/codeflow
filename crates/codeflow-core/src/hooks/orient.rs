@@ -100,7 +100,7 @@ fn enabled(project_toml: Option<&toml::Value>) -> bool {
 fn project_name(root: &Path) -> String {
     root.file_name().map_or_else(
         || "project".to_string(),
-        |n| n.to_string_lossy().to_string(),
+        |n| crate::git::GitName::from_os_str(n).display().to_string(),
     )
 }
 
@@ -166,12 +166,17 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn branch_line(root: &Path) -> Option<String> {
-    let info = RepoInfo::discover(root)?;
-    let policy = Policy::load(root);
-    let branch = if info.branch.is_empty() {
-        "(detached)".to_string()
-    } else {
-        info.branch.clone()
+    let info = match RepoInfo::discover(root) {
+        Ok(info) => info?,
+        Err(error) => return Some(format!("branch cannot be read: {error}")),
+    };
+    let policy = match Policy::load(root) {
+        Ok(policy) => policy,
+        Err(error) => return Some(format!("branch policy cannot be read: {error}")),
+    };
+    let branch = match &info.branch_name {
+        None => "(detached)".to_string(),
+        Some(name) => name.display().to_string(),
     };
     let kind = if info.is_worktree {
         "worktree"
@@ -273,7 +278,9 @@ fn recent_adrs(root: &Path, n: usize) -> Vec<String> {
     };
     let mut names: Vec<String> = entries
         .filter_map(std::result::Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_string())
+        // A title is read by joining the name back, so a name that is not
+        // valid UTF-8 is left out (OS text rule, issue 79).
+        .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| {
             std::path::Path::new(n)
                 .extension()
@@ -308,7 +315,10 @@ fn recent_adrs(root: &Path, n: usize) -> Vec<String> {
 fn gates_line(root: &Path) -> String {
     let mark = |on: bool| if on { "✓" } else { "✗" };
 
-    let hooks_dir = git_hooks_dir(root);
+    let hooks_dir = match git_hooks_dir(root) {
+        Ok(path) => path,
+        Err(error) => return format!("gates: cannot read active hooks: {error}"),
+    };
     let hook_wired = |name: &str| hooks_dir.as_ref().is_some_and(|d| d.join(name).exists());
 
     let settings =
@@ -331,15 +341,30 @@ fn gates_line(root: &Path) -> String {
 /// Resolve the active hooks directory (`core.hooksPath` or `<git>/hooks`).
 /// Shared with `doctor`'s hooks check so both surfaces resolve wiring the
 /// same way.
-pub(crate) fn git_hooks_dir(root: &Path) -> Option<std::path::PathBuf> {
-    let repo = super::repo::open(root)?;
-    if let Ok(config) = repo.config() {
-        if let Ok(path) = config.get_string("core.hookspath") {
-            let p = std::path::PathBuf::from(&path);
-            return Some(if p.is_absolute() { p } else { root.join(p) });
+pub(crate) fn git_hooks_dir(root: &Path) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(None);
+    };
+    let config = repo
+        .config()
+        .and_then(|mut config| config.snapshot())
+        .map_err(|error| format!("cannot read hook configuration: {error}"))?;
+    match config.get_bytes("core.hookspath") {
+        Ok(bytes) => {
+            let path = crate::git::GitName::from_bytes(bytes)
+                .os_path()
+                .map_err(|error| error.to_string())?;
+            Ok(Some(if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }))
         }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            Ok(Some(repo.commondir().join("hooks")))
+        }
+        Err(error) => Err(format!("cannot read core.hooksPath: {error}")),
     }
-    Some(repo.commondir().join("hooks"))
 }
 
 fn pointer_paths(root: &Path) -> Vec<String> {
@@ -361,6 +386,29 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// Round fifteen on issue 79: a hooks path that is not valid UTF-8 is the
+    /// folder git runs, not the default hooks folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_hooks_path_that_is_not_utf8_is_the_active_folder() {
+        use std::io::Write as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[core]\n\thooksPath = hooks-\xff\n")
+            .unwrap();
+        let active = git_hooks_dir(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            active.as_os_str().as_bytes(),
+            [dir.path().as_os_str().as_bytes(), b"/hooks-\xff"].concat()
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = crate::git::command()

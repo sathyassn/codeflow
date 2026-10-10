@@ -15,9 +15,10 @@ use std::rc::Rc;
 use git2::{BranchType, Repository};
 
 use super::work_start::{
-    parse_record, records_from_tree, validate_anchored_task, work_prefixes, work_suffix, NotReady,
-    Record, RecordKind,
+    carried_task_id_name, parse_record, records_from_tree, validate_anchored_task, work_prefixes,
+    work_suffix, work_suffix_name, NotReady, Record, RecordKind,
 };
+use crate::git::GitName;
 
 /// The derived state of one task in the new-claim context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -179,10 +180,12 @@ type Resolved = Result<Option<(String, git2::Oid)>, String>;
 fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
     let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
         .map_err(|error| error.to_string())?;
-    Ok(resolved.and_then(|resolved| {
-        let commit = super::work_start::target_reference(repo, &resolved.target)?;
-        Some((resolved.target, commit.id()))
-    }))
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+    Ok(super::work_start::target_reference(repo, &resolved.target)
+        .map_err(|error| error.to_string())?
+        .map(|commit| (resolved.target, commit.id())))
 }
 
 /// A resolved target as output shows it (`upstream/main`, not
@@ -205,14 +208,21 @@ fn shown(target: &str) -> String {
 /// Returns the reason when an explicit remote-tracking ref names no
 /// configured remote.
 fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
-    let owned = |buf: git2::Buf| std::str::from_utf8(&buf).ok().map(str::to_owned);
+    // OS text rule (issue 79): a remote name that is not valid UTF-8 cannot be
+    // a fetch remote CodeFlow names. The owner decides which remote is
+    // refreshed, so an owner that cannot be read is an error and never a
+    // quiet skip of that remote.
+    let owned = |buf: git2::Buf| {
+        std::str::from_utf8(&buf)
+            .map(str::to_owned)
+            .map_err(|_| format!("target '{declared}' names a remote that is not valid UTF-8"))
+    };
     if declared.starts_with("refs/remotes/") {
         return repo
             .branch_remote_name(declared)
-            .ok()
+            .map_err(|_| format!("target '{declared}' names a remote that is not configured"))
             .and_then(owned)
-            .map(Some)
-            .ok_or_else(|| format!("target '{declared}' names a remote that is not configured"));
+            .map(Some);
     }
     if declared.starts_with("origin/") {
         return Ok(Some("origin".to_string()));
@@ -221,51 +231,75 @@ fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<Strin
         "refs/heads/{}",
         declared.strip_prefix("refs/heads/").unwrap_or(declared)
     );
-    if repo.find_reference(&local).is_ok() {
-        return Ok(repo.branch_upstream_remote(&local).ok().and_then(owned));
+    match repo.find_reference(&local) {
+        Ok(_) => match repo.branch_upstream_remote(&local) {
+            Ok(remote) => owned(remote).map(Some),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(error) => Err(format!(
+                "cannot read upstream remote for '{declared}': {error}"
+            )),
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(Some("origin".to_string())),
+        Err(error) => Err(format!("cannot read target branch '{declared}': {error}")),
     }
-    Ok(Some("origin".to_string()))
 }
 
 /// The one remote scope for fetched refs and live claim listings. Origin
 /// carries published work; the target's fetch remote carries its integration
 /// line. Projects may opt additional remotes into advisory claims.
+///
+/// `declared` is the task's target, when it declares one. A remote that
+/// cannot be read is an error, never a remote left out (issue 79).
 fn claim_remotes(
     repo: &Repository,
     repo_root: &Path,
-    declared: &str,
+    declared: Option<&str>,
 ) -> Result<BTreeSet<String>, String> {
     let mut remotes = BTreeSet::new();
-    if repo.find_remote("origin").is_ok() {
+    let has_origin = origin_available(repo.find_remote("origin"))?;
+    if has_origin {
         remotes.insert("origin".to_string());
     }
-    if let Some(remote) = target_fetch_remote(repo, declared)? {
-        // A clone without origin still supports local-only claims.
-        if remote != "origin" || repo.find_remote("origin").is_ok() {
-            remotes.insert(remote);
+    if let Some(declared) = declared {
+        if let Some(remote) = target_fetch_remote(repo, declared)? {
+            // A clone without origin still supports local-only claims.
+            if remote != "origin" || has_origin {
+                remotes.insert(remote);
+            }
         }
     }
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)?;
     for remote in policy.git.claim_remotes {
         if remote.starts_with('-') || !git2::Remote::is_valid_name(&remote) {
             return Err(format!("invalid remote '{remote}' in git.claim_remotes"));
         }
         // A name git cannot find as a remote would be read as a path by
         // `git ls-remote`, so only configured remotes are accepted.
-        if repo.find_remote(&remote).is_err() {
-            return Err(format!(
-                "git.claim_remotes names '{remote}', which is not a configured remote; add the remote with `git remote add` or remove it from git.claim_remotes"
-            ));
+        match repo.find_remote(&remote) {
+            Ok(_) => {}
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                return Err(format!(
+                    "git.claim_remotes names '{remote}', which is not a configured remote; add the remote with `git remote add` or remove it from git.claim_remotes"
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot read remote '{remote}' named in git.claim_remotes: {error}"
+                ))
+            }
         }
         remotes.insert(remote);
     }
     Ok(remotes)
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct WorkBranches {
-    claims: BTreeMap<String, Vec<(String, git2::Oid)>>,
-    unrelated: BTreeMap<String, Vec<(String, String)>>,
+    /// Claims by task id: exact branch names with their tips.
+    claims: BTreeMap<String, Vec<(GitName, git2::Oid)>>,
+    /// Branches on remotes outside the claim scope by task id: the remote
+    /// and the branch name on it.
+    unrelated: BTreeMap<String, Vec<(GitName, GitName)>>,
 }
 
 impl WorkBranches {
@@ -275,8 +309,10 @@ impl WorkBranches {
             .into_iter()
             .flatten()
             .map(|(remote, branch)| {
+                let remote = remote.display();
                 format!(
-                    "also on {remote}: {branch} (not a claim: {remote} does not carry work to {})",
+                    "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
+                    branch.display(),
                     shown(target)
                 )
             })
@@ -291,70 +327,90 @@ fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
     ids: &BTreeSet<String>,
-    remotes: &BTreeSet<String>,
-) -> WorkBranches {
+    scope: &BTreeSet<String>,
+) -> Result<WorkBranches, String> {
     let mut carried = WorkBranches::default();
-    let Ok(branches) = repo.branches(None) else {
-        return carried;
-    };
+    let branches = repo.branches(None).map_err(|error| error.to_string())?;
+    let remotes = crate::git::name::remote_names(repo).map_err(|error| error.to_string())?;
     let mut seen = BTreeSet::new();
-    for (branch, kind) in branches.flatten() {
-        let Some(name) = branch.name().ok().flatten() else {
-            continue;
-        };
+    for branch in branches {
+        let (branch, kind) = branch.map_err(|error| error.to_string())?;
+        // OS text rule (issue 79, `docs/architecture.md`): the name is exact
+        // bytes, matched against work prefixes and task ids by prefix. A
+        // branch that is not valid UTF-8 still claims its task id, and two
+        // different names are two claims.
+        let name = crate::git::name::branch_name(&branch).map_err(|error| error.to_string())?;
         let (name, short, unrelated) = match kind {
-            BranchType::Local => (name.to_string(), name.to_string(), None),
+            BranchType::Local => (name.clone(), name, None),
             BranchType::Remote => {
-                let Some(remote) = repo
-                    .branch_remote_name(&format!("refs/remotes/{name}"))
-                    .ok()
-                    .and_then(|buf| std::str::from_utf8(&buf).ok().map(str::to_owned))
+                // The owner is the longest configured remote whose name the
+                // branch starts with, followed by `/`, compared as bytes.
+                let Some(remote) = remotes
+                    .iter()
+                    .filter(|remote| name.starts_with(remote.joined(b"/").bytes()))
+                    .max_by_key(|remote| remote.bytes().len())
                 else {
                     continue;
                 };
                 let Some(short) = name
-                    .strip_prefix(&format!("{remote}/"))
-                    .filter(|short| *short != "HEAD")
+                    .strip_prefix(remote.joined(b"/").bytes())
+                    .filter(|short| short.bytes() != b"HEAD")
                 else {
                     continue;
                 };
-                let shown = if remote == "origin" {
-                    short.to_string()
+                let shown = if remote.bytes() == b"origin" {
+                    short.clone()
                 } else {
-                    name.to_string()
+                    name
                 };
-                let unrelated = (!remotes.contains(&remote)).then_some(remote);
-                (shown, short.to_string(), unrelated)
+                // A remote outside the claim scope is compared as bytes; a
+                // name that is not valid UTF-8 is never in the scope.
+                let unrelated = (!scope.iter().any(|claim| claim.as_bytes() == remote.bytes()))
+                    .then(|| remote.clone());
+                (shown, short, unrelated)
             }
         };
-        let Some(oid) = branch.get().peel_to_commit().ok().map(|commit| commit.id()) else {
+        let oid = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        let Some(suffix) = work_suffix_name(prefixes, &short) else {
             continue;
         };
-        let Some(suffix) = work_suffix(prefixes, &short) else {
-            continue;
-        };
-        let Some(id) = ids
-            .iter()
-            .filter(|id| suffix.starts_with(&format!("{id}-")))
-            .max_by_key(|id| id.len())
-        else {
+        let Some(id) = carried_task_id_name(&suffix, ids) else {
             continue;
         };
         if let Some(remote) = unrelated {
             carried
                 .unrelated
-                .entry(id.clone())
+                .entry(id)
                 .or_default()
                 .push((remote, short));
         } else if seen.insert((name.clone(), oid)) {
-            carried
-                .claims
-                .entry(id.clone())
-                .or_default()
-                .push((name, oid));
+            carried.claims.entry(id).or_default().push((name, oid));
         }
     }
-    carried
+    Ok(carried)
+}
+
+/// The work branches of one claim scope, scanned once: targets with the
+/// same claim remotes share the scan.
+fn scope_scan<'a>(
+    scans: &'a mut BTreeMap<BTreeSet<String>, WorkBranches>,
+    repo: &Repository,
+    prefixes: &[String],
+    ids: &BTreeSet<String>,
+    remotes: BTreeSet<String>,
+) -> Result<&'a WorkBranches, String> {
+    use std::collections::btree_map::Entry as Slot;
+    match scans.entry(remotes) {
+        Slot::Occupied(found) => Ok(found.into_mut()),
+        Slot::Vacant(slot) => {
+            let scan = visible_work_branches(repo, prefixes, ids, slot.key())?;
+            Ok(slot.insert(scan))
+        }
+    }
 }
 
 /// Whether a branch tip has landed on the target tip (R-27): it is an
@@ -416,7 +472,7 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
         repo_root,
         &["rev-list", "--merges", "--max-count=1", &range],
     );
-    if !merges.is_ok_and(|out| out.trim().is_empty()) {
+    if !merges.is_ok_and(|out| out.is_empty()) {
         return false;
     }
     cherry_all_equivalent(repo_root, target, tip)
@@ -424,7 +480,7 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
 
 fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
     git(repo_root, &["cherry", target, tip])
-        .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+        .is_ok_and(|out| !out.is_empty() && out.split('\n').all(|line| line.starts_with("- ")))
 }
 
 /// Whether `git cherry target tip` could find every commit of `tip`
@@ -550,9 +606,9 @@ fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) ->
 fn split_landed(
     repo: &Repository,
     repo_root: &Path,
-    branches: &[(String, git2::Oid)],
+    branches: &[(GitName, git2::Oid)],
     target: git2::Oid,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<GitName>, Vec<GitName>) {
     let mut open = BTreeSet::new();
     let mut done = BTreeSet::new();
     for (name, tip) in branches {
@@ -575,24 +631,30 @@ fn fetched_at(repo: &Repository) -> Option<String> {
 
 /// The declared targets of the task records in the working tree, as
 /// written, and the default target for records that declare none.
-fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
-    // One listing; the first record of each id speaks for it, as
-    // `declared_work_target` finds it (R-103: no scan per record).
+fn declared_targets(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let mut ids = BTreeSet::new();
-    let mut targets: BTreeSet<String> =
-        crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
-            .into_iter()
-            .filter(|path| {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .is_some_and(|stem| ids.insert(stem.to_string()))
-            })
-            .filter_map(|path| super::work_start::declared_work_target_at(&path))
-            .collect();
-    if let Some(default) = super::default_work_target(repo_root) {
+    let mut targets = BTreeSet::new();
+    for path in crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
+        .map_err(|error| error.to_string())?
+    {
+        let first = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| ids.insert(stem.to_string()));
+        if first {
+            if let Some(target) = super::work_start::declared_work_target_at(&path)
+                .map_err(|error| error.to_string())?
+            {
+                targets.insert(target);
+            }
+        }
+    }
+    if let Some(default) =
+        super::default_work_target(repo_root).map_err(|error| error.to_string())?
+    {
         targets.insert(default);
     }
-    targets
+    Ok(targets)
 }
 
 /// Declared targets resolved once each, as `work start` resolves them.
@@ -679,8 +741,8 @@ fn read_tips(
 /// Returns the reason when the repository or a target tip cannot be read.
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let prefixes = work_prefixes(repo_root);
-    let default = super::default_work_target(repo_root);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
@@ -690,7 +752,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let tips = read_tips(
         &repo,
         &mut resolved,
-        declared_targets(repo_root),
+        declared_targets(repo_root)?,
         &mut out.snapshots,
     )?;
     let mut resolve = |declared: &str| resolved.resolve(declared);
@@ -702,10 +764,8 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let mut scans = BTreeMap::new();
     let mut judged = BTreeSet::new();
     for (target, reference, tip, records) in &tips {
-        let remotes = claim_remotes(&repo, repo_root, target)?;
-        let carried = scans
-            .entry(remotes.clone())
-            .or_insert_with(|| visible_work_branches(&repo, &prefixes, &ids, &remotes));
+        let remotes = claim_remotes(&repo, repo_root, Some(target))?;
+        let carried = scope_scan(&mut scans, &repo, &prefixes, &ids, remotes)?;
         for record in records
             .values()
             .filter(|record| record.kind == RecordKind::Task)
@@ -739,7 +799,13 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                     .unwrap_or_default(),
                 *tip,
             );
-            out.landed.extend(done);
+            // The report shows names; the decisions above used exact bytes.
+            out.landed
+                .extend(done.iter().map(|name| name.display().to_string()));
+            let names: Vec<String> = names
+                .iter()
+                .map(|name| name.display().to_string())
+                .collect();
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
@@ -791,6 +857,21 @@ pub struct Claim {
     pub informational_branches: Vec<String>,
 }
 
+/// `git <args>` with its output as exact bytes.
+fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let out = crate::git::command()
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
     let out = crate::git::command()
         .arg("-C")
@@ -799,7 +880,8 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
+        Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
@@ -940,9 +1022,19 @@ impl StackHints {
     }
 }
 
+fn origin_available(result: Result<git2::Remote<'_>, git2::Error>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot read origin remote: {error}")),
+    }
+}
+
 fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
     // A visible record owns its declaration; use the shared target resolver.
-    if let Some(target) = super::declared_work_target(root, task_id) {
+    if let Some(target) =
+        super::declared_work_target(root, task_id).map_err(|error| error.to_string())?
+    {
         return Ok(Some(target));
     }
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
@@ -950,15 +1042,21 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
     for reference in repo
         .references_glob("refs/remotes/*")
         .map_err(|e| e.to_string())?
-        .flatten()
     {
-        let Ok(name) = reference.name() else { continue };
+        let reference = reference.map_err(|error| error.to_string())?;
+        // OS text rule (issue 79): the name is only compared with a declared
+        // target, which is valid text in a record, so a name that is not valid
+        // UTF-8 can never be that target and is skipped.
+        let reference_name = crate::git::name::reference_name(&reference);
+        let Ok(name) = reference_name.rule_text() else {
+            continue;
+        };
         if name.ends_with("/HEAD") {
             continue;
         }
-        let Ok(tree) = reference.peel_to_tree() else {
-            continue;
-        };
+        let tree = reference
+            .peel_to_tree()
+            .map_err(|error| error.to_string())?;
         let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
         if let Some(target) = records
             .get(task_id)
@@ -969,8 +1067,10 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
                 .and_then(|s| s.split_once('/'))
                 .map(|(_, b)| b);
             if branch == Some(super::work_start::logical_target(target)) {
-                let preferred = target_fetch_remote(&repo, target)?
-                    .or_else(|| repo.find_remote("origin").ok().map(|_| "origin".into()));
+                let preferred = match target_fetch_remote(&repo, target)? {
+                    Some(remote) => Some(remote),
+                    None => origin_available(repo.find_remote("origin"))?.then(|| "origin".into()),
+                };
                 let remote = name
                     .strip_prefix("refs/remotes/")
                     .and_then(|s| s.split_once('/'))
@@ -997,11 +1097,28 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
 /// # Errors
 /// Reports target or fetch errors without creating a claim.
 pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
-    let remotes: Vec<String> = git(repo_root, &["remote"])?
-        .lines()
-        .map(str::to_string)
-        .collect();
-    if super::declared_work_target(repo_root, task_id).is_none() {
+    // OS text rule (issue 79): a remote is fetched by name, and a name that is
+    // not valid UTF-8 cannot be given to git as text, so claim refresh refuses
+    // before it fetches anything, never fetching a lookalike remote.
+    let remotes: Vec<String> = {
+        let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+        crate::git::name::remote_names(&repo)
+            .map_err(|error| error.to_string())?
+            .iter()
+            .map(|remote| {
+                remote.rule_text().map(str::to_string).map_err(|error| {
+                    format!(
+                        "cannot refresh claims: a remote name is not valid UTF-8 ({})",
+                        error.display()
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?
+    };
+    if super::declared_work_target(repo_root, task_id)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
         for remote in &remotes {
             git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
         }
@@ -1025,36 +1142,34 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The head commit, the new standalone record and the checked-out branch
+/// that a claim renames, read from one HEAD read whose errors refuse.
 fn standalone_claim_base(
     root: &Path,
     repo: &Repository,
     task_id: &str,
     target: git2::Oid,
-) -> Result<Option<(git2::Oid, Record)>, String> {
-    let head = repo
-        .head()
-        .and_then(|head| head.peel_to_commit())
+) -> Result<Option<(git2::Oid, Record, crate::git::GitName)>, String> {
+    let reference = repo.head().map_err(|error| error.to_string())?;
+    let current = crate::git::name::reference_shorthand(&reference);
+    let head = reference
+        .peel_to_commit()
         .map_err(|error| error.to_string())?;
     let here = records_from_tree(repo, &head.tree().map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
     let Some(task) = here.get(task_id).filter(|task| task.epic_id.is_none()) else {
         return Ok(None);
     };
-    let current = repo
-        .head()
-        .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
-        .unwrap_or_default();
-    if crate::hooks::policy::Policy::load(root)
+    if crate::hooks::policy::Policy::load(root)?
         .git
-        .branch_is_protected(&current)
+        .branch_is_protected_name(&current)
     {
         return Err("a protected branch cannot be renamed into a task claim".into());
     }
     if head.id() != target && !repo.graph_descendant_of(head.id(), target).unwrap_or(false) {
         return Err("the standalone branch must contain its current target".into());
     }
-    Ok(Some((head.id(), task.clone())))
+    Ok(Some((head.id(), task.clone(), current)))
 }
 
 /// Claim from reviewed predecessors, or rename the branch holding a new standalone record.
@@ -1070,8 +1185,8 @@ pub fn claim_on(
     let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let has_origin = repo.find_remote("origin").is_ok();
-    let remotes = claim_remotes(&repo, repo_root, &declared)?;
+    let has_origin = origin_available(repo.find_remote("origin"))?;
+    let remotes = claim_remotes(&repo, repo_root, Some(&declared))?;
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
@@ -1081,45 +1196,45 @@ pub fn claim_on(
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let mut records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
-    let current = repo
-        .head()
-        .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
-        .unwrap_or_default();
-    let mut rename = false;
+    // The branch a standalone claim renames, read once with the head it
+    // was judged on.
+    let mut renamed = None;
     if !records.contains_key(task_id) && stack.is_none() {
-        if let Some((head, task)) = standalone_claim_base(repo_root, &repo, task_id, target_tip)? {
+        if let Some((head, task, current)) =
+            standalone_claim_base(repo_root, &repo, task_id, target_tip)?
+        {
             records.insert(task_id.to_string(), task);
             tip = head;
-            rename = true;
+            renamed = Some(current);
         }
     }
     let reference_shown = shown(&reference);
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
-    let prefixes = work_prefixes(repo_root);
-    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes)?;
     let information = visible.information(task_id, &reference);
     let mut carried = visible.claims.remove(task_id).unwrap_or_default();
     for remote in &remotes {
         carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
     }
-    if rename {
-        carried.retain(|(name, _)| name != &current);
+    if let Some(current) = &renamed {
+        carried.retain(|(name, _)| name != current);
     }
     let (open, _) = split_landed(&repo, repo_root, &carried, target_tip);
     if !open.is_empty() {
+        let shown: Vec<String> = open.iter().map(|name| name.display().to_string()).collect();
         return Err(format!(
             "{task_id} is already claimed by a visible branch: {}",
-            open.join(", ")
+            shown.join(", ")
         ));
     }
     let title = records
         .get(task_id)
         .map_or("", |record| record.title.as_str());
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
-    if rename {
+    if renamed.is_some() {
         git(repo_root, &["branch", "-m", &branch])?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;
@@ -1159,29 +1274,40 @@ fn remote_claims(
     prefixes: &[String],
     task_id: &str,
     remote: &str,
-) -> Result<Vec<(String, git2::Oid)>, String> {
-    let listed = git(repo_root, &["ls-remote", "--heads", remote])
+) -> Result<Vec<(GitName, git2::Oid)>, String> {
+    // OS text rule (issue 79): the advertised names are exact bytes, so a
+    // name that is not valid UTF-8 stays a claim and never reads as another.
+    let listed = git_bytes(repo_root, &["ls-remote", "--heads", remote])
         .map_err(|error| format!("cannot list {remote}'s branches: {error}"))?;
-    Ok(listed
-        .lines()
-        .filter_map(|line| {
-            let (sha, name) = line.split_once('\t')?;
-            let name = name.strip_prefix("refs/heads/")?;
-            let suffix = work_suffix(prefixes, name)?;
-            if !suffix.starts_with(&format!("{task_id}-")) {
-                return None;
-            }
-            let oid = git2::Oid::from_str(sha).ok()?;
-            let known = repo.find_commit(oid).is_ok();
-            let shown = if remote == "origin" {
-                name.to_string()
-            } else {
-                format!("{remote}/{name}")
-            };
-            // An unknown tip is never landed: keep it open with a null id.
-            Some((shown, if known { oid } else { git2::Oid::ZERO_SHA1 }))
-        })
-        .collect())
+    let mut claims = Vec::new();
+    for line in listed
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let tab = line
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or_else(|| format!("{remote} advertised a malformed branch"))?;
+        let sha = std::str::from_utf8(&line[..tab]).map_err(|error| error.to_string())?;
+        let oid = git2::Oid::from_str(sha).map_err(|error| error.to_string())?;
+        let Some(name) = GitName::from_bytes(&line[tab + 1..]).strip_prefix(b"refs/heads/") else {
+            continue;
+        };
+        let Some(suffix) = work_suffix_name(prefixes, &name) else {
+            continue;
+        };
+        if !suffix.starts_with(format!("{task_id}-").as_bytes()) {
+            continue;
+        }
+        let known = repo.find_commit(oid).is_ok();
+        let shown = if remote == "origin" {
+            name
+        } else {
+            GitName::from_text(&format!("{remote}/")).joined(name.bytes())
+        };
+        claims.push((shown, if known { oid } else { git2::Oid::ZERO_SHA1 }));
+    }
+    Ok(claims)
 }
 
 /// Whether `branch` (local, or `origin/<branch>`) holds an open claim: it
@@ -1197,7 +1323,10 @@ pub(crate) fn is_open_claim(
     target: git2::Oid,
 ) -> bool {
     let name = branch.strip_prefix("origin/").unwrap_or(branch);
-    let carries_task = work_suffix(&work_prefixes(repo_root), name).is_some_and(|suffix| {
+    let Ok(prefixes) = work_prefixes(repo_root) else {
+        return true; // cleanup refuses an unproven claim
+    };
+    let carries_task = work_suffix(&prefixes, name).is_some_and(|suffix| {
         let mut parts = suffix.splitn(3, '-');
         match (parts.next(), parts.next()) {
             (Some(kind), Some(number)) => {
@@ -1220,26 +1349,32 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<
     let Ok(repo) = Repository::discover(repo_root) else {
         return Ok(Vec::new());
     };
-    let declared = super::declared_work_target(repo_root, task_id).unwrap_or_default();
-    let remotes = claim_remotes(&repo, repo_root, &declared)?;
+    let declared = super::declared_work_target(repo_root, task_id)
+        .map_err(|error| format!("cannot read task target: {error}"))?;
+    let remotes = claim_remotes(&repo, repo_root, declared.as_deref())?;
     let ids = BTreeSet::from([task_id.to_string()]);
-    let carried = visible_work_branches(&repo, &work_prefixes(repo_root), &ids, &remotes)
+    let prefixes =
+        work_prefixes(repo_root).map_err(|error| format!("cannot read work prefixes: {error}"))?;
+    let carried = visible_work_branches(&repo, &prefixes, &ids, &remotes)
+        .map_err(|error| format!("cannot read work branches: {error}"))?
         .claims
         .remove(task_id)
         .unwrap_or_default();
-    let target_tip = resolve_target(repo_root, &repo, &declared)
-        .ok()
-        .flatten()
+    let target_tip = declared
+        .and_then(|target| resolve_target(repo_root, &repo, &target).ok().flatten())
         .map(|(_, oid)| oid);
     let open = match target_tip {
         Some(tip) => split_landed(&repo, repo_root, &carried, tip).0,
         None => carried.into_iter().map(|(name, _)| name).collect(),
     };
+    // Compared with `own` byte for byte; the answer is shown as text.
+    let own = GitName::from_text(own);
     Ok(open
         .into_iter()
-        .filter(|name| name != own)
+        .filter(|name| *name != own)
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .map(|name| name.display().to_string())
         .collect())
 }
 
@@ -1293,27 +1428,74 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
     if !branch.starts_with("integration/") {
         return false;
     }
-    crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
-        .into_iter()
-        .any(|path| {
-            // An unreadable record may be the one that keeps the line live.
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                return true;
-            };
-            let Ok(record) = parse_record(&content, RecordKind::Task) else {
-                return true;
-            };
-            !matches!(record.status.as_str(), "complete" | "cancelled")
-                && record
-                    .integration_target
-                    .as_deref()
-                    .is_some_and(|target| canonical_target(target) == branch)
-        })
+    let Ok(files) =
+        crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
+    else {
+        return true; // cleanup must preserve a line whose task inventory is unproven
+    };
+    files.into_iter().any(|path| {
+        // An unreadable record may be the one that keeps the line live.
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return true;
+        };
+        let Ok(record) = parse_record(&content, RecordKind::Task) else {
+            return true;
+        };
+        !matches!(record.status.as_str(), "complete" | "cancelled")
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| canonical_target(target) == branch)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r22_target_fetch_remote_refuses_malformed_local_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        assert_eq!(
+            target_fetch_remote(&repo, "main").unwrap(),
+            Some("origin".into())
+        );
+        std::fs::write(repo.path().join("refs/heads/main"), "invalid object id\n").unwrap();
+        assert!(target_fetch_remote(&repo, "main").is_err());
+    }
+
+    #[test]
+    fn r22_origin_lookup_refuses_errors_but_keeps_missing_remote() {
+        assert!(!origin_available(Err(git2::Error::new(
+            git2::ErrorCode::NotFound,
+            git2::ErrorClass::Config,
+            "missing"
+        )))
+        .unwrap());
+        assert!(origin_available(Err(git2::Error::new(
+            git2::ErrorCode::Invalid,
+            git2::ErrorClass::Config,
+            "broken remote"
+        )))
+        .is_err());
+    }
+
+    #[test]
+    fn git_stdout_preserves_framing_and_refuses_failed_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = repo.path().join("config");
+        let mut config = std::fs::read(&path).unwrap();
+        config.extend_from_slice(b"\n[test]\nvalue = \"name\\n\"\ninvalid = \xff\n");
+        std::fs::write(path, config).unwrap();
+        assert_eq!(
+            super::git(dir.path(), &["config", "--get", "test.value"]).unwrap(),
+            "name\n"
+        );
+        assert!(super::git(dir.path(), &["config", "--get", "test.invalid"]).is_err());
+    }
+
     use crate::workgraph::work_start::{AnchoredTask, WorkStartError};
     use std::fs;
 
@@ -1547,6 +1729,65 @@ mod tests {
         assert!(error.to_string().contains("not on 'main'"), "{error}");
         assert!(consumer(&done).is_ok());
         assert!(verdict(root, "TSK-003").is_ok());
+    }
+
+    /// Review finding on issue 79: an upstream remote whose name is not valid
+    /// UTF-8 decoded to nothing, so that remote was silently left out of the
+    /// refresh. The owner is an identity, so it is an error.
+    #[test]
+    fn an_upstream_remote_that_is_not_utf8_is_an_error_not_a_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[b"refs/heads/side"]);
+        let config = repo.path().join("config");
+        let mut text = fs::read(&config).unwrap();
+        text.extend_from_slice(
+            b"[branch \"side\"]\n\tremote = caf\xe9\n\tmerge = refs/heads/side\n",
+        );
+        fs::write(&config, text).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let error = target_fetch_remote(&repo, "side").unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Review finding on issue 79: a branch whose name is not valid UTF-8 and
+    /// carries a task id used to drop out of the visible claims, so the id read
+    /// as free. It is read lossily and still claims the id.
+    #[test]
+    fn a_task_branch_that_is_not_utf8_still_claims_its_id() {
+        let dir = repo();
+        let root = dir.path();
+        run(root, &["commit", "-q", "--allow-empty", "-m", "test: seed"]);
+        let tip = run(root, &["rev-parse", "HEAD"]);
+        let mut packed = b"# pack-refs with: peeled fully-peeled sorted \n".to_vec();
+        packed.extend_from_slice(format!("{tip} refs/heads/task/TSK-238-").as_bytes());
+        packed.extend_from_slice(b"caf\xe9\n");
+        fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
+        let repository = Repository::open(root).unwrap();
+        let ids = BTreeSet::from(["TSK-238".to_string()]);
+        let carried =
+            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
+                .unwrap()
+                .claims;
+        let claims = &carried["TSK-238"];
+        assert_eq!(claims.len(), 1, "{carried:?}");
+        assert_eq!(claims[0].0, GitName::from_bytes(b"task/TSK-238-caf\xe9"));
+        // A real U+FFFD in another branch is another claim, not the same one.
+        run(root, &["branch", "task/TSK-238-caf\u{fffd}"]);
+        let carried =
+            visible_work_branches(&repository, &["task/".to_string()], &ids, &BTreeSet::new())
+                .unwrap()
+                .claims;
+        let names: BTreeSet<_> = carried["TSK-238"]
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                GitName::from_bytes(b"task/TSK-238-caf\xe9"),
+                GitName::from_text("task/TSK-238-caf\u{fffd}")
+            ])
+        );
     }
 
     #[test]
@@ -2048,14 +2289,14 @@ mod tests {
         let view = backlog(root).unwrap();
         assert_eq!(entry(&view, "TSK-001").branches.len(), 2);
         let repo = Repository::open(root).unwrap();
-        let remotes = claim_remotes(&repo, root, "main").unwrap();
+        let remotes = claim_remotes(&repo, root, Some("main")).unwrap();
         assert_eq!(
             remotes,
             BTreeSet::from(["origin".to_string(), "upstream".to_string()])
         );
         let ids = BTreeSet::from(["TSK-001".to_string()]);
-        let prefixes = work_prefixes(root);
-        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes);
+        let prefixes = work_prefixes(root).unwrap();
+        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes).unwrap();
         let local_names: BTreeSet<_> = scanned.claims["TSK-001"]
             .iter()
             .map(|(name, _)| name.clone())

@@ -54,13 +54,9 @@ pub struct EffectiveLevel {
 /// The read or parse failure, as text.
 pub fn raw_policy(root: &Path) -> Result<Option<Value>, String> {
     let path = root.join(".codeflow").join("policy.json");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|e| format!("{}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("{}: {e}", path.display())),
-    }
+    super::policy::optional_text(&path)?
+        .map(|text| serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())))
+        .transpose()
 }
 
 /// `true` when the raw policy carries `git.<key>`.
@@ -246,10 +242,8 @@ impl fmt::Display for ReleaseBackend {
 /// `codeflow`.
 pub fn release_backend(root: &Path) -> Result<ReleaseBackend, String> {
     let path = root.join(".codeflow").join("project.toml");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ReleaseBackend::None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+    let Some(text) = super::policy::optional_text(&path)? else {
+        return Ok(ReleaseBackend::None);
     };
     release_backend_str(&text, &path.display().to_string())
 }

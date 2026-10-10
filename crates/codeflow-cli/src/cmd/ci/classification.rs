@@ -11,16 +11,15 @@
 
 use std::path::Path;
 
+use codeflow_core::git::GitName;
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
 use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
 use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
-    check_epic_line, check_epic_line_with_adoptions, declared_work_target,
-    declared_work_target_at_revision, durable_work_tracking_enabled,
+    check_epic_line, check_epic_line_with_adoptions, durable_work_tracking_enabled,
     durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -46,7 +45,7 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
     let mut in_fence = false;
     let mut lines = Vec::new();
     for raw in visible.lines() {
-        let line = raw.trim();
+        let line = raw.trim_matches([' ', '\t', '\r']);
         if line.starts_with("```") || line.starts_with("~~~") {
             in_fence = !in_fence;
             continue;
@@ -58,12 +57,12 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
         let Some(value) = line.strip_prefix("Task:") else {
             continue;
         };
-        let value = value.trim();
+        let value = value.trim_matches([' ', '\t', '\r']);
         let value = value
             .strip_prefix('`')
             .and_then(|value| value.strip_suffix('`'))
             .unwrap_or(value)
-            .trim();
+            .trim_matches([' ', '\t', '\r']);
         lines.push(if let Some(epics) = epic_list(value) {
             epics
         } else if value.is_empty()
@@ -94,7 +93,10 @@ fn epic_list(value: &str) -> Option<TaskLine> {
     if !value.contains(',') {
         return None;
     }
-    let items: Vec<&str> = value.split(',').map(str::trim).collect();
+    let items: Vec<&str> = value
+        .split(',')
+        .map(|value| value.trim_matches([' ', '\t']))
+        .collect();
     let distinct = items
         .iter()
         .collect::<std::collections::BTreeSet<_>>()
@@ -147,8 +149,8 @@ pub(super) struct ReleaseHead {
 pub(super) struct Input<'a> {
     pub body: &'a str,
     pub branch: &'a str,
-    /// Every path the range touches.
-    pub files: &'a [String],
+    /// Every path the range touches, as git's exact bytes.
+    pub files: &'a [GitName],
     /// The task id the branch carries on a work prefix, if any.
     pub branch_task: Option<String>,
     /// For an `integration/` head: the epic it lands, or why it is not a
@@ -159,7 +161,7 @@ pub(super) struct Input<'a> {
     /// Why a range changing these files cannot ride in a planning
     /// amendment ([`amendment::range_problem`]), asked only for a planning
     /// class.
-    pub amendment_problem: &'a dyn Fn(&[String]) -> Option<String>,
+    pub amendment_problem: &'a dyn Fn(&[GitName]) -> Option<String>,
     /// Why an epic a planning amendment names cannot be named: absent from
     /// the head, or cancelled at the target. `None` when it can.
     pub epic_problem: &'a dyn Fn(&str) -> Option<String>,
@@ -254,17 +256,19 @@ pub(super) struct Range<'a> {
 
 /// The branch `git.root_branch` names in the policy at `base`. It is read at
 /// the target, so a pull request cannot name its own head as the root.
-pub(super) fn root_branch_at(root: &Path, base: &str) -> Option<String> {
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["show", &format!("{base}:.codeflow/policy.json")])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())?;
-    let policy: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let name = policy["git"]["root_branch"].as_str()?.trim();
-    (!name.is_empty()).then(|| name.to_string())
+pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, String> {
+    let Some(text) = codeflow_core::hooks::landed_policy::policy_text_at(root, base)? else {
+        return Ok(None);
+    };
+    let policy: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot read root-branch policy: {error}"))?;
+    match policy.get("git").and_then(|git| git.get("root_branch")) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|name| Some(name.to_string()))
+            .ok_or_else(|| "cannot read root_branch: expected a string".to_string()),
+    }
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
@@ -289,9 +293,14 @@ fn integration_line_eligible(
     range: &Range<'_>,
     tagged: &mut Vec<super::TaggedViolation>,
 ) -> bool {
-    if !branch.starts_with("integration/")
-        || root_branch_at(root, range.base).as_deref() == Some(branch)
-    {
+    let root_branch = match root_branch_at(root, range.base) {
+        Ok(name) => name,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return false;
+        }
+    };
+    if !branch.starts_with("integration/") || root_branch.as_deref() == Some(branch) {
         return true;
     }
     match check_epic_line(root, branch, range.target, range.base, range.head) {
@@ -321,8 +330,19 @@ pub(super) fn bodyless_line_check(
     let Some(range) = range else {
         return;
     };
-    if !branch.starts_with("integration/") || !matches!(tracking_on(root, Some(range)), Ok(true)) {
+    if !branch.starts_with("integration/") {
         return;
+    }
+    match tracking_on(root, Some(range)) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
     }
     ran.push("classification");
     integration_line_eligible(root, branch, range, tagged);
@@ -348,10 +368,13 @@ pub(super) fn branch_journey(
     };
     // The task as the judged head carries it, so a run from another checkout
     // (a push of a branch other than the one checked out) still finds it.
-    let Some(task_id) = task_id_from_branch_at(root, branch, range.head)
-        .or_else(|| task_id_from_branch(root, branch))
-    else {
-        return;
+    let task_id = match super::branch_task_at(root, branch, range.head) {
+        Ok(Some(task)) => task,
+        Ok(None) => return,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
     };
     // Tracking as the judged head carries it too, so a run from a checkout
     // without tracking (a push from `main`) still sees a head that adds it.
@@ -449,18 +472,55 @@ fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
 /// Where durable tracking is off: whether the body names exactly one unit
 /// that matches the branch, or the range is on the root branch the target's
 /// policy names, which carries no `Task:` line.
-fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_>>) -> bool {
-    match task_lines(body).as_slice() {
-        [TaskLine::Tracked(id)] => {
-            task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
-        }
+fn names_its_unit(
+    root: &Path,
+    body: &str,
+    branch: &str,
+    range: Option<&Range<'_>>,
+) -> Result<bool, String> {
+    Ok(match task_lines(body).as_slice() {
+        [TaskLine::Tracked(id)] => task_id_from_branch(root, branch)
+            .map_err(|error| error.to_string())?
+            .is_none_or(|carried| carried == *id),
         [TaskLine::Epic(_) | TaskLine::Epics(_) | TaskLine::Unit(_)] => {
-            task_id_from_branch(root, branch).is_none()
+            task_id_from_branch(root, branch)
+                .map_err(|error| error.to_string())?
+                .is_none()
         }
-        [] => {
-            range.is_some_and(|range| root_branch_at(root, range.base).as_deref() == Some(branch))
-        }
+        [] => match range {
+            Some(range) => root_branch_at(root, range.base)?.as_deref() == Some(branch),
+            None => false,
+        },
         _ => false,
+    })
+}
+
+/// Decide whether full classification applies, recording a refusal for any
+/// unreadable tracking state or invalid unit name before dispatch can return.
+fn classification_applies(
+    root: &Path,
+    body: &str,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) -> bool {
+    match tracking_on(root, range) {
+        Ok(true) => true,
+        Ok(false) => {
+            match names_its_unit(root, body, branch, range) {
+                Ok(true) => {},
+                Ok(false) => push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT),
+                Err(error) => push(tagged, RULE, error, HINT),
+            }
+            false
+        }
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            false
+        }
     }
 }
 
@@ -480,25 +540,10 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
-    match tracking_on(root, range) {
-        Ok(true) => {}
-        Ok(false) => {
-            ran.push("classification");
-            if !names_its_unit(root, body, branch, range) {
-                push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT);
-            }
-            return None;
-        }
-        Err(error) => {
-            tagged.push(super::TaggedViolation {
-                sha: None,
-                violation: super::tracking_state_violation(error),
-            });
-            ran.push("classification");
-            return None;
-        }
-    }
     ran.push("classification");
+    if !classification_applies(root, body, branch, range, tagged) {
+        return None;
+    }
     let Some(range) = range else {
         push(
             tagged,
@@ -523,11 +568,25 @@ pub(super) fn dispatch(
     if release.is_none() && !integration_line_eligible(root, branch, range, tagged) {
         return None;
     }
-    let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
+    let files: Vec<GitName> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
     let amendment_problem =
-        |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
+        |files: &[GitName]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
+    let branch_task = match task_id_from_branch(root, branch) {
+        Ok(task) => task,
+        Err(error) => {
+            push(tagged, RULE, error.to_string(), HINT);
+            return None;
+        }
+    };
+    let root_branch = match root_branch_at(root, range.base) {
+        Ok(name) => name,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return None;
+        }
+    };
     let epic_line = branch.starts_with("integration/").then(|| {
         check_epic_line_with_adoptions(root, branch, range.target, range.base, range.head)
     });
@@ -535,9 +594,9 @@ pub(super) fn dispatch(
         body,
         branch,
         files: &files,
-        branch_task: task_id_from_branch(root, branch),
+        branch_task,
         epic_line: epic_line.as_ref().map(epic_line_id),
-        root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
+        root_branch: root_branch.as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
@@ -652,12 +711,12 @@ fn selection_check(
     root: &Path,
     branch: &str,
     range: &Range<'_>,
-    files: &[String],
+    files: &[GitName],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
     let touches_records = files
         .iter()
-        .any(|file| file.starts_with("project-management/"));
+        .any(|file| file.starts_with(b"project-management/"));
     if touches_records && !branch.starts_with("plan/") {
         match codeflow_core::workgraph::readiness::selections_in_range(root, range.base, range.head)
         {
@@ -725,21 +784,27 @@ fn tracked(
     root: &Path,
     task_id: &str,
     anchor: Anchor<'_>,
-    files: &[String],
-    changes: &[(String, String)],
+    files: &[GitName],
+    changes: &[(String, GitName)],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
     let Anchor { branch, head, .. } = anchor;
-    let added_records: Vec<_> = changes
+    // A spike branch's scope is known even when its records cannot be read.
+    if branch.starts_with("spike/") {
+        spike_paths(task_id, files, tagged);
+    }
+    // Matched as bytes: an added record whose name is not valid UTF-8 is
+    // never this task's own record, so it counts against the task.
+    let added_records: Vec<&GitName> = changes
         .iter()
         .filter(|(status, _)| status == "A")
-        .map(|(_, path)| path.as_str())
-        .filter(|path| is_added_work_record(path))
+        .map(|(_, path)| path)
+        .filter(|path| is_added_work_record(path.bytes()))
         .collect();
-    if added_records
-        .iter()
-        .any(|path| !is_record_of(path, task_id))
-        || (added_records.len() > 1)
+    if added_records.iter().any(|path| {
+        path.rule_text()
+            .map_or(true, |path| !is_record_of(path, task_id))
+    }) || (added_records.len() > 1)
     {
         push(
             tagged,
@@ -750,14 +815,24 @@ fn tracked(
     }
     // The record at the head first: a standalone record is on its branch,
     // not in a base checkout.
-    let declared = declared_work_target_at_revision(root, branch, head)
-        .ok()
-        .flatten()
-        .or_else(|| declared_work_target(root, task_id));
+    let declared = match super::work_target_at(root, branch, head, task_id) {
+        Ok(target) => target,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
+    };
     // The own-branch preflight prints any resolution note and reports a
     // diverged target; this check reports it only for another task's claim.
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
+        Err(error) if super::work_start_reader_error(&error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
         Err(_) if anchor.own_branch => return,
         Err(error) => {
             anchor_failure(
@@ -773,18 +848,15 @@ fn tracked(
         root, task_id, &target, branch, head,
     ) {
         Ok(report) => {
-            let spike =
-                report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");
-            if spike {
-                if let Some(path) = files.iter().find(|path| !is_spike_path(path, task_id)) {
-                    push(
-                        tagged,
-                        RULE,
-                        format!("spike {task_id} changes {path}; a spike lands only findings under docs/research/ and its own record"),
-                        "move the product change to a task of its own",
-                    );
-                }
+            if report.work_type.as_deref() == Some("spike") && !branch.starts_with("spike/") {
+                spike_paths(task_id, files, tagged);
             }
+        }
+        Err(error) if super::work_start_reader_error(&error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
         }
         Err(_) if anchor.own_branch => {}
         Err(error) => anchor_failure(
@@ -794,6 +866,21 @@ fn tracked(
             codeflow_core::remedy::WORK_START_MERGE_PLANNING
                 .with(&[("target", &target), ("id", task_id)]),
         ),
+    }
+}
+
+fn spike_paths(task_id: &str, files: &[GitName], tagged: &mut Vec<super::TaggedViolation>) {
+    // A name that is not valid UTF-8 is never a spike path.
+    if let Some(path) = files.iter().find(|path| {
+        path.rule_text()
+            .map_or(true, |path| !is_spike_path(path, task_id))
+    }) {
+        push(
+            tagged,
+            RULE,
+            format!("spike {task_id} changes {}; a spike lands only findings under docs/research/ and its own record", path.display()),
+            "move the product change to a task of its own",
+        );
     }
 }
 
@@ -808,8 +895,16 @@ fn journey(
     files: &[String],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
-    let project = ProjectPaths::load(root);
+    let project = match ProjectPaths::load(root) {
+        Ok(project) => project,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
+    };
     let sets = path_sets();
+    // `journey_paths` refuses a name that is not UTF-8 before this point
+    // (`acceptance::rule_name`), so every name here is matched as text.
     let Some((path, member)) = files.iter().find_map(|path| {
         sets.adopter_facing_member(path, &project)
             .map(|member| (path, member))
@@ -838,14 +933,16 @@ fn journey(
 /// beyond its own: Markdown under `project-management/`, except the record
 /// templates and operator feedback items (`FB-NNN.md` and the index
 /// directly in the feedback directory), which are not work records and
-/// whose ids the registry merge rule binds (TSK-241).
-fn is_added_work_record(path: &str) -> bool {
-    path.starts_with("project-management/")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        && !path.starts_with("project-management/templates/")
-        && !codeflow_core::feedback::is_feedback_path(path)
+/// whose ids the registry merge rule binds (TSK-241). Matched as bytes: a
+/// name that is not valid UTF-8 is never a feedback item, whose names are
+/// ASCII, so it stays a work record (issue 79).
+fn is_added_work_record(path: impl AsRef<[u8]>) -> bool {
+    let bytes = path.as_ref();
+    bytes.starts_with(b"project-management/")
+        && bytes.len() >= 3
+        && bytes[bytes.len() - 3..].eq_ignore_ascii_case(b".md")
+        && !bytes.starts_with(b"project-management/templates/")
+        && !std::str::from_utf8(bytes).is_ok_and(codeflow_core::feedback::is_feedback_path)
 }
 
 fn is_record_of(path: &str, task_id: &str) -> bool {
@@ -865,7 +962,7 @@ pub(super) fn range_changes(
     root: &Path,
     base: &str,
     head: &str,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<(String, GitName)>, String> {
     parse_name_status(&name_status(root, base, head)?)
 }
 
@@ -893,10 +990,10 @@ fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
     Ok(out.stdout)
 }
 
-fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
+fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, GitName)>, String> {
     Ok(parse_name_status_raw(stdout)?
         .into_iter()
-        .map(|(status, path)| (status, String::from_utf8_lossy(&path).to_string()))
+        .map(|(status, path)| (status, GitName::from_bytes(&path)))
         .collect())
 }
 
@@ -907,7 +1004,14 @@ fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String
         .filter(|field| !field.is_empty());
     let mut changes = Vec::new();
     while let Some(status) = fields.next() {
-        let status = String::from_utf8_lossy(status).to_string();
+        // OS text rule (issue 79): a status is git's own ASCII letter, so
+        // one that is not valid UTF-8 makes the output unreadable. A path is
+        // kept as git's exact bytes; each rule that needs text judges a
+        // name that is not valid UTF-8 the strict way, and none reads a
+        // lossy spelling, which could match a pattern the real bytes do not.
+        let status = std::str::from_utf8(status)
+            .map_err(|_| "git diff printed a status that is not valid UTF-8".to_string())?
+            .to_string();
         let path = fields
             .next()
             .ok_or_else(|| format!("git diff output ends after status {status}"))?;
@@ -920,13 +1024,229 @@ fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String
 mod tests {
     use super::*;
 
+    fn r22_repo(malformed_record: bool) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        if malformed_record {
+            std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+            std::fs::write(
+                dir.path().join("project-management/tasks/TSK-002.md"),
+                b"\xff",
+            )
+            .unwrap();
+        }
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "test",
+            ],
+        ] {
+            assert!(codeflow_core::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let output = codeflow_core::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let head = String::from_utf8(output.stdout).unwrap().trim().to_string();
+        (dir, head)
+    }
+
+    #[test]
+    fn r22_tracking_reader_failures_block_own_and_other_branches() {
+        for malformed_record in [false, true] {
+            let (dir, head) = r22_repo(malformed_record);
+            if !malformed_record {
+                std::fs::write(dir.path().join(".git/refs/heads/main"), "invalid ref\n").unwrap();
+            }
+            for own_branch in [false, true] {
+                let mut tagged = Vec::new();
+                tracked(
+                    dir.path(),
+                    "TSK-001",
+                    Anchor {
+                        own_branch,
+                        level: PolicyLevel::Off,
+                        branch: "task/TSK-001-test",
+                        head: &head,
+                    },
+                    &[],
+                    &[],
+                    &mut tagged,
+                );
+                assert!(
+                    tagged
+                        .iter()
+                        .any(|finding| finding.violation.rule == "work.tracking_state"
+                            && (finding.violation.level == PolicyLevel::Block)),
+                    "own={own_branch}, malformed={malformed_record}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r22_spike_branch_scope_survives_unreadable_tracking_state() {
+        let dir = tempfile::tempdir().unwrap();
+        for own_branch in [false, true] {
+            let mut tagged = Vec::new();
+            tracked(
+                dir.path(),
+                "TSK-001",
+                Anchor {
+                    own_branch,
+                    level: PolicyLevel::Off,
+                    branch: "spike/TSK-001-test",
+                    head: "HEAD",
+                },
+                &["src/lib.rs".into()],
+                &[],
+                &mut tagged,
+            );
+            assert!(tagged.iter().any(|finding| finding.violation.rule == RULE
+                && finding
+                    .violation
+                    .message
+                    .contains("a spike lands only findings")
+                && (finding.violation.level == PolicyLevel::Block)));
+        }
+    }
+
+    #[test]
+    fn r22_absent_task_and_research_only_spike_keep_existing_policy_levels() {
+        let (dir, head) = r22_repo(false);
+        for own_branch in [false, true] {
+            let mut tagged = Vec::new();
+            tracked(
+                dir.path(),
+                "TSK-001",
+                Anchor {
+                    own_branch,
+                    level: PolicyLevel::Off,
+                    branch: "spike/TSK-001-test",
+                    head: &head,
+                },
+                &["docs/research/findings.md".into()],
+                &[],
+                &mut tagged,
+            );
+            assert!(tagged
+                .iter()
+                .all(|finding| !(finding.violation.level == PolicyLevel::Block)));
+            assert!(tagged
+                .iter()
+                .all(|finding| finding.violation.rule != "work.tracking_state"));
+        }
+    }
+
+    #[test]
+    fn r15_root_branch_preserves_unicode_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            br#"{"git":{"root_branch":"release\u00a0"}}"#,
+        )
+        .unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", ".codeflow/policy.json"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "test",
+            ],
+        ] {
+            assert!(codeflow_core::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        assert_eq!(
+            root_branch_at(dir.path(), "HEAD").unwrap().as_deref(),
+            Some("release\u{a0}")
+        );
+    }
+
+    /// Issue 79: a changed path that is not valid UTF-8 is listed as its
+    /// exact bytes, never as a lossy spelling of another, and never makes
+    /// the range unreadable.
+    #[test]
+    fn a_changed_path_that_is_not_utf8_is_listed_as_its_bytes() {
+        let ok = parse_name_status(b"M\0docs/a.md\0").unwrap();
+        assert_eq!(ok, [("M".to_string(), GitName::from_text("docs/a.md"))]);
+        let odd = parse_name_status(b"M\0docs/caf\xe9.md\0").unwrap();
+        assert_eq!(odd[0].1.bytes(), b"docs/caf\xe9.md");
+        assert!(parse_name_status(b"\xff\0docs/a.md\0").is_err());
+    }
+
+    /// Round 23: a name that is not valid UTF-8 is judged the strict way by
+    /// every rule that reads paths as text: it is never a spike path, never
+    /// a task's own record, and the journey rule's path listing refuses it
+    /// (`acceptance::rule_name`), so it never passes as no adopter path.
+    #[test]
+    fn r23_odd_names_are_judged_strictly_by_path_rules() {
+        let odd = GitName::from_bytes(b"docs/research/caf\xe9.md");
+        let plain = GitName::from_text("docs/research/cafe.md");
+        let mut tagged = Vec::new();
+        spike_paths("TSK-001", std::slice::from_ref(&plain), &mut tagged);
+        assert!(tagged.is_empty(), "the control is a spike path");
+        spike_paths("TSK-001", std::slice::from_ref(&odd), &mut tagged);
+        assert_eq!(tagged.len(), 1);
+        assert!(tagged[0].violation.message.contains(r"caf\xe9.md"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let git = GitPolicy::default();
+        let mut tagged = Vec::new();
+        let plain_text = plain.rule_text().unwrap().to_string();
+        journey(
+            dir.path(),
+            &git,
+            "TSK-001",
+            "HEAD",
+            &[plain_text],
+            &mut tagged,
+        );
+        assert!(tagged.is_empty(), "the control is no adopter-facing path");
+        assert_eq!(
+            codeflow_core::workgraph::acceptance::rule_name(plain.bytes()).as_deref(),
+            Ok("docs/research/cafe.md")
+        );
+        assert!(
+            codeflow_core::workgraph::acceptance::rule_name(odd.bytes()).is_err(),
+            "an odd name refuses the journey listing"
+        );
+    }
+
     fn no_problem(_: &str) -> Option<String> {
         None
     }
 
     /// The path rule alone, for a project whose product is `src/**`; the
     /// managed block and links need a repository (`planning_amendment`).
-    fn path_problem(files: &[String]) -> Option<String> {
+    fn path_problem(files: &[GitName]) -> Option<String> {
         let project = ProjectPaths {
             product: vec!["src/**".to_string()],
             watched: Vec::new(),
@@ -934,12 +1254,16 @@ mod tests {
         files
             .iter()
             .find(|path| {
-                codeflow_core::workgraph::classify::amendment_path(path, &project).is_none()
+                codeflow_core::workgraph::classify::amendment_path(
+                    path.rule_text().unwrap(),
+                    &project,
+                )
+                .is_none()
             })
             .map(|path| format!("a planning-only pull request touches a product path: {path}"))
     }
 
-    fn input<'a>(body: &'a str, branch: &'a str, files: &'a [String]) -> Input<'a> {
+    fn input<'a>(body: &'a str, branch: &'a str, files: &'a [GitName]) -> Input<'a> {
         Input {
             body,
             branch,
@@ -958,8 +1282,8 @@ mod tests {
         }
     }
 
-    fn paths(list: &[&str]) -> Vec<String> {
-        list.iter().map(ToString::to_string).collect()
+    fn paths(list: &[&str]) -> Vec<GitName> {
+        list.iter().map(|path| GitName::from_text(path)).collect()
     }
 
     /// TSK-241: a task pull request may add operator feedback items beside
@@ -1078,7 +1402,7 @@ mod tests {
                 .unwrap_err()
                 .contains("a task id never takes a list")
         );
-        let block = |_: &[String]| Some(amendment::MANAGED_BLOCK_CHANGED.to_string());
+        let block = |_: &[GitName]| Some(amendment::MANAGED_BLOCK_CHANGED.to_string());
         let mut changed = input("Task: EPC-001, EPC-002", "plan/next", &carried);
         changed.amendment_problem = &block;
         assert!(classify(&changed)
@@ -1140,10 +1464,10 @@ mod tests {
         assert_eq!(
             parse_name_status(out).unwrap(),
             [
-                ("M".to_string(), "src/\u{3c0}.rs".to_string()),
-                ("A".to_string(), ".claude/a\tb.md".to_string()),
-                ("D".to_string(), "src/old.rs".to_string()),
-                ("A".to_string(), "lib/new.rs".to_string()),
+                ("M".to_string(), GitName::from_text("src/\u{3c0}.rs")),
+                ("A".to_string(), GitName::from_text(".claude/a\tb.md")),
+                ("D".to_string(), GitName::from_text("src/old.rs")),
+                ("A".to_string(), GitName::from_text("lib/new.rs")),
             ]
         );
         assert!(parse_name_status(b"M\0").is_err());

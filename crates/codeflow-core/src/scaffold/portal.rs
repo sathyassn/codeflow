@@ -777,7 +777,11 @@ fn remove_abandoned_transaction_debris(
         .map_err(|e| ScaffoldError::io(root.join(".codeflow"), e))?;
     let mut debris_seen = 0;
     for entry in entries {
-        let name = entry.to_string_lossy();
+        // Transaction debris is named by this tool in ASCII, so a name that
+        // is not valid UTF-8 is not debris (OS text rule, issue 79).
+        let Some(name) = entry.to_str() else {
+            continue;
+        };
         let is_stage = name.starts_with(TRANSACTION_STAGE_PREFIX);
         let cleanup_id = name.strip_prefix(TRANSACTION_CLEANUP_PREFIX);
         if !is_stage && cleanup_id.is_none() {
@@ -959,6 +963,10 @@ fn authenticated_cleanup_outputs(
     };
     let mut removals = Vec::new();
     for name in staged {
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. Each
+        // staged name is looked up in the transaction's own list of outputs,
+        // so a name that is not valid UTF-8 is foreign state, and the cleanup
+        // refuses it instead of deleting around it.
         let name = name.to_str().ok_or_else(|| ScaffoldError::InvalidState {
             what: directory.into(),
             detail: "non-UTF-8 staged output name".into(),
@@ -1170,6 +1178,10 @@ fn setup_portal_locked(
     }
     let manifest_bytes = source
         .read(MANIFEST_ASSET)
+        .map_err(|error| ScaffoldError::InvalidState {
+            what: MANIFEST_ASSET.into(),
+            detail: error.to_string(),
+        })?
         .ok_or_else(|| ScaffoldError::ManifestMissing(MANIFEST_ASSET.into()))?;
     if manifest_bytes.len() > MAX_MANIFEST_BYTES {
         return Err(ScaffoldError::ManifestInvalid(
@@ -1218,6 +1230,10 @@ fn setup_portal_locked(
     for file in &manifest.files {
         let asset = source
             .read(&format!("{ASSET_PREFIX}{}", file.path))
+            .map_err(|error| ScaffoldError::InvalidState {
+                what: file.path.clone(),
+                detail: error.to_string(),
+            })?
             .ok_or_else(|| {
                 ScaffoldError::ManifestMissing(format!("{ASSET_PREFIX}{}", file.path))
             })?;
@@ -1589,6 +1605,9 @@ fn plan_legacy_baseline_removal(
                 detail: "baseline directory contains too many entries".into(),
             });
         }
+        // Kept strict for the reason given for staged names above: an entry
+        // that is not valid UTF-8 is unknown content, and the migration
+        // preserves all content.
         let name = entry
             .into_string()
             .map_err(|_| ScaffoldError::InvalidState {
@@ -1850,7 +1869,7 @@ fn rollback_mutations(
 }
 
 fn path_text(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    crate::portable_path::slashed(path)
 }
 
 fn roots_equal(left: &str, right: &str) -> bool {
@@ -1960,8 +1979,8 @@ mod tests {
     struct MapSource(BTreeMap<String, Vec<u8>>);
 
     impl AssetSource for MapSource {
-        fn read(&self, path: &str) -> Option<Vec<u8>> {
-            self.0.get(path).cloned()
+        fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(self.0.get(path).cloned())
         }
     }
 
@@ -2970,6 +2989,63 @@ mod tests {
             std::fs::read(temp.path().join("guide/managed.txt")).unwrap(),
             b"user edit\n"
         );
+    }
+
+    /// A file named `caf\xe9`, which is not valid UTF-8, in `directory`.
+    /// `false` when the file system refuses the name (APFS does), so the tests
+    /// below run where they can, as on Linux.
+    #[cfg(unix)]
+    fn write_latin1_file(directory: &Path) -> bool {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::fs::write(
+            directory.join(std::ffi::OsStr::from_bytes(b"caf\xe9")),
+            b"x",
+        )
+        .is_ok()
+    }
+
+    /// Kept strict (issue 79): a legacy baseline entry that is not valid UTF-8
+    /// is unknown content, and the migration preserves all content.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_baseline_entry_that_is_not_utf8_stops_migration() {
+        let temp = initialized_root();
+        setup_portal(&source("1.0.0", "old\n"), temp.path(), Path::new("guide")).unwrap();
+        make_legacy(temp.path());
+        if !write_latin1_file(&temp.path().join(BASELINE_ROOT)) {
+            return;
+        }
+        let before = std::fs::read(temp.path().join(STATE_PATH)).unwrap();
+        let error =
+            setup_portal(&source("2.0.0", "new\n"), temp.path(), Path::new("guide")).unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8"), "{error}");
+        assert_eq!(std::fs::read(temp.path().join(STATE_PATH)).unwrap(), before);
+    }
+
+    /// Kept strict (issue 79): a staged output that is not valid UTF-8 is not
+    /// one of the transaction's own outputs, so the cleanup refuses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_output_that_is_not_utf8_stops_the_cleanup() {
+        let temp = initialized_root();
+        let transaction = temp.path().join(TRANSACTION_PATH);
+        std::fs::create_dir_all(transaction.join("after")).unwrap();
+        if !write_latin1_file(&transaction.join("after")) {
+            return;
+        }
+        let journal: PortalTransactionJournal = serde_json::from_str(
+            r#"{"schema_version":2,"transaction_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","portal_root":"guide","state_path":".codeflow/docs-portal.json","baseline_root":".codeflow/.docs-portal-baseline","mutations":[]}"#,
+        )
+        .unwrap();
+        let error = authenticated_cleanup_outputs(
+            &PortalIo::open(temp.path()).unwrap(),
+            TRANSACTION_PATH,
+            &journal,
+            Path::new("guide"),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8"), "{error}");
     }
 
     #[test]

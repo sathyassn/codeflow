@@ -147,7 +147,7 @@ fn in_window(window: &Window, number: u64, merged_at: &str) -> bool {
 fn parse_subject(subject: &str) -> Option<(u64, &str)> {
     let rest = subject.strip_prefix("Merge pull request #")?;
     let (number, rest) = rest.split_once(' ')?;
-    let head = rest.strip_prefix("from ")?.split_whitespace().next()?;
+    let head = rest.strip_prefix("from ")?.split(' ').next()?;
     Some((number.parse().ok()?, head))
 }
 
@@ -216,12 +216,19 @@ fn status_only(repo: &Repository, merge: &Commit<'_>) -> bool {
         let Some(delta) = diff.get_delta(index) else {
             return false;
         };
-        let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) else {
+        let Some(path) = delta
+            .new_file()
+            .path_bytes()
+            .or_else(|| delta.old_file().path_bytes())
+        else {
             return false;
         };
-        let path = path.to_string_lossy();
-        let is_record =
-            RECORD_DIRS.iter().any(|dir| path.starts_with(dir)) && path.ends_with(".md");
+        // Bytes, not text (OS text rule, issue 79): only ASCII prefixes and
+        // the suffix are tested.
+        let is_record = RECORD_DIRS
+            .iter()
+            .any(|dir| path.starts_with(dir.as_bytes()))
+            && path.ends_with(b".md");
         // A record added or removed is planning, not a status move.
         if !is_record || delta.old_file().id().is_zero() || delta.new_file().id().is_zero() {
             return false;
@@ -273,7 +280,7 @@ fn regions(text: &str) -> Vec<Region> {
     let mut key = String::new();
     let mut section: Option<String> = None;
     for line in text.lines() {
-        if delimiters < 2 && line.trim_end() == "---" {
+        if delimiters < 2 && line.trim_end_matches([' ', '\t']) == "---" {
             delimiters += 1;
             out.push(Region::Delimiter);
             continue;
@@ -283,14 +290,14 @@ fn regions(text: &str) -> Vec<Region> {
             // items belong to the key above them.
             if !line.starts_with([' ', '\t', '-', '#']) {
                 if let Some((name, _)) = line.split_once(':') {
-                    key = name.trim().to_string();
+                    key = name.trim_matches([' ', '\t']).to_string();
                 }
             }
             out.push(Region::Front(key.clone()));
             continue;
         }
         if let Some(name) = line.strip_prefix("## ") {
-            section = Some(name.trim().to_string());
+            section = Some(name.trim_matches([' ', '\t']).to_string());
         }
         out.push(section.clone().map_or(Region::Title, Region::Section));
     }
@@ -342,5 +349,16 @@ mod tests {
         assert_eq!(got[7], Region::Title);
         assert_eq!(got[11], Region::Section("Acceptance Criteria".into()));
         assert_eq!(got[15], Region::Section("Closeout".into()));
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_merge_subject_keeps_branch_unicode_space() {
+        assert_eq!(
+            super::parse_subject("Merge pull request #12 from owner/topic\u{a0}name"),
+            Some((12, "owner/topic\u{a0}name"))
+        );
     }
 }

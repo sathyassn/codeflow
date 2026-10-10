@@ -68,8 +68,12 @@ def fail(message: str) -> NoReturn:
 
 
 def run(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
+    # Git output can hold text that is not UTF-8, such as a commit message in
+    # another encoding (issue 79). This reader is for text that is shown or
+    # searched for markers, so it is decoded lossily. A path is never read
+    # through it: see changed_paths.
     result = subprocess.run(
-        args, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        args, cwd=cwd, text=True, errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
@@ -374,11 +378,23 @@ def file_at_ref(ref: str, path: str, *, cwd: Path) -> bytes:
 
 
 def changed_paths(base: str, head: str, *, cwd: Path) -> list[str]:
-    return [
-        line
-        for line in git("diff", "--name-only", f"{base}...{head}", "--", cwd=cwd).splitlines()
-        if line
-    ]
+    """The changed paths, each an exact name (issue 79).
+
+    A path is matched against the watched globs, so a lossy spelling could miss
+    a pattern. The names are read as NUL-delimited bytes and decoded with the
+    file system's surrogate escapes: one escape per invalid byte, so a `?`
+    matches one byte as it does in the C locale, and no two names share a
+    spelling."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "-z", f"{base}...{head}", "--"],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip() or "no output"
+        fail(f"command failed (git diff --name-only {base}...{head}): {detail}")
+    return [os.fsdecode(raw) for raw in result.stdout.split(b"\0") if raw]
 
 
 def matches_any(path: str, patterns: list[str]) -> bool:
@@ -886,19 +902,25 @@ def read_fragments(source: str | Path, *, cwd: Path) -> list[tuple[str, str]]:
                     fail(f"changelog fragment {relative} is not a regular file")
                 found.append((relative, path.read_bytes()))
     else:
-        listing = run(
-            ["git", "ls-tree", "-r", "-z", "--full-tree", source, "--", FRAGMENT_DIR], cwd=cwd
-        ).stdout
-        for record in filter(None, listing.split("\0")):
-            meta, _, relative = record.partition("\t")
-            mode = meta.split()[0]
+        # A path is read as exact bytes, never through the lossy `run`
+        # (issue 79): each invalid byte keeps its own surrogate escape, so a
+        # name that is not UTF-8 is refused by name below as misnamed.
+        args = ["git", "ls-tree", "-r", "-z", "--full-tree", source, "--", FRAGMENT_DIR]
+        result = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            detail = result.stderr.decode(errors="replace").strip() or "no output"
+            fail(f"command failed ({' '.join(args)}): {detail}")
+        for record in filter(None, result.stdout.split(b"\0")):
+            meta, _, name = record.partition(b"\t")
+            relative = os.fsdecode(name)
+            mode = meta.split()[0].decode("ascii")
             if relative == FRAGMENT_DIR:
                 fail(f"{FRAGMENT_DIR} must be a directory of changelog fragments")
             if mode not in {"100644", "100755"}:
                 fail(f"changelog fragment {relative} is not a regular file")
             found.append((relative, file_at_ref(source, relative, cwd=cwd)))
     fragments = []
-    for relative, data in sorted(found, key=lambda item: item[0].encode()):
+    for relative, data in sorted(found, key=lambda item: os.fsencode(item[0])):
         if not is_fragment_path(relative):
             fail(
                 f"changelog fragment {relative} is misnamed; a fragment is "

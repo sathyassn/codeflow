@@ -70,11 +70,9 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let note =
         |message: String| result(Status::Note(remedy::DOCTOR_REMOTE_UNREAD.remedy()), message);
 
-    let Some(nwo) = github_origin(root) else {
-        return note(
-            "no GitHub `origin` remote, so doctor reads no host rules for the default branch"
-                .into(),
-        );
+    let nwo = match origin_or_why(root) {
+        Ok(nwo) => nwo,
+        Err(why) => return note(why),
     };
     if opts.do_look_path("gh").is_err() {
         return note(format!(
@@ -202,7 +200,7 @@ fn policy_list(root: &Path) -> Result<(Vec<String>, String), String> {
         || errors.iter().any(|e| e.key == "policy.json")
     {
         return untrusted(format!(
-            "the policy file does not parse, so the built-in defaults stand in for it: {}",
+            "the policy file does not parse, so enforcement refuses it and no list is in force: {}",
             text(&all)
         ));
     }
@@ -217,7 +215,11 @@ fn policy_list(root: &Path) -> Result<(Vec<String>, String), String> {
     if !list_errors.is_empty() {
         return untrusted(text(&list_errors));
     }
-    let required = Policy::load(root).git.required_checks;
+    // An unreadable policy is named, never read as the defaults (issue 79).
+    let required = match Policy::load(root) {
+        Ok(policy) => policy.git.required_checks,
+        Err(why) => return untrusted(why),
+    };
     if required.is_empty() || required.iter().any(|name| name.trim().is_empty()) {
         return untrusted("git.required_checks names no usable check".into());
     }
@@ -509,11 +511,44 @@ fn names(list: &Value) -> Vec<String> {
         .collect()
 }
 
+/// `owner/name` of the GitHub `origin`, or the note that says why doctor
+/// reads no host rules.
+fn origin_or_why(root: &Path) -> Result<String, String> {
+    match github_origin(root) {
+        Ok(Some(nwo)) => Ok(nwo),
+        Ok(None) => Err(
+            "no GitHub `origin` remote, so doctor reads no host rules for the default branch"
+                .into(),
+        ),
+        Err(why) => Err(format!(
+            "{why}, so doctor reads no host rules for the default branch"
+        )),
+    }
+}
+
 /// `owner/name` of the `origin` remote when it is on github.com.
-fn github_origin(root: &Path) -> Option<String> {
-    let repo = git2::Repository::discover(root).ok()?;
-    let remote = repo.find_remote("origin").ok()?;
-    parse_github_url(remote.url().ok()?)
+///
+/// OS text rule (issue 79): only a proven missing repository or `origin` is
+/// none. An unreadable repository or an `origin` URL that is not UTF-8 is
+/// named, never read as no remote.
+fn github_origin(root: &Path) -> Result<Option<String>, String> {
+    let Some(repo) = crate::hooks::repo::open(root)? else {
+        return Ok(None);
+    };
+    let remote = match repo.find_remote("origin") {
+        Ok(remote) => remote,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot read the `origin` remote: {}",
+                error.message()
+            ))
+        }
+    };
+    let url = remote
+        .url()
+        .map_err(|error| format!("cannot read the `origin` URL: {}", error.message()))?;
+    Ok(parse_github_url(url))
 }
 
 /// `owner/name` from an HTTPS, SSH or scp-style github.com URL.
@@ -663,10 +698,10 @@ mod tests {
     #[test]
     fn an_untrusted_required_checks_list_notes_before_any_host_call() {
         // The host strictly requires one other check for everyone. An empty
-        // list would leave no policy name to find missing, and a file that
-        // does not parse, or names the key wrongly, loads the defaults in
-        // place of the intended list, so each must stop the check before
-        // `gh` is asked anything instead of passing it.
+        // list would leave no policy name to find missing, a file that does
+        // not parse is refused by enforcement, and a misnamed key loads the
+        // defaults in place of the intended list, so each must stop the
+        // check before `gh` is asked anything instead of passing it.
         static CALLS: AtomicUsize = AtomicUsize::new(0);
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
             CALLS.fetch_add(1, Ordering::SeqCst);

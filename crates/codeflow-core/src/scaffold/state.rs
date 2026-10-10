@@ -418,17 +418,17 @@ impl InstalledManifest {
         root.join(INSTALLED_MANIFEST)
     }
 
-    /// Loads the record, or an empty one when absent.
+    /// Loads the record, or an empty one when absent. It is read as
+    /// [`Self::store`] writes it, beneath the root without following a
+    /// link, so a dangling link is refused, never read as no record.
     ///
     /// # Errors
     ///
-    /// IO failures other than not-found, or invalid JSON.
+    /// A linked path, IO failures other than not-found, or invalid JSON.
     pub fn load_or_default(root: &Path, scaffold_version: &str) -> Result<Self, ScaffoldError> {
-        let path = Self::path(root);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).map_err(ScaffoldError::from),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new(scaffold_version)),
-            Err(e) => Err(ScaffoldError::io(&path, e)),
+        match read_beneath_root(root, INSTALLED_MANIFEST)? {
+            Some(text) => serde_json::from_str(&text).map_err(ScaffoldError::from),
+            None => Ok(Self::new(scaffold_version)),
         }
     }
 
@@ -456,11 +456,12 @@ impl Baseline {
         format!("{BASELINE_DIR}/{dest}")
     }
 
-    #[must_use]
-    pub fn read(root: &Path, dest: &str) -> Option<String> {
-        // A symlinked baseline path resolves to `None` (treated as absent),
-        // exactly like a missing baseline — never a read that follows the link.
-        read_beneath_root(root, &Self::rel(dest)).ok().flatten()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the baseline cannot be read safely or decoded.
+    pub fn read(root: &Path, dest: &str) -> Result<Option<String>, ScaffoldError> {
+        read_beneath_root(root, &Self::rel(dest))
     }
 
     /// # Errors
@@ -502,10 +503,15 @@ fn write_file_with_mode(
     bytes: &[u8],
     mode_from: Option<&Path>,
 ) -> Result<(), ScaffoldError> {
-    let permissions = mode_from
-        .and_then(|from| std::fs::symlink_metadata(from).ok())
-        .filter(std::fs::Metadata::is_file)
-        .map(|meta| meta.permissions());
+    // Only a proven-absent `mode_from` takes the default; a read failure
+    // is never read as no permissions to keep.
+    let permissions = match mode_from {
+        Some(from) => crate::absence::symlink_metadata_optional(from)
+            .map_err(|e| ScaffoldError::io(from, e))?
+            .filter(std::fs::Metadata::is_file)
+            .map(|meta| meta.permissions()),
+        None => None,
+    };
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
             path,
@@ -1383,6 +1389,20 @@ pub(crate) fn set_exec(path: &Path, exec: bool) -> Result<(), ScaffoldError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A manifest record that cannot be read refuses; only a missing one
+    /// is the empty record.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_installed_manifest_is_not_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let empty = InstalledManifest::load_or_default(root, "3.1.0").unwrap();
+        assert!(empty.files.is_empty());
+        std::fs::create_dir(root.join(".codeflow")).unwrap();
+        std::os::unix::fs::symlink("gone", InstalledManifest::path(root)).unwrap();
+        assert!(InstalledManifest::load_or_default(root, "3.1.0").is_err());
+    }
 
     /// TSK-225: the state stays readable by the CI installers' line reader
     /// whatever its values hold, and means the same as before.

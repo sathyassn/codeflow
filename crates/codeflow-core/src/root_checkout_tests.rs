@@ -43,10 +43,10 @@ fn umbrella_policy() -> GitPolicy {
     }
 }
 
-fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-    let map: HashMap<String, String> = pairs
+fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    let map: HashMap<String, OsString> = pairs
         .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .map(|(k, v)| ((*k).to_string(), OsString::from(v)))
         .collect();
     move |name: &str| map.get(name).cloned()
 }
@@ -331,15 +331,15 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
     let root = repo_with_commit(&dir.path().join("r"));
     let repo = git2::Repository::open(&root).unwrap();
 
-    let rb = root_branch(&repo, &umbrella_policy());
+    let rb = root_branch(&repo, &umbrella_policy()).unwrap();
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         (WORKSPACE_ROOT_BRANCH, RootBranchSource::Policy)
     );
 
-    let rb = root_branch(&repo, &GitPolicy::default());
+    let rb = root_branch(&repo, &GitPolicy::default()).unwrap();
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::ProtectedList)
     );
 
@@ -347,9 +347,9 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
         protected_branches: vec!["release/*".into()],
         ..GitPolicy::default()
     };
-    let rb = root_branch(&repo, &fallback);
+    let rb = root_branch(&repo, &fallback).unwrap();
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::Fallback)
     );
 
@@ -362,9 +362,9 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
             "refs/remotes/origin/trunk",
         ],
     );
-    let rb = root_branch(&repo, &GitPolicy::default());
+    let rb = root_branch(&repo, &GitPolicy::default()).unwrap();
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("trunk", RootBranchSource::OriginHead)
     );
 }
@@ -372,10 +372,39 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
 // ---- commits at the root checkout ------------------------------------------
 
 #[test]
+fn r21_direct_origin_head_has_no_default_branch_designation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let repo = git2::Repository::open(&root).unwrap();
+    let tip = repo.head().unwrap().target().unwrap();
+    repo.reference("refs/remotes/origin/HEAD", tip, true, "fixture")
+        .unwrap();
+    let branch = default_branch(&repo, &GitPolicy::default()).unwrap();
+    assert_eq!(branch.name.rule_text().unwrap(), "main");
+    assert_eq!(branch.source, RootBranchSource::ProtectedList);
+    repo.find_reference("refs/remotes/origin/HEAD")
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(
+        default_branch(&repo, &GitPolicy::default()).unwrap(),
+        branch
+    );
+    let fallback = GitPolicy {
+        protected_branches: vec![],
+        ..GitPolicy::default()
+    };
+    assert_eq!(
+        default_branch(&repo, &fallback).unwrap().source,
+        RootBranchSource::Fallback
+    );
+}
+
+#[test]
 fn a_commit_at_the_root_on_its_root_branch_is_fine() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));
-    assert_eq!(commit_finding(&root, &GitPolicy::default()), None);
+    assert_eq!(commit_finding(&root, &GitPolicy::default()).unwrap(), None);
 }
 
 #[test]
@@ -383,7 +412,9 @@ fn a_commit_at_the_root_on_a_feature_branch_is_found_with_its_message() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
-    let finding = commit_finding(&root, &GitPolicy::default()).expect("a finding");
+    let finding = commit_finding(&root, &GitPolicy::default())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(
         finding.message(),
         format!(
@@ -407,7 +438,9 @@ fn a_commit_at_the_root_on_a_detached_head_is_found() {
     let root = repo_with_commit(&dir.path().join("r"));
     let sha = git(&root, &["rev-parse", "HEAD"]);
     git(&root, &["switch", "--quiet", "--detach"]);
-    let finding = commit_finding(&root, &GitPolicy::default()).expect("a finding");
+    let finding = commit_finding(&root, &GitPolicy::default())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(finding.head, Head::Detached(sha.chars().take(9).collect()));
     assert!(finding.message().contains("on a detached HEAD at"));
 }
@@ -421,7 +454,7 @@ fn a_commit_in_a_linked_worktree_on_a_feature_branch_is_fine() {
         &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
     );
     assert_eq!(
-        commit_finding(&root.join(".worktrees/t"), &GitPolicy::default()),
+        commit_finding(&root.join(".worktrees/t"), &GitPolicy::default()).unwrap(),
         None
     );
 }
@@ -431,9 +464,11 @@ fn an_umbrella_root_on_its_root_branch_passes_and_on_a_feature_branch_is_found()
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("u"));
     git(&root, &["switch", "--quiet", "-c", WORKSPACE_ROOT_BRANCH]);
-    assert_eq!(commit_finding(&root, &umbrella_policy()), None);
+    assert_eq!(commit_finding(&root, &umbrella_policy()).unwrap(), None);
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
-    let finding = commit_finding(&root, &umbrella_policy()).expect("a finding");
+    let finding = commit_finding(&root, &umbrella_policy())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(
         finding.message(),
         format!(
@@ -452,7 +487,7 @@ fn a_root_branch_named_main_explicitly_adds_no_finding_on_main() {
         root_branch: "main".into(),
         ..GitPolicy::default()
     };
-    assert_eq!(commit_finding(&root, &policy), None);
+    assert_eq!(commit_finding(&root, &policy).unwrap(), None);
 }
 
 // ---- git-guard (AC-2) --------------------------------------------------------
@@ -463,9 +498,9 @@ fn a_root_branch_named_main_explicitly_adds_no_finding_on_main() {
 fn guard(cwd: &Path, policy: &GitPolicy, command: &str) -> Vec<Violation> {
     use crate::hooks::git_guard::{evaluate, read_target, GuardContext, Retarget};
     let repo = git2::Repository::discover(cwd).unwrap();
-    let branch = crate::hooks::repo::current_branch(&repo);
+    let branch = crate::hooks::repo::current_branch(&repo).unwrap();
     let common = repo.commondir().to_path_buf();
-    let root = RootCheckout::at(cwd, policy);
+    let root = RootCheckout::at(cwd, policy).unwrap();
     let dir_target = |spec: &Retarget<'_>| read_target(cwd, Some(&common), spec);
     let ctx = GuardContext {
         policy,
@@ -874,7 +909,7 @@ fn umbrella(dir: &Path) -> PathBuf {
 }
 
 fn found(root: &Path) -> Vec<NestedRepo> {
-    nested_repositories(&git2::Repository::open(root).unwrap())
+    nested_repositories(&git2::Repository::open(root).unwrap()).unwrap()
 }
 
 #[test]
@@ -1133,8 +1168,8 @@ fn a_registered_submodule_stays_tracked_and_unflagged() {
     );
     git(&root, &["commit", "--quiet", "-m", "add submodule"]);
     let repo = git2::Repository::open(&root).unwrap();
-    assert!(nested_repositories(&repo).is_empty());
-    let subs = submodule_paths(&repo);
+    assert!(nested_repositories(&repo).unwrap().is_empty());
+    let subs = submodule_paths(&repo).unwrap();
     assert!(stray_gitlinks(&repo, &subs).is_empty());
     let report = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
     assert!(warnings(&report).is_empty(), "{report:?}");
@@ -1187,7 +1222,7 @@ fn a_gitlink_without_a_submodule_entry_is_reported() {
     git(&root, &["add", "embedded"]);
     let repo = git2::Repository::open(&root).unwrap();
     assert_eq!(
-        stray_gitlinks(&repo, &submodule_paths(&repo)),
+        stray_gitlinks(&repo, &submodule_paths(&repo).unwrap()),
         vec!["embedded".to_string()]
     );
 }
@@ -1721,7 +1756,7 @@ fn finish_on_a_policy_without_a_git_object_sets_the_key() {
     write_policy(&root, "{}");
     let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
     assert!(report.policy_changed);
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(&root);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(&root).unwrap();
     assert_eq!(policy.git.root_branch, WORKSPACE_ROOT_BRANCH);
 }
 
@@ -1795,6 +1830,27 @@ fn the_workspace_hint_appears_only_for_nested_repositories_without_a_root_branch
     assert_eq!(git(&root, &["branch", "--show-current"]), "main");
 }
 
+#[test]
+fn r16_repository_reports_do_not_hide_malformed_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("repo"));
+    std::fs::write(root.join(".git/HEAD"), b"malformed HEAD\n").unwrap();
+    let findings = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message.contains("cannot read")));
+    let hint = workspace_hint(&root, &GitPolicy::default()).expect("cannot-read finding");
+    assert!(hint.message.contains("cannot read"), "{}", hint.message);
+
+    std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+    let findings = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
+    assert!(
+        !findings.is_empty(),
+        "existing unreadable repository cannot disappear"
+    );
+    assert!(workspace_hint(&root, &GitPolicy::default()).is_some());
+}
+
 // ---- the policy keys (AC-1) -------------------------------------------------
 
 #[test]
@@ -1846,4 +1902,387 @@ fn bootstrap_grace_suspends_the_rule() {
     let mut p = GitPolicy::default();
     p.suspend_for_bootstrap();
     assert_eq!(p.root_checkout_commits, PolicyLevel::Off);
+}
+
+/// Review finding on issue 79: a root branch or a checked-out branch whose
+/// name is not valid UTF-8 was read as absent, and a lossy spelling made it
+/// equal to a different branch. Each name is kept as `GitName` bytes, so each
+/// branch is itself and no other. Unix only: Windows cannot hold the name as
+/// a ref path, so libgit2 cannot read the branch there at all.
+#[cfg(unix)]
+#[test]
+fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    let git_dir = root.join(".git");
+    crate::git::write_packed_refs(
+        &git_dir,
+        &[
+            (tip.clone(), b"refs/heads/main".to_vec()),
+            (tip.clone(), b"refs/heads/release/caf\xe9".to_vec()),
+            (tip, b"refs/remotes/origin/release/caf\xe9".to_vec()),
+        ],
+    );
+    let _ = std::fs::remove_file(git_dir.join("refs/heads/main"));
+    std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
+    std::fs::create_dir_all(git_dir.join("refs/remotes/origin")).unwrap();
+    std::fs::write(
+        git_dir.join("refs/remotes/origin/HEAD"),
+        b"ref: refs/remotes/origin/release/caf\xe9\n",
+    )
+    .unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+
+    let invalid = GitName::from_bytes(b"release/caf\xe9");
+    assert_eq!(head(&repo).unwrap(), Head::Branch(invalid.clone()));
+    let origin = default_branch(&repo, &GitPolicy::default()).unwrap();
+    assert_eq!(
+        (origin.name, origin.source),
+        (invalid, RootBranchSource::OriginHead)
+    );
+
+    // On the root branch itself: no finding.
+    let facts = RootCheckout::read(&repo, &GitPolicy::default())
+        .unwrap()
+        .unwrap();
+    assert!(facts
+        .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
+        .is_none());
+
+    // A policy root branch that holds a real U+FFFD is another branch, not
+    // the one whose byte is invalid.
+    let lookalike = GitPolicy {
+        root_branch: "release/caf\u{fffd}".to_string(),
+        ..GitPolicy::default()
+    };
+    let facts = RootCheckout::read(&repo, &lookalike).unwrap().unwrap();
+    assert!(facts
+        .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
+        .is_some());
+}
+
+/// Review finding on issue 79: a default branch that is not valid UTF-8 was
+/// passed to git as its escaped spelling, which resolves to nothing. The
+/// workspace branch step stops with the reason instead.
+#[test]
+fn a_default_branch_that_is_not_utf8_stops_the_workspace_branch_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    let git_dir = root.join(".git");
+    crate::git::write_packed_refs(
+        &git_dir,
+        &[
+            (tip.clone(), b"refs/heads/main".to_vec()),
+            (tip, b"refs/remotes/origin/caf\xe9".to_vec()),
+        ],
+    );
+    std::fs::create_dir_all(git_dir.join("refs/remotes/origin")).unwrap();
+    std::fs::write(
+        git_dir.join("refs/remotes/origin/HEAD"),
+        b"ref: refs/remotes/origin/caf\xe9\n",
+    )
+    .unwrap();
+    let error = prepare_branch(&root, &GitPolicy::default()).err().unwrap();
+    assert!(
+        error.0.message.contains("not valid UTF-8"),
+        "{}",
+        error.0.message
+    );
+}
+
+/// Issue 79: a registered submodule path and an index gitlink are compared as
+/// exact bytes, so a gitlink `sub` plus an invalid byte is not the registered
+/// `sub` plus U+FFFD, and is reported by its escaped name.
+#[test]
+fn a_gitlink_is_compared_with_the_registered_paths_by_exact_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    for path in [&b"sub\xe9"[..], "sub\u{fffd}".as_bytes()] {
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+            flags: 0,
+            flags_extended: 0,
+            path: path.to_vec(),
+        };
+        index.add(&entry).unwrap();
+    }
+    let registered: BTreeSet<GitName> = [GitName::from_text("sub\u{fffd}")].into();
+    assert_eq!(stray_gitlinks(&repo, &registered), [r"sub\xe9"]);
+}
+
+/// A folder whose name is not valid UTF-8 is not walked as its lossy
+/// spelling, and a nested repository beside it is still found.
+#[cfg(unix)]
+#[test]
+fn a_folder_that_is_not_utf8_does_not_hide_or_rename_a_nested_repository() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    let odd = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    if std::fs::create_dir(&odd).is_err() {
+        return; // this file system refuses the name
+    }
+    std::fs::create_dir_all(odd.join("inner").join(".git")).unwrap();
+    std::fs::create_dir_all(root.join("plain").join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    assert!(
+        nested_repositories(&repo).is_err(),
+        "cannot omit a repository that finish would need to ignore"
+    );
+}
+
+/// Round eight on issue 79: a tracked file whose name is not valid UTF-8 and
+/// that is gone from the working tree is uncommitted work, so the branch
+/// switch is refused instead of seeing a clean tree.
+#[test]
+fn a_tracked_change_to_a_name_that_is_not_utf8_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(b"docs/caf\xe9.md", b"x"), (b"docs/plain.md", b"y")],
+    );
+    let changes = tracked_changes(&repo).unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|name| name.bytes() == b"docs/caf\xe9.md"),
+        "{changes:?}"
+    );
+}
+
+/// Round fifteen on issue 79: a `.git` file whose folder holds a newline names
+/// that exact folder. When it does not exist, ownership is unreadable and
+/// nested inventory refuses; the first line cannot prove an owned worktree.
+#[test]
+fn a_gitfile_folder_with_a_newline_is_not_an_owned_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let common = dir.path().join("common");
+    std::fs::create_dir_all(common.join("worktrees").join("meta")).unwrap();
+    let marker = dir.path().join("wt-git");
+    let inside = common.join("worktrees").join("meta");
+    std::fs::write(&marker, format!("gitdir: {}\n", inside.display())).unwrap();
+    assert!(is_own_worktree(&marker, &common).unwrap());
+    std::fs::write(&marker, format!("gitdir: {}\nother\n", inside.display())).unwrap();
+    let error = is_own_worktree(&marker, &common).unwrap_err();
+    assert!(error.contains("cannot resolve gitfile target"), "{error}");
+}
+
+#[test]
+fn configured_root_branch_keeps_unicode_whitespace() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(temp.path()).unwrap();
+    for name in ["release\u{a0}", "\u{a0}"] {
+        let policy = GitPolicy {
+            root_branch: name.into(),
+            ..GitPolicy::default()
+        };
+        assert_eq!(
+            root_branch(&repo, &policy).unwrap().name.bytes(),
+            name.as_bytes()
+        );
+        assert_eq!(workspace_branch_name(&policy), name);
+        let checkout = RootCheckout::read(&repo, &policy).unwrap().unwrap();
+        assert!(checkout.commit_on(name).is_none());
+        assert!(checkout.commit_on("release").is_some());
+    }
+}
+
+#[test]
+fn r15_actor_unicode_marker_is_present() {
+    assert_eq!(
+        actor(&env_of(&[("CLAUDECODE", "\u{a0}")])),
+        Actor::Agent("CLAUDECODE")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_process_env_preserves_non_utf8_values() {
+    use std::os::unix::ffi::OsStrExt;
+    let name = format!("CODEFLOW_R16_PROCESS_ENV_{}_UNREADABLE", std::process::id());
+    std::env::set_var(&name, std::ffi::OsStr::from_bytes(b"\xff"));
+    let value = process_env(&name);
+    std::env::remove_var(&name);
+    assert!(value.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_actor_preserves_non_utf8_process_marker() {
+    use std::os::unix::ffi::OsStrExt;
+    let key = format!("CODEFLOW_R16_ACTOR_{}_UNREADABLE", std::process::id());
+    std::env::set_var(&key, std::ffi::OsStr::from_bytes(b"\xff"));
+    let observed = actor(&|name| {
+        (name == "CODEX_SESSION_ID")
+            .then(|| process_env(&key))
+            .flatten()
+    });
+    std::env::remove_var(&key);
+    assert_eq!(observed, Actor::Agent("CODEX_SESSION_ID"));
+}
+
+#[cfg(unix)]
+fn env_of_os(pairs: &[(&str, &[u8])]) -> impl Fn(&str) -> Option<OsString> {
+    use std::os::unix::ffi::OsStringExt;
+    let values: HashMap<String, OsString> = pairs
+        .iter()
+        .map(|(key, value)| ((*key).into(), OsString::from_vec(value.to_vec())))
+        .collect();
+    move |name| values.get(name).cloned()
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_actor_preserves_non_utf8_marker_bytes() {
+    assert_eq!(
+        actor(&env_of_os(&[("CODEX_SESSION_ID", b"\xff")])),
+        Actor::Agent("CODEX_SESSION_ID")
+    );
+    assert_eq!(
+        actor(&env_of_os(&[
+            (HUMAN_OVERRIDE_ENV, b"1\xff"),
+            ("CODEX_SESSION_ID", b"\xff")
+        ])),
+        Actor::Agent("CODEX_SESSION_ID")
+    );
+}
+
+#[test]
+fn r16_finish_preserves_unreadable_gitignore() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    write_policy(&root, "{\"git\": {\"protected_branches\": [\"main\"]}}\n");
+    let original = b"# bad\xff\n";
+    std::fs::write(root.join(".gitignore"), original).unwrap();
+    let step = prepare_branch(&root, &GitPolicy::default()).unwrap();
+    assert!(finish(&root, step).is_err());
+    assert_eq!(std::fs::read(root.join(".gitignore")).unwrap(), original);
+}
+
+/// Unix only: Windows refuses a newline in a file name (os error 123).
+#[cfg(unix)]
+#[test]
+fn r16_nested_inventory_refuses_unrepresentable_ignore_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    std::fs::create_dir_all(root.join("line\nbreak").join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    assert!(nested_repositories(&repo).is_err());
+}
+
+/// The name Windows can hold that `.gitignore` text cannot: a folder whose
+/// UTF-16 name holds an unpaired surrogate is refused, never written lossily.
+#[cfg(windows)]
+#[test]
+fn nested_inventory_refuses_a_folder_name_that_is_not_unicode() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    let name = std::ffi::OsString::from_wide(&[u16::from(b'd'), 0xD800]);
+    std::fs::create_dir_all(root.join(name).join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    let error = nested_repositories(&repo).unwrap_err();
+    assert!(error.contains("as UTF-8"), "{error}");
+}
+
+#[test]
+fn r16_unreadable_origin_head_refuses_root_commit_judgment() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let repo = git2::Repository::open(&root).unwrap();
+    let origin = repo.path().join("refs/remotes/origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    std::fs::write(origin.join("HEAD"), b"not a ref\n").unwrap();
+    assert!(default_branch(&repo, &GitPolicy::default()).is_err());
+    let finding = hook_violation(&root, &GitPolicy::default(), &env_of(&[])).unwrap();
+    assert_eq!(finding.level, PolicyLevel::Block);
+    assert!(finding.message.contains("cannot read"));
+}
+
+#[cfg(unix)]
+#[test]
+fn r18_dangling_git_marker_is_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
+    assert!(super::git_marker(dir.path()).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn r19_dangling_registered_worktree_stays_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("root"));
+    let checkout = dir.path().join("checkout");
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            checkout.to_str().unwrap(),
+            "-b",
+            "feat/x",
+        ],
+    );
+    std::fs::rename(&checkout, dir.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("missing"), &checkout).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    let env = env_of(&[]);
+    assert!(worktree_findings(&repo, &GitPolicy::default(), &env)
+        .iter()
+        .any(|f| f.message.contains("cannot inspect linked worktree")));
+}
+
+#[test]
+fn r22_prepare_branch_refuses_corrupt_default_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "--quiet", "-c", "task/example"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", &tip]);
+    git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    std::fs::write(root.join(".git/refs/heads/main"), "not an oid\n").unwrap();
+    let error = prepare_branch(&root, &GitPolicy::default()).unwrap_err();
+    assert!(error.to_string().contains("main"), "{error}");
+    assert_eq!(git(&root, &["branch", "--show-current"]), "task/example");
+}
+
+#[test]
+fn r22_prepare_branch_uses_remote_when_default_is_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "--quiet", "-c", "task/example"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", &tip]);
+    git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    git(&root, &["branch", "-D", "main"]);
+    assert!(matches!(
+        prepare_branch(&root, &GitPolicy::default()).unwrap(),
+        BranchStep::Created { .. }
+    ));
 }

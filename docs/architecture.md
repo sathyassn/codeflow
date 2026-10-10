@@ -156,6 +156,88 @@ The runtime posture each harness receives, including the Codex permission
 profile and Claude's credential mask, is in
 [harness posture](harness-posture.md).
 
+#### Text from the operating system and git
+
+Names, paths and process text that the operating system or git supplies are
+bytes, and valid UTF-8 is not promised (issue 79). One layer and one rule
+cover the engine.
+
+The layer is `codeflow_core::git::GitName` (`git/name.rs`): the exact bytes of
+a ref, branch, remote, worktree, path or tree entry, read once where the name
+enters (git2 `*_bytes` accessors, NUL-separated git output, `OsStr` bytes).
+
+| View | Use | On a name that is not UTF-8 |
+|---|---|---|
+| `bytes()`, `starts_with`, `joined`, a map keyed by `GitName` | comparing, keying, prefix tests, building a path | exact, never lossy |
+| `rule_text()` | a rule that needs text (a glob, a task prefix, a config key, a record path) | returns an error that carries the display form, so the read refuses |
+| `display()` | output to a person: messages, logs, advice | escapes each invalid byte as `\xNN`; not a comparable value |
+| `os_path()` | a file system path | exact on Unix; refuses where the name cannot be one |
+| `storage_key()` | a key that is persisted or put in a map of text | valid text as is, else a lossy form, a NUL and hex: no two names share a key |
+
+The rule:
+
+- **A value that is compared or used in a decision is never decoded lossily.**
+  A lossy spelling can equal a different valid name (an invalid byte and a real
+  U+FFFD both read as U+FFFD). Decisions use the bytes, or `rule_text()`, or
+  refuse. Lossy decoding is for display only, and goes through `display()`.
+- **Refuse where a wrong value would change a security or identity decision**,
+  and say why in a comment at that site, starting "OS text rule" or "Kept
+  strict". Refuse and do not skip: a name the check cannot read is work or
+  authority it cannot prove (a policy source ref, a remote name, a worktree
+  name, a state directory written into a hook command). Where leaving a name
+  out only keeps it (cleanup advice, a waiver offered for a branch), it is
+  left out and not guessed.
+- **A name that only matches a name this tool generates is skipped.** A
+  directory entry tested against a UUID or a nonce-suffixed temporary name is
+  not one of ours when it is not valid UTF-8, because every generated name is
+  ASCII, so the scan moves on.
+- **A glob on a name read from disk matches bytes.** In the C locale `?` and
+  `[..]` consume one byte, but the lossy spelling holds one character for a
+  run of bytes, so it cannot rule such a name out. The deletion guard treats a
+  glob with `?`, `[` or `\` that meets a name that is not UTF-8 as unproven,
+  and `find -name` keeps such a name as a candidate. A pattern of literals and
+  `*` is answered by the lossy spelling as the bytes would answer it. These are
+  the two listed matcher exceptions in the scan.
+- **Plumbing answers keep names exact.** The id registry's git runner reads text
+  answers strictly and name lists as bytes: a name that is not UTF-8 becomes its
+  storage key, which no record or registry path equals, and a file it must
+  rewrite is addressed by its exact bytes. Where a platform cannot hold a name
+  (native Windows), the key alone stands for the entry.
+- **Tree walks read names as bytes.** git2's `Tree::walk` stops with an error
+  at a directory whose name is not UTF-8; `git::walk_tree` reads the entries
+  as bytes. A record path is valid text, so a path that is not UTF-8 is not a
+  record, and a tree under it is never read as one.
+- **The hook plane keeps branch text.** A branch that is not valid UTF-8 reads
+  as one sentinel name that is always protected, so a guard fails closed, and
+  the exact name is kept for display.
+- **Decision inputs must be obtained successfully.** File, environment, Git,
+  metadata and parse errors refuse, or produce a named unproven result that
+  the caller consumes as refusal. They cannot become absent, empty, default,
+  skipped or fallback values. The same rule applies when a size or capability
+  limit prevents reading an input. Genuine optional absence remains distinct
+  from a failed read. JSON, TOML, Markdown and blobs retain their format
+  contracts; a read or parse failure names the input and refuses its decision.
+- **The grammar's reader removes framing once.** Downstream consumers retain
+  already-decoded quote, backslash, LF and NUL content. Idempotent separator
+  rules remain separate from delimiter removal. Native environment bytes
+  remain `OsString` until a consumer requires text or constructs a path.
+
+A source scan (`crates/codeflow-core/tests/name_decode_scan.rs`) parses every
+production source with `syn` and fails on a new `from_utf8_lossy`,
+`to_string_lossy` or git2 text accessor (`shorthand`, `symbolic_target`,
+`name()` in a file that uses git2) outside the layer, unless it is listed with
+the reason it never feeds a decision. The list is keyed by file, enclosing
+item and call, with a count, and a stale entry fails. Its decision-input pass
+also covers obtaining-to-absent chains, discarded errors, Unicode whitespace
+and framing removal. Closed reason tags distinguish separator grammars from
+framing readers; `FRAMING_OWNERS` names the latter. An `unproven` row names the
+caller that refuses its result. The scan does not resolve types or prove data
+flow, so wrapper return types and errors carried through local variables need
+a caller audit and site regressions (a collision, refusal or whole-path fixture).
+
+The pre-push and reference-transaction stdin reads are strict by an earlier
+decision that the `remedy_clearing` tests pin.
+
 ### scaffold: `assets/`
 
 - `assets/base/` holds the shipped scaffold: the AGENTS.md and CLAUDE.md

@@ -52,7 +52,10 @@ pub fn durable_root(root: &Path, home: &Path) -> PathBuf {
         .and_then(|r| r.commondir().canonicalize().ok())
         .unwrap_or_else(|| root.to_path_buf());
     home.join(super::gate_guard::HOME_EVIDENCE_DIR)
-        .join(&digest(identity.to_string_lossy().as_bytes())[..16])
+        // OS text rule (issue 79): the repository's own folder names its
+        // evidence, so it is hashed by its exact bytes. A lossy spelling would
+        // let two folders share one evidence directory and one green base.
+        .join(&digest(identity.as_os_str().as_encoded_bytes())[..16])
 }
 
 pub fn revision(root: &Path) -> Option<String> {
@@ -64,10 +67,39 @@ pub fn revision(root: &Path) -> Option<String> {
         .map(|id| id.to_string())
 }
 
+/// The snapshot key and the file system path of one index entry.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): a path in the index is
+/// bytes, and the gate only reads it and hashes what it names, so a name that
+/// is not valid UTF-8 must not stop `codeflow test`. The file system path
+/// keeps the exact bytes where the platform allows it. The key is the name
+/// itself when it is valid UTF-8. Otherwise it is the lossy text, a NUL and the
+/// hex of the bytes: a path never holds a NUL, so no valid name can equal that
+/// key, and two different invalid names differ in their hex, so one name never
+/// hides a change of another in the snapshot.
+fn tracked_entry(root: &Path, raw: &[u8]) -> (String, Option<PathBuf>) {
+    let name = crate::git::GitName::from_bytes(raw);
+    // Exact bytes where the platform holds them. Where it cannot (a name that
+    // is not UTF-8 on native Windows) no file of that name can exist, so
+    // there is no path and the key alone stands for the entry, never a
+    // lossy lookalike of another name.
+    let path = name.os_path().ok().map(|relative| root.join(relative));
+    (name.storage_key(), path)
+}
+
+/// The bytes of a link target, exact on every platform (`as_encoded_bytes`
+/// keeps a Windows target's unpaired surrogates, which a lossy spelling would
+/// merge).
+fn link_target_bytes(target: &Path) -> Vec<u8> {
+    target.as_os_str().as_encoded_bytes().to_vec()
+}
+
 /// Snapshot the bytes and modes of every tracked path, including dirty edits.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return Ok(BTreeMap::new());
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(invalid(root, format!("cannot discover repository: {error}; repair repository metadata before rerunning the gate"))),
     };
     let mut result = BTreeMap::new();
     for entry in repo
@@ -75,27 +107,43 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
         .map_err(|e| invalid(root, e.to_string()))?
         .iter()
     {
-        let name = std::str::from_utf8(&entry.path).map_err(|e| invalid(root, e.to_string()))?;
-        let path = root.join(name);
-        let bytes = if path.is_symlink() {
-            std::fs::read_link(&path)?
-                .to_string_lossy()
-                .as_bytes()
-                .to_vec()
-        } else if path.exists() {
-            std::fs::read(&path)?
+        let (name, path) = tracked_entry(root, &entry.path);
+        let Some(path) = path else {
+            result.insert(
+                name,
+                digest(&[entry.mode.to_le_bytes().as_slice(), b"<unrepresentable>"].concat()),
+            );
+            continue;
+        };
+        let unreadable = |error: std::io::Error| {
+            TestingError::Io(std::io::Error::new(error.kind(), format!("cannot snapshot {}: {error}; restore a readable tracked path before rerunning the gate", path.display())))
+        };
+        let metadata = if crate::absence::proven_absent(&path).map_err(unreadable)? {
+            None
+        } else {
+            Some(std::fs::symlink_metadata(&path).map_err(unreadable)?)
+        };
+        let bytes = if metadata
+            .as_ref()
+            .is_some_and(|m| m.file_type().is_symlink())
+        {
+            // The exact target bytes: a lossy spelling would give two
+            // different targets one hash and hide a change of the link.
+            link_target_bytes(&std::fs::read_link(&path).map_err(unreadable)?)
+        } else if metadata.is_some() {
+            std::fs::read(&path).map_err(unreadable)?
         } else {
             b"<deleted>".to_vec()
         };
         #[cfg(unix)]
         let mode = {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::symlink_metadata(&path).map_or(0, |m| m.permissions().mode())
+            metadata.map_or(0, |m| m.permissions().mode())
         };
         #[cfg(not(unix))]
         let mode = entry.mode;
         result.insert(
-            name.to_string(),
+            name,
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
         );
     }
@@ -117,25 +165,38 @@ pub fn matches(patterns: &[String], path: &str) -> bool {
     })
 }
 
-fn green_base(root: &Path, home: Option<&Path>, base: &str, config_digest: &str) -> bool {
+fn green_base(
+    root: &Path,
+    home: Option<&Path>,
+    base: &str,
+    config_digest: &str,
+) -> Result<bool, String> {
     let Some(home) = home else {
-        return false;
+        return Ok(false);
     };
-    let Ok(entries) = std::fs::read_dir(durable_root(root, home)) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let artifact = std::fs::read(entry.path().join("run.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-        artifact.is_some_and(|a| {
-            a["passed"] == true
-                && a["complete"] == true
-                && a["clean"] == true
-                && a["revision"] == base
-                && a["config_digest"] == config_digest
-        })
-    })
+    let directory = durable_root(root, home);
+    if !directory
+        .try_exists()
+        .map_err(|error| format!("cannot inspect green-base evidence: {error}"))?
+    {
+        return Ok(false);
+    }
+    let mut green = false;
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("cannot read green-base evidence: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("cannot read green-base entry: {error}"))?;
+        let bytes = std::fs::read(entry.path().join("run.json"))
+            .map_err(|error| format!("cannot read green-base run: {error}"))?;
+        let a: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot parse green-base run: {error}"))?;
+        green |= a["passed"] == true
+            && a["complete"] == true
+            && a["clean"] == true
+            && a["revision"] == base
+            && a["config_digest"] == config_digest;
+    }
+    Ok(green)
 }
 
 /// Select conservatively from the whole delta, then include producer closure.
@@ -173,21 +234,24 @@ pub fn select(
     let Some(base) = &options.since else {
         return all("no proven comparison base");
     };
-    let Some(base_sha) = git_output(
+    let base_sha = match git_output(
         root,
         &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    ) else {
-        return all("unproven base");
+    ) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
-    let base_sha = base_sha.trim();
-    if !green_base(root, home, base_sha, config_digest) {
-        return all("base has no green run with the same config digest");
+    let base_sha = base_sha.strip_suffix('\n').unwrap_or(&base_sha);
+    match green_base(root, home, base_sha, config_digest) {
+        Ok(true) => {}
+        Ok(false) => return all("base has no green run with the same config digest"),
+        Err(error) => return all(&error),
     }
-    if git_output(root, &["merge-base", "--is-ancestor", base_sha, "HEAD"]).is_none() {
-        return all("base is not a candidate ancestor");
+    if let Err(error) = git_output(root, &["merge-base", "--is-ancestor", base_sha, "HEAD"]) {
+        return all(&error);
     }
     // Include staged and unstaged edits as well as the committed range.
-    let Some(delta) = git_output(
+    let delta = match git_output(
         root,
         &[
             "diff",
@@ -197,12 +261,13 @@ pub fn select(
             base_sha,
             "--",
         ],
-    ) else {
-        return all("delta unavailable");
+    ) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
-    let Some(untracked) = git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"])
-    else {
-        return all("untracked inputs unavailable");
+    let untracked = match git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"]) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
     let mut paths = Vec::new();
     let mut fields = delta.split('\0').filter(|f| !f.is_empty());
@@ -295,7 +360,14 @@ pub fn check_only(
     }
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Option<String> {
+/// Git's text output, or an error when it failed or is not valid UTF-8.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): kept strict on purpose.
+/// The output decides which targets a run may skip, and an error makes every
+/// caller select every target, so a path that is not valid UTF-8 widens the
+/// run and never narrows it. A lossy path could match a `narrow` pattern the
+/// real bytes do not and drop a check the change owes.
+fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = crate::git::command()
         .args(args)
         .current_dir(root)
@@ -303,12 +375,15 @@ fn git_output(root: &Path, args: &[&str]) -> Option<String> {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
+        .map_err(|error| format!("cannot read Git comparison: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot read Git comparison: Git exited {}",
+            output.status
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("cannot read Git comparison as UTF-8: {error}"))
 }
 
 /// Probe writable temporary storage and the tools actually named by selected commands.
@@ -336,7 +411,7 @@ pub fn preflight(
                 continue;
             }
             if command
-                .split(|c: char| c.is_whitespace() || "'\";&|".contains(c))
+                .split(|c: char| matches!(c, ' ' | '\t' | '\n') || "'\";&|".contains(c))
                 .any(|word| word == tool)
             {
                 tools.insert(tool);
@@ -382,7 +457,10 @@ pub fn preflight(
     for t in targets {
         let command = &t.modes[mode].command;
         if let Some(rest) = command.strip_prefix("python3 -B scripts/with-node.py ") {
-            let pin = rest.split_whitespace().next().unwrap_or("");
+            let pin = rest
+                .split([' ', '\t', '\n'])
+                .find(|word| !word.is_empty())
+                .unwrap_or("");
             let mut probe = String::from("node --version");
             if command.contains("npm ") {
                 probe.push_str(" && npm --version");
@@ -420,4 +498,205 @@ fn observation(output: &std::process::Output) -> String {
     )
     .trim()
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository whose index and first commit hold `caf\xe9.txt`, a name
+    /// that is not valid UTF-8, beside `plain.txt`. The file is never written
+    /// to the work tree, so the repository builds on file systems that refuse
+    /// such a name.
+    fn repository_with_a_non_utf8_path() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for name in [b"plain.txt".as_slice(), b"caf\xe9.txt"] {
+            let id = repo.blob(b"data").unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 4,
+                    id,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: name.to_vec(),
+                })
+                .unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "test: seed",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Issue 79: the snapshot of tracked files used to fail on the first
+    /// index path that is not valid UTF-8, which stopped `codeflow test` in
+    /// any project with such a file name.
+    #[test]
+    fn tracked_snapshots_a_path_that_is_not_utf8() {
+        let dir = repository_with_a_non_utf8_path();
+        let snapshot = tracked(dir.path()).unwrap();
+        assert_eq!(snapshot.len(), 2, "{snapshot:?}");
+        assert!(snapshot.contains_key("plain.txt"));
+        let key = snapshot
+            .keys()
+            .find(|key| key.starts_with("caf"))
+            .expect("the non-UTF-8 path is in the snapshot");
+        assert!(key.ends_with("\x00636166e92e747874"), "{key:?}");
+        // A second snapshot of the same tree is equal, so the gate sees no
+        // generation change for a name it cannot spell.
+        assert_eq!(snapshot, tracked(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn two_names_that_differ_only_in_invalid_bytes_keep_distinct_keys() {
+        let root = Path::new("/repo");
+        let (first, _) = tracked_entry(root, b"a\xe9");
+        let (second, _) = tracked_entry(root, b"a\xff");
+        assert_ne!(first, second);
+        assert_eq!(tracked_entry(root, b"plain.txt").0, "plain.txt");
+        // Review finding: a valid name that spells the lossy text and the
+        // hex of an invalid one must not share its key.
+        let (valid, _) = tracked_entry(root, "a\u{fffd} [bytes 61ff]".as_bytes());
+        assert_ne!(second, valid);
+    }
+
+    /// Review finding: both names in one index must stay visible in the
+    /// snapshot, so a change to one of them is a generation change.
+    #[test]
+    fn a_valid_name_that_spells_an_invalid_ones_key_keeps_its_own_entry() {
+        let dir = repository_with_a_non_utf8_path();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        let id = repo.blob(b"other").unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100_644,
+                uid: 0,
+                gid: 0,
+                file_size: 5,
+                id,
+                flags: 0,
+                flags_extended: 0,
+                path: "caf\u{fffd} [bytes 636166e92e747874]".as_bytes().to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        assert_eq!(tracked(dir.path()).unwrap().len(), 3);
+    }
+
+    /// Kept strict on purpose: git output that is not valid UTF-8 is `None`,
+    /// which every caller reads as "select every target".
+    #[test]
+    fn git_output_that_is_not_utf8_selects_every_target() {
+        let dir = repository_with_a_non_utf8_path();
+        assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_err());
+        assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_ok());
+    }
+
+    /// Review finding: two link targets that differ only in invalid bytes must
+    /// hash differently, so a producer that retargets a tracked link is a
+    /// generation change. Runs where the file system accepts such a target.
+    /// Review finding on issue 79: the evidence directory was named by a lossy
+    /// spelling of the folder, so `caf` plus an invalid byte and `caf` plus a
+    /// real U+FFFD shared one directory and one green base.
+    #[cfg(unix)]
+    #[test]
+    fn two_folders_that_differ_only_in_an_invalid_byte_keep_their_own_evidence() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let home = Path::new("/home/example");
+        let invalid = Path::new(std::ffi::OsStr::from_bytes(b"/no/such/caf\xff"));
+        let replacement = Path::new("/no/such/caf\u{fffd}");
+        assert_ne!(
+            durable_root(invalid, home),
+            durable_root(replacement, home),
+            "one evidence directory for two folders"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_target_that_is_not_utf8_is_hashed_exactly() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o120_000,
+                uid: 0,
+                gid: 0,
+                file_size: 4,
+                id: repo.blob(b"base").unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: b"link".to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        let link = dir.path().join("link");
+        let target = |bytes: &[u8]| {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(bytes), &link)
+        };
+        if target(b"caf\xff").is_err() {
+            return;
+        }
+        let first = tracked(dir.path()).unwrap();
+        target(b"caf\xfe").unwrap();
+        assert_ne!(first, tracked(dir.path()).unwrap());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_tracked_refuses_corrupt_repository_but_allows_no_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(tracked(dir.path()).unwrap().is_empty());
+        std::fs::write(dir.path().join(".git"), "not a gitdir\n").unwrap();
+        assert!(tracked(dir.path()).is_err());
+    }
+    #[test]
+    fn r22_tracked_refuses_stat_failure_but_records_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/file"), "x").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("sub/file")).unwrap();
+        index.write().unwrap();
+        std::fs::remove_file(dir.path().join("sub/file")).unwrap();
+        assert_eq!(tracked(dir.path()).unwrap().len(), 1);
+        std::fs::remove_dir(dir.path().join("sub")).unwrap();
+        std::os::unix::fs::symlink("sub", dir.path().join("sub")).unwrap();
+        assert!(tracked(dir.path()).is_err());
+    }
 }

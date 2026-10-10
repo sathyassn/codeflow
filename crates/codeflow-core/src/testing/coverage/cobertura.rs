@@ -33,7 +33,21 @@ pub(crate) fn parse_cobertura_str(
     let mut lines_found = 0u64;
     let mut lines_hit = 0u64;
 
+    let mut scanned = 0;
+    let mut line = 1;
     loop {
+        let offset = usize::try_from(reader.buffer_position())
+            .unwrap_or(xml.len())
+            .min(xml.len());
+        line += xml.as_bytes()[scanned..offset]
+            .split(|&byte| byte == b'\n')
+            .count()
+            - 1;
+        scanned = offset;
+        let invalid = |message: String| TestingError::CoverageParseError {
+            path: source_path.to_path_buf(),
+            message: format!("line {line}: {message}"),
+        };
         match reader.read_event() {
             Ok(Event::Start(ref e) | Event::Empty(ref e)) => {
                 match e.local_name().as_ref() {
@@ -50,9 +64,16 @@ pub(crate) fn parse_cobertura_str(
                         }
 
                         let mut filename = String::new();
-                        for attr in e.attributes().flatten() {
+                        for attr in e.attributes() {
+                            let attr = attr.map_err(|error| invalid(error.to_string()))?;
                             if attr.key.local_name().as_ref() == b"filename" {
-                                filename = String::from_utf8_lossy(&attr.value).to_string();
+                                filename = attr
+                                    .decoded_and_normalized_value(
+                                        quick_xml::XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| invalid(error.to_string()))?
+                                    .into_owned();
                             }
                         }
 
@@ -64,14 +85,20 @@ pub(crate) fn parse_cobertura_str(
                     }
                     b"line" if current_file.is_some() => {
                         lines_found += 1;
-                        for attr in e.attributes().flatten() {
+                        for attr in e.attributes() {
+                            let attr = attr.map_err(|error| invalid(error.to_string()))?;
                             if attr.key.local_name().as_ref() == b"hits" {
-                                if let Ok(hits) =
-                                    String::from_utf8_lossy(&attr.value).parse::<u64>()
-                                {
-                                    if hits > 0 {
-                                        lines_hit += 1;
-                                    }
+                                let value = attr
+                                    .decoded_and_normalized_value(
+                                        quick_xml::XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| invalid(error.to_string()))?;
+                                let hits = value
+                                    .parse::<u64>()
+                                    .map_err(|error| invalid(error.to_string()))?;
+                                if hits > 0 {
+                                    lines_hit += 1;
                                 }
                             }
                         }
@@ -79,16 +106,11 @@ pub(crate) fn parse_cobertura_str(
                     _ => {}
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.local_name().as_ref() == b"class" || e.local_name().as_ref() == b"file" {
-                    // Do nothing here; we flush at the next file/class start or EOF
-                }
-            }
             Ok(Event::Eof) => break,
             Err(e) => {
                 return Err(TestingError::CoverageParseError {
                     path: source_path.to_path_buf(),
-                    message: format!("XML parse error: {e}"),
+                    message: format!("line {line}: XML parse error: {e}"),
                 });
             }
             _ => {}
@@ -183,5 +205,27 @@ mod tests {
     fn test_parse_cobertura_file_not_found() {
         let result = parse_cobertura(&PathBuf::from("/nonexistent/cov.xml"));
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_cobertura_attribute_errors_name_file_and_line() {
+        let path = Path::new("cov.xml");
+        assert!(parse_cobertura_str("<coverage/>", path).unwrap().is_empty());
+        for xml in [
+            "<coverage>\n<class filename='a' filename='b'/></coverage>",
+            "<coverage>\n<class filename=noquote/></coverage>",
+            "<coverage>\n<class filename='a'><line hits='oops'/></class></coverage>",
+        ] {
+            let error = parse_cobertura_str(xml, path).unwrap_err().to_string();
+            assert!(
+                error.contains("cov.xml") && error.contains("line 2"),
+                "{error}"
+            );
+        }
     }
 }

@@ -130,7 +130,7 @@ pub fn set_status(
     if !written && !judged_only(kind, &change.target) {
         return Err(vocabulary_error());
     }
-    let graph = Graph::from_worktree(repo_root);
+    let graph = Graph::from_worktree(repo_root).map_err(|error| VerbError::Refused(vec![error]))?;
     let record = graph
         .records
         .get(id)
@@ -152,7 +152,8 @@ pub fn set_status(
     if !refused.is_empty() {
         return Err(VerbError::Refused(refused));
     }
-    let (base, paths) = working_context(repo_root);
+    let (base, paths) =
+        working_context(repo_root).map_err(|error| VerbError::Refused(vec![error]))?;
     let verdict = judge_change(
         Some(record),
         &after,
@@ -200,6 +201,7 @@ fn bind_completion_of(
             .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
         let target =
             super::work_start::resolve_work_target(repo_root, after.integration_target.as_deref())
+                .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
                 .ok_or_else(|| {
                     VerbError::Refused(vec![
                         "cannot resolve the task target for reopen criteria".into()
@@ -258,7 +260,8 @@ fn gate_binding(
     if findings.is_empty() {
         return Ok(());
     }
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)
+        .map_err(|error| VerbError::Refused(vec![error]))?;
     if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
         let mut refused = findings;
         refused.push(tail.to_string());
@@ -306,6 +309,38 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
+/// The merge base of the task's own branch with its target, when `HEAD` is
+/// that branch: the range a record-only amendment waiver may name (TSK-184).
+/// A branch name that is not valid UTF-8 is not the task's own branch, so no
+/// waiver is offered for its range.
+fn own_range_base(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    task: &RecordView,
+    head: git2::Oid,
+) -> Option<git2::Oid> {
+    repo.head()
+        .ok()
+        .and_then(|head| {
+            crate::git::name::reference_shorthand(&head)
+                .rule_text()
+                .ok()
+                .map(str::to_string)
+        })
+        .filter(|branch| {
+            super::task_id_from_branch(repo_root, branch)
+                .is_ok_and(|id| id.as_deref() == Some(task.id.as_str()))
+        })
+        .and_then(|_| {
+            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+                .ok()
+                .flatten()
+        })
+        .and_then(|target| repo.revparse_single(&target).ok())
+        .and_then(|object| object.peel_to_commit().ok())
+        .and_then(|target| repo.merge_base(head, target.id()).ok())
+}
+
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
@@ -329,10 +364,14 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         )];
     };
     // A task without a declared target belongs to the default one.
-    let default_target = super::work_start::resolve_work_target(repo_root, None)
-        .and_then(|target| repo.revparse_single(&target).ok())
-        .and_then(|object| object.peel_to_commit().ok())
-        .map(|commit| commit.id());
+    let default_name = match super::work_start::resolve_work_target(repo_root, None) {
+        Ok(name) => name,
+        Err(error) => return vec![error.to_string()],
+    };
+    let default_target = match target_commit(&repo, default_name.as_deref()) {
+        Ok(target) => target,
+        Err(error) => return vec![error],
+    };
     let landing = super::acceptance::Landing::Worktree {
         head,
         changed: &changed,
@@ -371,7 +410,6 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     let into = task
         .integration_target
         .as_deref()
-        .map(str::trim)
         .filter(|target| !target.is_empty());
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
@@ -380,24 +418,11 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             // amendment commit in the pull request's own range (TSK-184).
             // The binder withholds it from a range that reopens the task,
             // as it does for CI.
-            let own_range_base = repo
-                .head()
-                .ok()
-                .and_then(|head| head.shorthand().ok().map(str::to_string))
-                .filter(|branch| {
-                    super::task_id_from_branch(repo_root, branch).as_deref()
-                        == Some(task.id.as_str())
-                })
-                .and_then(|_| {
-                    super::work_start::resolve_work_target(
-                        repo_root,
-                        task.integration_target.as_deref(),
-                    )
-                })
-                .and_then(|target| repo.revparse_single(&target).ok())
-                .and_then(|object| object.peel_to_commit().ok())
-                .and_then(|target| repo.merge_base(head, target.id()).ok());
-            let run = verb_authorities(repo_root, &repo, task, default_target);
+            let own_range_base = own_range_base(repo_root, &repo, task, head);
+            let run = match verb_authorities(repo_root, &repo, task, default_target) {
+                Ok(run) => run,
+                Err(error) => return vec![error],
+            };
             shown(super::acceptance::bind_completion_with_amendment(
                 &repo,
                 task,
@@ -423,6 +448,20 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     }
 }
 
+fn target_commit(
+    repo: &git2::Repository,
+    target: Option<&str>,
+) -> Result<Option<git2::Oid>, String> {
+    target
+        .map(|target| {
+            repo.revparse_single(target)
+                .and_then(|object| object.peel_to_commit())
+                .map(|commit| commit.id())
+                .map_err(|error| format!("cannot read acceptance target '{target}': {error}"))
+        })
+        .transpose()
+}
+
 /// The target tips a clean merge after the review may come from when the
 /// verb binds a completion. The verb has no run base, so it reads the
 /// task's target as `work start` anchors it, beside the default target. It
@@ -433,15 +472,17 @@ fn verb_authorities(
     repo: &git2::Repository,
     task: &RecordView,
     default_target: Option<git2::Oid>,
-) -> super::acceptance::RunBases {
-    super::acceptance::RunBases::new(
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .and_then(|target| repo.revparse_single(&target).ok())
-            .and_then(|object| object.peel_to_commit().ok())
-            .map(|commit| commit.id())
-            .into_iter()
-            .chain(default_target),
-    )
+) -> Result<super::acceptance::RunBases, String> {
+    Ok(super::acceptance::RunBases::new(
+        target_commit(
+            repo,
+            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+                .map_err(|error| error.to_string())?
+                .as_deref(),
+        )?
+        .into_iter()
+        .chain(default_target),
+    ))
 }
 
 /// Replace `path` with `content` only when its bytes still hash to
@@ -456,11 +497,12 @@ pub fn replace_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Resu
     if Sha256::digest(&current).as_slice() != expected {
         return Err(VerbError::Concurrent(path.to_path_buf()));
     }
-    let name = path.file_name().map_or_else(
-        || "record".into(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    // The temporary name keeps the file name's exact bytes (OS text rule,
+    // issue 79), so it sits beside the record and never names another file.
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name().unwrap_or_else(|| "record".as_ref()));
+    name.push(format!(".{}.tmp", std::process::id()));
+    let temporary = path.with_file_name(name);
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -482,8 +524,8 @@ pub fn replace_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Resu
 
 fn required<'a>(value: Option<&'a String>, flag: &str, why: &str) -> Result<&'a str, String> {
     value
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty() && !value.contains('\n'))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty() && !value.contains('\n'))
         .ok_or_else(|| format!("{why} needs {flag} <one line>"))
 }
 
@@ -526,7 +568,7 @@ fn propose(record: &RecordView, change: &StatusChange) -> Result<String, String>
         }
         (RecordKind::Task | RecordKind::Epic, "complete") => {
             if let Some(block) = &change.acceptance {
-                let inner = block.trim_end();
+                let inner = block.trim_end_matches('\n');
                 content =
                     append_to_section(&content, "## Closeout", &format!("```yaml\n{inner}\n```\n"));
             }
@@ -557,13 +599,17 @@ fn propose(record: &RecordView, change: &StatusChange) -> Result<String, String>
 /// Returns a message when the frontmatter delimiters are missing.
 pub fn set_frontmatter_value(content: &str, key: &str, value: &str) -> Result<String, String> {
     let mut lines: Vec<String> = content.split('\n').map(str::to_owned).collect();
-    if lines.first().map(|line| line.trim_end()) != Some("---") {
+    if lines
+        .first()
+        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
+        != Some("---")
+    {
         return Err("record has no frontmatter".into());
     }
     let close = lines
         .iter()
         .skip(1)
-        .position(|line| line.trim_end() == "---")
+        .position(|line| line.trim_end_matches([' ', '\t', '\r']) == "---")
         .map(|index| index + 1)
         .ok_or("record frontmatter is not closed")?;
     let prefix = format!("{key}:");
@@ -613,12 +659,16 @@ fn insert_section_before(content: &str, section: &str, before: &str) -> String {
                 .iter()
                 .map(|line| (*line).to_string())
                 .collect();
-            out.push(section.trim_end().to_string());
+            out.push(section.trim_end_matches('\n').to_string());
             out.push(String::new());
             out.extend(lines[start..].iter().map(|line| (*line).to_string()));
             out.join("\n")
         }
-        None => format!("{}\n\n{}\n", content.trim_end(), section.trim_end()),
+        None => format!(
+            "{}\n\n{}\n",
+            content.trim_end_matches('\n'),
+            section.trim_end_matches('\n')
+        ),
     }
 }
 
@@ -629,12 +679,15 @@ pub(crate) fn append_to_section(content: &str, heading: &str, text: &str) -> Str
     match section_range(&lines, heading) {
         Some((_, end)) => {
             let mut head: Vec<&str> = lines[..end].to_vec();
-            while head.last().is_some_and(|line| line.trim().is_empty()) {
+            while head
+                .last()
+                .is_some_and(|line| line.trim_matches([' ', '\t', '\r']).is_empty())
+            {
                 head.pop();
             }
             let mut out = head.join("\n");
             out.push_str("\n\n");
-            out.push_str(text.trim_end());
+            out.push_str(text.trim_end_matches('\n'));
             out.push('\n');
             if end < lines.len() {
                 out.push('\n');
@@ -644,8 +697,8 @@ pub(crate) fn append_to_section(content: &str, heading: &str, text: &str) -> Str
         }
         None => format!(
             "{}\n\n{heading}\n\n{}\n",
-            content.trim_end(),
-            text.trim_end()
+            content.trim_end_matches('\n'),
+            text.trim_end_matches('\n')
         ),
     }
 }
@@ -668,8 +721,11 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
         if scanned[body_end].kind != LineKind::FenceClose {
             return None;
         }
-        let header = (index..body_end).find(|&at| !scanned[at].visible.trim().is_empty());
-        if let Some(header) = header.filter(|&at| scanned[at].visible.trim_end() == "acceptance:") {
+        let header =
+            (index..body_end).find(|&at| !scanned[at].visible.trim_matches([' ', '\t']).is_empty());
+        if let Some(header) =
+            header.filter(|&at| scanned[at].visible.trim_end_matches([' ', '\t']) == "acceptance:")
+        {
             let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
             out[header] = "acceptance_superseded:".to_string();
             out.insert(header + 1, format!("  reason: {reason}"));
@@ -683,6 +739,17 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r22_target_anchor_refuses_an_unpeelable_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        assert_eq!(target_commit(&repo, None).unwrap(), None);
+        let blob = repo.blob(b"not a commit").unwrap();
+        repo.reference("refs/tags/not-commit", blob, true, "test")
+            .unwrap();
+        assert!(target_commit(&repo, Some("refs/tags/not-commit")).is_err());
+    }
 
     #[test]
     fn frontmatter_value_keeps_the_comment_column() {

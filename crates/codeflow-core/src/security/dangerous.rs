@@ -61,6 +61,8 @@ fn command_tokens(command: &str) -> Vec<String> {
         match (quote, ch) {
             (Some(active), c) if c == active => quote = None,
             (None, '\'' | '"') => quote = Some(ch),
+            // This fallback also reads raw PowerShell, whose lexical grammar
+            // includes Unicode separators. POSIX deletion has its own reader.
             (None, c) if c.is_whitespace() => {
                 if !current.is_empty() {
                     tokens.push(std::mem::take(&mut current));
@@ -80,7 +82,6 @@ pub(super) fn program_name(token: &str) -> String {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(token)
-        .trim_matches(|c: char| matches!(c, '"' | '\''))
         .to_ascii_lowercase()
 }
 
@@ -338,7 +339,7 @@ fn is_home_root_operand(op: &str) -> bool {
 /// false-positive on ordinary `echo` and commit-message strings.
 pub(super) fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
     let op = unquote_unescape(raw);
-    let op = op.trim();
+    let op = op.as_str();
     if is_home_root_operand(op) {
         return Some("home directory");
     }
@@ -466,7 +467,9 @@ fn temp_place(op: &str, tmpdir: Option<&Path>) -> TempPlace {
     };
     let tmpdir = tmpdir
         .and_then(|dir| std::fs::canonicalize(dir).ok())
-        .map(|dir| dir.to_string_lossy().into_owned())
+        // A temp folder that is not valid UTF-8 cannot be compared as text,
+        // so it is not a root (OS text rule, issue 79).
+        .and_then(|dir| dir.to_str().map(str::to_string))
         .filter(|dir| temp_root_depth(dir).is_some());
     // `/tmp/*` is judged as `/tmp/`, so a glob over a whole root is the root.
     match temp_root_depth(&canonical) {
@@ -537,7 +540,9 @@ fn canonical_operand(path: &str) -> Option<String> {
                 if rest.contains(&"..") {
                     return None;
                 }
-                let mut canonical = base.to_string_lossy().into_owned();
+                // A real path that is not valid UTF-8 cannot be judged as text
+                // (OS text rule, issue 79), so it is not established.
+                let mut canonical = base.to_str()?.to_string();
                 for part in rest {
                     if !canonical.ends_with('/') {
                         canonical.push('/');
@@ -546,9 +551,9 @@ fn canonical_operand(path: &str) -> Option<String> {
                 }
                 return Some(canonical);
             }
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound
-                    && std::fs::symlink_metadata(&prefix).is_err() => {}
+            Err(_)
+                if crate::absence::proven_absent(Path::new(&prefix)).is_ok_and(|absent| absent) => {
+            }
             Err(_) => return None,
         }
     }
@@ -561,7 +566,7 @@ fn canonical_operand(path: &str) -> Option<String> {
 /// the profile itself (or its whole-tree glob) is protected here.
 fn dangerous_windows_target(op: &str) -> Option<&'static str> {
     let normalized = op
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'))
+        .trim_matches([',', ';'])
         .replace('/', "\\")
         .to_ascii_lowercase();
     let path = normalized.strip_suffix("\\*").unwrap_or(&normalized);
@@ -618,7 +623,7 @@ fn dangerous_windows_target(op: &str) -> Option<&'static str> {
 }
 
 fn is_windows_drive_designator(op: &str) -> bool {
-    let op = op.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'));
+    let op = op.trim_matches([',', ';']);
     let bytes = op.as_bytes();
     bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
@@ -1046,6 +1051,18 @@ fn check_fork_bomb(cmd: &str) -> Option<Verdict> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unicode_blanks_stay_in_dangerous_operands() {
+        assert_eq!(
+            command_tokens("Remove-Item\u{a0}-Recurse C:\\Windows"),
+            ["Remove-Item", "-Recurse", "C:\\Windows"]
+        );
+        assert_eq!(dangerous_rm_target("'/etc\u{a0}'"), None);
+        assert_eq!(dangerous_rm_target("'/etc '"), None);
+        assert!(dangerous_rm_target("/etc").is_some());
+        assert!(check_windows_recursive_delete("Remove-Item\u{a0}-Recurse C:\\Windows").is_some());
+    }
     use super::*;
     use std::sync::OnceLock;
 

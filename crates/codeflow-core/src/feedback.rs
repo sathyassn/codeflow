@@ -241,34 +241,57 @@ pub fn parse_item(path: &str, content: &str) -> Result<Item, String> {
 }
 
 /// The item files under [`FEEDBACK_DIR`]: every Markdown file directly in
-/// it except the index, sorted. Empty when the directory is absent.
+/// it except the index, sorted. Empty when the directory is proven absent.
 /// A symbolic link is never followed: the directory is skipped when a part
-/// of its path is one, and a linked entry is left out.
-#[must_use]
-pub fn item_files(root: &Path) -> Vec<PathBuf> {
+/// of its path is one (which [`tracked`] refuses and [`lint`] reports), and
+/// a linked entry is left out.
+///
+/// # Errors
+///
+/// The directory or one of its entries cannot be read (issue 79: never read
+/// as no items).
+pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let Ok(dir) = contained_path(root, FEEDBACK_DIR) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension().is_some_and(|ext| ext == "md")
-                && path.file_name().is_some_and(|name| name != "INDEX.md")
-        })
-        .collect();
+    if crate::absence::symlink_metadata_optional(&dir)?.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        // The entry's own type: a link is left out, never followed.
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "md")
+            && path.file_name().is_some_and(|name| name != "INDEX.md")
+        {
+            files.push(path);
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
 
 /// Whether the project keeps feedback items (the directory exists).
-#[must_use]
-pub fn tracked(root: &Path) -> bool {
-    root.join(FEEDBACK_DIR).is_dir()
+/// `false` only when the directory is proven absent.
+///
+/// # Errors
+///
+/// The directory cannot be read, so whether it exists is unknown; or it
+/// is present but unusable: a symbolic link (to a directory or dangling)
+/// is at or above it, or something other than a directory is there.
+pub fn tracked(root: &Path) -> std::io::Result<bool> {
+    let dir = contained_path(root, FEEDBACK_DIR).map_err(std::io::Error::other)?;
+    match crate::absence::symlink_metadata_optional(&dir)? {
+        None => Ok(false),
+        Some(meta) if meta.is_dir() => Ok(true),
+        Some(_) => Err(std::io::Error::other(format!(
+            "{FEEDBACK_DIR} is not a directory"
+        ))),
+    }
 }
 
 /// Whether a repository-relative path is a feedback item (`FB-NNN.md`) or
@@ -354,8 +377,9 @@ pub(crate) fn replace_whole(path: &Path, text: &str, mode_from: &Path) -> std::i
         .and_then(|name| name.to_str())
         .unwrap_or("file");
     let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-    let permissions = std::fs::symlink_metadata(mode_from)
-        .ok()
+    // Only a proven-absent `mode_from` takes the default; a read failure
+    // is never read as no permissions to keep.
+    let permissions = crate::absence::symlink_metadata_optional(mode_from)?
         .filter(std::fs::Metadata::is_file)
         .map(|meta| meta.permissions());
     let mut options = std::fs::OpenOptions::new();
@@ -392,7 +416,16 @@ pub struct Loaded {
 #[must_use]
 pub fn load(root: &Path) -> Loaded {
     let mut loaded = Loaded::default();
-    for path in item_files(root) {
+    let files = match item_files(root) {
+        Ok(files) => files,
+        Err(error) => {
+            loaded
+                .unreadable
+                .push((FEEDBACK_DIR.to_string(), error.to_string()));
+            return loaded;
+        }
+    };
+    for path in files {
         let rel = relative(root, &path);
         match std::fs::read_to_string(&path) {
             Ok(content) => match parse_item(&rel, &content) {
@@ -405,11 +438,10 @@ pub fn load(root: &Path) -> Loaded {
     loaded
 }
 
+/// The repository path of `path`, exact (issue 79): a name that is not
+/// valid UTF-8 keeps its bytes as a storage key.
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    crate::portable_path::slashed(path.strip_prefix(root).unwrap_or(path))
 }
 
 /// The project's topics, or the default list when it sets none.
@@ -427,18 +459,24 @@ pub fn topics(root: &Path) -> Result<Vec<String>, String> {
 /// or `EPC-NNN` record in the checkout, or a repository-relative path (an
 /// optional `#anchor` is ignored) that stays inside the repository and
 /// reaches its target through no symbolic link.
-#[must_use]
-pub fn placement_resolves(root: &Path, reference: &str) -> bool {
+///
+/// # Errors
+/// The work records cannot be read, so whether the id exists is unknown
+/// (never read as an id that does not resolve).
+pub fn placement_resolves(root: &Path, reference: &str) -> Result<bool, String> {
     let reference = reference.trim();
     if reference.is_empty() {
-        return false;
+        return Ok(false);
     }
     if let Some(id) = RegId::parse(reference) {
-        return matches!(id.kind(), Kind::Tsk | Kind::Epc)
-            && crate::workgraph::allocate::work_item_exists(
-                &root.join("project-management"),
-                reference,
-            );
+        if !matches!(id.kind(), Kind::Tsk | Kind::Epc) {
+            return Ok(false);
+        }
+        return crate::workgraph::allocate::work_item_exists(
+            &root.join("project-management"),
+            reference,
+        )
+        .map_err(|error| format!("cannot read the work records to resolve {reference}: {error}"));
     }
     let path = reference.split('#').next().unwrap_or_default();
     let relative = Path::new(path);
@@ -447,9 +485,15 @@ pub fn placement_resolves(root: &Path, reference: &str) -> bool {
             .components()
             .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
     {
-        return false;
+        return Ok(false);
     }
-    contained_path(root, path).is_ok_and(|target| std::fs::symlink_metadata(target).is_ok())
+    // A path that escapes the repository or crosses a link is refused.
+    let Ok(target) = contained_path(root, path) else {
+        return Ok(false);
+    };
+    crate::absence::symlink_metadata_optional(&target)
+        .map(|meta| meta.is_some())
+        .map_err(|error| format!("cannot read {path} to resolve it: {error}"))
 }
 
 fn one_line(value: &str, what: &str) -> Result<String, String> {
@@ -582,7 +626,7 @@ pub fn create_with(
     }
     let dir = contained_path(root, FEEDBACK_DIR).map_err(StoreError::Invalid)?;
     let pm = root.join("project-management");
-    let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(&pm))?;
+    let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(&pm)?)?;
     let parsed = RegId::parse(&id).filter(|parsed| parsed.kind() == Kind::Fb);
     let Some(parsed) = parsed else {
         return Err(StoreError::Invalid(format!(
@@ -627,10 +671,10 @@ pub const TEMPLATE_MAX_BYTES: u64 = 64 * 1024;
 /// Why the file is not read.
 pub fn read_project_template(root: &Path) -> Result<Option<String>, String> {
     let path = contained_path(root, PROJECT_TEMPLATE)?;
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("{PROJECT_TEMPLATE}: {error}")),
+    let Some(meta) = crate::absence::symlink_metadata_optional(&path)
+        .map_err(|error| format!("{PROJECT_TEMPLATE}: {error}"))?
+    else {
+        return Ok(None);
     };
     if !meta.is_file() {
         return Err(format!("{PROJECT_TEMPLATE} is not a regular file"));
@@ -741,7 +785,7 @@ fn propose(
             let mut placed = item.placed_in.clone();
             for reference in &change.placements {
                 let reference = one_line(reference, "--in")?;
-                if !placement_resolves(root, &reference) {
+                if !placement_resolves(root, &reference)? {
                     return Err(format!(
                         "--in {reference} does not resolve: name a TSK-NNN or EPC-NNN record in this checkout, or a path inside the repository that exists"
                     ));
@@ -793,7 +837,9 @@ fn propose(
                 return Err(format!("{id} cannot supersede itself"));
             }
             let successor_path = contained_path(root, &format!("{FEEDBACK_DIR}/{successor}.md"))?;
-            if !std::fs::symlink_metadata(&successor_path).is_ok_and(|meta| meta.is_file()) {
+            let successor_meta = crate::absence::symlink_metadata_optional(&successor_path)
+                .map_err(|error| format!("--by {successor} cannot be read: {error}"))?;
+            if !successor_meta.is_some_and(|meta| meta.is_file()) {
                 return Err(format!(
                     "--by {successor} does not exist under {FEEDBACK_DIR}/"
                 ));
@@ -894,8 +940,26 @@ fn line_of(content: &str, key: &str) -> usize {
 #[must_use]
 pub fn lint(root: &Path) -> Lint {
     let mut lint = Lint::default();
-    if !tracked(root) {
+    // A link at or above the directory is present, never absent: name it.
+    if let Err(reason) = contained_path(root, FEEDBACK_DIR) {
+        lint.errors.push(LintFinding {
+            path: FEEDBACK_DIR.to_string(),
+            line: 1,
+            message: format!("{reason}; keep the items in the directory itself"),
+        });
         return lint;
+    }
+    match tracked(root) {
+        Ok(true) => {}
+        Ok(false) => return lint,
+        Err(error) => {
+            lint.errors.push(LintFinding {
+                path: FEEDBACK_DIR.to_string(),
+                line: 1,
+                message: format!("the feedback directory cannot be read: {error}"),
+            });
+            return lint;
+        }
     }
     let topics = match topics(root) {
         Ok(topics) => topics,
@@ -920,13 +984,6 @@ pub fn lint(root: &Path) -> Lint {
     let mut uids: BTreeMap<&str, &str> = BTreeMap::new();
     for item in &loaded.items {
         lint_item(root, item, &topics, &ids, &mut uids, &mut lint.errors);
-    }
-    if let Err(reason) = contained_path(root, FEEDBACK_DIR) {
-        lint.errors.push(LintFinding {
-            path: FEEDBACK_DIR.to_string(),
-            line: 1,
-            message: format!("{reason}; keep the items in the directory itself"),
-        });
     }
     let written =
         contained_path(root, INDEX_PATH).and_then(|path| match std::fs::symlink_metadata(&path) {
@@ -1057,15 +1114,20 @@ fn lint_links(
                     "a placed item has no placed_in entry".to_string(),
                 );
             }
-            for reference in item
-                .placed_in
-                .iter()
-                .filter(|reference| !placement_resolves(root, reference))
-            {
-                fail(
-                    "placed_in",
-                    format!("placed_in entry {reference} does not resolve to a task, epic or path"),
-                );
+            for reference in &item.placed_in {
+                match placement_resolves(root, reference) {
+                    Ok(true) => {}
+                    Ok(false) => fail(
+                        "placed_in",
+                        format!(
+                            "placed_in entry {reference} does not resolve to a task, epic or path"
+                        ),
+                    ),
+                    Err(error) => fail(
+                        "placed_in",
+                        format!("placed_in entry {reference} cannot be checked: {error}"),
+                    ),
+                }
             }
         }
         "closed" if item.closure.is_empty() => {
@@ -1177,7 +1239,9 @@ pub fn render_index(items: &[Item], topics: &[String]) -> String {
 /// keeps no feedback directory.
 #[must_use]
 pub fn open_summary(root: &Path) -> Option<(usize, Vec<(String, usize)>)> {
-    if !tracked(root) {
+    // A summary only: `validate --docs` and `feedback list` report a
+    // directory that cannot be read or is reached through a link.
+    if !matches!(tracked(root), Ok(true)) {
         return None;
     }
     let topics = topics(root).unwrap_or_default();
@@ -1341,14 +1405,14 @@ mod tests {
     fn placements_resolve_only_inside_the_repository() {
         let dir = project();
         let root = dir.path();
-        assert!(placement_resolves(root, "TSK-001"));
-        assert!(placement_resolves(root, "AGENTS.md#rules"));
-        assert!(!placement_resolves(root, "TSK-002"));
-        assert!(!placement_resolves(root, "EPC-001"));
-        assert!(!placement_resolves(root, "FB-001"));
-        assert!(!placement_resolves(root, "../AGENTS.md"));
-        assert!(!placement_resolves(root, "/etc/hosts"));
-        assert!(!placement_resolves(root, ""));
+        assert!(placement_resolves(root, "TSK-001").unwrap());
+        assert!(placement_resolves(root, "AGENTS.md#rules").unwrap());
+        assert!(!placement_resolves(root, "TSK-002").unwrap());
+        assert!(!placement_resolves(root, "EPC-001").unwrap());
+        assert!(!placement_resolves(root, "FB-001").unwrap());
+        assert!(!placement_resolves(root, "../AGENTS.md").unwrap());
+        assert!(!placement_resolves(root, "/etc/hosts").unwrap());
+        assert!(!placement_resolves(root, "").unwrap());
     }
 
     /// A value written over several lines cannot be replaced line by line:
@@ -1522,5 +1586,64 @@ mod tests {
         assert_eq!(open_summary(root).unwrap().0, 3);
         let bare = tempfile::tempdir().unwrap();
         assert!(open_summary(bare.path()).is_none());
+    }
+
+    /// A feedback directory that is a symbolic link, to a directory or
+    /// dangling, or that sits under one, is present: the lint names the
+    /// link and the directory never reads as absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_dangling_feedback_directory_is_reported_never_absent() {
+        use std::os::unix::fs::symlink;
+        let elsewhere = tempfile::tempdir().unwrap();
+        for target in [
+            elsewhere.path().to_path_buf(),
+            elsewhere.path().join("gone"),
+        ] {
+            let dir = project();
+            let root = dir.path();
+            std::fs::remove_dir(root.join(FEEDBACK_DIR)).unwrap();
+            symlink(&target, root.join(FEEDBACK_DIR)).unwrap();
+            assert!(tracked(root).is_err(), "{}", target.display());
+            let found = messages(root);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("project-management/feedback is a symbolic link")),
+                "{found:?}"
+            );
+            assert!(open_summary(root).is_none());
+        }
+        // A link above the directory is reported the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(elsewhere.path().join("pm/feedback")).unwrap();
+        symlink(elsewhere.path().join("pm"), root.join("project-management")).unwrap();
+        assert!(tracked(root).is_err());
+        let found = messages(root);
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("project-management is a symbolic link")),
+            "{found:?}"
+        );
+    }
+
+    /// A file where the directory belongs is present, never no feedback.
+    #[test]
+    fn a_file_at_the_feedback_directory_is_reported_never_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("project-management")).unwrap();
+        std::fs::write(root.join(FEEDBACK_DIR), "not a directory\n").unwrap();
+        assert!(tracked(root).is_err());
+        let found = messages(root);
+        assert!(
+            found.iter().any(|m| m.contains("is not a directory")),
+            "{found:?}"
+        );
+        let absent = tempfile::tempdir().unwrap();
+        assert!(!tracked(absent.path()).unwrap());
+        assert!(messages(absent.path()).is_empty());
     }
 }

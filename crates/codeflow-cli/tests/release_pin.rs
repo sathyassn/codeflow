@@ -313,3 +313,53 @@ fn update_keeps_the_setup_hook_and_doctor_reports_hook_and_digests() {
         fx.read(STATE)
     );
 }
+
+/// Issue 79: a `CODEFLOW_RELEASE_URL` that is not UTF-8 refuses the pin. It
+/// is never read as unset, which would pin digests downloaded from GitHub
+/// instead of the host it names. The variable is set only for the child
+/// process. A stand-in `curl` records any download, so no network is used.
+#[test]
+fn update_pin_refuses_a_release_url_that_is_not_utf8() {
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let before = fx.read(STATE);
+    let bin = fx.dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let called = fx.dir.path().join("curl-called");
+    std::fs::write(
+        bin.join("curl"),
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nexit 22\n",
+            called.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let url = std::ffi::OsString::from_vec(b"file:///releases-\xff".to_vec());
+    let out = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["update", "--pin", "99.0.0"])
+        .current_dir(fx.root())
+        .env("CODEFLOW_HOME", fx.dir.path().join("home"))
+        .env("CODEFLOW_RELEASE_URL", url)
+        .env("PATH", path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .output()
+        .unwrap();
+    let said = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("CODEFLOW_RELEASE_URL is not UTF-8"), "{said}");
+    assert!(
+        !called.exists(),
+        "a download was attempted: {}",
+        std::fs::read_to_string(&called).unwrap_or_default()
+    );
+    assert_eq!(fx.read(STATE), before);
+}

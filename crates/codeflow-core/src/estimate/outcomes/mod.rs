@@ -209,7 +209,13 @@ pub fn outcomes(repo_root: &Path, cwd: &Path, options: &Options) -> OutcomeRepor
         }
     };
     for record in &records {
-        let timings = history.timings(record);
+        let timings = match history.timings(record) {
+            Ok(timings) => timings,
+            Err(error) => {
+                report.finding("history_unreadable", true, error);
+                return report;
+            }
+        };
         // The closing point follows the current status: a task completed,
         // reopened and then cancelled closed when it was cancelled.
         let closed = if record.status == "cancelled" {

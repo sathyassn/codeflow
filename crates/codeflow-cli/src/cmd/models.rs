@@ -84,7 +84,7 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
     if args.override_id.is_some() && args.task.is_none() {
         return Err("--override requires --task".into());
     }
-    let root = super::repo_root();
+    let root = super::repo_root()?;
     let catalog = load_catalog(&root)?;
     if args.duty == "test-authoring" {
         return Err(

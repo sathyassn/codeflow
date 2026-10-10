@@ -15,7 +15,13 @@ pub struct IntegrateArgs {
 }
 
 pub fn run(args: &IntegrateArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
 
     match integrate(&root, &args.branch, &args.into) {
         Ok(outcome) => {

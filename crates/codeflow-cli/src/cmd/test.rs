@@ -90,7 +90,13 @@ pub fn run(args: &TestArgs) -> i32 {
         return run_setup(setup_args);
     }
 
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let _lock = match guard_gate(&root, &args.mode) {
         Ok(lock) => lock,
         Err(message) => {
@@ -192,7 +198,9 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
     if mode != "full" {
         return Ok(None);
     }
-    let dirs = lock_dirs(root, codeflow_home().as_deref());
+    let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
+        format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
+    })?;
     let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| {
         let mut message = held.to_string();
         if message.contains("gate lock unavailable") {
@@ -230,19 +238,41 @@ fn print_failure_report(report: &FailureReport) {
 /// `codeflow test setup`: deterministic, offline config mechanics over root
 /// detection, release-embedded templates, and explicit target append.
 fn run_setup(args: &SetupArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     if args.list_templates {
         for name in crate::embedded::test_template_names() {
-            let description = crate::embedded::read_test_template(&name)
-                .map(|content| setup::template_description(&content))
-                .unwrap_or_default();
+            let content = match crate::embedded::read_test_template(&name) {
+                Ok(Some(content)) => content,
+                Ok(None) => {
+                    eprintln!("codeflow test setup: listed template {name} is absent");
+                    return 1;
+                }
+                Err(error) => {
+                    eprintln!("codeflow test setup: {error}");
+                    return 1;
+                }
+            };
+            let description = setup::template_description(&content);
             println!("{name}  — {description}");
         }
         return 0;
     }
 
     if let Some(name) = &args.template {
-        let Some(content) = crate::embedded::read_test_template(name) else {
+        let loaded = match crate::embedded::read_test_template(name) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                eprintln!("codeflow test setup: {error}");
+                return 1;
+            }
+        };
+        let Some(content) = loaded else {
             eprintln!(
                 "codeflow test setup: template {name:?} not found; run `codeflow test setup --list-templates`"
             );

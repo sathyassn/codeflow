@@ -17,7 +17,13 @@ pub struct StatusArgs {
 }
 
 pub fn run(args: &StatusArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let view = collect_status(&root);
     print!("{}", render_status(&view, args.capabilities));
     if args.delivery {

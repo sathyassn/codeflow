@@ -85,8 +85,11 @@ pub fn reserve(root: &Path, request: &Request) -> Result<Reservation, IdsError> 
 
 fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError> {
     let uid = request.uid.clone().unwrap_or_else(super::new_uid);
-    let issuer = request.issuer.clone().unwrap_or_else(|| git.user_email());
-    if !git.has_remote(AUTHORITY) {
+    let issuer = match request.issuer.clone() {
+        Some(issuer) => issuer,
+        None => git.user_email()?,
+    };
+    if !git.has_remote(AUTHORITY)? {
         return commit_local(git, request, &uid, &issuer, Standing::Local, None);
     }
     if let Fetched::Offline(reason) = fetch(git, AUTHORITY)? {
@@ -104,7 +107,7 @@ fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError>
             }
             verify_descent(git, AUTHORITY)?;
         }
-        let base = git.rev(&tracking);
+        let base = git.rev(&tracking)?;
         let ledger = Ledger::read(git, &tracking)?;
         healthy(&ledger)?;
         if base.is_none() {
@@ -160,7 +163,7 @@ fn read_back(git: &Git, entry: &Entry, commit: &str, why: &str) -> Result<Reserv
         Fetched::Offline(reason) => {
             // Nothing can be known: keep the commit as a pending reservation
             // so `ids sync` resolves it by uid later.
-            let old = git.rev(REGISTRY_REF);
+            let old = git.rev(REGISTRY_REF)?;
             set_ref(git, REGISTRY_REF, commit, old.as_deref())?;
             Ok(Reservation {
                 id: entry.id.clone(),
@@ -208,7 +211,7 @@ fn commit_local(
     note: Option<String>,
 ) -> Result<Reservation, IdsError> {
     let tracking = tracking_ref(AUTHORITY);
-    if git.rev(REGISTRY_REF).is_none() && git.rev(&tracking).is_none() {
+    if git.rev(REGISTRY_REF)?.is_none() && git.rev(&tracking)?.is_none() {
         match fresh_repository(git) {
             Ok(()) => {}
             // With no remote this clone is the authority: seeding it is
@@ -223,7 +226,10 @@ fn commit_local(
     let remote = Ledger::read(git, &tracking)?;
     healthy(&local)?;
     healthy(&remote)?;
-    let base = git.rev(REGISTRY_REF).or_else(|| git.rev(&tracking));
+    let base = match git.rev(REGISTRY_REF)? {
+        Some(local) => Some(local),
+        None => git.rev(&tracking)?,
+    };
     let id = choose(git, &[&local, &remote], request)?;
     let entry = Entry::issued(
         id.clone(),
@@ -234,7 +240,12 @@ fn commit_local(
     );
     let commit = commit_entries(git, base.as_deref(), &[&entry], request.verb)?;
     remember(git, &entry, request)?;
-    set_ref(git, REGISTRY_REF, &commit, git.rev(REGISTRY_REF).as_deref())?;
+    set_ref(
+        git,
+        REGISTRY_REF,
+        &commit,
+        git.rev(REGISTRY_REF)?.as_deref(),
+    )?;
     Ok(Reservation {
         id,
         uid: uid.to_string(),
@@ -256,7 +267,9 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         .max()
         .unwrap_or(0);
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind);
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+    })?;
     let next = history.max(refs).max(worktree) + 1;
     Ok(RegId::canonical(kind, next))
 }
@@ -282,7 +295,10 @@ fn fresh_repository(git: &Git) -> Result<(), IdsError> {
             "--",
         ];
         args.extend_from_slice(&super::entry::RECORD_ROOTS);
-        if z_fields(&git.run(&args)?).any(|path| super::record_id_from_path(path).is_some()) {
+        if z_fields(&git.run_bytes(&args)?)
+            .iter()
+            .any(|path| super::record_id_from_path(path).is_some())
+        {
             return Err(IdsError::NotSeeded);
         }
     }
@@ -373,7 +389,17 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     }
     let lower = stderr.to_lowercase();
     if lower.contains("couldn't find remote ref") || lower.contains("could not find remote ref") {
-        if git.rev(&tracking).is_some() {
+        let name = format!("refs/heads/{}", super::REGISTRY_BRANCH);
+        match crate::git::remote_query::ls_remote(git.root(), &["--exit-code", remote, &name]) {
+            Ok(answer) if answer.is_empty() => {}
+            Ok(_) => return Ok(Fetched::Offline(stderr)),
+            Err(error) => {
+                return Ok(Fetched::Offline(format!(
+                    "{stderr}; cannot prove remote absence: {error}"
+                )))
+            }
+        }
+        if git.rev(&tracking)?.is_some() {
             return Err(IdsError::Rewritten(format!(
                 "`{}` is gone from {remote} although it was fetched before",
                 super::REGISTRY_BRANCH
@@ -395,7 +421,7 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
 /// never verified one; after a checkpoint it is a deletion, refused before
 /// any push so nothing can replace the lost history.
 pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
-    let Some(tip) = git.rev(&tracking_ref(remote)) else {
+    let Some(tip) = git.rev(&tracking_ref(remote))? else {
         if let Some(last) = state::load(git)?.last_verified.get(remote) {
             return Err(IdsError::Rewritten(format!(
                 "`{branch}` is absent from {remote} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history (`git push {remote} {last}:refs/heads/{branch}`), then repairs any file it lacks with `codeflow ids restore <id>`",
@@ -415,7 +441,7 @@ pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
 fn checkpoint(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
     let state = state::load(git)?;
     if let Some(last) = state.last_verified.get(remote) {
-        if git.rev(last).is_none() || !git.is_ancestor(last, tip) {
+        if git.rev(last)?.is_none() || !git.is_ancestor(last, tip)? {
             return Err(IdsError::Rewritten(format!(
                 "the registry tip {} does not descend from the last verified tip {}",
                 short(tip),
@@ -506,7 +532,9 @@ fn diagnostics(text: &str) -> String {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                [flag, _refs, summary] if flag.trim().len() <= 1 => (*summary).to_string(),
+                [flag, _refs, summary] if flag.trim_matches(' ').len() <= 1 => {
+                    (*summary).to_string()
+                }
                 _ => line.to_string(),
             }
         })
@@ -562,7 +590,7 @@ pub struct SyncReport {
 pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
-    if !git.has_remote(AUTHORITY) {
+    if !git.has_remote(AUTHORITY)? {
         return Ok(SyncReport {
             note: Some("no authority remote: the local registry is authoritative".to_string()),
             ..SyncReport::default()
@@ -576,14 +604,16 @@ pub fn sync(root: &Path) -> Result<SyncReport, IdsError> {
 }
 
 /// Whether the local registry holds reservations the authority lacks.
-#[must_use]
-pub fn has_pending(root: &Path) -> bool {
+///
+/// # Errors
+/// Returns an error when Git cannot inspect the local or authority history.
+pub fn has_pending(root: &Path) -> Result<bool, IdsError> {
     let git = Git::new(root);
-    let Some(local) = git.rev(REGISTRY_REF) else {
-        return false;
+    let Some(local) = git.rev(REGISTRY_REF)? else {
+        return Ok(false);
     };
-    match git.rev(&tracking_ref(AUTHORITY)) {
-        Some(tracking) => !git.is_ancestor(&local, &tracking),
+    match git.rev(&tracking_ref(AUTHORITY))? {
+        Some(tracking) => Ok(!git.is_ancestor(&local, &tracking)?),
         None => git.has_remote(AUTHORITY),
     }
 }
@@ -607,8 +637,8 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
     }
     let commits = git.run(&args)?;
     let mut entries = Vec::new();
-    for commit in commits.lines() {
-        let changes = git.run(&[
+    for commit in commits.split_terminator('\n') {
+        let changes = git.run_bytes(&[
             "diff-tree",
             "-r",
             "--root",
@@ -617,7 +647,7 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
             "-z",
             commit,
         ])?;
-        for change in inventory::raw_changes(&changes) {
+        for change in inventory::raw_changes(&changes)? {
             if change.status != 'A' {
                 continue;
             }
@@ -634,7 +664,7 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
 fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
     let tracking = tracking_ref(remote);
     let mut report = SyncReport::default();
-    let Some(local) = git.rev(REGISTRY_REF) else {
+    let Some(local) = git.rev(REGISTRY_REF)? else {
         return Ok(report);
     };
     let mut reason = String::new();
@@ -646,9 +676,9 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
             }
             verify_descent(git, remote)?;
         }
-        let tip = git.rev(&tracking);
+        let tip = git.rev(&tracking)?;
         if let Some(tip) = &tip {
-            if git.is_ancestor(&local, tip) {
+            if git.is_ancestor(&local, tip)? {
                 set_ref(git, REGISTRY_REF, tip, Some(&local))?;
                 return Ok(report);
             }
@@ -767,14 +797,14 @@ fn clash_message(git: &Git, clashes: &[Entry]) -> Result<String, IdsError> {
 pub fn drop_pending(root: &Path, id: &RegId) -> Result<bool, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
-    let tracking = git.rev(&tracking_ref(AUTHORITY));
-    let Some(local) = git.rev(REGISTRY_REF) else {
+    let tracking = git.rev(&tracking_ref(AUTHORITY))?;
+    let Some(local) = git.rev(REGISTRY_REF)? else {
         return Ok(false);
     };
-    if tracking
-        .as_deref()
-        .is_some_and(|tip| git.is_ancestor(&local, tip))
-    {
+    if match tracking.as_deref() {
+        Some(tip) => git.is_ancestor(&local, tip)?,
+        None => false,
+    } {
         return Ok(false);
     }
     let pending = pending_entries(&git, &local, tracking.as_deref())?;
@@ -820,7 +850,7 @@ pub fn admit(
 ) -> Result<Admission, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
-    let registry = if git.has_remote(AUTHORITY) {
+    let registry = if git.has_remote(AUTHORITY)? {
         if let Fetched::Offline(reason) = fetch(&git, AUTHORITY)? {
             return Err(IdsError::Offline(reason));
         }
@@ -845,7 +875,7 @@ pub fn admit(
         target: target.to_string(),
         uid: Some(uid.to_string()),
         wanted: Some(id.clone()),
-        issuer: Some(format!("admit:{}", git.user_email())),
+        issuer: Some(format!("admit:{}", git.user_email()?)),
         verb: "admit",
         resume: None,
     };
@@ -868,7 +898,7 @@ pub fn admit(
 pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
-    let online = git.has_remote(AUTHORITY);
+    let online = git.has_remote(AUTHORITY)?;
     let registry = if online {
         if let Fetched::Offline(reason) = fetch(&git, AUTHORITY)? {
             return Err(IdsError::Offline(reason));
@@ -959,14 +989,14 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
             "no reservation of {id} is waiting for its record in this clone"
         )));
     };
-    let me = git.user_email();
+    let me = git.user_email()?;
     if unwritten.issuer != me {
         return Err(IdsError::Invalid(format!(
             "{id} was reserved by {}, not by {me}",
             unwritten.issuer
         )));
     }
-    if git.has_remote(AUTHORITY) {
+    if git.has_remote(AUTHORITY)? {
         if let Fetched::Offline(_) = fetch(&git, AUTHORITY)? {
             // Offline: the local registry must hold the pending binding.
         }
@@ -992,6 +1022,84 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r20_pending_registry_query_failure_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(super::has_pending(&root.path().join("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_registry_remote_failure_does_not_select_local_authority() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_REMOTE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(root.path()).unwrap();
+            repo.remote("origin", "https://example.invalid/repo")
+                .unwrap();
+            assert!(super::sync(root.path()).is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\ncase \"$3\" in remote|config) exit 128;; *) exec /usr/bin/git \"$@\";; esac\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ids::issue::tests::r20_registry_remote_failure_does_not_select_local_authority",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_registry_missing_ref_diagnostic_needs_remote_proof() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_FETCH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            git2::Repository::init(root.path()).unwrap();
+            let git = crate::ids::Git::new(root.path());
+            assert!(matches!(
+                super::fetch(&git, "origin"),
+                Ok(super::Fetched::Offline(_)) | Err(_)
+            ));
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\ncase \"$3\" in fetch) printf \"fatal: couldn't find remote ref refs/heads/codeflow/registry\\n\" >&2; exit 128;; rev-parse) exit 1;; *) exit 128;; esac\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ids::issue::tests::r20_registry_missing_ref_diagnostic_needs_remote_proof",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1080,5 +1188,22 @@ mod tests {
             classify_push("remote: HTTP 403 Forbidden"),
             Pushed::Failed(IdsError::Permission(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    #[test]
+    fn r22_choose_refuses_unreadable_inventory_and_keeps_empty_root() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let git = super::Git::new(dir.path());
+        let request = super::Request::issue(crate::ids::Kind::Tsk, "task", "main");
+        assert_eq!(
+            super::choose(&git, &[], &request).unwrap().to_string(),
+            "TSK-001"
+        );
+        std::fs::write(dir.path().join("project-management"), b"not a directory").unwrap();
+        assert!(super::choose(&git, &[], &request).is_err());
     }
 }

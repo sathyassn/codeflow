@@ -100,6 +100,8 @@ pub fn update(
 /// (TSK-215).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
+    /// The update input could not be obtained; no repair is proven.
+    Unproven(String),
     /// The file already is what update would leave.
     Current,
     /// Update writes the file: it installs or replaces it, merges it
@@ -125,18 +127,21 @@ pub enum Decision {
 /// shipped entry for `dest` applies to the project's tier and permission
 /// preset with managed ownership, whole or by region. A record in the
 /// installed manifest alone never counts.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error when an input to the update decision cannot be read or parsed.
 pub fn decide(
     source: &dyn super::AssetSource,
     root: &Path,
     dest: &str,
     binary_version: &str,
-) -> Option<Decision> {
-    let state = ProjectState::load(root).ok()?;
-    let ignore = ScaffoldConfig::load(root).ok()?;
-    let manifest = ScaffoldManifest::load(source).ok()?;
-    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version).ok()?;
-    let entry = manifest
+) -> Result<Option<Decision>, ScaffoldError> {
+    let state = ProjectState::load(root)?;
+    let ignore = ScaffoldConfig::load(root)?;
+    let manifest = ScaffoldManifest::load(source)?;
+    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
+    let Some(entry) = manifest
         .entries
         .iter()
         .find(|entry| entry.dest == dest && entry.applies(state.tier, &state.permission_preset))
@@ -145,34 +150,40 @@ pub fn decide(
                 entry.ownership,
                 Ownership::Managed | Ownership::ManagedRegion
             )
-        })?;
-    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
-    if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref()).ok()? {
-        return Some(Decision::Skipped(note));
+        })
+    else {
+        return Ok(None);
+    };
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
+    if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref())? {
+        return Ok(Some(Decision::Skipped(note)));
     }
-    if let Err(ScaffoldError::UnsafeSymlink { path }) = guard_beneath_root(root, Path::new(dest)) {
-        let link = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
-        return Some(Decision::Skipped(format!(
-            "{link} is a symlink, and update never writes through one"
-        )));
+    match guard_beneath_root(root, Path::new(dest)) {
+        Err(ScaffoldError::UnsafeSymlink { path }) => {
+            let link = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            return Ok(Some(Decision::Skipped(format!(
+                "{link} is a symlink, and update never writes through one"
+            ))));
+        }
+        Err(error) => return Err(error),
+        Ok(_) => {}
     }
     let ctx = update_context(root, &state, binary_version);
     let mut scratch = Report::new(String::new());
-    let rendered = render_entry(source, entry, &ctx, &mut scratch).ok()??;
-    let dest_path = root.join(dest);
-    let current = if dest_path.exists() {
-        Some(std::fs::read_to_string(&dest_path).ok()?)
-    } else {
-        None
+    let Some(rendered) = render_entry(source, entry, &ctx, &mut scratch)? else {
+        return Ok(None);
     };
+    let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
         let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
-        let base = Baseline::read(root, dest);
+        let base = Baseline::read(root, dest)?;
         let step = managed_step(
             current.as_deref(),
             &rendered,
@@ -180,7 +191,7 @@ pub fn decide(
             base.as_deref(),
             false,
         );
-        return Some(match step {
+        return Ok(Some(match step {
             ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
                 Decision::Rewrite(rendered)
             }
@@ -189,21 +200,20 @@ pub fn decide(
             ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
             ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
             ManagedStep::Kept => Decision::KeptUserModification,
-        });
+        }));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
         (RegionFormat::Json, None) => rendered.clone(),
         (RegionFormat::Json, Some(current)) => {
-            let previous = Baseline::read(root, dest);
+            let previous = Baseline::read(root, dest)?;
             merge_json_region(
                 entry,
                 current,
                 previous.as_deref(),
                 &rendered,
                 &mut Vec::new(),
-            )
-            .ok()?
+            )?
         }
         (format @ (RegionFormat::Markdown | RegionFormat::Hash), current) => {
             let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
@@ -218,11 +228,11 @@ pub fn decide(
             }
         }
     };
-    Some(match current {
+    Ok(Some(match current {
         Some(current) if next == current && current == rendered => Decision::Current,
         Some(current) if next == current => Decision::KeptUserModification,
         _ => Decision::Rewrite(next),
-    })
+    }))
 }
 
 /// Why update skips `entry` before reading it (`[scaffold] ignore`, the
@@ -274,7 +284,7 @@ fn update_context(
         .file_name()
         .map_or_else(
             || "project".to_string(),
-            |n| n.to_string_lossy().to_string(),
+            |n| crate::git::GitName::from_os_str(n).display().to_string(),
         );
     build_context(
         &project,
@@ -304,8 +314,10 @@ fn update_writes(
         state.scaffold_version, opts.binary_version, state.tier
     ));
     let mut diffs = String::new();
-    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
 
     for entry in &manifest.entries {
         if !entry.applies(state.tier, &state.permission_preset) {
@@ -337,7 +349,9 @@ fn update_writes(
         warn_steps_before_secret_scan(root, &entry.dest, &mut report);
     }
     if let Some(kept) = &kept_template {
-        if root.join(".codeflow/policy.json").exists() {
+        // A policy that cannot be read refuses; only a missing one skips
+        // the diagnosis.
+        if super::path_exists(&root.join(".codeflow").join("policy.json"))? {
             let diagnosis = pr_template::diagnose(root, kept, false)?;
             if let Some(line) = pr_template::describe(kept, &diagnosis, false) {
                 report.notes.push(line);
@@ -365,7 +379,7 @@ fn update_writes(
         report.notes.push(note);
     }
     // The brownfield hook choice stays visible until the adopter makes it.
-    if super::detect::configured_hooks_path(root).as_deref()
+    if super::detect::configured_hooks_path(root)?.as_deref()
         == Some(super::detect::CODEFLOW_HOOKS_PATH)
     {
         if let Some(found) = super::detect::git_dir_hooks(root) {
@@ -497,15 +511,36 @@ fn scan_order(workflow: &str) -> ScanOrder {
 /// record, no commit, or a recorded baseline is left alone.
 fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
     use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
-    if !recorded_baseline(root).is_empty() || Graph::from_worktree(root).records.is_empty() {
+    if !recorded_baseline(root)
+        .map_err(ScaffoldError::Git)?
+        .is_empty()
+        || Graph::from_worktree(root)
+            .map_err(ScaffoldError::Git)?
+            .records
+            .is_empty()
+    {
         return Ok(None);
     }
-    let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {
-        let id = repo.head().ok()?.peel_to_commit().ok()?.id();
-        Some(id.to_string())
-    }) else {
+    let Some(repo) = crate::hooks::repo::open(root).map_err(|error| {
+        ScaffoldError::Git(format!("cannot read migration repository: {error}"))
+    })?
+    else {
         return Ok(None);
     };
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
+        Err(error) => {
+            return Err(ScaffoldError::Git(format!(
+                "cannot read migration HEAD: {error}"
+            )))
+        }
+    };
+    let head = head
+        .peel_to_commit()
+        .map_err(|error| ScaffoldError::Git(format!("cannot read migration commit: {error}")))?
+        .id()
+        .to_string();
     let path = ProjectState::path(root);
     let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
     let mut table: toml::Table =
@@ -688,11 +723,12 @@ fn update_entry(
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);
+    let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
 
     match entry.ownership {
         Ownership::Managed => {
-            let current = if dest_path.exists() {
+            let current = if exists {
                 Some(
                     std::fs::read_to_string(&dest_path)
                         .map_err(|e| ScaffoldError::io(&dest_path, e))?,
@@ -702,7 +738,7 @@ fn update_entry(
             };
             let old = current.as_deref().unwrap_or_default();
             let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
-            let base = Baseline::read(root, &entry.dest);
+            let base = Baseline::read(root, &entry.dest)?;
             match managed_step(
                 current.as_deref(),
                 &rendered,
@@ -802,7 +838,7 @@ fn update_entry(
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
             RegionFormat::Json => {
-                if !dest_path.exists() {
+                if !exists {
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
@@ -811,7 +847,7 @@ fn update_entry(
                 }
                 let current = std::fs::read_to_string(&dest_path)
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
-                let previous = Baseline::read(root, &entry.dest);
+                let previous = Baseline::read(root, &entry.dest)?;
                 let mut lines = vec![];
                 let merged =
                     merge_json_region(entry, &current, previous.as_deref(), &rendered, &mut lines)?;
@@ -834,7 +870,7 @@ fn update_entry(
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
                 record(installed, entry, hash::sha256_hex(block.as_bytes()));
                 Baseline::write(root, &entry.dest, &block)?;
-                if !dest_path.exists() {
+                if !exists {
                     let content = if region::extract_block(&rendered, format).is_some() {
                         rendered.clone()
                     } else {
@@ -874,7 +910,7 @@ fn update_entry(
             }
         },
         Ownership::UserOwned => {
-            if !dest_path.exists() {
+            if !exists {
                 write_dest(root, entry, &rendered)?;
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
@@ -889,7 +925,7 @@ fn update_entry(
             } else {
                 let mut notes = vec!["user-owned: never mutated by update".to_string()];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
-                let baseline_missing = Baseline::read(root, &entry.dest).is_none();
+                let baseline_missing = Baseline::read(root, &entry.dest)?.is_none();
                 if is_new_entry || baseline_missing {
                     Baseline::write(root, &entry.dest, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
@@ -925,8 +961,9 @@ fn sync_user_owned_json(
         std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
     let mut user: serde_json::Value = serde_json::from_str(&current_text)?;
     let new_default: serde_json::Value = serde_json::from_str(rendered)?;
-    let old_default: Option<serde_json::Value> =
-        Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
+    let old_default: Option<serde_json::Value> = Baseline::read(root, &entry.dest)?
+        .map(|t| serde_json::from_str(&t))
+        .transpose()?;
 
     let mut added: Vec<String> = vec![];
     let mut moved: Vec<MovedDefault> = vec![];
@@ -938,8 +975,8 @@ fn sync_user_owned_json(
         prior_release::policies(&entry.src)
             .into_iter()
             .flatten()
-            .filter_map(|text| serde_json::from_str(text).ok())
-            .collect()
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()?
     } else {
         vec![]
     };
@@ -1356,6 +1393,27 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r17_migration_without_repository_has_no_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = dir.path().join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(
+            tasks.join("TSK-001.md"),
+            "---\nid: TSK-001\ntitle: Fixture\nstatus: planned\n---\n",
+        )
+        .unwrap();
+        assert!(super::record_work_records_baseline(dir.path())
+            .unwrap()
+            .is_none());
+        git2::Repository::init(dir.path()).unwrap();
+        assert!(super::record_work_records_baseline(dir.path())
+            .unwrap()
+            .is_none());
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        assert!(super::record_work_records_baseline(dir.path()).is_err());
+    }
+
     /// The shipped workflow and this repository's own run only the checkout
     /// before the gitleaks step; a step added there is named, a renamed scan
     /// step is reported as unrecognised, and a conflict proposal that does

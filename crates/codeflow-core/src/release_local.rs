@@ -24,9 +24,29 @@ const PYTHON: &str = "python3";
 
 /// Whether the project at `root` adopted `CodeFlow`'s release calculator and
 /// carries it.
-#[must_use]
-pub fn adopted(root: &Path) -> bool {
-    matches!(release_backend(root), Ok(ReleaseBackend::Codeflow)) && root.join(SCRIPT).is_file()
+/// # Errors
+/// Refuses unreadable adoption settings or script metadata.
+pub fn adopted(root: &Path) -> Result<bool, String> {
+    if release_backend(root)? != ReleaseBackend::Codeflow {
+        return Ok(false);
+    }
+    let path = root.join(SCRIPT);
+    if crate::absence::proven_absent(&path).map_err(|error| {
+        format!(
+            "cannot inspect {}: {error}; repair the release script path",
+            path.display()
+        )
+    })? {
+        return Ok(false);
+    }
+    std::fs::metadata(&path)
+        .map(|metadata| metadata.is_file())
+        .map_err(|error| {
+            format!(
+                "cannot inspect {}: {error}; repair the release script path",
+                path.display()
+            )
+        })
 }
 
 /// How `release.py preflight` opens the note that reports a valid release
@@ -85,9 +105,8 @@ pub fn preflight(
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT}: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
     match output.status.code() {
-        Some(0 | 1) => serde_json::from_str(stdout.trim())
+        Some(0 | 1) => serde_json::from_slice(&output.stdout)
             .map_err(|error| format!("{SCRIPT} preflight printed no result: {error}")),
         _ => Err(failure(&output)),
     }
@@ -118,6 +137,8 @@ pub fn structural(root: &Path, reference: &str) -> Result<(), String> {
     }
 }
 
+/// The diagnostic for an unsuccessful run: the script's own text (stderr,
+/// else stdout) with the exit status, which is always named.
 fn failure(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -127,10 +148,14 @@ fn failure(output: &std::process::Output) -> String {
         stderr
     };
     let text = text.trim();
+    let status = match output.status.code() {
+        Some(code) => format!("{SCRIPT} exited with code {code}"),
+        None => format!("{SCRIPT} exited with {}", output.status),
+    };
     if text.is_empty() {
-        format!("{SCRIPT} exited with {}", output.status)
+        status
     } else {
-        text.to_string()
+        format!("{text} ({status})")
     }
 }
 
@@ -164,10 +189,10 @@ mod tests {
 
     #[test]
     fn only_a_project_that_adopted_and_carries_the_calculator_runs_it() {
-        assert!(adopted(project("codeflow", Some("")).path()));
-        assert!(!adopted(project("codeflow", None).path()));
-        assert!(!adopted(project("none", Some("")).path()));
-        assert!(!adopted(project("external", Some("")).path()));
+        assert!(adopted(project("codeflow", Some("")).path()).unwrap());
+        assert!(!adopted(project("codeflow", None).path()).unwrap());
+        assert!(!adopted(project("none", Some("")).path()).unwrap());
+        assert!(!adopted(project("external", Some("")).path()).unwrap());
     }
 
     fn python_available() -> bool {
@@ -202,7 +227,7 @@ mod tests {
         );
         assert_eq!(
             preflight(dir.path(), "HEAD", "b", "origin", Path::new("codeflow")).unwrap_err(),
-            "release error: boom"
+            "release error: boom (scripts/release.py exited with code 2)"
         );
         let silent = project("codeflow", Some("print('not json')\n"));
         assert!(
@@ -225,7 +250,27 @@ mod tests {
         );
         assert_eq!(
             structural(bad.path(), "HEAD").unwrap_err(),
-            "release error: stamps disagree"
+            "release error: stamps disagree (scripts/release.py exited with code 2)"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_release_adoption_refuses_unreadable_settings_and_script() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!adopted(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        let project = dir.path().join(".codeflow/project.toml");
+        std::fs::write(&project, "invalid = [").unwrap();
+        assert!(adopted(dir.path()).is_err());
+        std::fs::write(&project, "[release]\nbackend = 'codeflow'\n").unwrap();
+        assert!(!adopted(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join(SCRIPT)).unwrap();
+        assert!(adopted(dir.path()).is_err());
     }
 }

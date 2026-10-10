@@ -47,8 +47,17 @@ pub(crate) fn sourced_files(env: &StartupEnv) -> Sourced {
     };
     for name in READ {
         let file = home.join(name);
-        let Ok(meta) = std::fs::metadata(&file) else {
-            continue;
+        // Only a file proven absent is skipped; one the check cannot read
+        // is named, never read as sourcing nothing (issue 79).
+        let meta = match crate::absence::metadata_optional(&file) {
+            Ok(Some(meta)) => meta,
+            Ok(None) => continue,
+            Err(error) => {
+                found
+                    .unresolved
+                    .push(format!("~/{name}: cannot read: {error}"));
+                continue;
+            }
         };
         if !meta.is_file() || meta.len() > READ_LIMIT {
             if meta.len() > READ_LIMIT {
@@ -58,11 +67,28 @@ pub(crate) fn sourced_files(env: &StartupEnv) -> Sourced {
             }
             continue;
         }
-        let Ok(bytes) = std::fs::read(&file) else {
-            continue;
+        let bytes = match std::fs::read(&file) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                found
+                    .unresolved
+                    .push(format!("~/{name}: cannot read: {error}"));
+                continue;
+            }
         };
-        let text = String::from_utf8_lossy(&bytes);
-        for line in text.lines() {
+        // The shell reads lines at a newline. A line that is not text is
+        // named as unresolved, never read through a lossy spelling.
+        for (number, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+            let Ok(line) = std::str::from_utf8(line) else {
+                // A comment line runs nothing, whatever its bytes.
+                let first = line.iter().find(|byte| !matches!(byte, b' ' | b'\t'));
+                if first != Some(&b'#') {
+                    found
+                        .unresolved
+                        .push(format!("~/{name}: line {} is not UTF-8", number + 1));
+                }
+                continue;
+            };
             for word in source_operands(line) {
                 match literal(&word, home) {
                     Some(path) => {
@@ -81,15 +107,18 @@ pub(crate) fn sourced_files(env: &StartupEnv) -> Sourced {
 /// The operand of each `source FILE` or `. FILE` command on a line,
 /// quotes removed. A comment ends the line.
 fn source_operands(line: &str) -> Vec<String> {
+    // The shell's blanks only (issue 79): another whitespace character is
+    // part of its word.
+    let blank = crate::hooks::git_guard::shell_blank;
     let code = line.split(" #").next().unwrap_or(line);
-    let code = if code.trim_start().starts_with('#') {
+    let code = if code.trim_start_matches(blank).starts_with('#') {
         ""
     } else {
         code
     };
     let mut out = Vec::new();
     for command in code.split([';', '&', '|']) {
-        let mut words = command.split_whitespace();
+        let mut words = command.split(blank).filter(|word| !word.is_empty());
         let mut first = words.next();
         while matches!(first, Some("then" | "do" | "else" | "{" | "!")) {
             first = words.next();
@@ -532,6 +561,47 @@ mod tests {
             ["~/.zshrc: $HOME/work.zsh", "~/.zshrc: /opt/tool/env.sh"]
         );
         assert_eq!(found.unresolved, ["~/.zshrc: $ZSH/oh-my-zsh.sh"]);
+    }
+
+    /// Issue 79: a `source` line that is not UTF-8 and a startup file the
+    /// check cannot read are named, never read as sourcing nothing; a
+    /// comment line runs nothing whatever its bytes.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_startup_lines_and_files_are_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(
+            home.join(".zshrc"),
+            b"# caf\xe9\nsource ~/caf\xe9.zsh\n".as_slice(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(home.join("missing"), home.join(".bashrc")).unwrap();
+        let env = StartupEnv {
+            home: Some(home.clone()),
+            other_homes: Vec::new(),
+            zdotdir: None,
+            xdg_config: None,
+            etc_roots: Vec::new(),
+        };
+        let found = sourced_files(&env);
+        assert!(found.unprotected.is_empty(), "{:?}", found.unprotected);
+        assert!(
+            found
+                .unresolved
+                .iter()
+                .any(|entry| entry.starts_with("~/.bashrc: cannot read")),
+            "{:?}",
+            found.unresolved
+        );
+        assert!(
+            found
+                .unresolved
+                .contains(&"~/.zshrc: line 2 is not UTF-8".to_string()),
+            "{:?}",
+            found.unresolved
+        );
+        assert_eq!(found.unresolved.len(), 2, "{:?}", found.unresolved);
     }
 
     #[test]

@@ -28,7 +28,9 @@ fn init_repo(root: &Path, name: &str) {
     .unwrap();
     fs::write(
         root.join(".codeflow/project.toml"),
-        format!("name = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\n"),
+        format!(
+            "schema_version = 1\nname = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
+        ),
     )
     .unwrap();
     fs::create_dir_all(root.join(".git")).unwrap();
@@ -319,6 +321,70 @@ esac
     );
 }
 
+/// Round 23: `remote protect` finds its project as main does, the nearest
+/// directory initialized for `CodeFlow`, never the git work tree root, so a
+/// project nested inside another repository protects its own branches.
+#[test]
+fn r23_remote_protect_reads_the_nearest_initialized_project() {
+    let home = tempfile::tempdir().unwrap();
+    let outer = tempfile::tempdir().unwrap();
+    // The outer repository's work tree root, with no CodeFlow state.
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(outer.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap()
+        .success());
+    let project = outer.path().join("nested");
+    init_repo(&project, "nested");
+    let deeper = project.join("src/module");
+    fs::create_dir_all(&deeper).unwrap();
+    let out = run_in(&deeper, home.path(), &["remote", "protect", "--dry-run"]);
+    let text = stdout(&out);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("release/* [ruleset (glob pattern)]:"),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("not found"));
+}
+
+/// The defaults note is printed only for a policy proven missing; a policy
+/// behind a dangling link refuses without claiming it was not found.
+#[cfg(unix)]
+#[test]
+fn r23_remote_protect_names_defaults_only_for_a_missing_policy() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "notes");
+    let policy = repo.path().join(".codeflow").join("policy.json");
+    fs::remove_file(&policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{errors}");
+    assert!(errors.contains("not found"), "{errors}");
+
+    std::os::unix::fs::symlink("gone.json", &policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "{errors}");
+    assert!(errors.contains("cannot read policy"), "{errors}");
+    assert!(!errors.contains("not found"), "{errors}");
+}
+
 #[cfg(unix)]
 #[test]
 fn remote_protect_degrades_legibly_on_free_plan_403() {
@@ -395,6 +461,49 @@ fn any_command_touches_registry() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn r21_remote_protect_refuses_undecodable_identity_before_api() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "invalid-identity");
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+if [ "$1" = "repo" ]; then
+  printf '{"nameWithOwner":"owner/caf'
+  printf '\377'
+  printf '","isPrivate":false}'
+  exit 0
+fi
+: > api-called
+printf '{}'
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths = vec![shims.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let out = codeflow()
+        .args(["remote", "protect"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.contains("status: degraded"), "{text}");
+    assert!(text.contains("UTF-8"), "{text}");
+    assert!(!text.contains("status: applied"), "{text}");
+    assert!(!repo.path().join("api-called").exists());
+}
+
 /// TSK-137 AC-4: hook, ci and read-only commands leave the registry alone,
 /// other commands still record the repo, and a home the process may not
 /// write (a sandbox, a read-only directory) is silent.
@@ -441,4 +550,58 @@ fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("registry touch failed"), "{stderr}");
     assert_eq!(fs::read_to_string(&registry).unwrap(), before);
+}
+
+#[test]
+fn r22_remote_protect_refuses_unreadable_tracking_state() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "tracking-error");
+    fs::write(repo.path().join(".codeflow/project.toml"), b"\xff").unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read existing CodeFlow state"));
+}
+
+#[test]
+fn r22_remote_protect_absent_tracking_state_keeps_dry_run() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout(&out).contains("status: dry-run"));
+}
+
+#[cfg(unix)]
+#[test]
+fn r22_startup_refuses_missing_current_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let gone = repo.path().join("gone");
+    fs::create_dir(&gone).unwrap();
+    let out = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "rmdir \"$1\"; exec \"$2\" policy show",
+            "codeflow-test",
+        ])
+        .arg(&gone)
+        .arg(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(&gone)
+        .env("CODEFLOW_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", stdout(&out));
 }

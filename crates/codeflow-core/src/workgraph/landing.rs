@@ -313,7 +313,9 @@ impl<'r> RecordStore<'r> {
     }
 
     /// The text of `blob`, read once per run; `None` when the object
-    /// cannot be read.
+    /// cannot be read or is not UTF-8. A lossy rendering could parse as a
+    /// record whose values differ from its bytes (issue 79), so such a
+    /// file is doubt, never a record.
     fn text(&mut self, blob: Oid) -> Option<Rc<str>> {
         if let Some(text) = self.texts.get(&blob) {
             return text.clone();
@@ -322,7 +324,7 @@ impl<'r> RecordStore<'r> {
             .repo
             .find_blob(blob)
             .ok()
-            .map(|object| Rc::from(String::from_utf8_lossy(object.content()).as_ref()));
+            .and_then(|object| std::str::from_utf8(object.content()).ok().map(Rc::from));
         self.texts.insert(blob, text.clone());
         text
     }
@@ -451,15 +453,26 @@ impl<'r> RecordStore<'r> {
                 Err(reason) => return TaskJudgement::unreadable(reason),
             }
         }
-        let newest = points.iter().find(|(point, _)| {
-            points.iter().all(|(other, _)| {
-                other == point
-                    || self
-                        .repo
-                        .graph_descendant_of(*point, *other)
-                        .unwrap_or(false)
-            })
-        });
+        // An ancestry that cannot be read refuses (issue 79): read as "not
+        // newer", it would let the points' agreement decide alone.
+        let mut newest = None;
+        for (point, held) in &points {
+            let mut all = true;
+            for (other, _) in &points {
+                match super::acceptance::is_ancestor_or_same(self.repo, *other, *point) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        all = false;
+                        break;
+                    }
+                    Err(reason) => return TaskJudgement::unreadable(reason),
+                }
+            }
+            if all {
+                newest = Some((point, held));
+                break;
+            }
+        }
         let at_points = if let Some((_, held)) = newest {
             match (&held.doubt, held.records.first()) {
                 (Some(doubt), _) => Err(doubt.clone()),
@@ -624,7 +637,9 @@ impl<'r> RecordStore<'r> {
                     .iter()
                     .find(|(held, _)| *held == blob)
                     .map(|(_, record)| record.path.clone())
-                    .unwrap_or_default();
+                    .ok_or_else(|| {
+                        format!("{commit} no longer holds the version it was read with")
+                    })?;
                 let merge = self.repo.find_commit(commit).map_err(unreadable)?;
                 from_parent = match super::acceptance::read_merge(self.repo, &merge) {
                     super::acceptance::MergeReading::Clean => true,
@@ -714,9 +729,13 @@ impl<'r> RecordStore<'r> {
             if let Some(doubt) = held.doubt {
                 return Landing::Unreadable(doubt);
             }
-            let reaches = outside.at.is_some_and(|at| {
-                at == *tip || self.repo.graph_descendant_of(*tip, at).unwrap_or(false)
-            });
+            let reaches = match outside.at {
+                Some(at) => match super::acceptance::is_ancestor_or_same(self.repo, at, *tip) {
+                    Ok(reaches) => reaches,
+                    Err(reason) => return Landing::Unreadable(reason),
+                },
+                None => false,
+            };
             let shows = held
                 .records
                 .iter()
@@ -732,14 +751,17 @@ impl<'r> RecordStore<'r> {
         if !tips.is_empty() {
             let history = self.walk(task, &tips, judged);
             if let Some(commit) = history.witness {
-                let reference = outside
-                    .tips
-                    .iter()
-                    .find(|(_, tip)| {
-                        *tip == commit
-                            || self.repo.graph_descendant_of(*tip, commit).unwrap_or(false)
-                    })
-                    .map_or_else(|| commit.to_string(), |(name, _)| name.clone());
+                let mut reference = commit.to_string();
+                for (name, tip) in outside.tips {
+                    match super::acceptance::is_ancestor_or_same(self.repo, commit, *tip) {
+                        Ok(true) => {
+                            reference.clone_from(name);
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(reason) => return Landing::Unreadable(reason),
+                    }
+                }
                 return Landing::Unjudged { reference, commit };
             }
             if let Some(doubt) = history.doubt {
@@ -775,15 +797,19 @@ impl<'r> RecordStore<'r> {
         let mut refs = Vec::new();
         for reference in self.repo.references().map_err(unreadable)? {
             let reference = reference.map_err(unreadable)?;
-            let Ok(name) = reference.name() else { continue };
-            let tracked = name.starts_with("refs/heads/") || name.starts_with("refs/remotes/");
+            // OS text rule (issue 79): a ref that holds the task outside the
+            // range counts when its name is not UTF-8, and one that cannot be
+            // peeled refuses; only the holder named is the display form.
+            let name = crate::git::name::reference_name(&reference);
+            let tracked = name.starts_with(b"refs/heads/") || name.starts_with(b"refs/remotes/");
             if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
                 continue;
             }
-            if let Ok(commit) = reference.peel_to_commit() {
-                let short = reference.shorthand().unwrap_or(name).to_string();
-                refs.push((name.to_string(), short, commit.id()));
-            }
+            let commit = reference.peel_to_commit().map_err(unreadable)?;
+            let short = crate::git::name::reference_shorthand(&reference)
+                .display()
+                .to_string();
+            refs.push((name, short, commit.id()));
         }
         refs.sort();
         let mut walk = self.repo.revwalk().map_err(unreadable)?;
@@ -820,12 +846,13 @@ impl<'r> RecordStore<'r> {
             if !adds {
                 continue;
             }
-            let holder = refs
-                .iter()
-                .find(|(_, _, tip)| {
-                    *tip == commit || self.repo.graph_descendant_of(*tip, commit).unwrap_or(false)
-                })
-                .map_or_else(|| commit.to_string(), |(_, short, _)| short.clone());
+            let mut holder = commit.to_string();
+            for (_, short, tip) in &refs {
+                if super::acceptance::is_ancestor_or_same(self.repo, commit, *tip)? {
+                    holder.clone_from(short);
+                    break;
+                }
+            }
             return Ok(Some((holder, commit)));
         }
         Ok(None)
@@ -957,6 +984,131 @@ mod tests {
                 own: &[],
             },
         )
+    }
+
+    /// What the store reads of TSK-001 in the tree of `head`.
+    fn held(repo: &Repository, head: Oid) -> Result<Held, String> {
+        RecordStore::new(repo).held_at(head, &Identity::named("TSK-001", None, "TSK-001.md"))
+    }
+
+    fn remove_object(repo: &Repository, oid: Oid) {
+        let hex = oid.to_string();
+        std::fs::remove_file(repo.path().join("objects").join(&hex[..2]).join(&hex[2..])).unwrap();
+    }
+
+    /// Issue 79: a task file that does not parse may be this task, and a
+    /// file that is not UTF-8 is never parsed from a lossy rendering.
+    #[test]
+    fn r22_a_malformed_or_undecodable_task_file_is_doubt() {
+        for (name, text) in [
+            (
+                b"project-management/tasks/TSK-999.md".as_slice(),
+                b"---\nid: TSK-001\nstatus: [unclosed\n---\n".as_slice(),
+            ),
+            (
+                b"project-management/tasks/TSK-001.md".as_slice(),
+                b"---\nid: TSK-001\nstatus: todo\nintegration_target: caf\xff\n---\n".as_slice(),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, head) = crate::git::repo_with_tree(dir.path(), &[(name, text)]);
+            let found = held(&repo, head).unwrap();
+            assert!(found.doubt.is_some(), "{}", String::from_utf8_lossy(name));
+            assert!(found.records.is_empty());
+        }
+    }
+
+    /// Issue 79: a tree a task directory names that cannot be read, and an
+    /// epic directory whose name is not UTF-8, refuse instead of reading
+    /// as no record.
+    #[test]
+    fn r22_unreadable_task_directories_refuse() {
+        for path in [
+            "project-management",
+            "project-management/tasks",
+            "project-management/epics",
+            "project-management/epics/EPC-001",
+            "project-management/epics/EPC-001/tasks",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, head) = crate::git::repo_with_tree(
+                dir.path(),
+                &[
+                    (
+                        b"project-management/tasks/TSK-001.md",
+                        b"---\nid: TSK-001\nstatus: todo\n---\n",
+                    ),
+                    (
+                        b"project-management/epics/EPC-001/tasks/TSK-002.md",
+                        b"---\nid: TSK-002\nstatus: todo\n---\n",
+                    ),
+                ],
+            );
+            let tree = repo
+                .find_commit(head)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .get_path(std::path::Path::new(path))
+                .unwrap()
+                .id();
+            remove_object(&repo, tree);
+            drop(repo);
+            let repo = Repository::open(dir.path()).unwrap();
+            assert!(held(&repo, head).is_err(), "{path}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(
+                b"project-management/epics/EPC-001\xff/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nstatus: todo\n---\n",
+            )],
+        );
+        assert!(held(&repo, head).is_err());
+    }
+
+    /// The control: absent directories, an entry of another kind, a file
+    /// that is no task record and another task's record hold nothing.
+    #[test]
+    fn r22_absent_directories_and_other_tasks_hold_nothing() {
+        for files in [
+            vec![],
+            vec![(
+                b"project-management".as_slice(),
+                b"ordinary file".as_slice(),
+            )],
+            vec![(
+                b"project-management/epics/EPC-001\xff/tasks/note.md".as_slice(),
+                b"not a task record".as_slice(),
+            )],
+            vec![(
+                b"project-management/tasks/TSK-002.md".as_slice(),
+                b"---\nid: TSK-002\nstatus: todo\n---\n".as_slice(),
+            )],
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, head) = crate::git::repo_with_tree(dir.path(), &files);
+            let found = held(&repo, head).unwrap();
+            assert!(found.records.is_empty() && found.doubt.is_none());
+        }
+    }
+
+    /// Issue 79: a branch that cannot be peeled to a commit refuses the
+    /// search for a holder outside the range instead of being skipped.
+    #[test]
+    fn r22_holder_refuses_unpeelable_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(dir.path(), &[]);
+        let task = Identity::named("TSK-001", None, "TSK-001.md");
+        let blob = repo.blob(b"not a commit").unwrap();
+        std::fs::write(repo.path().join("refs/heads/broken"), format!("{blob}\n")).unwrap();
+        assert!(RecordStore::new(&repo).holder_outside(&task, head).is_err());
+        std::fs::remove_file(repo.path().join("refs/heads/broken")).unwrap();
+        assert!(RecordStore::new(&repo)
+            .holder_outside(&task, head)
+            .unwrap()
+            .is_none());
     }
 
     const UID: &str = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";

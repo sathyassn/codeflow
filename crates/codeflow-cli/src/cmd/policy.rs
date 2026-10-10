@@ -35,7 +35,13 @@ pub enum PolicyCommand {
 pub fn run(args: &PolicyArgs) -> i32 {
     match args.command {
         PolicyCommand::Explain => explain(),
-        PolicyCommand::Show => show(&super::repo_root()),
+        PolicyCommand::Show => match super::repo_root() {
+            Ok(root) => show(&root),
+            Err(error) => {
+                eprintln!("codeflow: {error}");
+                2
+            }
+        },
     }
 }
 
@@ -112,8 +118,12 @@ fn show(root: &Path) -> i32 {
         PolicySource::ProjectFile => {
             println!("codeflow policy: .codeflow/policy.json is in effect");
         }
+        PolicySource::UnreadableFile(error) => {
+            eprintln!("codeflow policy: {error}");
+            return 1;
+        }
         PolicySource::MalformedFile => {
-            println!("codeflow policy: .codeflow/policy.json DOES NOT PARSE — enforcement is using the built-in defaults for EVERY key");
+            println!("codeflow policy: .codeflow/policy.json DOES NOT PARSE — enforcement refuses this policy");
         }
     }
     for e in &errors {

@@ -347,12 +347,20 @@ fn is_version(text: &str) -> bool {
 }
 
 /// The release URL base: `CODEFLOW_RELEASE_URL` when set, else GitHub.
-#[must_use]
-pub fn release_url() -> String {
-    std::env::var("CODEFLOW_RELEASE_URL")
-        .ok()
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| DEFAULT_RELEASE_URL.to_string())
+///
+/// # Errors
+///
+/// A value that is not UTF-8 refuses (issue 79): reading it as unset would
+/// pin digests from another release host than the one named.
+pub fn release_url() -> Result<String, String> {
+    match std::env::var("CODEFLOW_RELEASE_URL") {
+        Ok(url) if !url.is_empty() => Ok(url),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(DEFAULT_RELEASE_URL.to_string()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(
+            "CODEFLOW_RELEASE_URL is not UTF-8, so the release host it names cannot be read"
+                .to_string(),
+        ),
+    }
 }
 
 /// Downloads `url` with `curl -fsSL`, as the CI installers do, so a
@@ -418,7 +426,8 @@ pub fn pin_release(
     let sums = fetch(&format!("{release}/sha256.sum")).map_err(|error| {
         format!("codeflow {version} has no published checksum file (sha256.sum): {error}")
     })?;
-    let sums = String::from_utf8_lossy(&sums);
+    let sums = std::str::from_utf8(&sums)
+        .map_err(|error| format!("sha256.sum for codeflow {version} is not UTF-8 text: {error}"))?;
     let mut digests = Vec::new();
     for triple in TRIPLES {
         let asset = format!("codeflow-cli-{triple}.tar.xz");

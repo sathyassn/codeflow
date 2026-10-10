@@ -304,11 +304,10 @@ pub fn init_with_launch(
     Ok(settings_path)
 }
 
-/// A provenance value as recorded: trimmed, 1 to 128 characters, no control
+/// A provenance value as recorded: exact, nonblank, 1 to 128 bytes, no control
 /// characters.
 fn provenance_value(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
+    (!value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
         .then(|| value.to_string())
 }
 
@@ -1144,6 +1143,10 @@ fn inspect_continuations(
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let mut continuations: Vec<ContinuationState> = Vec::with_capacity(entries.len());
     for entry in entries {
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. Every
+        // entry here is a record this tool wrote under a validated id, so a
+        // name that is not valid UTF-8 is foreign state, and the state check
+        // stops on it rather than reading around it.
         let task_id = entry
             .file_name()
             .into_string()
@@ -1281,6 +1284,7 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let mut states = Vec::with_capacity(entries.len());
     for entry in entries {
+        // Kept strict for the reason given for continuation names above.
         let turn_id = entry
             .file_name()
             .into_string()
@@ -1734,6 +1738,10 @@ fn validate_absolute(path: &Path) -> Result<(), DelegateError> {
             "delegate state directory must be absolute",
         ));
     }
+    // OS text rule (issue 79, `docs/architecture.md`): kept strict. The path
+    // is written into the hook command line (`hook_command`) that the harness
+    // later runs, so a lossy spelling would make the hook read another
+    // directory.
     if path.to_str().is_none() {
         return Err(DelegateError::invalid(
             "delegate state directory must be valid UTF-8",
@@ -3765,6 +3773,63 @@ mod tests {
             ErrorKind::Invalid
         );
     }
+
+    /// Makes a `0700` directory named `caf\xe9`, which is not valid UTF-8, in
+    /// `parent`. `None` when the file system refuses the name (APFS does), so
+    /// the tests below run where they can, as on Linux.
+    #[cfg(unix)]
+    fn latin1_private_dir(parent: &Path) -> Option<()> {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::DirBuilderExt as _;
+        let path = parent.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        std::fs::DirBuilder::new().mode(0o700).create(path).ok()
+    }
+
+    /// Kept strict (issue 79): the state directory is written into the hook
+    /// command, so a path that is not valid UTF-8 is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_state_directory_that_is_not_utf8_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
+        let error = validate_absolute(path).unwrap_err();
+        assert!(error.message.contains("valid UTF-8"), "{}", error.message);
+    }
+
+    /// Kept strict (issue 79): a turn directory this tool did not write is
+    /// foreign state, and the check stops on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_directory_that_is_not_utf8_is_unsafe_state() {
+        let (_temp, path) = state();
+        if latin1_private_dir(&path.join("turns")).is_none() {
+            return;
+        }
+        let error = inspect_turns("run-1", &path).unwrap_err();
+        assert!(error.message.contains("not UTF-8"), "{}", error.message);
+    }
+
+    /// Kept strict (issue 79): the same for a continuation of a stopped turn.
+    #[cfg(unix)]
+    #[test]
+    fn a_continuation_that_is_not_utf8_is_unsafe_state() {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let (_temp, path) = state();
+        ready(&path);
+        arm("run-1", &path, "turn-1", b"hello").unwrap();
+        accept(&path, Some(PROMPT_ID));
+        stop(&path, PROMPT_ID, "done").unwrap();
+        let continuations = path.join("turns").join("turn-1").join("continuations");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&continuations)
+            .unwrap();
+        if latin1_private_dir(&continuations).is_none() {
+            return;
+        }
+        let error = inspect_turns("run-1", &path).unwrap_err();
+        assert!(error.message.contains("not UTF-8"), "{}", error.message);
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -3783,5 +3848,17 @@ mod windows_tests {
             "native Windows is unsupported for delegate state; use WSL2"
         );
         assert!(!state.exists());
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_provenance_retains_unicode_identity() {
+        assert_eq!(
+            super::provenance_value("model\u{a0}"),
+            Some("model\u{a0}".into())
+        );
+        assert_eq!(super::provenance_value("\u{a0}"), None);
     }
 }

@@ -111,13 +111,20 @@ pub(crate) fn find_target_ref<'r>(
     target_branch: &str,
 ) -> Result<git2::Reference<'r>, GitError> {
     let remote_ref = format!("refs/remotes/origin/{target_branch}");
-    if let Ok(reference) = repo.find_reference(&remote_ref) {
-        return Ok(reference);
+    match repo.find_reference(&remote_ref) {
+        Ok(reference) => return Ok(reference),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
 
     let local_ref = format!("refs/heads/{target_branch}");
-    repo.find_reference(&local_ref)
-        .map_err(|_| GitError::RefNotFound(format!("neither {remote_ref} nor {local_ref} exists")))
+    repo.find_reference(&local_ref).map_err(|error| {
+        if error.code() == git2::ErrorCode::NotFound {
+            GitError::RefNotFound(format!("neither {remote_ref} nor {local_ref} exists"))
+        } else {
+            error.into()
+        }
+    })
 }
 
 /// Result of a rebase attempt.
@@ -146,7 +153,7 @@ pub enum RebaseResult {
 ///
 /// Returns `GitError` if git commands fail for non-conflict reasons.
 pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseResult, GitError> {
-    let mut args: Vec<String> = fallback_identity_args(repo_path);
+    let mut args: Vec<String> = fallback_identity_args(repo_path)?;
     args.push("rebase".to_string());
     args.push(target_branch.to_string());
     let output = crate::git::command()
@@ -161,7 +168,7 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
 
     // Rebase failed — collect conflict info from status and abort.
     let status_output = crate::git::command()
-        .args(["diff", "--name-only", "--diff-filter=U"])
+        .args(["diff", "--name-only", "-z", "--diff-filter=U"])
         .current_dir(repo_path)
         .output()
         .ok();
@@ -169,10 +176,12 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
     let conflicting_files = status_output
         .as_ref()
         .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(String::from)
+            // The list is shown to a person, so each exact path goes through
+            // its display form (OS text rule, issue 79).
+            o.stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| crate::git::GitName::from_bytes(path).display().to_string())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -195,21 +204,40 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
 /// never set a global identity — hit exactly that. When a real identity IS
 /// configured (local, global, or system) it is left untouched so the rebase is
 /// attributed correctly.
-fn fallback_identity_args(repo_path: &Path) -> Vec<String> {
-    identity_args_for(has_git_identity(repo_path))
+fn fallback_identity_args(repo_path: &Path) -> Result<Vec<String>, GitError> {
+    Ok(identity_args_for(has_git_identity(repo_path)?))
 }
 
 /// Whether a committer identity (both `user.name` and `user.email`) is
 /// resolvable for `repo_path` via any config scope (local, global, system).
-fn has_git_identity(repo_path: &Path) -> bool {
-    let configured = |key: &str| {
-        crate::git::command()
-            .args(["config", key])
+fn has_git_identity(repo_path: &Path) -> Result<bool, GitError> {
+    let configured = |key: &str| -> Result<bool, GitError> {
+        let out = crate::git::command()
+            .args(["config", "--null", "--get", key])
             .current_dir(repo_path)
             .output()
-            .is_ok_and(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
+            .map_err(|error| GitError::MergeFailed(format!("cannot read {key}: {error}")))?;
+        if out.status.code() == Some(1) {
+            return Ok(false);
+        }
+        if !out.status.success() {
+            return Err(GitError::MergeFailed(format!(
+                "cannot read {key}: git config failed ({})",
+                out.status
+            )));
+        }
+        let value = out
+            .stdout
+            .strip_suffix(&[0])
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                GitError::MergeFailed(format!("cannot read {key}: empty or unframed identity"))
+            })?;
+        Ok(!value.is_empty())
     };
-    configured("user.name") && configured("user.email")
+    let name = configured("user.name")?;
+    let email = configured("user.email")?;
+    Ok(name && email)
 }
 
 /// The `-c` argument list: empty when an identity already exists, or a fallback
@@ -229,7 +257,7 @@ fn identity_args_for(has_identity: bool) -> Vec<String> {
 
 /// Collect file paths from merge conflicts in the index.
 fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
-    let mut paths = Vec::new();
+    let mut names: Vec<crate::git::GitName> = Vec::new();
     if let Ok(conflicts) = index.conflicts() {
         for conflict in conflicts.flatten() {
             // A conflict entry has ancestor, our, and their sides.
@@ -239,16 +267,21 @@ fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
                 .as_ref()
                 .or(conflict.their.as_ref())
                 .or(conflict.ancestor.as_ref())
-                .map(|entry| String::from_utf8_lossy(&entry.path).to_string());
+                .map(|entry| crate::git::GitName::from_bytes(&entry.path));
 
             if let Some(p) = path {
-                if !paths.contains(&p) {
-                    paths.push(p);
+                if !names.contains(&p) {
+                    names.push(p);
                 }
             }
         }
     }
-    paths
+    // Shown to a person (OS text rule, issue 79): each exact path by its
+    // display form.
+    names
+        .iter()
+        .map(|name| name.display().to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -637,6 +670,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn r20_failed_identity_query_never_selects_scaffold_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[broken\n").unwrap();
+        assert!(format!("{:?}", has_git_identity(dir.path())).starts_with("Err("));
+    }
+
     // -- attempt_rebase tests --
 
     #[test]
@@ -696,8 +737,8 @@ mod tests {
         let mut cfg = repo.config().unwrap();
         cfg.set_str("user.name", "Real Dev").unwrap();
         cfg.set_str("user.email", "real@example.com").unwrap();
-        assert!(has_git_identity(dir.path()));
-        assert!(fallback_identity_args(dir.path()).is_empty());
+        assert!(has_git_identity(dir.path()).unwrap());
+        assert!(fallback_identity_args(dir.path()).unwrap().is_empty());
     }
 
     #[test]
@@ -762,5 +803,26 @@ mod tests {
         let index = repo.index().unwrap();
         let paths = collect_conflict_paths(&index);
         assert!(paths.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_target_ref_only_notfound_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        assert_eq!(find_target_ref(&repo, "main").unwrap().target(), Some(oid));
+        std::fs::create_dir_all(repo.path().join("refs/remotes/origin")).unwrap();
+        std::fs::write(repo.path().join("refs/remotes/origin/main"), "broken ref\n").unwrap();
+        assert!(find_target_ref(&repo, "main").is_err());
     }
 }

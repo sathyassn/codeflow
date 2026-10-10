@@ -145,6 +145,34 @@ impl std::fmt::Display for IntegrateOutcome {
     }
 }
 
+/// The branch to restore after a failed landing.
+///
+/// OS text rule (issue 79): a failed landing puts the checkout back on this
+/// branch by name. A name that is not valid UTF-8 cannot be given back
+/// exactly, and falling back to another name would restore the wrong
+/// checkout, so integrate refuses before it changes anything. A HEAD that
+/// cannot be read is refused the same way; only an unborn branch restores
+/// the target.
+fn checked_out_branch(repo: &git2::Repository, target: &str) -> Result<String, IntegrateError> {
+    match repo.head() {
+        Ok(head) => match crate::git::name::reference_shorthand(&head).rule_text() {
+            Ok(name) => Ok(name.to_string()),
+            Err(_) => Err(IntegrateError::Preflight(
+                "the checked-out branch name is not valid UTF-8, so integrate could not \
+                 restore it after a failure; switch to another branch first"
+                    .to_string(),
+            )),
+        },
+        // An unborn branch has nothing to restore but the target; any other
+        // failure is a checkout integrate cannot name, so it refuses.
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => Ok(target.to_string()),
+        Err(error) => Err(IntegrateError::Preflight(format!(
+            "cannot read the checked-out branch, so integrate could not restore it after a \
+             failure: {error}"
+        ))),
+    }
+}
+
 /// Integrate `branch` into `target`: flock → preflight → rebase → test →
 /// ff-merge. The target ref moves only when every stage succeeds.
 ///
@@ -179,14 +207,10 @@ pub fn integrate(
 
     // Canonical policy (git.protected_branches with glob support), not the
     // obsolete flat SecurityPolicy — so a custom protected target is honored.
-    let (policy, _) = Policy::load_effective(repo_root);
+    let (policy, _) = Policy::load_effective(repo_root).map_err(IntegrateError::Preflight)?;
     let target_protected = policy.git.branch_is_protected(target);
 
-    let original = repo
-        .head()
-        .ok()
-        .and_then(|h| h.shorthand().ok().map(ToString::to_string))
-        .unwrap_or_else(|| target.to_string());
+    let original = checked_out_branch(&repo, target)?;
     let old_target_short = short_id(&repo, target_oid);
 
     // Stage 2: rebase the branch onto the target.
@@ -325,7 +349,15 @@ fn run_release_structure(
     original: &str,
     tested: &str,
 ) -> Result<(), IntegrateError> {
-    if !crate::release_local::adopted(repo_root) {
+    let adopted = crate::release_local::adopted(repo_root).map_err(|message| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::TestGateFailed {
+            summary: format!(
+                "  release state: {message}; repair release configuration before integrating"
+            ),
+        }
+    })?;
+    if !adopted {
         return Ok(());
     }
     crate::release_local::structural(repo_root, tested).map_err(|message| {
@@ -450,10 +482,12 @@ fn current_checkout(repo_root: &Path) -> Option<String> {
         .current_dir(repo_root)
         .output()
         .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    // Shown only: the display form keeps a name that is not valid UTF-8 apart.
+    output.status.success().then(|| {
+        crate::git::GitName::from_bytes(output.stdout.trim_ascii())
+            .display()
+            .to_string()
+    })
 }
 
 fn refresh_target_worktrees(
@@ -463,48 +497,39 @@ fn refresh_target_worktrees(
     tested_oid: git2::Oid,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
-    let Ok(output) = crate::git::command()
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo_root)
-        .output()
-    else {
+    let Ok(repo) = git2::Repository::open(repo_root) else {
         warnings.push("could not enumerate linked worktrees after landing".to_string());
         return warnings;
     };
-    if !output.status.success() {
-        warnings.push(format!(
-            "could not enumerate linked worktrees after landing: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-        return warnings;
-    }
-
     let current = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.to_path_buf());
-    for record in String::from_utf8_lossy(&output.stdout).split("\n\n") {
-        let path = record
-            .lines()
-            .find_map(|line| line.strip_prefix("worktree "))
-            .map(PathBuf::from);
-        let branch = record.lines().find_map(|line| line.strip_prefix("branch "));
-        if branch != Some(&format!("refs/heads/{target}")) {
+    // OS text rule (issue 79): the path below is handed to `reset --hard`, so
+    // it comes from git's own files as exact bytes. A text listing could end a
+    // path at a newline or spell it lossily, and then name another checkout.
+    let target_ref = format!("refs/heads/{target}");
+    let heads = match crate::git::checkout_heads(&repo) {
+        Ok(heads) => heads,
+        Err(error) => {
+            warnings.push(format!(
+                "cannot read linked worktrees after landing: {error}"
+            ));
+            return warnings;
+        }
+    };
+    for (path, head) in heads {
+        if head.as_ref().map(crate::git::GitName::bytes) != Some(target_ref.as_bytes()) {
             continue;
         }
-        let Some(path) = path else { continue };
         if path.canonicalize().unwrap_or_else(|_| path.clone()) == current {
             continue;
         }
         match worktree_clean_at(&path, old_target_oid) {
             Ok(true) => {
                 let reset = crate::git::command()
-                    .args([
-                        "-C",
-                        path.to_string_lossy().as_ref(),
-                        "reset",
-                        "--hard",
-                        &tested_oid.to_string(),
-                    ])
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["reset", "--hard", &tested_oid.to_string()])
                     .output();
                 if !reset.as_ref().is_ok_and(|result| result.status.success()) {
                     warnings.push(format!(
@@ -642,6 +667,165 @@ mod tests {
     fn gate_token_env_name_is_the_coordinated_constant() {
         // f-hooks reads the same constant; the name is contract.
         assert_eq!(GATE_TOKEN_ENV, "CODEFLOW_INTEGRATE_TOKEN");
+    }
+
+    /// Review finding on issue 79: a checked-out branch whose name is not
+    /// valid UTF-8 was replaced by the target name, so a failed landing
+    /// restored the wrong checkout. Integrate refuses before changing anything.
+    /// Windows cannot hold the name as a ref path, so libgit2 fails to read
+    /// the branch there and integrate refuses on that read instead.
+    #[test]
+    fn a_checked_out_branch_that_is_not_utf8_is_refused_before_any_change() {
+        let dir = repo_with_feature_branch();
+        let tip = branch_oid(dir.path(), "main");
+        crate::git::write_packed_refs(
+            &dir.path().join(".git"),
+            &[
+                (tip.clone(), b"refs/heads/main".to_vec()),
+                (tip, b"refs/heads/caf\xe9".to_vec()),
+            ],
+        );
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/caf\xe9\n").unwrap();
+        let before = branch_oid(dir.path(), "feat/x");
+        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        let reason = if cfg!(windows) {
+            "cannot read the checked-out branch"
+        } else {
+            "not valid UTF-8"
+        };
+        assert!(
+            matches!(error, IntegrateError::Preflight(ref why) if why.contains(reason)),
+            "{error}"
+        );
+        assert_eq!(before, branch_oid(dir.path(), "feat/x"));
+    }
+
+    /// A checked-out branch that cannot be read is no branch to restore:
+    /// integrate refuses before any change instead of restoring the target.
+    /// An unborn branch still restores the target, as nothing else exists.
+    #[test]
+    fn r23_an_unreadable_head_is_refused_before_any_change() {
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "true");
+        // Nothing staged, so git status, which reads the broken HEAD as
+        // unborn, sees a clean tree and only the HEAD read can refuse.
+        git(dir.path(), &["rm", "-q", "-r", "--cached", "base.txt"]);
+        fs::remove_file(dir.path().join("base.txt")).unwrap();
+        fs::write(
+            dir.path().join(".git/refs/heads/broken"),
+            b"not an object id\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/broken\n").unwrap();
+        let before = branch_oid(dir.path(), "feat/x");
+        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(
+            matches!(error, IntegrateError::Preflight(ref why) if why.contains("cannot read the checked-out branch")),
+            "{error}"
+        );
+        assert_eq!(before, branch_oid(dir.path(), "feat/x"));
+
+        // The control: an unborn branch with nothing staged lands and puts
+        // the checkout on the target.
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "true");
+        git(dir.path(), &["rm", "-q", "-r", "--cached", "base.txt"]);
+        fs::remove_file(dir.path().join("base.txt")).unwrap();
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/orphan\n").unwrap();
+        let tested = branch_oid(dir.path(), "feat/x");
+        let outcome = integrate(dir.path(), "feat/x", "main");
+        assert!(
+            outcome.is_ok(),
+            "{:?}",
+            outcome.err().map(|e| e.to_string())
+        );
+        assert_eq!(branch_oid(dir.path(), "main"), tested);
+    }
+
+    /// Review finding on issue 79: the path of another worktree that holds the
+    /// target was read lossily and handed to `reset --hard`. It is the exact
+    /// path now. Runs where the file system accepts the name, as on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_worktree_whose_path_is_not_utf8_is_refreshed_at_that_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = repo_with_feature_branch();
+        let old = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        git(dir.path(), &["branch", "land"]);
+        let parent = tempfile::tempdir().unwrap();
+        let wt = parent.path().join(std::ffi::OsStr::from_bytes(b"wt\xff"));
+        if fs::create_dir(&wt).is_err() {
+            return;
+        }
+        let added = crate::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["worktree", "add", "--force"])
+            .arg(&wt)
+            .arg("land")
+            .output()
+            .unwrap();
+        assert!(added.status.success(), "{added:?}");
+        let warnings = refresh_target_worktrees(
+            dir.path(),
+            "land",
+            git2::Oid::from_str(&old).unwrap(),
+            git2::Oid::from_str(&tested).unwrap(),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let head = crate::git::command()
+            .arg("-C")
+            .arg(&wt)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), tested);
+    }
+
+    /// Review finding on issue 79: a text listing ended a worktree path at a
+    /// newline, so a checkout named `wt\nother` was read as `wt`, and the
+    /// landing reset the wrong checkout. The path now comes from git's files.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_worktree_path_with_a_newline_never_names_another_checkout() {
+        let dir = repo_with_feature_branch();
+        let old = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        git(dir.path(), &["branch", "land"]);
+        git(dir.path(), &["branch", "other"]);
+        let parent = tempfile::tempdir().unwrap();
+        let plain = parent.path().join("wt");
+        let tricky = parent.path().join("wt\nother");
+        for (path, branch) in [(&plain, "other"), (&tricky, "land")] {
+            let added = crate::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(["worktree", "add"])
+                .arg(path)
+                .arg(branch)
+                .output()
+                .unwrap();
+            assert!(added.status.success(), "{added:?}");
+        }
+        let warnings = refresh_target_worktrees(
+            dir.path(),
+            "land",
+            git2::Oid::from_str(&old).unwrap(),
+            git2::Oid::from_str(&tested).unwrap(),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let head = |path: &Path| {
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(head(&tricky), tested, "the target worktree is refreshed");
+        assert_eq!(head(&plain), old, "another checkout is left alone");
     }
 
     #[test]
@@ -969,5 +1153,20 @@ mod tests {
         let dir = repo_with_feature_branch();
         let _ = integrate(dir.path(), "feat/x", "main");
         assert!(dir.path().join(".git/codeflow/integrate.lock").exists());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_unreadable_release_adoption_refuses_integration() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run_release_structure(dir.path(), "main", "HEAD").is_ok());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/project.toml"), "invalid = [").unwrap();
+        let error = run_release_structure(dir.path(), "main", "HEAD").unwrap_err();
+        assert!(error.to_string().contains("repair release configuration"));
     }
 }

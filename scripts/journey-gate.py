@@ -120,7 +120,7 @@ def run(key: tuple, names: list[str], test_threads: str | None, results: Path | 
     cmd = command(key, names, test_threads)
     print("journey gate: " + " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""), flush=True)
     done = subprocess.run(
-        cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
     )
     output = done.stdout
     if done.returncode != 0:

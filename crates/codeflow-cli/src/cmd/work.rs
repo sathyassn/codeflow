@@ -69,7 +69,13 @@ pub fn run(args: &WorkArgs) -> i32 {
 }
 
 fn next(epic: Option<&str>, as_json: bool) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let mut backlog = match readiness::backlog(&root) {
         Ok(backlog) => backlog,
         Err(error) => {
@@ -194,7 +200,13 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
 }
 
 fn claim(task_id: &str, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     if !on.is_empty() {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
             eprintln!("work claim: error: {error}");
@@ -240,7 +252,13 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
 /// the command succeeds; CI reports the same finding at the same level. An
 /// unreadable tracking state always blocks.
 fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     // An undeterminable tracking state blocks whatever the level says, as in
     // CI's `work.tracking_state`.
     if let Err(error) = durable_work_tracking_enabled(&root) {
@@ -253,7 +271,13 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         );
         return 1;
     }
-    let (policy, _armed) = Policy::load_effective(&root);
+    let (policy, _armed) = match Policy::load_effective(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let level = policy.git.work_planning_level();
     let Err(findings) = plan_check(&root, task_id, target, on) else {
         return 0;
@@ -288,9 +312,10 @@ fn plan_check(
         return Err(findings);
     }
 
-    let declared = target
-        .map(str::to_string)
-        .or_else(|| declared_work_target(root, task_id));
+    let declared = match target {
+        Some(target) => Some(target.to_string()),
+        None => declared_work_target(root, task_id).map_err(|error| vec![error.to_string()])?,
+    };
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
         Err(error) => return Err(vec![error.to_string()]),
@@ -366,10 +391,12 @@ fn reviewed(
     {
         return Err("predecessor PR identity or tip differs from the pin; rebase on its new reviewed head and recheck".into());
     }
-    let (policy, _) = Policy::load_effective(root);
+    let (policy, _) = Policy::load_effective(root)?;
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
-    let body = proof["body"].as_str().unwrap_or_default();
+    let body = proof["body"]
+        .as_str()
+        .ok_or("cannot read predecessor review body")?;
     Ok(named()
         .iter()
         .any(|revision| super::ci::pr_body::review_names_revision(body, &headings[0], revision)))

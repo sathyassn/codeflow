@@ -244,9 +244,18 @@ pub fn marker_sizes(
         }
         AttrSource::Revision(revision) => format!("--source={revision}"),
     };
+    // OS text rule (issue 79): a path is a storage key (valid text as it is,
+    // else its exact bytes in hex), so git is asked about the real bytes and
+    // the answer is keyed the same way.
     let input: Vec<u8> = paths
         .iter()
-        .flat_map(|path| path.bytes().chain(std::iter::once(0)))
+        .flat_map(|path| {
+            crate::git::GitName::from_storage_key(path)
+                .bytes()
+                .to_vec()
+                .into_iter()
+                .chain(std::iter::once(0))
+        })
         .collect();
     // A git that refuses its arguments exits before it reads the paths, so
     // the write may fail with a broken pipe, which the helper leaves to the
@@ -267,13 +276,31 @@ pub fn marker_sizes(
             },
         );
     }
-    // `-z` output is path, attribute, value, each ended by a NUL.
-    let text = String::from_utf8_lossy(&out.stdout);
-    let fields: Vec<&str> = text.split('\0').collect();
-    Ok(fields
-        .chunks_exact(3)
-        .map(|record| (record[0].to_string(), size_from(record[2])))
-        .collect())
+    parse_marker_sizes(&out.stdout, paths)
+}
+
+fn parse_marker_sizes(answer: &[u8], paths: &[&str]) -> Result<BTreeMap<String, usize>, AttrError> {
+    let malformed =
+        || AttrError::Failed("git check-attr returned an incomplete or malformed answer".into());
+    // Every requested path has exactly one path/attribute/value triple.
+    let payload = answer.strip_suffix(b"\0").ok_or_else(malformed)?;
+    let fields: Vec<_> = payload.split(|byte| *byte == 0).collect();
+    if fields.len() != paths.len() * 3 {
+        return Err(malformed());
+    }
+    let mut sizes = BTreeMap::new();
+    for (record, requested) in fields.chunks_exact(3).zip(paths) {
+        if record[0] != crate::git::GitName::from_storage_key(requested).bytes()
+            || record[1] != ATTRIBUTE.as_bytes()
+        {
+            return Err(malformed());
+        }
+        let value = std::str::from_utf8(record[2]).map_err(|error| {
+            AttrError::Failed(format!("conflict-marker-size is not valid UTF-8: {error}"))
+        })?;
+        sizes.insert((*requested).to_string(), size_from(value));
+    }
+    Ok(sizes)
 }
 
 /// The findings for `files` at `level`, each file judged at its size in
@@ -295,7 +322,8 @@ pub fn check(
                 RULE,
                 level,
                 format!(
-                    "{path}:{} adds an unresolved {} conflict marker ({})",
+                    "{}:{} adds an unresolved {} conflict marker ({})",
+                    crate::git::display_key(path),
                     marker.line,
                     marker.kind.name(),
                     marker.kind.fill().to_string().repeat(size)
@@ -350,8 +378,8 @@ pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
         None,
         Some(&mut |delta, _hunk, line| {
             if line.origin() == '+' && delta.new_file().mode() != git2::FileMode::Commit {
-                if let Some(path) = delta.new_file().path() {
-                    let path = path.to_string_lossy().into_owned();
+                if let Some(path) = delta.new_file().path_bytes() {
+                    let path = crate::git::GitName::from_bytes(path).storage_key();
                     let number = line
                         .new_lineno()
                         .and_then(|n| usize::try_from(n).ok())
@@ -401,6 +429,61 @@ pub fn incomplete(level: PolicyLevel, error: &str, remedy: crate::remedy::Remedy
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_malformed_attribute_answer_is_not_a_default() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_ATTRIBUTE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(marker_sizes(root.path(), AttrSource::Revision("HEAD"), &["a.rs"]).is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\nprintf malformed\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::conflict_markers::tests::r20_malformed_attribute_answer_is_not_a_default",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
+    fn r15_attribute_decode_failure_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            b"a.txt conflict-marker-size=\xff\n",
+        )
+        .unwrap();
+        git(dir.path(), &["add", ".gitattributes"]);
+        let git_dir = dir.path().join(".git");
+        let index_file = git_dir.join("index");
+        let result = marker_sizes(
+            dir.path(),
+            AttrSource::Index {
+                git_dir: &git_dir,
+                index_file: &index_file,
+            },
+            &["a.txt"],
+        );
+        assert!(result.is_err(), "{result:?}");
+    }
+
     use super::*;
 
     /// A marker line built at run time, so this file holds none itself.
@@ -676,5 +759,27 @@ mod tests {
         assert!(marker_sizes(root, AttrSource::Revision("HEAD"), &[])
             .unwrap()
             .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    /// Issue 79: a path is a storage key, shown to a person by its exact
+    /// escaped name, and asked of git by its exact bytes.
+    #[test]
+    fn a_path_that_is_not_utf8_is_shown_by_its_exact_name() {
+        let key = crate::git::GitName::from_bytes(b"caf\xe9.md").storage_key();
+        let mut files = AddedLines::new();
+        files.insert(key, vec![(1, "<<<<<<< ours".to_string())]);
+        let out = check(PolicyLevel::Block, &files, &BTreeMap::new());
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].message.contains(r"caf\xe9.md:1"),
+            "{}",
+            out[0].message
+        );
+        assert!(!out[0].message.contains('\0'), "{}", out[0].message);
     }
 }

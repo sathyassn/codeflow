@@ -1097,7 +1097,7 @@ pub(crate) fn writer_read(
     for (var, value) in assigned {
         if known.env_options.contains(&var.as_str()) {
             let mut list = vec!["-".to_string()];
-            list.extend(value.split_whitespace().map(str::to_string));
+            list.extend(option_words(value));
             lists.push(list);
         }
     }
@@ -1464,7 +1464,7 @@ fn writer_form(name: &str, args: &[String], assigned: &[(String, String)]) -> Op
             ));
         }
         if known.env_options.contains(&var.as_str()) {
-            let words: Vec<String> = value.split_whitespace().map(str::to_string).collect();
+            let words = option_words(value);
             // The value comes before the command line, so a tar key there
             // is not the first word.
             let mut read = vec!["-".to_string()];
@@ -1477,6 +1477,17 @@ fn writer_form(name: &str, args: &[String], assigned: &[(String, String)]) -> Op
         }
     }
     None
+}
+
+/// The words of an option variable such as `TAR_OPTIONS`, split as the
+/// writers split them: at spaces, tabs and newlines only (issue 79), so
+/// another whitespace character stays inside its word.
+fn option_words(value: &str) -> Vec<String> {
+    value
+        .split(crate::hooks::git_guard::shell_blank)
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Whether `word` assigns the search path. The name is compared without
@@ -1525,7 +1536,11 @@ pub(crate) fn gitconfig_target(text: &str) -> Option<String> {
     // operators, `=` and env's `\_`.
     let spaced = text.replace("\\_", " ");
     let words: Vec<&str> = spaced
-        .split(|c: char| c.is_whitespace() || "'\";|&()<>`=".contains(c))
+        .split(|c: char| {
+            // C's whitespace, the widest set env -S, xargs or a shell
+            // splits at (issue 79); no tool splits at other spaces.
+            matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c') || "'\";|&()<>`=".contains(c)
+        })
         .filter(|w| !w.is_empty())
         .collect();
     let has = |wanted: &[&str]| words.iter().any(|w| wanted.contains(w));

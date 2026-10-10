@@ -32,31 +32,37 @@ pub(super) struct Adoption {
 /// with the reason.
 pub(super) fn trusted_actor(
     flag: &str,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> (String, Option<String>) {
-    let flag = flag.trim();
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<(String, Option<String>), String> {
     if flag.is_empty() || flag == UNKNOWN_ACTOR {
-        return (UNKNOWN_ACTOR.to_string(), None);
+        return Ok((UNKNOWN_ACTOR.to_string(), None));
     }
     let untrusted = |why: String| {
-        (
+        Ok((
             UNKNOWN_ACTOR.to_string(),
             Some(format!("--actor '{flag}' is not trusted: {why}")),
-        )
+        ))
     };
-    if env("GITHUB_ACTIONS").as_deref() != Some("true") {
+    let text = |key: &str| {
+        env(key)
+            .map(std::ffi::OsString::into_string)
+            .transpose()
+            .map_err(|_| format!("cannot read {key} as UTF-8"))
+    };
+    if text("GITHUB_ACTIONS")?.as_deref() != Some("true") {
         return untrusted("not a GitHub Actions run, so there is no event identity".to_string());
     }
-    let event = env("GITHUB_EVENT_NAME").unwrap_or_default();
+    let event = text("GITHUB_EVENT_NAME")?.unwrap_or_default();
     if event != "pull_request_target" && event != "pull_request" {
         return untrusted(format!("the '{event}' event is not a pull request event"));
     }
-    let payload: Option<serde_json::Value> = env("GITHUB_EVENT_PATH")
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str(&text).ok());
-    let Some(payload) = payload else {
-        return untrusted("the event payload cannot be read".to_string());
+    let Some(path) = env("GITHUB_EVENT_PATH") else {
+        return untrusted("GITHUB_EVENT_PATH is absent, so there is no event identity".into());
     };
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("cannot read GitHub event: {error}"))?;
+    let payload: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot read GitHub event JSON: {error}"))?;
     let repo = |side: &str| {
         payload
             .pointer(&format!("/pull_request/{side}/repo/full_name"))
@@ -67,10 +73,10 @@ pub(super) fn trusted_actor(
         (Some(head), Some(base)) if head == base => {}
         _ => return untrusted("a fork pull request carries no trusted identity".to_string()),
     }
-    if env("GITHUB_ACTOR").as_deref() != Some(flag) {
+    if text("GITHUB_ACTOR")?.as_deref() != Some(flag) {
         return untrusted("it is not the event's actor".to_string());
     }
-    (flag.to_string(), None)
+    Ok((flag.to_string(), None))
 }
 
 /// Resolve adopter fit for this run and print what applies: the actor, any
@@ -83,7 +89,7 @@ pub(super) fn resolve(
     actor: &str,
     branch: &str,
     has_body: bool,
-) -> Adoption {
+) -> Result<Adoption, String> {
     let mut effective = git.clone();
     let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
@@ -92,7 +98,7 @@ pub(super) fn resolve(
     effective.pr_required_sections = adoption::mapped_sections(git, &git.pr_required_sections);
     effective.pr_code_sections = adoption::mapped_sections(git, &git.pr_code_sections);
 
-    let (actor, why) = trusted_actor(actor, &|key| std::env::var(key).ok());
+    let (actor, why) = trusted_actor(actor, &|key| std::env::var_os(key))?;
     let actor = actor.as_str();
     println!("codeflow ci: actor '{actor}'");
     if let Some(why) = why {
@@ -112,7 +118,12 @@ pub(super) fn resolve(
         );
     }
 
-    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(root).unwrap_or(false);
+    let (tracked, unread) = tracking_for_levels(
+        codeflow_core::workgraph::durable_work_tracking_enabled(root),
+    );
+    if let Some(unread) = unread {
+        println!("codeflow ci: {unread}");
+    }
     print_levels(
         raw,
         git,
@@ -145,11 +156,11 @@ pub(super) fn resolve(
             "set `[release] backend` in .codeflow/project.toml to none, external or codeflow",
         )),
     }
-    Adoption {
+    Ok(Adoption {
         git: effective,
         profile,
         violations,
-    }
+    })
 }
 
 /// Put the unit name a matched profile supplies on a `Task:` line when the
@@ -205,19 +216,24 @@ pub(super) fn supply_sections(profile: Option<&AutomationProfile>, body: &str) -
 /// the two-step upgrade order, even when the checkout is the target and the
 /// head's own workflow no longer validates it. `Some(2)` stops the run.
 pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
-    let show = |path: &str| {
-        let out = codeflow_core::git::command()
-            .arg("-C")
-            .arg(root)
-            .args(["show", &format!("{head}:{path}")])
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    let read = || -> Result<_, String> {
+        let commit = super::rev_parse(root, head)?.ok_or_else(|| {
+            format!("cannot read head configuration: {head} does not name a commit")
+        })?;
+        Ok((
+            head_config(root, &commit, ".codeflow/policy.json")?,
+            head_config(root, &commit, ".codeflow/project.toml")?,
+        ))
+    };
+    let (policy, project) = match read() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("codeflow ci: error: cannot read head configuration: {error}");
+            return Some(2);
+        }
     };
     let mut failed = false;
-    if let Some(text) = show(".codeflow/policy.json") {
+    if let Some(text) = policy {
         if let Err(errors) = policy_schema::validate_policy_str(&text) {
             for e in &errors {
                 eprintln!("codeflow ci: head policy error: {e}");
@@ -233,13 +249,45 @@ pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
             failed = true;
         }
     }
-    if let Some(text) = show(".codeflow/project.toml") {
+    if let Some(text) = project {
         if let Err(e) = adoption::release_backend_str(&text, "the head's .codeflow/project.toml") {
             eprintln!("codeflow ci: error: {e}");
             failed = true;
         }
     }
     failed.then_some(2)
+}
+
+/// A missing entry in a successfully read tree is optional. A failed Git
+/// process or unreadable present blob makes `check_head_config` refuse.
+fn head_config(root: &Path, commit: &str, path: &str) -> Result<Option<String>, String> {
+    let entries = super::git_bytes(root, &["ls-tree", "-z", commit, "--", path])?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let terminated = entries
+        .strip_suffix(b"\0")
+        .ok_or("cannot read head configuration tree entry")?;
+    let entry = std::str::from_utf8(terminated)
+        .map_err(|_| "cannot decode head configuration tree entry")?;
+    let (metadata, name) = entry
+        .split_once('\t')
+        .ok_or("cannot read head configuration tree entry")?;
+    let fields: Vec<_> = metadata.split(' ').collect();
+    let [mode, "blob", oid] = fields.as_slice() else {
+        return Err(format!("head configuration is not a blob: {path}"));
+    };
+    if name != path
+        || !matches!(*mode, "100644" | "100755" | "120000")
+        || !matches!(oid.len(), 40 | 64)
+        || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!("cannot read head configuration tree entry: {path}"));
+    }
+    let bytes = super::git_bytes(root, &["cat-file", "blob", oid])?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("head configuration is not valid UTF-8: {path}"))
 }
 
 /// Which optional checks this run includes.
@@ -249,6 +297,21 @@ struct Ran {
     has_body: bool,
     /// Durable work tracking is on, so the work-record checks run.
     tracked: bool,
+}
+
+/// Whether the work-record level lines are printed, and the line that says
+/// why they are not when tracking cannot be read. The enforcement reads
+/// tracking itself and surfaces the error; these lines only report levels.
+fn tracking_for_levels<E: std::fmt::Display>(read: Result<bool, E>) -> (bool, Option<String>) {
+    match read {
+        Ok(tracked) => (tracked, None),
+        Err(error) => (
+            false,
+            Some(format!(
+                "the work_records and work_planning levels are not shown: cannot read whether durable work tracking is on: {error}"
+            )),
+        ),
+    }
 }
 
 /// The levels adopter fit resolves before the profile applies, with their
@@ -346,6 +409,81 @@ fn print_levels(
 
 #[cfg(test)]
 mod tests {
+    /// A tracking read that fails says so in place of the work-record
+    /// level lines; a read that succeeds prints them or not as before.
+    #[test]
+    fn r23_level_lines_name_an_unread_tracking_state() {
+        let (tracked, unread) = super::tracking_for_levels(Err("boom"));
+        assert!(!tracked);
+        let unread = unread.expect("the failed read is named");
+        assert!(unread.contains("cannot read whether durable work tracking is on: boom"));
+        assert_eq!(super::tracking_for_levels::<String>(Ok(true)), (true, None));
+        assert_eq!(
+            super::tracking_for_levels::<String>(Ok(false)),
+            (false, None)
+        );
+    }
+
+    #[test]
+    fn r20_head_config_refuses_failed_git_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let initialized = codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(directory.path())
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        std::fs::write(directory.path().join(".git/config"), "[broken\n").unwrap();
+        assert_eq!(super::check_head_config(directory.path(), "HEAD"), Some(2));
+    }
+
+    #[test]
+    fn r17_absent_event_path_keeps_actor_untrusted() {
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        let (actor, why) = super::trusted_actor("automation", &env).unwrap();
+        assert_eq!(actor, super::UNKNOWN_ACTOR);
+        assert!(why.unwrap().contains("GITHUB_EVENT_PATH is absent"));
+    }
+
+    #[test]
+    fn r16_unreadable_actor_event_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = dir.path().join("event.json");
+        std::fs::write(&event, b"\xff").unwrap();
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_EVENT_PATH" => Some(event.as_os_str().to_owned()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        assert!(super::trusted_actor("automation", &env)
+            .unwrap_err()
+            .contains("GitHub event"));
+    }
+
+    #[test]
+    fn r15_actor_requires_exact_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let event = temp.path().join("event.json");
+        std::fs::write(&event, r#"{"pull_request":{"head":{"repo":{"full_name":"o/r"}},"base":{"repo":{"full_name":"o/r"}}}}"#).unwrap();
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_EVENT_PATH" => Some(event.to_str().unwrap().into()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        let (actor, why) = super::trusted_actor("automation\u{a0}", &env).unwrap();
+        assert_eq!(actor, "unknown");
+        assert!(why.is_some());
+    }
+
     #[test]
     fn only_a_same_repository_pull_request_event_carries_an_actor() {
         use super::trusted_actor;
@@ -364,24 +502,27 @@ mod tests {
         let ci = |path: &std::path::Path, actor: &'static str| {
             let path = path.display().to_string();
             move |key: &str| match key {
-                "GITHUB_ACTIONS" => Some("true".to_string()),
-                "GITHUB_EVENT_NAME" => Some("pull_request_target".to_string()),
-                "GITHUB_EVENT_PATH" => Some(path.clone()),
-                "GITHUB_ACTOR" => Some(actor.to_string()),
+                "GITHUB_ACTIONS" => Some("true".into()),
+                "GITHUB_EVENT_NAME" => Some("pull_request_target".into()),
+                "GITHUB_EVENT_PATH" => Some(path.clone().into()),
+                "GITHUB_ACTOR" => Some(actor.into()),
                 _ => None,
             }
         };
         // A local run: the flag alone is never an identity.
-        let (actor, why) = trusted_actor(bot, &|_| None);
+        let (actor, why) = trusted_actor(bot, &|_| None).unwrap();
         assert_eq!(actor, "unknown");
         assert!(why.unwrap().contains("not a GitHub Actions run"));
         // The trusted path: same repository, the event's own actor.
-        assert_eq!(trusted_actor(bot, &ci(&same, bot)), (bot.to_string(), None));
+        assert_eq!(
+            trusted_actor(bot, &ci(&same, bot)).unwrap(),
+            (bot.to_string(), None)
+        );
         // A fork, and a flag that is not the event's actor.
-        let (actor, why) = trusted_actor(bot, &ci(&fork, bot));
+        let (actor, why) = trusted_actor(bot, &ci(&fork, bot)).unwrap();
         assert_eq!(actor, "unknown");
         assert!(why.unwrap().contains("fork"));
-        let (actor, _) = trusted_actor(bot, &ci(&same, "mallory"));
+        let (actor, _) = trusted_actor(bot, &ci(&same, "mallory")).unwrap();
         assert_eq!(actor, "unknown");
         let _ = std::fs::remove_dir_all(&dir);
     }

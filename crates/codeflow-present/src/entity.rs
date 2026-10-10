@@ -136,7 +136,7 @@ fn collapsed(raw: &str) -> Option<String> {
 /// `html` have none.
 pub fn block_entities(block: &Block) -> Result<Vec<Entity>> {
     match block {
-        Block::Figure { declaration, .. } => Ok(figure_entities(declaration)),
+        Block::Figure { declaration, .. } => figure_entities(declaration),
         Block::Html { html, legend, .. } => {
             let mut entities = stage_entities(&Html::parse_fragment(html));
             if let Some(legend) = legend {
@@ -181,9 +181,9 @@ pub fn find_entity<'a>(
 // figure blocks
 // ---------------------------------------------------------------------------
 
-fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
+fn figure_entities(declaration: &serde_json::Value) -> Result<Vec<Entity>> {
     let Some(figure) = declaration.get("figure") else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let states = figure
         .get("states")
@@ -227,7 +227,7 @@ fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
                 let label = collapsed(&label_texts)
                     .or_else(|| means(state).as_deref().and_then(collapsed))
                     .unwrap_or_else(|| finish_label(id));
-                let bounds = mark_extent(item).map(Rect::from_extent);
+                let bounds = mark_extent(item)?.map(Rect::from_extent);
                 entities.push(Entity {
                     id: id.to_string(),
                     label,
@@ -258,18 +258,29 @@ fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
             unverified_reason: Some("a legend entry is page text outside the drawing".to_string()),
         });
     }
-    entities
+    Ok(entities)
 }
 
-fn number(item: &serde_json::Value, key: &str) -> Option<f64> {
+fn number(item: &serde_json::Value, key: &str) -> Result<f64> {
     item.get(key)
         .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            crate::PresentError::InvalidDocument(format!(
+                "cannot read finite figure coordinate {key}"
+            ))
+        })
 }
 
-/// The extent of a declared mark's primary shape, as the grammar draws it.
-fn mark_extent(item: &serde_json::Value) -> Option<Extent> {
-    let shape = item.get("shape").and_then(serde_json::Value::as_str)?;
+/// Read a declared mark's geometry. Malformed fields propagate through
+/// `figure_entities` and `block_entities`, so selector validation refuses them.
+/// Valid shapes outside the bounds engine retain an explicit unknown extent.
+fn mark_extent(item: &serde_json::Value) -> Result<Option<Extent>> {
+    let unreadable = || crate::PresentError::InvalidDocument("cannot read figure geometry".into());
+    let shape = item
+        .get("shape")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(unreadable)?;
     let mut extent = Extent::default();
     match shape {
         "rect" => {
@@ -293,19 +304,36 @@ fn mark_extent(item: &serde_json::Value) -> Option<Extent> {
             extent.add(number(item, "x2")?, number(item, "y2")?);
         }
         "polyline" => {
-            for point in item.get("points")?.as_array()? {
-                let pair = point.as_array()?;
-                let (x, y) = (pair.first()?.as_f64()?, pair.get(1)?.as_f64()?);
+            for point in item
+                .get("points")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(unreadable)?
+            {
+                let pair = point.as_array().ok_or_else(unreadable)?;
+                let (x, y) = (
+                    pair.first()
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(unreadable)?,
+                    pair.get(1)
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(unreadable)?,
+                );
                 if !(x.is_finite() && y.is_finite()) {
-                    return None;
+                    return Err(unreadable());
                 }
                 extent.add(x, y);
             }
         }
-        "path" => return path_extent(item.get("d")?.as_str()?),
-        _ => return None,
+        "path" => {
+            return Ok(path_extent(
+                item.get("d")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(unreadable)?,
+            ))
+        }
+        _ => return Ok(None),
     }
-    extent.finish()
+    Ok(extent.finish())
 }
 
 // ---------------------------------------------------------------------------
@@ -389,10 +417,10 @@ fn stage_label(element: ElementRef<'_>, id: &str, elements: &[ElementRef<'_>]) -
     let for_text = elements
         .iter()
         .filter(|other| {
-            other
-                .value()
-                .attr("data-cf-for")
-                .is_some_and(|ids| ids.split_whitespace().any(|named| named == id))
+            other.value().attr("data-cf-for").is_some_and(|ids| {
+                ids.split([' ', '\t', '\r', '\n', '\u{c}'])
+                    .any(|named| named == id)
+            })
         })
         .map(|other| own_visible_text(*other))
         .filter(|text| !text.is_empty())
@@ -519,7 +547,7 @@ fn add_shape_extent(
             let numbers = value
                 .attr("points")
                 .unwrap_or_default()
-                .split(|character: char| character == ',' || character.is_whitespace())
+                .split([',', ' ', '\t', '\r', '\n'])
                 .filter(|part| !part.is_empty())
                 .map(parse_length)
                 .collect::<Option<Vec<_>>>()
@@ -542,7 +570,7 @@ fn add_shape_extent(
 }
 
 fn parse_length(raw: &str) -> Option<f64> {
-    let trimmed = raw.trim();
+    let trimmed = raw.trim_matches([' ', '\t', '\r', '\n']);
     let number = trimmed.strip_suffix("px").unwrap_or(trimmed);
     number.parse::<f64>().ok().filter(|value| value.is_finite())
 }
@@ -570,7 +598,7 @@ fn declares_geometry(css: &str, sheet: bool) -> bool {
         .flat_map(|block| block.split(';'))
         .any(|declaration| {
             declaration.split_once(':').is_some_and(|(property, _)| {
-                let property = property.trim();
+                let property = property.trim_matches([' ', '\t', '\r', '\n', '\u{c}']);
                 GEOMETRY_PROPERTIES.contains(&property) || property.starts_with("offset")
             })
         })
@@ -732,10 +760,12 @@ fn names_or_hides_its_parts(element: ElementRef<'_>) -> bool {
             && (labelled(element, "data-cf-label") || labelled(element, "aria-label")))
 }
 
-/// Whether an element's first role is `img`.
+/// Whether an element's first role is `img`. A role attribute is a list of
+/// tokens split on ASCII whitespace, as browsers read it, so a no-break
+/// space never separates two roles.
 fn has_picture_role(element: ElementRef<'_>) -> bool {
     element.value().attr("role").is_some_and(|role| {
-        role.split_whitespace()
+        role.split_ascii_whitespace()
             .next()
             .is_some_and(|first| first.eq_ignore_ascii_case("img"))
     })
@@ -993,6 +1023,34 @@ fn quadratic_extent(extent: &mut Extent, xs: [f64; 3], ys: [f64; 3]) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r16_malformed_figure_entity_refuses_block_read() {
+        let block = crate::document::Block::Figure {
+            id: "probe".into(),
+            declaration: serde_json::json!({"figure":{"wide":{"draw":[{"id":"a","state":"ready","shape":"path","d":23}]}}}),
+        };
+        assert!(super::block_entities(&block).is_err());
+    }
+
+    #[test]
+    fn r16_geometry_field_type_refuses_instead_of_unknown_extent() {
+        assert!(super::mark_extent(&serde_json::json!({"shape":"path","d":23})).is_err());
+        assert!(
+            super::mark_extent(&serde_json::json!({"shape":"circle","cx":0,"cy":0,"r":"bad"}))
+                .is_err()
+        );
+        assert!(super::mark_extent(&serde_json::json!({"shape":"text"}))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn r15_svg_length_keeps_unicode_whitespace() {
+        assert_eq!(super::parse_length("\u{a0}12"), None);
+        assert_eq!(super::parse_length("12\u{a0}"), None);
+        assert_eq!(super::parse_length(" 12\t"), Some(12.0));
+    }
+
     use super::*;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -1235,6 +1293,19 @@ mod tests {
         assert!(
             !stage_naming("<svg><rect data-cf-target='a' role='img'/></svg>")
                 .picture_role_hides_entities
+        );
+        // Role tokens split on ASCII whitespace only.
+        assert!(
+            stage_naming(
+                "<figure role='\timg presentation'><svg><rect data-cf-target='a'/></svg></figure>"
+            )
+            .picture_role_hides_entities
+        );
+        assert!(
+            !stage_naming(
+                "<figure role='img\u{a0}x'><svg><rect data-cf-target='a'/></svg></figure>"
+            )
+            .picture_role_hides_entities
         );
     }
 

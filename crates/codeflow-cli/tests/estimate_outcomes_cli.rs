@@ -918,3 +918,89 @@ fn a_moved_record_keeps_its_history() {
     );
     assert_eq!(outcome["elapsed_active_seconds"], 2000);
 }
+
+/// Issue 79: a record blob in the history that cannot be read is reported,
+/// never read as the record being absent, which would invent a transition.
+#[test]
+fn an_unreadable_record_in_the_history_is_reported() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.deliver("TSK-001", T0 + 1000, HOUR);
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    // The planned version's blob, which only the history holds.
+    let blob = fx.git_out(
+        &[
+            "rev-parse",
+            "plan/TSK-001:project-management/tasks/TSK-001.md",
+        ],
+        T0,
+    );
+    let object = fx
+        .root
+        .join(".git/objects")
+        .join(&blob[..2])
+        .join(&blob[2..]);
+    std::fs::remove_file(object).unwrap();
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(1), "{report:#}");
+    assert!(
+        report["findings"]
+            .to_string()
+            .contains("history_unreadable"),
+        "{report:#}"
+    );
+}
+
+/// Issue 79: a forecast directory that cannot be listed leaves the home
+/// unusable instead of joining fewer forecasts.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_forecast_directory_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    three_delivered(&fx);
+    fx.adopt("project-management/estimates");
+    let name = fx.root.join("project-management/estimates/forecasts/plan");
+    std::fs::create_dir_all(&name).unwrap();
+    std::fs::write(name.join("v1.json"), forecast(&["TSK-001"])).unwrap();
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    std::fs::set_permissions(&name, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = fx.run(&["estimate", "outcomes"]);
+    std::fs::set_permissions(&name, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("cannot be read"), "{text}");
+}
+
+/// Issue 79: a reviewed commit this clone holds but cannot read refuses the
+/// report, instead of reading as a commit the clone lacks, which would
+/// place the landing at the completion.
+#[test]
+fn an_unreadable_reviewed_commit_is_reported() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(&["checkout", "-q", "-b", "side", "main"], T0 + 300);
+    let reviewed = fx.code("side.txt", T0 + 400);
+    fx.git(&["checkout", "-q", "main"], T0 + 500);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 600);
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    let object = fx
+        .root
+        .join(".git/objects")
+        .join(&reviewed[..2])
+        .join(&reviewed[2..]);
+    std::fs::remove_file(&object).unwrap();
+    std::fs::write(&object, b"not zlib data").unwrap();
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(1), "{report:#}");
+    assert!(
+        report["findings"]
+            .to_string()
+            .contains("history_unreadable"),
+        "{report:#}"
+    );
+}

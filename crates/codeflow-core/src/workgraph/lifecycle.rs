@@ -21,8 +21,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use git2::{Repository, TreeWalkMode, TreeWalkResult};
+use git2::Repository;
 
+use crate::git::GitName;
 use crate::remedy::{self, Finding};
 
 use super::record_text::{
@@ -72,7 +73,7 @@ impl RecordView {
             .map_err(|error| error.to_string())?;
         let field = |name: &str| {
             let value = crate::validate::get_string_field(&data, name);
-            (!value.trim().is_empty()).then_some(value)
+            (!value.is_empty()).then_some(value)
         };
         let valid = |id: &str| match kind {
             RecordKind::Task => super::is_valid_task_format_id(id),
@@ -145,10 +146,33 @@ pub struct Graph {
     pub records: BTreeMap<String, RecordView>,
 }
 
+/// An undecodable epic directory can still hold a task whose identity is ASCII.
+/// Other non-record names remain outside the record inventory.
+fn record_path_text(name: &GitName) -> Result<Option<&str>, String> {
+    if let Ok(path) = name.rule_text() {
+        return Ok(Some(path));
+    }
+    let parts: Vec<_> = name.bytes().split(|byte| *byte == b'/').collect();
+    if let [b"project-management", b"epics", _, b"tasks", file] = parts.as_slice() {
+        // Every supported task filename is ASCII. A non-ASCII filename
+        // cannot be a task identity, but the enclosing epic name can.
+        if file.is_ascii() {
+            let file = std::str::from_utf8(file).map_err(|error| error.to_string())?;
+            if record_kind_for_tree_path(&format!("project-management/tasks/{file}")).is_some() {
+                return Err(format!("cannot decode work record path {}", name.display()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 impl Graph {
     /// Read the checked-out records under `project-management/`.
-    #[must_use]
-    pub fn from_worktree(repo_root: &Path) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an inventory or record cannot be read, decoded or parsed.
+    pub fn from_worktree(repo_root: &Path) -> Result<Self, String> {
         let pm = repo_root.join("project-management");
         let mut graph = Self::default();
         for (kind, files) in [
@@ -156,19 +180,21 @@ impl Graph {
             (RecordKind::Spec, super::layout::spec_record_files(&pm)),
             (RecordKind::Task, super::layout::task_record_files(&pm)),
         ] {
-            for path in files {
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let relative = path
-                    .strip_prefix(repo_root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                graph.insert(kind, &relative, &content);
+            for path in files.map_err(|error| error.to_string())? {
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+                let relative =
+                    crate::portable_path::slashed(path.strip_prefix(repo_root).unwrap_or(&path));
+                if !crate::git::key_is_text(&relative) {
+                    return Err(format!(
+                        "cannot decode work record path {}",
+                        crate::git::display_key(&relative)
+                    ));
+                }
+                graph.insert(kind, &relative, &content)?;
             }
         }
-        graph
+        Ok(graph)
     }
 
     /// Read the records of a commit's tree.
@@ -186,42 +212,53 @@ impl Graph {
             .map_err(|error| format!("cannot read the tree of {revision}: {}", error.message()))?;
         let mut graph = Self::default();
         let mut failure = None;
-        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
-            let Ok(name) = entry.name() else {
-                return TreeWalkResult::Ok;
+        crate::git::walk_tree(repo, &tree, &mut |name, entry| {
+            let path = match record_path_text(name) {
+                Ok(Some(path)) => path,
+                Ok(None) => return crate::git::Walk::Continue,
+                Err(error) => {
+                    failure = Some(error);
+                    return crate::git::Walk::Stop;
+                }
             };
-            let path = format!("{root}{name}");
-            let Some(kind) = record_kind_for_tree_path(&path) else {
-                return TreeWalkResult::Ok;
+            let Some(kind) = record_kind_for_tree_path(path) else {
+                return crate::git::Walk::Continue;
             };
             match repo.find_blob(entry.id()) {
                 Ok(blob) => {
-                    graph.insert(kind, &path, &String::from_utf8_lossy(blob.content()));
-                    TreeWalkResult::Ok
+                    let loaded = std::str::from_utf8(blob.content())
+                        .map_err(|error| error.to_string())
+                        .and_then(|content| graph.insert(kind, path, content));
+                    match loaded {
+                        Ok(()) => crate::git::Walk::Continue,
+                        Err(error) => {
+                            failure = Some(format!("{path}: {error}"));
+                            crate::git::Walk::Stop
+                        }
+                    }
                 }
                 Err(error) => {
                     failure = Some(format!("{path}: {}", error.message()));
-                    TreeWalkResult::Abort
+                    crate::git::Walk::Stop
                 }
             }
         })
-        .map_err(|error| {
-            failure
-                .clone()
-                .unwrap_or_else(|| error.message().to_string())
-        })?;
+        .map_err(|error| error.message().to_string())?;
         match failure {
             Some(failure) => Err(failure),
             None => Ok(graph),
         }
     }
 
-    /// Unparseable records and duplicate ids are left to the structural
-    /// validator, which reports them.
-    fn insert(&mut self, kind: RecordKind, path: &str, content: &str) {
-        if let Ok(record) = RecordView::parse(kind, path, content) {
-            self.records.entry(record.id.clone()).or_insert(record);
+    /// Every discovered record must be readable and have an unambiguous identity.
+    fn insert(&mut self, kind: RecordKind, path: &str, content: &str) -> Result<(), String> {
+        let record =
+            RecordView::parse(kind, path, content).map_err(|error| format!("{path}: {error}"))?;
+        if self.records.contains_key(&record.id) {
+            return Err(format!("{path}: duplicate work id {}", record.id));
         }
+        self.records.insert(record.id.clone(), record);
+        Ok(())
     }
 
     fn get(&self, id: &str, kind: RecordKind) -> Option<&RecordView> {
@@ -287,16 +324,33 @@ impl Baseline {
     /// `HEAD` (the verbs and `validate --docs`).
     #[must_use]
     pub fn load(repo_root: &Path) -> Self {
-        let Ok(repo) = Repository::discover(repo_root) else {
-            let entries = recorded_baseline(repo_root);
-            return if entries.is_empty() {
-                Self::NotRecorded
-            } else {
-                Self::Unavailable(entries)
-            };
+        let entries = match recorded_baseline(repo_root) {
+            Ok(entries) => entries,
+            Err(error) => return Self::Refused(vec![error]),
         };
-        let head = resolve_commit(&repo, "HEAD");
-        Self::from_entries(&repo, &recorded_baseline(repo_root), head)
+        let repo = match Repository::discover(repo_root) {
+            Ok(repo) => repo,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                return if entries.is_empty() {
+                    Self::NotRecorded
+                } else {
+                    Self::Unavailable(entries)
+                };
+            }
+            Err(error) => {
+                return Self::Refused(vec![format!(
+                    "cannot discover migration baseline repository: {error}"
+                )])
+            }
+        };
+        if entries.is_empty() {
+            return Self::NotRecorded;
+        }
+        let head = match resolve_commit(&repo, "HEAD") {
+            Ok(head) => head,
+            Err(error) => return Self::Refused(vec![error]),
+        };
+        Self::from_entries(&repo, &entries, head)
     }
 
     /// Resolve baseline entries for judging the commit `head`. An entry is
@@ -321,16 +375,30 @@ impl Baseline {
                 continue;
             };
             match repo.find_object(oid, None) {
-                Err(_) => missing.push(entry.clone()),
-                Ok(object) if object.kind() != Some(git2::ObjectType::Commit) => refused.push(format!(
-                    "{BASELINE_KEY} entry {entry} is not a commit"
-                )),
-                Ok(_) if !head.is_some_and(|head| contains(repo, head, oid)) => refused.push(format!(
-                    "{BASELINE_KEY} entry {entry} is not an ancestor of the commit being judged; every baseline must be a commit this history contains"
-                )),
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                    missing.push(entry.clone());
+                }
+                Err(error) => {
+                    refused.push(format!("cannot read {BASELINE_KEY} entry {entry}: {error}"));
+                }
+                Ok(object) if object.kind() != Some(git2::ObjectType::Commit) => {
+                    refused.push(format!("{BASELINE_KEY} entry {entry} is not a commit"));
+                }
                 Ok(_) => {
-                    if !resolved.iter().any(|(_, seen)| *seen == oid) {
-                        resolved.push((entry.clone(), oid));
+                    let contained = match head {
+                        Some(head) => contains(repo, head, oid),
+                        None => Ok(false),
+                    };
+                    match contained {
+                        Err(error) => refused.push(format!("cannot read ancestry of {BASELINE_KEY} entry {entry}: {error}")),
+                        Ok(false) => refused.push(format!(
+                            "{BASELINE_KEY} entry {entry} is not an ancestor of the commit being judged; every baseline must be a commit this history contains"
+                        )),
+                        Ok(true) => {
+                            if !resolved.iter().any(|(_, seen)| *seen == oid) {
+                                resolved.push((entry.clone(), oid));
+                            }
+                        }
                     }
                 }
             }
@@ -345,18 +413,28 @@ impl Baseline {
         for (entry, oid) in &resolved {
             match Graph::from_revision(repo, &oid.to_string()) {
                 Ok(graph) => graphs.push(graph),
-                Err(_) => return Self::Unavailable(vec![entry.clone()]),
+                Err(error) => {
+                    return Self::Refused(vec![format!(
+                        "cannot read {BASELINE_KEY} entry {entry}: {error}"
+                    )])
+                }
             }
         }
-        let ancestor = resolved
-            .iter()
-            .map(|(_, older)| {
-                resolved
-                    .iter()
-                    .map(|(_, newer)| older != newer && contains(repo, *newer, *older))
-                    .collect()
-            })
-            .collect();
+        let mut ancestor = Vec::new();
+        for (_, older) in &resolved {
+            let mut row = Vec::new();
+            for (_, newer) in &resolved {
+                match contains(repo, *newer, *older) {
+                    Ok(contains) => row.push(older != newer && contains),
+                    Err(error) => {
+                        return Self::Refused(vec![format!(
+                            "cannot read migration baseline ancestry: {error}"
+                        )])
+                    }
+                }
+            }
+            ancestor.push(row);
+        }
         Self::Available {
             commits: resolved.into_iter().map(|(entry, _)| entry).collect(),
             graphs,
@@ -485,14 +563,15 @@ impl Baseline {
 pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     let mut lines = content.split_inclusive('\n');
     let first = lines.next()?;
-    if first.trim_end() != "---" {
+    if super::record_text::without_line_ending(first).trim_end_matches([' ', '\t']) != "---" {
         return None;
     }
     let mut out = String::from(first);
     let (mut removed, mut closed) = (false, false);
     for line in lines {
         if !closed {
-            if line.trim_end() == "---" {
+            if super::record_text::without_line_ending(line).trim_end_matches([' ', '\t']) == "---"
+            {
                 closed = true;
             } else if !removed && line.starts_with("uid:") {
                 removed = true;
@@ -504,58 +583,106 @@ pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     (removed && closed).then_some(out)
 }
 
-fn resolve_commit(repo: &Repository, revision: &str) -> Option<git2::Oid> {
-    repo.revparse_single(revision)
-        .and_then(|object| object.peel_to_commit())
-        .map(|commit| commit.id())
-        .ok()
+fn resolve_commit(repo: &Repository, revision: &str) -> Result<Option<git2::Oid>, String> {
+    // revparse reports NotFound for an unborn HEAD. The HEAD reader distinguishes
+    // that legitimate state from an unreadable reference or an unknown revision.
+    let commit = if revision == "HEAD" {
+        match repo.head() {
+            Ok(head) => head.peel_to_commit(),
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
+            Err(error) => return Err(format!("cannot resolve HEAD to a commit: {error}")),
+        }
+    } else {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+    };
+    commit
+        .map(|commit| Some(commit.id()))
+        .map_err(|error| format!("cannot resolve {revision} to a commit: {error}"))
 }
 
 /// Whether `commit` is `tip` or one of its ancestors.
-fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> bool {
-    tip == commit || repo.graph_descendant_of(tip, commit).unwrap_or(false)
+fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> Result<bool, String> {
+    if tip == commit {
+        return Ok(true);
+    }
+    repo.graph_descendant_of(tip, commit)
+        .map_err(|error| error.to_string())
 }
 
 /// The baseline entries of a parsed project config: a list, or a single
-/// string read as a one-item list. Entries are trimmed; their form is
+/// string read as a one-item list. Entries are exact strings; their form is
 /// checked when they are resolved.
-fn baseline_entries(config: Option<&toml::Value>) -> Vec<String> {
+fn baseline_entries(config: Option<&toml::Value>) -> Result<Vec<String>, String> {
     let values: Vec<&str> = match config.and_then(|config| config.get(BASELINE_KEY)) {
+        None => Vec::new(),
         Some(toml::Value::String(value)) => vec![value.as_str()],
-        Some(toml::Value::Array(items)) => items.iter().filter_map(toml::Value::as_str).collect(),
-        _ => Vec::new(),
+        Some(toml::Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or_else(|| format!("{BASELINE_KEY} entries must be strings"))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => {
+            return Err(format!(
+                "{BASELINE_KEY} must be a string or an array of strings"
+            ))
+        }
     };
     let mut entries: Vec<String> = Vec::new();
-    for value in values
-        .into_iter()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for value in values {
         if !entries.iter().any(|seen| seen == value) {
             entries.push(value.to_string());
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// The recorded migration baseline entries of the checked-out tree; empty
 /// when none.
-#[must_use]
-pub fn recorded_baseline(repo_root: &Path) -> Vec<String> {
-    baseline_entries(crate::hooks::policy::read_project_toml(repo_root).as_ref())
+///
+/// # Errors
+///
+/// Refuses an unreadable, non-UTF-8 or malformed project file, or a baseline
+/// field that is not a string or list of strings. Only a missing file is absent.
+pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
+    let path = repo_root.join(".codeflow/project.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path).map_err(|error| error.to_string())? =>
+        {
+            return Ok(Vec::new())
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let config = text
+        .parse::<toml::Value>()
+        .map_err(|error| error.to_string())?;
+    baseline_entries(Some(&config))
 }
 
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
-fn baseline_at(repo: &Repository, commit: git2::Oid) -> Vec<String> {
-    let config = repo
+fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, String> {
+    let tree = repo
         .find_commit(commit)
-        .ok()
-        .and_then(|commit| commit.tree().ok())
-        .and_then(|tree| tree.get_path(Path::new(".codeflow/project.toml")).ok())
-        .and_then(|entry| repo.find_blob(entry.id()).ok())
-        .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
-        .and_then(|text| text.parse::<toml::Value>().ok());
-    baseline_entries(config.as_ref())
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+    let config = text
+        .parse::<toml::Value>()
+        .map_err(|error| error.to_string())?;
+    baseline_entries(Some(&config))
 }
 
 /// The baseline that governs a range, and the notices about it. Trust comes
@@ -574,13 +701,32 @@ fn range_baseline(
     target: git2::Oid,
     head: Option<&str>,
 ) -> (Baseline, Vec<Finding>) {
-    let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
-    let base_list = baseline_at(repo, target);
+    let refuse = |error: String| {
+        (
+            Baseline::Refused(vec![format!("cannot read migration baseline: {error}")]),
+            Vec::new(),
+        )
+    };
+    let head_commit = match resolve_commit(repo, head.unwrap_or("HEAD")) {
+        Ok(head) => head,
+        Err(error) => return refuse(error),
+    };
+    let base_list = match baseline_at(repo, target) {
+        Ok(entries) => entries,
+        Err(error) => return refuse(error),
+    };
     let head_list = match head {
-        Some(_) => head_commit
+        Some(_) => match head_commit
             .map(|commit| baseline_at(repo, commit))
-            .unwrap_or_default(),
-        None => recorded_baseline(repo_root),
+            .transpose()
+        {
+            Ok(entries) => entries.unwrap_or_default(),
+            Err(error) => return refuse(error),
+        },
+        None => match recorded_baseline(repo_root) {
+            Ok(entries) => entries,
+            Err(error) => return refuse(error),
+        },
     };
     let mut notices = Vec::new();
     if base_list.is_empty() {
@@ -1442,7 +1588,11 @@ fn context_problems(
         if !product.is_empty() {
             problems.push(format!(
                 "a spec becomes {to} only in a planning-only change (project-management/ and docs/plan/); this change also touches {}",
-                product.join(", ")
+                product
+                    .iter()
+                    .map(|path| crate::git::display_key(path))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -1549,11 +1699,13 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
     // field of a commit starts with the newline that ends its header.
     let mut fields = output.stdout.split(|byte| *byte == 0);
     while let Some(field) = fields.next() {
-        let field = String::from_utf8_lossy(field);
-        let field = field.trim_start_matches('\n');
+        // Header fields are git's own ASCII (hashes, modes, status).
+        let field = std::str::from_utf8(field)
+            .map_err(|error| format!("cannot decode git log metadata: {error}"))?;
+        let field = field.strip_prefix('\n').unwrap_or(field);
         if let Some(hash) = field.strip_prefix("commit ") {
             commits.push((
-                git2::Oid::from_str(hash.trim()).map_err(message)?,
+                git2::Oid::from_str(hash.strip_suffix('\n').unwrap_or(hash)).map_err(message)?,
                 Vec::new(),
             ));
             continue;
@@ -1564,31 +1716,33 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
         let Some(path) = fields.next() else {
             break;
         };
-        let path = String::from_utf8_lossy(path);
-        let path = path.as_ref();
+        let path = GitName::from_bytes(path);
+        let Some(path) = record_path_text(&path)? else {
+            continue;
+        };
         let Some(kind) = record_kind_for_tree_path(path) else {
             continue;
         };
         if let Some((_, paths)) = commits.last_mut() {
             paths.push(path.to_string());
         }
-        let Some(blob) = meta
-            .split_whitespace()
-            .nth(3)
-            .and_then(|hash| git2::Oid::from_str(hash).ok())
-            .filter(|oid| !oid.is_zero())
-        else {
+        let hash = meta.split(' ').nth(3).ok_or("git log omitted a blob id")?;
+        let blob = git2::Oid::from_str(hash).map_err(message)?;
+        if blob.is_zero() {
             continue;
+        }
+        let names_spec = if let Some(names_spec) = names.get(&blob) {
+            *names_spec
+        } else {
+            let object = repo.find_blob(blob).map_err(message)?;
+            let content =
+                std::str::from_utf8(object.content()).map_err(|error| error.to_string())?;
+            let record = RecordView::parse(kind, path, content)?;
+            let names_spec =
+                record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id);
+            names.insert(blob, names_spec);
+            names_spec
         };
-        let names_spec = *names.entry(blob).or_insert_with(|| {
-            repo.find_blob(blob).ok().is_some_and(|blob| {
-                RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).is_ok_and(
-                    |record| {
-                        record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id)
-                    },
-                )
-            })
-        });
         if names_spec {
             relevant.insert(path.to_string());
         }
@@ -1606,7 +1760,7 @@ fn implemented_at_a_commit(
     spec_id: &str,
 ) -> Result<bool, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let mut parsed: HashMap<git2::Oid, Option<RecordView>> = HashMap::new();
+    let mut parsed: HashMap<git2::Oid, RecordView> = HashMap::new();
     for (oid, paths) in commits {
         if !paths.iter().any(|path| relevant.contains(path)) {
             continue;
@@ -1617,23 +1771,27 @@ fn implemented_at_a_commit(
             .map_err(message)?;
         let mut graph = Graph::default();
         for path in relevant {
-            let (Ok(entry), Some(kind)) = (
-                tree.get_path(Path::new(path)),
-                record_kind_for_tree_path(path),
-            ) else {
+            let Some(kind) = record_kind_for_tree_path(path) else {
                 continue;
             };
-            let view = parsed.entry(entry.id()).or_insert_with(|| {
-                repo.find_blob(entry.id()).ok().and_then(|blob| {
-                    RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).ok()
-                })
-            });
-            if let Some(view) = view {
-                graph
-                    .records
-                    .entry(view.id.clone())
-                    .or_insert_with(|| view.clone());
-            }
+            let entry = match tree.get_path(Path::new(path)) {
+                Ok(entry) => entry,
+                Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+                Err(error) => return Err(message(error)),
+            };
+            let view = match parsed.entry(entry.id()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(cached) => {
+                    let blob = repo.find_blob(entry.id()).map_err(message)?;
+                    let content =
+                        std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+                    cached.insert(RecordView::parse(kind, path, content)?)
+                }
+            };
+            graph
+                .records
+                .entry(view.id.clone())
+                .or_insert_with(|| view.clone());
         }
         if graph
             .get(spec_id, RecordKind::Spec)
@@ -1656,9 +1814,8 @@ fn shipped_specs(
 ) -> (BTreeSet<String>, Vec<(String, String)>) {
     let mut shipped = BTreeSet::new();
     let mut problems = Vec::new();
-    let Some(tip) = resolve_commit(repo, base) else {
-        return (shipped, problems);
-    };
+    let tip = resolve_commit(repo, base)
+        .and_then(|tip| tip.ok_or_else(|| format!("no commit at spec history base {base}")));
     for record in after.records.values() {
         let Some(old) = before.get(&record.id, RecordKind::Spec) else {
             continue;
@@ -1669,7 +1826,11 @@ fn shipped_specs(
         {
             continue;
         }
-        match shipped_in_history(repo, tip, &record.id) {
+        match tip
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|tip| shipped_in_history(repo, *tip, &record.id))
+        {
             Ok(true) => {
                 shipped.insert(record.id.clone());
             }
@@ -1792,13 +1953,13 @@ fn judge_range_against(
     brought: Option<&Brought>,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let target_commit = resolve_commit(&repo, target)
+    let target_commit = resolve_commit(&repo, target)?
         .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
     let (baseline, notices) = range_baseline(repo_root, &repo, target_commit, head);
     let base_graph = Graph::from_revision(&repo, base)?;
     let after = match head {
         Some(head) => Graph::from_revision(&repo, head)?,
-        None => Graph::from_worktree(repo_root),
+        None => Graph::from_worktree(repo_root)?,
     };
     // The tree before the change, with each record the base lacks taken
     // from a baseline copy, for the rules that read the surrounding records.
@@ -1811,7 +1972,7 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
-    let reopened = reopened_in_range(&repo, base, head, &after);
+    let reopened = reopened_in_range(&repo, base, head, &after)?;
     let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
         base: Some(&before),
@@ -1855,7 +2016,7 @@ fn judge_range_against(
         // line). Any other range is judged whole, so a private merge inside
         // a task branch cannot manufacture the exception.
         let landing = if on_line {
-            landing_paths(&repo, base, head, record)
+            landing_paths(&repo, base, head, record)?
         } else {
             None
         };
@@ -1893,39 +2054,52 @@ fn landing_paths(
     base: &str,
     head: Option<&str>,
     record: &RecordView,
-) -> Option<Vec<String>> {
+) -> Result<Option<Vec<String>>, String> {
     let to = record.status.as_str();
     if record.kind != RecordKind::Spec || !matches!(to, "approved" | "superseded") {
-        return None;
+        return Ok(None);
     }
-    let base = resolve_commit(repo, base)?;
-    let mut commit = repo.find_commit(resolve_commit(repo, head?)?).ok()?;
-    let status_at = |commit: &git2::Commit<'_>| -> Option<String> {
-        let entry = commit.tree().ok()?.get_path(Path::new(&record.path)).ok()?;
-        let blob = entry.to_object(repo).ok()?.into_blob().ok()?;
-        let text = String::from_utf8_lossy(blob.content()).into_owned();
-        RecordView::parse(record.kind, &record.path, &text)
-            .ok()
-            .map(|view| view.status)
+    let Some(head) = head else {
+        return Ok(None);
+    };
+    let base = resolve_commit(repo, base)?.ok_or("cannot resolve spec landing base")?;
+    let tip = resolve_commit(repo, head)?.ok_or("cannot resolve spec landing head")?;
+    let mut commit = repo.find_commit(tip).map_err(|error| error.to_string())?;
+    let status_at = |commit: &git2::Commit<'_>| -> Result<Option<String>, String> {
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        let entry = match tree.get_path(Path::new(&record.path)) {
+            Ok(entry) => entry,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        let text = std::str::from_utf8(blob.content())
+            .map_err(|error| format!("spec landing record is not valid UTF-8: {error}"))?;
+        RecordView::parse(record.kind, &record.path, text).map(|view| Some(view.status))
     };
     while commit.id() != base {
-        let parent = commit.parent(0).ok()?;
-        let arrived =
-            status_at(&commit).as_deref() == Some(to) && status_at(&parent).as_deref() != Some(to);
+        if commit.parent_count() == 0 {
+            return Ok(None);
+        }
+        let parent = commit.parent(0).map_err(|error| error.to_string())?;
+        let arrived = status_at(&commit)?.as_deref() == Some(to)
+            && status_at(&parent)?.as_deref() != Some(to);
         if arrived {
             if commit.parent_count() < 2 {
-                return None;
+                return Ok(None);
             }
             return changed_paths(
                 repo,
                 &parent.id().to_string(),
                 Some(&commit.id().to_string()),
             )
-            .ok();
+            .map(Some);
         }
         commit = parent;
     }
-    None
+    Ok(None)
 }
 
 /// Complete tasks whose status left `complete` inside this range, including
@@ -1936,7 +2110,7 @@ pub(super) fn reopened_in_range(
     base: &str,
     head: Option<&str>,
     after: &Graph,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let candidates: Vec<&RecordView> = after
         .records
         .values()
@@ -1944,61 +2118,42 @@ pub(super) fn reopened_in_range(
         .collect();
     let mut reopened = BTreeSet::new();
     if candidates.is_empty() {
-        return reopened;
+        return Ok(reopened);
     }
-    let (Some(base), Some(tip)) = (
-        resolve_commit(repo, base),
-        resolve_commit(repo, head.unwrap_or("HEAD")),
-    ) else {
-        return reopened;
+    let resolve = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("cannot read reopen history at {revision}: {error}"))
     };
-    let Ok(mut walk) = repo.revwalk() else {
-        return reopened;
-    };
-    if walk.push(tip).is_err() || walk.hide(base).is_err() {
-        return reopened;
-    }
-    // A record's blob repeats across most commits, so each is parsed once.
-    let mut statuses: HashMap<(git2::Oid, &str), Option<String>> = HashMap::new();
-    for oid in walk.flatten() {
-        let Ok(tree) = repo.find_commit(oid).and_then(|commit| commit.tree()) else {
-            continue;
-        };
+    let base = resolve(base)?;
+    let tip = resolve(head.unwrap_or("HEAD"))?;
+    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    walk.push(tip)
+        .and_then(|()| walk.hide(base))
+        .map_err(|error| error.to_string())?;
+    for oid in walk {
+        let oid = oid.map_err(|error| error.to_string())?;
+        let commit = repo.find_commit(oid).map_err(|error| error.to_string())?;
         for record in &candidates {
-            let Ok(entry) = tree.get_path(Path::new(&record.path)) else {
+            let Some(content) = super::acceptance::blob_at(repo, oid, &record.path)? else {
                 continue;
             };
-            let status = statuses
-                .entry((entry.id(), record.path.as_str()))
-                .or_insert_with(|| {
-                    entry
-                        .to_object(repo)
-                        .ok()
-                        .and_then(|object| object.into_blob().ok())
-                        .and_then(|blob| {
-                            let text = String::from_utf8_lossy(blob.content()).into_owned();
-                            RecordView::parse(record.kind, &record.path, &text).ok()
-                        })
-                        .map(|view| view.status)
-                });
-            if status.as_deref().is_some_and(|status| status != "complete") {
-                // A task branch can merge a line that completed another
-                // task meanwhile. Its earlier todo snapshots are not a
-                // reopen: require the actual first-parent status edge.
-                let was_complete = repo
-                    .find_commit(oid)
-                    .ok()
-                    .and_then(|commit| commit.parent_id(0).ok())
-                    .and_then(|parent| super::acceptance::blob_at(repo, parent, &record.path))
-                    .and_then(|content| RecordView::parse(record.kind, &record.path, &content).ok())
-                    .is_some_and(|before| before.status == "complete");
-                if was_complete {
-                    reopened.insert(record.id.clone());
+            let status = RecordView::parse(record.kind, &record.path, &content)?.status;
+            if status != "complete" {
+                if let Some(parent) = commit.parent_ids().next() {
+                    if let Some(content) = super::acceptance::blob_at(repo, parent, &record.path)? {
+                        if RecordView::parse(record.kind, &record.path, &content)?.status
+                            == "complete"
+                        {
+                            reopened.insert(record.id.clone());
+                        }
+                    }
                 }
             }
         }
     }
-    reopened
+    Ok(reopened)
 }
 
 /// Every path a change touches, from `base` to `head` (a revision), or to
@@ -2026,13 +2181,12 @@ pub fn changed_paths(
         repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options))
     }
     .map_err(|error| format!("cannot diff from {base}: {}", error.message()))?;
-    // Each name as git records it ([`super::acceptance::git_name`]): a
-    // backslash or a byte that is not UTF-8 never reads as a record's path.
-    let mut paths: Vec<String> = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|path| super::acceptance::git_name(path.as_os_str().as_encoded_bytes()))
+    // OS text rule (issue 79): a path is kept as its storage key, so a path
+    // that is not valid UTF-8 stays its own path (valid text is unchanged and
+    // no valid path equals a key with an invalid byte), never a lossy lookalike.
+    let mut paths: Vec<String> = crate::git::diff_paths(&diff)
+        .iter()
+        .map(GitName::storage_key)
         .collect();
     paths.sort();
     paths.dedup();
@@ -2043,30 +2197,38 @@ pub fn changed_paths(
 /// uncommitted work (the verb cannot know the pull request's base; CI and
 /// `validate --since` judge the whole range) and the tree at the merge-base
 /// of `HEAD` and the default work target, when one resolves.
-#[must_use]
-pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>) {
-    let Ok(repo) = Repository::discover(repo_root) else {
-        return (None, None);
+///
+/// # Errors
+///
+/// Returns an error if changed paths, target history or contextual records cannot be read.
+pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<String>>), String> {
+    let Some(repo) = crate::hooks::repo::open(repo_root)? else {
+        return Ok((None, None));
     };
-    let paths = changed_paths(&repo, "HEAD", None).ok();
-    let base = super::work_start::default_work_target(repo_root)
-        .and_then(|target| {
-            let head = repo
-                .revparse_single("HEAD")
-                .ok()?
-                .peel_to_commit()
-                .ok()?
-                .id();
-            let target = repo
-                .revparse_single(&target)
-                .ok()?
-                .peel_to_commit()
-                .ok()?
-                .id();
-            repo.merge_base(head, target).ok()
-        })
-        .and_then(|anchor| Graph::from_revision(&repo, &anchor.to_string()).ok());
-    (base, paths)
+    match repo.head() {
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok((None, None)),
+        Err(error) => return Err(format!("cannot read working context HEAD: {error}")),
+        Ok(_) => {}
+    }
+    let paths = changed_paths(&repo, "HEAD", None)?;
+    let base = match super::work_start::default_work_target(repo_root)
+        .map_err(|error| error.to_string())?
+    {
+        Some(target) => {
+            let resolve = |name: &str| {
+                repo.revparse_single(name)
+                    .and_then(|object| object.peel_to_commit())
+                    .map(|commit| commit.id())
+                    .map_err(|error| error.to_string())
+            };
+            let anchor = repo
+                .merge_base(resolve("HEAD")?, resolve(&target)?)
+                .map_err(|error| error.to_string())?;
+            Some(Graph::from_revision(&repo, &anchor.to_string())?)
+        }
+        None => None,
+    };
+    Ok((base, Some(paths)))
 }
 
 /// Judge a pull request: the records changed from the merge-base of `base`
@@ -2182,7 +2344,15 @@ pub fn judge_release_range(
 /// the stale-word warnings of R-28 and R-80.
 #[must_use]
 pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
-    let graph = Graph::from_worktree(repo_root);
+    let graph = match Graph::from_worktree(repo_root) {
+        Ok(graph) => graph,
+        Err(error) => {
+            return Verdict {
+                errors: vec![error],
+                ..Verdict::default()
+            }
+        }
+    };
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
     verdict.warnings.extend(baseline.warning());
@@ -2219,10 +2389,15 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
 fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<Finding> {
     let mut warnings = Vec::new();
     let repo = Repository::discover(repo_root).ok();
-    let prefixes = crate::hooks::policy::Policy::load_effective(repo_root)
-        .0
-        .git
-        .branch_prefixes;
+    let prefixes = match crate::hooks::policy::Policy::load_effective(repo_root) {
+        Ok((policy, _)) => policy.git.branch_prefixes,
+        Err(error) => {
+            return vec![Finding::new(
+                format!("cannot read work policy: {error}"),
+                remedy::BASELINE_REVIEW.remedy(),
+            )]
+        }
+    };
     for record in graph.records.values() {
         match record.kind {
             RecordKind::Epic if matches!(record.status.as_str(), "draft" | "planning") => {
@@ -2312,6 +2487,8 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         .as_deref()
         .and_then(|target| {
             super::resolve_work_target(repo.workdir().unwrap_or_else(|| repo.path()), Some(target))
+                .ok()
+                .flatten()
         })
         .and_then(|target| {
             ["refs/heads/", "refs/remotes/"]
@@ -2324,15 +2501,17 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         return false;
     };
     let marker = format!("{}-", task.id);
+    let remotes = crate::git::name::remote_names(repo).unwrap_or_default();
     references.flatten().any(|reference| {
-        let Ok(name) = reference.name() else {
-            return false;
-        };
-        let short = if let Some(local) = name.strip_prefix("refs/heads/") {
+        // OS text rule (issue 79): a branch that is not valid UTF-8 still
+        // counts as active work when its prefix and task id match, so the name
+        // is exact bytes and the prefix and marker are tested as bytes.
+        let name = crate::git::name::reference_name(&reference);
+        let short = if let Some(local) = name.strip_prefix(b"refs/heads/") {
             local
-        } else if let Some(remote) = name.strip_prefix("refs/remotes/") {
-            match remote.split_once('/') {
-                Some((_, branch)) => branch,
+        } else if let Some(remote) = name.strip_prefix(b"refs/remotes/") {
+            match crate::git::tracking_branch(&remote, &remotes) {
+                Some(branch) => branch,
                 None => return false,
             }
         } else {
@@ -2340,8 +2519,8 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         };
         let carries = prefixes.iter().any(|prefix| {
             short
-                .strip_prefix(prefix.as_str())
-                .is_some_and(|rest| rest.starts_with(&marker))
+                .strip_prefix(prefix.as_bytes())
+                .is_some_and(|rest| rest.starts_with(marker.as_bytes()))
         });
         if !carries {
             return false;
@@ -2361,3 +2540,45 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_landing_paths_refuse_undecodable_parent_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = "project-management/specs/SPC-001.md";
+        let base = crate::git::add_commit(&repo, &[(b"seed", b"base")]);
+        let parent = crate::git::add_commit(
+            &repo,
+            &[(
+                path.as_bytes(),
+                b"---\nid: SPC-001\nstatus: draft\nintegration_target: caf\xff\n---\n",
+            )],
+        );
+        let valid = "---\nid: SPC-001\nstatus: approved\nintegration_target: main\n---\n";
+        let next = crate::git::add_commit(&repo, &[(path.as_bytes(), valid.as_bytes())]);
+        let tree = repo.find_commit(next).unwrap().tree().unwrap();
+        let signature = git2::Signature::now("test", "test@example.invalid").unwrap();
+        let head = repo
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "merge approval",
+                &tree,
+                &[
+                    &repo.find_commit(parent).unwrap(),
+                    &repo.find_commit(base).unwrap(),
+                ],
+            )
+            .unwrap();
+        let record = super::RecordView::parse(super::RecordKind::Spec, path, valid).unwrap();
+        let answer =
+            super::landing_paths(&repo, &base.to_string(), Some(&head.to_string()), &record);
+        assert!(
+            answer.is_err(),
+            "unreadable parent must not prove a narrowed landing: {answer:?}"
+        );
+    }
+}

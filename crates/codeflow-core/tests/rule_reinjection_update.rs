@@ -101,11 +101,11 @@ struct Overlay {
 }
 
 impl AssetSource for Overlay {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
-        self.overrides
-            .get(path)
-            .cloned()
-            .or_else(|| self.current.read(path))
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        match self.overrides.get(path) {
+            Some(value) => Ok(Some(value.clone())),
+            None => self.current.read(path),
+        }
     }
 }
 
@@ -113,6 +113,7 @@ fn text(source: &DirSource, path: &str) -> String {
     let text = String::from_utf8(
         source
             .read(path)
+            .unwrap()
             .unwrap_or_else(|| panic!("{path} missing")),
     )
     .unwrap();

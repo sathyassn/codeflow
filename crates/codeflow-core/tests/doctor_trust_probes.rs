@@ -417,10 +417,10 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
     let project = base.join("grok").join("project");
     let home = base.join("grok").join("home");
     fs::create_dir_all(&project).unwrap();
-    let env_on: fn(&str) -> Option<String> =
-        |name| (name == "GROK_FOLDER_TRUST").then(|| "enabled".to_string());
-    let env_off: fn(&str) -> Option<String> =
-        |name| (name == "GROK_FOLDER_TRUST").then(|| "NO".to_string());
+    let env_on: fn(&str) -> Option<std::ffi::OsString> =
+        |name| (name == "GROK_FOLDER_TRUST").then(|| "enabled".into());
+    let env_off: fn(&str) -> Option<std::ffi::OsString> =
+        |name| (name == "GROK_FOLDER_TRUST").then(|| "NO".into());
 
     grok_case(&project, &home);
     fs::write(
@@ -483,7 +483,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
     let relative = Options {
         project_dir: project.to_string_lossy().into_owned(),
         look_path: Some(|_| Ok("synthetic-harness".into())),
-        env_var: Some(|name| (name == "GROK_HOME").then(|| "relative-grok".to_string())),
+        env_var: Some(|name| (name == "GROK_HOME").then(|| "relative-grok".into())),
         ..Options::default()
     };
     record("grok-relative-home-store", check("grok", &relative));

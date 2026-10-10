@@ -614,7 +614,7 @@ fn clears_release_preflight_unrun() {
     let row = "RELEASE_PREFLIGHT_UNRUN";
     prove(
         row,
-        "release preflight did not run for",
+        "release preflight could not complete for",
         || preflighted(&root),
         |printed| {
             let step = printed_command(printed, row, Some("python3"));
@@ -676,6 +676,45 @@ fn clears_registry_unwritten() {
         Some(1),
         "{written}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn clears_registry_root_unreadable() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    // A folder inside the project whose CodeFlow state is a dangling link:
+    // whether it is a project of its own cannot be established.
+    let sub = root.join("sub");
+    std::fs::create_dir_all(sub.join(".codeflow")).unwrap();
+    let link = sub.join(".codeflow").join("project.toml");
+    std::os::unix::fs::symlink("missing.toml", &link).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let status = || {
+        text(
+            &command(exe().to_str().unwrap(), &sub)
+                .env("CODEFLOW_HOME", home.path())
+                .arg("status")
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "REGISTRY_ROOT_UNREADABLE",
+        "registry touch skipped",
+        status,
+        |printed| {
+            let named = printed
+                .split("repair ")
+                .nth(1)
+                .and_then(|rest| rest.split(" or its parent directories").next())
+                .unwrap_or_else(|| panic!("no path printed:\n{printed}"));
+            assert_eq!(Path::new(named), link, "{printed}");
+            std::fs::remove_file(named).unwrap();
+        },
+    );
+    let written = std::fs::read_to_string(home.path().join("registry.json")).unwrap();
+    assert!(written.contains("\"repos\""), "{written}");
 }
 
 #[test]
@@ -1569,9 +1608,8 @@ fn an_unrelated_history_joined_into_a_related_branch_is_checked_in_full() {
 }
 
 /// A related branch whose old remote tip an overlay makes parentless is
-/// not taken for unrelated history: with a replace ref or a graft, the
-/// four-bullet commit it carries is still judged by the tightened default
-/// (review round seven).
+/// not taken for unrelated history. A replace ref or graft that prevents
+/// proving that history refuses the push before judging its commit body.
 #[test]
 fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
     for overlay in ["replace", "graft"] {
@@ -1616,7 +1654,9 @@ fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
             out.contains("overlays its recorded history"),
             "{overlay}: {out}"
         );
-        refused(&dest, &out, &head_sha(&root));
+        // AC-10: unproven history refuses before any commit-body judgment.
+        assert!(out.contains("cannot prove history"), "{out}");
+        not_landed(&dest, &out, "feat/x", &head_sha(&root));
     }
 }
 

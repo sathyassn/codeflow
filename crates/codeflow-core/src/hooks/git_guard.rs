@@ -129,9 +129,22 @@ pub fn read_branch_name(
     }
     cmd.args(["check-ref-format", "--branch", name]);
     match cmd.output() {
-        Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout)
-            .trim_end_matches(['\n', '\r'])
-            .to_string()),
+        // OS text rule (issue 79): the name is judged against protected
+        // branch globs. One that is not valid UTF-8 reads as the sentinel
+        // every branch rule treats as protected, as the hook plane does.
+        Ok(out) if out.status.success() => match std::str::from_utf8(&out.stdout) {
+            Err(_) => Ok(crate::hooks::policy::NON_UTF8_BRANCH.to_string()),
+            Ok(text) => {
+                let name = text.strip_suffix('\n').unwrap_or(text);
+                if name.starts_with('-')
+                    || !git2::Reference::is_valid_name(&format!("refs/heads/{name}"))
+                {
+                    Err("git check-ref-format --branch returned an invalid branch name".into())
+                } else {
+                    Ok(name.to_string())
+                }
+            }
+        },
         Ok(out) => Err(format!(
             "`git check-ref-format --branch` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
@@ -162,11 +175,15 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
     }
     cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
     match cmd.output() {
-        Ok(out) if out.status.success() => AliasAnswer::Expansion(
-            String::from_utf8_lossy(&out.stdout)
-                .trim_end_matches(['\n', '\r'])
-                .to_string(),
-        ),
+        // OS text rule (issue 79): the expansion is judged as command words,
+        // so one that is not valid UTF-8 is unreadable, which the guard
+        // treats as uncertainty and stops, never as a lossy spelling.
+        Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
+            Ok(text) => {
+                AliasAnswer::Expansion(text.strip_suffix('\n').unwrap_or(&text).to_string())
+            }
+            Err(_) => AliasAnswer::Unreadable("the alias is not valid UTF-8".to_string()),
+        },
         Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
         Ok(out) => AliasAnswer::Unreadable(format!(
             "`git config` failed: {}",
@@ -181,8 +198,9 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
 /// effective git policy, which is the defaults when it has no policy file.
 /// A relative `spec.path` is taken from `cwd`. A git-dir spec opens exactly
 /// that git directory, as git does with `--git-dir`/`GIT_DIR`; any other
-/// path is discovered upward, as `-C` and `cd` are. `None` when the path does
-/// not exist or is not in a repository.
+/// path is discovered upward, as `-C` and `cd` are. `None` when the path or
+/// its repository state cannot be resolved. The caller treats that answer as
+/// unknown and refuses mutations regardless of the session policy.
 #[must_use]
 pub fn read_target(
     cwd: &std::path::Path,
@@ -195,7 +213,7 @@ pub fn read_target(
     } else {
         cwd.join(p)
     };
-    if !abs.exists() {
+    if crate::absence::proven_absent(&abs).ok()? {
         return None;
     }
     let repo = if spec.git_dir {
@@ -212,16 +230,27 @@ pub fn read_target(
         } else {
             abs
         };
-        git2::Repository::discover(&start).ok()?
+        super::repo::open(&start).ok()??
     };
     // Empty on a detached HEAD, which no branch rule protects.
-    let branch = super::repo::current_branch(&repo);
-    let same = session_common.is_some_and(|s| same_path(s, repo.commondir()))
-        && git2::Repository::discover(cwd)
-            .ok()
-            .and_then(|session| session.workdir().map(Path::to_path_buf))
-            .zip(repo.workdir())
-            .is_some_and(|(session, target)| same_path(&session, target));
+    let branch = super::repo::current_branch(&repo).ok()?;
+    let same = if let Some(common) = session_common {
+        if same_path(common, repo.commondir()).ok()? {
+            let session = super::repo::open(cwd).ok()?;
+            match session
+                .as_ref()
+                .and_then(git2::Repository::workdir)
+                .zip(repo.workdir())
+            {
+                Some((session, target)) => same_path(session, target).ok()?,
+                None => false,
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     let policy = if same {
         None
     } else {
@@ -232,14 +261,15 @@ pub fn read_target(
                 .git,
         )
     };
-    let root = repo
+    let root = if let Some(dir) = repo
         .workdir()
         .filter(|_| crate::root_checkout::is_root_checkout(&repo))
-        .and_then(|dir| {
-            super::landed_policy::load(dir)
-                .ok()
-                .and_then(|authority| RootCheckout::read(&repo, &authority.policy.git))
-        });
+    {
+        let authority = super::landed_policy::load(dir).ok()?;
+        RootCheckout::read(&repo, &authority.policy.git).ok()?
+    } else {
+        None
+    };
     Some(TargetRepo {
         branch,
         policy,
@@ -247,11 +277,8 @@ pub fn read_target(
     })
 }
 
-fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => a == b,
-    }
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> std::io::Result<bool> {
+    Ok(a.canonicalize()? == b.canonicalize()?)
 }
 
 /// Parsed `PreToolUse` hook payload (the fields the guard reads).
@@ -453,8 +480,17 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 /// disclose how the verdict was reached.
 #[must_use]
 pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    evaluate_report_at(command, ctx, &cwd)
+    match std::env::current_dir() {
+        Ok(cwd) => evaluate_report_at(command, ctx, &cwd),
+        Err(error) => Evaluation {
+            violations: vec![Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read the working directory: {error}"),
+                "run the command from an existing readable checkout",
+            )],
+            notes: Vec::new(),
+        },
+    }
 }
 
 /// Evaluate a command using the tool payload's working directory for paths.
@@ -960,7 +996,7 @@ fn cd_target(tokens: &[String]) -> Option<String> {
     tokens[1..]
         .iter()
         .find(|t| !t.starts_with('-'))
-        .map(|t| t.trim_matches(|c| c == '"' || c == '\'').to_string())
+        .cloned()
         .filter(|d| !d.is_empty())
 }
 
@@ -1334,7 +1370,7 @@ fn token_integrity_path_spelled(
                 let dir = &token[..slash];
                 if !dir.is_empty()
                     && unresolved_tail(dir).is_none()
-                    && in_enforcement_dir(&integrity_shell_path(dir, cwd))
+                    && in_enforcement_dir(&integrity_shell_path(dir, cwd)).unwrap_or(true)
                 {
                     return Some("repository enforcement files");
                 }
@@ -1353,18 +1389,19 @@ fn token_integrity_path_spelled(
 /// repository's enforcement directories (`.codeflow`, `.claude`, `.git`,
 /// `.github`, `.codex`, `.grok`), where any entry may be an enforcement
 /// file.
-fn in_enforcement_dir(dir: &Path) -> bool {
-    let Ok(real) = std::fs::canonicalize(dir) else {
-        return false;
+fn in_enforcement_dir(dir: &Path) -> Result<bool, String> {
+    if crate::absence::cannot_exist(dir).map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    let real = std::fs::canonicalize(dir).map_err(|error| error.to_string())?;
+    let Some(repo) = super::repo::open(&real)? else {
+        return Ok(false);
     };
-    let Some(root) = git2::Repository::discover(&real)
-        .ok()
-        .and_then(|repo| repo.workdir().map(Path::to_path_buf))
-        .and_then(|root| std::fs::canonicalize(root).ok())
-    else {
-        return false;
+    let Some(root) = repo.workdir() else {
+        return Ok(false);
     };
-    real.strip_prefix(&root).is_ok_and(|inside| {
+    let root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
+    Ok(real.strip_prefix(&root).is_ok_and(|inside| {
         inside.components().next().is_some_and(|first| {
             let name = first.as_os_str().to_string_lossy().to_lowercase();
             matches!(
@@ -1372,13 +1409,38 @@ fn in_enforcement_dir(dir: &Path) -> bool {
                 ".codeflow" | ".claude" | ".git" | ".github" | ".codex" | ".grok"
             )
         })
-    })
+    }))
 }
 
 /// What a recursive change of a directory the guard cannot resolve is
 /// reported as.
 const BRACE_UNREAD_DIR: &str =
     "repository enforcement files (a directory the guard cannot resolve)";
+
+/// The integrity path a file-system path (a glob expansion or a `find`
+/// candidate) reaches. Text is read as the token it spells. A path that is not
+/// valid UTF-8 has no honest token (its storage key holds a NUL and resolves
+/// to nothing), so the file-system checks run on the exact path, links
+/// followed (OS text rule, issue 79).
+fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    let shown = crate::portable_path::slashed(path);
+    if crate::git::key_is_text(&shown) {
+        return token_integrity_path_literal(&shown, cwd, payload_cwd);
+    }
+    let exact = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    if super::edit_guard::repository_authority_target(&exact, payload_cwd, true) {
+        return Some(super::edit_guard::AUTHORITY_PATH);
+    }
+    match super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true) {
+        Ok(true) => Some("repository enforcement files"),
+        Ok(false) => None,
+        Err(_) => Some("repository enforcement paths (cannot read repository state)"),
+    }
+}
 
 /// [`token_integrity_path`] for the token as written, without expanding a
 /// glob in it.
@@ -1397,12 +1459,18 @@ fn token_integrity_path_literal(
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
-    if super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
-        return Some("repository enforcement files");
+    match super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
+        Ok(true) => return Some("repository enforcement files"),
+        Ok(false) => {}
+        Err(_) => return Some("repository enforcement paths (cannot read repository state)"),
     }
     integrity_target(&normalize_path(token)).or_else(|| {
-        let base = integrity_disk_case(payload_cwd);
-        let path = integrity_disk_case(&cwd.join(token));
+        let (Ok(base), Ok(path)) = (
+            integrity_disk_case(payload_cwd),
+            integrity_disk_case(&cwd.join(token)),
+        ) else {
+            return Some("repository enforcement paths (cannot read path case)");
+        };
         if let Some(protected) = root_dot_pattern_target(&path) {
             return Some(protected);
         }
@@ -1736,6 +1804,8 @@ const GLOB_ENTRY_LIMIT: usize = 4096;
 enum GlobStop {
     /// It would read more than [`GLOB_ENTRY_LIMIT`] entries.
     TooManyEntries,
+    /// An existing path could not be classified or enumerated.
+    Unreadable,
 }
 
 /// One file-name component of a shell pattern, read so that it matches at
@@ -1934,6 +2004,21 @@ impl WordGlob {
     }
 }
 
+/// Missing paths, paths that cannot exist and known non-directories have no
+/// children; unreadable paths cannot certify an empty glob expansion.
+fn glob_directory(dir: &Path) -> Result<Option<std::fs::ReadDir>, GlobStop> {
+    if crate::absence::cannot_exist(dir).map_err(|_| GlobStop::Unreadable)? {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(dir).map_err(|_| GlobStop::Unreadable)?;
+    if !metadata.is_dir() {
+        return Ok(None);
+    }
+    std::fs::read_dir(dir)
+        .map(Some)
+        .map_err(|_| GlobStop::Unreadable)
+}
+
 /// Every path at or below `dir`, at every depth: names that start with `.`
 /// are included and linked directories are entered, each real directory
 /// once.
@@ -1947,16 +2032,20 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
                 continue;
             }
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Some(entries) = glob_directory(&dir)? else {
             continue;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|_| GlobStop::Unreadable)?;
             *read += 1;
             if *read > GLOB_ENTRY_LIMIT {
                 return Err(GlobStop::TooManyEntries);
             }
             let path = dir.join(entry.file_name());
-            if path.is_dir() {
+            if std::fs::metadata(&path)
+                .map_err(|_| GlobStop::Unreadable)?
+                .is_dir()
+            {
                 pending.push(path.clone());
             }
             found.push(path);
@@ -2013,10 +2102,11 @@ fn expand_components(
             let mut next = current.clone();
             let mut pending = current.clone();
             while let Some(dir) = pending.pop() {
-                let Ok(entries) = std::fs::read_dir(&dir) else {
+                let Some(entries) = glob_directory(&dir)? else {
                     continue;
                 };
-                for entry in entries.flatten() {
+                for entry in entries {
+                    let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                     *read += 1;
                     if *read > GLOB_ENTRY_LIMIT {
                         return Err(GlobStop::TooManyEntries);
@@ -2029,7 +2119,11 @@ fn expand_components(
                         continue;
                     }
                     let path = dir.join(&name);
-                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    if entry
+                        .file_type()
+                        .map_err(|_| GlobStop::Unreadable)?
+                        .is_dir()
+                    {
                         pending.push(path.clone());
                     }
                     next.push(path);
@@ -2042,10 +2136,11 @@ fn expand_components(
         let dotted = every_name || match_hidden || text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
-            let Ok(entries) = std::fs::read_dir(dir) else {
+            let Some(entries) = glob_directory(dir)? else {
                 continue;
             };
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                 *read += 1;
                 if *read > GLOB_ENTRY_LIMIT {
                     return Err(GlobStop::TooManyEntries);
@@ -2078,12 +2173,11 @@ fn expand_components(
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     let glob = WordGlob::new(word, cwd);
     let reached = |path: &Path| {
-        let shown = crate::portable_path::slashed(path);
-        token_integrity_path_literal(&shown, cwd, payload_cwd)
+        path_integrity(path, cwd, payload_cwd)
             .map(str::to_string)
             .or_else(|| {
                 checkout_under(path, cwd, payload_cwd, None)
-                    .map(|c| format!("the registered worktree {}", c.display()))
+                    .map(|c| format!("the registered worktree {}", c.description()))
             })
     };
     match glob.expand() {
@@ -2091,10 +2185,17 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             .iter()
             .find_map(|path| reached(path))
             .map(|p| format!("{p} (through `{word}`)")),
+        Err(GlobStop::Unreadable) => Some(format!("cannot read paths reached through `{word}`")),
         Err(GlobStop::TooManyEntries) => {
             let prefix = glob.prefix();
-            let holds = super::edit_guard::holds_enforcement_files(&prefix, cwd)
-                || super::edit_guard::holds_enforcement_files(&prefix, payload_cwd);
+            let holds =
+                match super::edit_guard::holds_enforcement_files(&prefix, cwd).and_then(|first| {
+                    super::edit_guard::holds_enforcement_files(&prefix, payload_cwd)
+                        .map(|second| first || second)
+                }) {
+                    Ok(holds) => holds,
+                    Err(error) => return Some(format!("cannot read enforcement paths: {error}")),
+                };
             (holds || reached(&prefix).is_some()).then(|| {
                 format!(
                     "`{word}`, which reads more than {GLOB_ENTRY_LIMIT} entries under a directory that holds enforcement files"
@@ -2343,13 +2444,23 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
     let mut reached = Vec::new();
     for dir in &run.dirs {
         let path = if target == "~" {
-            run.home.clone().unwrap_or_else(|| dir.clone())
+            if let Some(home) = run.home.clone() {
+                home
+            } else {
+                run.unknown
+                    .get_or_insert_with(|| "cannot resolve the home directory".to_string());
+                continue;
+            }
         } else {
             shell_path_with_home(target, dir, run.home.as_deref())
         };
         if target.contains(['*', '?', '[']) {
             match WordGlob::new(target, dir).expand() {
                 Ok(found) => reached.extend(found),
+                Err(GlobStop::Unreadable) => {
+                    run.unknown
+                        .get_or_insert_with(|| format!("cannot read directory glob `{target}`"));
+                }
                 Err(GlobStop::TooManyEntries) => {
                     run.unknown.get_or_insert_with(|| {
                         format!("`{target}`, a directory glob over too many entries")
@@ -2503,18 +2614,35 @@ fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf
 // directories; ordinary root globs and patterns below other paths stay ordinary.
 // The pattern's own directory decides, wherever the command runs from.
 fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
-    let pattern = path.file_name()?.to_str()?;
-    if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
+    let pattern = path.file_name()?;
+    let bytes = pattern.as_encoded_bytes();
+    if !bytes.starts_with(b".") || !bytes.iter().any(|b| b"*?[{".contains(b)) {
         return None;
     }
-    let parent = path.parent()?.canonicalize().ok()?;
-    let root = super::RepoInfo::discover(&parent)?
-        .root
-        .canonicalize()
-        .ok()?;
+    let parent = path.parent()?;
+    match crate::absence::cannot_exist(parent) {
+        Ok(true) => return None,
+        Ok(false) => {}
+        Err(_) => return Some("repository root pattern (cannot read directory)"),
+    }
+    let Ok(parent) = parent.canonicalize() else {
+        return Some("repository root pattern (cannot read directory)");
+    };
+    let info = match super::RepoInfo::discover(&parent) {
+        Ok(info) => info?,
+        Err(_) => return Some("repository root pattern (cannot read repository)"),
+    };
+    let Ok(root) = info.root.canonicalize() else {
+        return Some("repository root pattern (cannot read root)");
+    };
     if parent != root {
         return None;
     }
+    let Some(pattern) = pattern.to_str() else {
+        // The root pattern cannot be classified as text: refuse it as
+        // potentially reaching enforcement, never treat it as absent.
+        return Some(".codeflow/");
+    };
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
@@ -2541,15 +2669,17 @@ fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
     shell_pattern(pattern).matches(name)
 }
 
-fn integrity_disk_case(path: &Path) -> PathBuf {
+fn integrity_disk_case(path: &Path) -> Result<PathBuf, String> {
     let mut real = PathBuf::new();
     for component in path.components() {
         real.push(component);
-        if let Ok(metadata) = std::fs::symlink_metadata(&real) {
-            super::edit_guard::normalize_case(&mut real, &metadata);
+        if let Some(metadata) =
+            crate::absence::existing_metadata(&real).map_err(|error| error.to_string())?
+        {
+            super::edit_guard::normalize_case(&mut real, &metadata)?;
         }
     }
-    real
+    Ok(real)
 }
 
 fn integrity_target(path: &str) -> Option<&'static str> {
@@ -2803,7 +2933,7 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
             }
             c if !single
                 && !double
-                && (c.is_whitespace() || matches!(c, '<' | '>' | '|' | ';' | '&' | '(' | ')')) =>
+                && (shell_blank(c) || matches!(c, '<' | '>' | '|' | ';' | '&' | '(' | ')')) =>
             {
                 break;
             }
@@ -3098,13 +3228,20 @@ fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
                     glob_reach(w, cwd, payload_cwd)
                 } else {
                     let path = integrity_shell_path(w, cwd);
-                    (!w.is_empty()
-                        && super::edit_guard::repository_enforcement_target(
-                            &path,
-                            payload_cwd,
-                            false,
-                        ))
-                    .then(|| format!("repository enforcement files (through `{w}`)"))
+                    if w.is_empty() {
+                        return None;
+                    }
+                    match super::edit_guard::repository_enforcement_target(
+                        &path,
+                        payload_cwd,
+                        false,
+                    ) {
+                        Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
+                        Ok(false) => None,
+                        Err(error) => {
+                            Some(format!("cannot read repository enforcement paths: {error}"))
+                        }
+                    }
                 }
             })
         });
@@ -3119,13 +3256,12 @@ fn assignment_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The words of a command line, split at blanks and shell operators, with
-/// their quotes removed.
+/// Raw words split at blanks and shell operators for conservative name
+/// detection. Only `shell_words` removes shell quote framing.
 fn line_words(line: &str) -> impl Iterator<Item = &str> {
     line.split(|c: char| {
-        c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
+        shell_blank(c) || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
     })
-    .map(|w| w.trim_matches(['\'', '"']))
     .filter(|w| !w.is_empty())
 }
 
@@ -3160,7 +3296,7 @@ fn read_only_program(tokens: &[String]) -> bool {
 /// A variable the line does not set, read from the guard's own
 /// environment: every other occurrence of the name on the line must be an
 /// expansion of it.
-fn environment_value(name: &str, line: &str) -> Option<String> {
+fn environment_value(name: &str, line: &str) -> Option<std::ffi::OsString> {
     let bare = line.match_indices(name).any(|(at, _)| {
         let before = &line[..at];
         let after = &line[at + name.len()..];
@@ -3177,16 +3313,17 @@ fn environment_value(name: &str, line: &str) -> Option<String> {
     if bare {
         return None;
     }
-    std::env::var(name).ok()
+    std::env::var_os(name)
 }
 
 /// The paths a destructive command's target word names, or `None` when
 /// the guard cannot resolve it: a command substitution, a variable the line
-/// sets or the guard cannot read, or a brace expansion. A glob is expanded
-/// against the file system.
-fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> {
+/// sets or a brace expansion. A glob is expanded against the file system.
+/// Failed glob reads and environment decoding return an error, which callers
+/// refuse even when no protected path is known.
+fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<PathBuf>>, String> {
     if token.contains('`') || token.contains("$(") || has_substitution(token) {
-        return None;
+        return Ok(None);
     }
     let mut text = String::new();
     let mut rest = token;
@@ -3194,7 +3331,9 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
         text.push_str(&rest[..at]);
         let after = &rest[at + 1..];
         let (name, used) = if let Some(braced) = after.strip_prefix('{') {
-            let end = braced.find('}')?;
+            let Some(end) = braced.find('}') else {
+                return Ok(None);
+            };
             (&braced[..end], end + 2)
         } else {
             let end = after
@@ -3203,46 +3342,90 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
             (&after[..end], end)
         };
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return None;
+            return Ok(None);
         }
-        text.push_str(&environment_value(name, line)?);
+        let Some(value) = environment_value(name, line) else {
+            return Ok(None);
+        };
+        text.push_str(
+            value
+                .to_str()
+                .ok_or_else(|| format!("environment value {name} is not valid UTF-8"))?,
+        );
         rest = &after[used..];
     }
     text.push_str(rest);
     if text.contains('{') && (text.contains(',') || text.contains("..")) {
-        return None;
+        return Ok(None);
     }
     if text.contains(['*', '?', '[']) {
-        return WordGlob::new(&text, cwd).expand().ok();
+        return WordGlob::new(&text, cwd)
+            .expand()
+            .map(Some)
+            .map_err(|error| match error {
+                GlobStop::Unreadable => format!("cannot read target glob `{text}`"),
+                GlobStop::TooManyEntries => format!("target glob `{text}` has too many entries"),
+            });
     }
-    Some(vec![integrity_shell_path(&text, cwd)])
+    if (text == "~" || text.starts_with("~/")) && crate::portable_path::user_home().is_none() {
+        return Err("cannot resolve the home directory".to_string());
+    }
+    Ok(Some(vec![integrity_shell_path(&text, cwd)]))
 }
 
 /// A recursive delete of a registered worktree, or of a directory holding
 /// one, removes a live checkout with its uncommitted work and enforcement
 /// files (TSK-216 review finding 1).
-fn checkout_delete_violation(level: PolicyLevel, what: &str, checkout: &Path) -> Violation {
+enum CheckoutReach {
+    Path(PathBuf),
+    Unreadable(String),
+}
+
+impl CheckoutReach {
+    fn description(&self) -> String {
+        match self {
+            Self::Path(path) => path.display().to_string(),
+            Self::Unreadable(why) => format!("cannot read registered worktrees: {why}"),
+        }
+    }
+}
+
+fn checkout_delete_violation(
+    level: PolicyLevel,
+    what: &str,
+    checkout: &CheckoutReach,
+) -> Violation {
+    let message = match checkout {
+        CheckoutReach::Path(path) => format!(
+            "{what} would delete the registered worktree `{}` with its work and enforcement files",
+            path.display()
+        ),
+        CheckoutReach::Unreadable(why) => {
+            format!("{what}: cannot read registered worktrees: {why}")
+        }
+    };
     Violation::new(
         "git.hook_integrity",
         level,
-        format!(
-            "{what} would delete the registered worktree `{}` with its work and enforcement files",
-            checkout.display()
-        ),
+        message,
         crate::remedy::WORKTREE_DELETE.remedy(),
     )
 }
 
-/// The registered checkout under `path`, read in the repository at `cwd`
-/// and, when that fails, at the session's own cwd.
 fn checkout_under(
     path: &Path,
     cwd: &Path,
     payload_cwd: &Path,
     except: Option<&Path>,
-) -> Option<PathBuf> {
-    super::edit_guard::registered_checkout_under(path, cwd, except)
-        .or_else(|| super::edit_guard::registered_checkout_under(path, payload_cwd, except))
+) -> Option<CheckoutReach> {
+    for root in [cwd, payload_cwd] {
+        match super::edit_guard::registered_checkout_under(path, root, except) {
+            Ok(Some(path)) => return Some(CheckoutReach::Path(path)),
+            Ok(None) => {}
+            Err(error) => return Some(CheckoutReach::Unreadable(error)),
+        }
+    }
+    None
 }
 
 /// Judge the targets of a command that deletes directories (TSK-216 review
@@ -3260,10 +3443,19 @@ fn worktree_delete_check(
     line: &str,
     except: Option<&Path>,
 ) -> Option<Violation> {
-    let held = super::edit_guard::holds_registered_worktrees(cwd);
+    let held = match super::edit_guard::holds_registered_worktrees(cwd) {
+        Ok(held) => held,
+        Err(error) => {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot read registered worktrees: {error}"),
+            ))
+        }
+    };
     for target in targets.iter().filter(|t| !t.is_empty()) {
         match resolve_targets(target, cwd, line) {
-            Some(paths) => {
+            Err(error) => return Some(hook_integrity_violation(level, error)),
+            Ok(Some(paths)) => {
                 if let Some(checkout) = paths
                     .iter()
                     .find_map(|path| checkout_under(path, cwd, payload_cwd, except))
@@ -3271,7 +3463,7 @@ fn worktree_delete_check(
                     return Some(checkout_delete_violation(level, what, &checkout));
                 }
             }
-            None if held || worktree_text(target).is_some() => {
+            Ok(None) if held || worktree_text(target).is_some() => {
                 return Some(Violation::new(
                     "git.hook_integrity",
                     level,
@@ -3281,7 +3473,7 @@ fn worktree_delete_check(
                     crate::remedy::WORKTREE_DELETE.remedy(),
                 ));
             }
-            None => {}
+            Ok(None) => {}
         }
     }
     None
@@ -3480,18 +3672,12 @@ fn sed_text_violation(
                     format!("reads its script from its input, and the command line names `{p}`")
                 })
             } else {
-                let path = cwd.join(file);
-                match std::fs::metadata(&path) {
-                    Ok(meta) if meta.len() > SED_SCRIPT_LIMIT => Some(format!(
-                        "runs the script file `{file}`, which is too large for the guard to read"
-                    )),
-                    Ok(_) => std::fs::read(&path)
-                        .ok()
-                        .and_then(|bytes| enforcement_text(&String::from_utf8_lossy(&bytes)))
+                match read_sed_script(file, cwd) {
+                    SedRead::Read(text) => enforcement_text(&text)
                         .map(|p| format!("runs the script file `{file}`, which names `{p}`")),
-                    Err(_) => line_names(line, cwd, payload_cwd).map(|p| {
-                        format!("runs the script file `{file}`, which the guard cannot read, and the command line names `{p}`")
-                    }),
+                    SedRead::Unreadable { file, why } => {
+                        Some(format!("cannot read script `{file}`: {why}"))
+                    }
                 }
             };
             if let Some(why) = why {
@@ -3537,14 +3723,22 @@ fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     if path.file_name().is_some_and(|n| n == "*") {
         return true;
     }
-    let name = path
-        .file_name()
-        .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+    // OS text rule (issue 79): a candidate is a name read from disk, which
+    // need not be valid UTF-8. A single-character wildcard consumes one byte
+    // in the C locale but one replacement character in the lossy spelling, so
+    // the lossy answer cannot rule such a name out: it stays a candidate
+    // (protection kept) unless the pattern is literals and `*` only.
+    let lossy = path.file_name().map(std::ffi::OsStr::to_string_lossy);
+    let invalid = path.file_name().is_some_and(|name| name.to_str().is_none());
+    let name = lossy.unwrap_or_else(|| path.to_string_lossy());
     filter.iter().all(|(pattern, insensitive)| {
         let options = glob::MatchOptions {
             case_sensitive: !insensitive,
             ..glob::MatchOptions::new()
         };
+        if invalid && pattern.contains(['?', '[', '\\']) {
+            return true;
+        }
         shell_pattern(pattern).matches_with(&name, options)
     })
 }
@@ -3691,11 +3885,21 @@ fn find_action_violation(
         }
         if let Some(at) = rest.iter().position(|a| a == "-files0-from") {
             let text = match rest.get(at + 1).map(String::as_str) {
-                Some("-") | None => line.to_string(),
-                Some(file) => std::fs::read(cwd.join(file)).map_or_else(
-                    |_| line.to_string(),
-                    |bytes| String::from_utf8_lossy(&bytes).into_owned(),
-                ),
+                Some("-") | None => {
+                    return Some(hook_integrity_violation(
+                        level,
+                        "cannot read find starting points from stdin".to_string(),
+                    ))
+                }
+                Some(file) => match std::fs::read_to_string(cwd.join(file)) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return Some(hook_integrity_violation(
+                            level,
+                            format!("cannot read find starting points from {file}: {error}"),
+                        ))
+                    }
+                },
             };
             if let Some(p) = enforcement_text(&text).or_else(|| worktree_text(&text)) {
                 return Some(hook_integrity_violation(
@@ -3709,7 +3913,7 @@ fn find_action_violation(
             &starts
                 .iter()
                 .copied()
-                .filter(|start| resolve_targets(start, cwd, line).is_none())
+                .filter(|start| !matches!(resolve_targets(start, cwd, line), Ok(Some(_))))
                 .collect::<Vec<_>>(),
             level,
             cwd,
@@ -3733,10 +3937,18 @@ fn find_action_violation(
             }
         })
         .collect();
-    let reachable: Vec<PathBuf> = start_paths
-        .iter()
-        .flat_map(|start| super::edit_guard::find_candidates(start, payload_cwd))
-        .collect();
+    let mut reachable = Vec::new();
+    for start in &start_paths {
+        match super::edit_guard::find_candidates(start, payload_cwd) {
+            Ok(paths) => reachable.extend(paths),
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read find targets: {error}"),
+                ))
+            }
+        }
+    }
     let mut at = end;
     while let Some(arg) = rest.get(at) {
         let filter = find_name_filter(&rest[..at]);
@@ -3756,7 +3968,12 @@ fn find_action_violation(
                         ));
                     }
                     let shown = crate::portable_path::slashed(candidate);
-                    if let Some(p) = token_integrity_path(&shown, cwd, payload_cwd) {
+                    let reach = if crate::git::key_is_text(&shown) {
+                        token_integrity_path(&shown, cwd, payload_cwd)
+                    } else {
+                        path_integrity(candidate, cwd, payload_cwd)
+                    };
+                    if let Some(p) = reach {
                         return Some(hook_integrity_violation(
                             level,
                             format!("`find -delete` would delete the integrity path `{p}`"),
@@ -3800,7 +4017,7 @@ fn find_action_violation(
                         let (shown, dir) = match (in_dir, candidate.parent(), candidate.file_name())
                         {
                             (true, Some(parent), Some(name)) => (
-                                format!("./{}", name.to_string_lossy()),
+                                format!("./{}", crate::portable_path::slashed(Path::new(name))),
                                 parent.to_path_buf(),
                             ),
                             _ => (crate::portable_path::slashed(candidate), cwd.to_path_buf()),
@@ -3931,24 +4148,31 @@ fn recursive_change_violation(
     if !recursive {
         return None;
     }
-    rm_operands(args)
+    for target in rm_operands(args)
         .into_iter()
         .filter(|target| !target.is_empty())
-        .find_map(|target| {
-            let paths = resolve_targets(target, cwd, line)?;
-            paths
-                .iter()
-                .any(|path| {
-                    super::edit_guard::holds_enforcement_files(path, cwd)
-                        || super::edit_guard::holds_enforcement_files(path, payload_cwd)
-                })
-                .then(|| {
-                    hook_integrity_violation(
-                        level,
-                        format!("`{cmd}` would change `{target}`, which holds enforcement files, and what lies below it"),
-                    )
-                })
-        })
+    {
+        let paths = match resolve_targets(target, cwd, line) {
+            Ok(Some(paths)) => paths,
+            Ok(None) => continue,
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read recursive-change targets: {error}"),
+                ))
+            }
+        };
+        for path in &paths {
+            for root in [cwd, payload_cwd] {
+                match super::edit_guard::holds_enforcement_files(path, root) {
+                    Ok(true) => return Some(hook_integrity_violation(level, format!("`{cmd}` would change `{target}`, which holds enforcement files, and what lies below it"))),
+                    Ok(false) => {},
+                    Err(error) => return Some(hook_integrity_violation(level, format!("cannot read recursive-change targets: {error}"))),
+                }
+            }
+        }
+    }
+    None
 }
 
 /// GNU `parallel` runs a command over its input as `xargs` does; its
@@ -4189,14 +4413,26 @@ fn direct_write_violation(
         }
     }
     if cmd == "sed" {
-        if let Some(p) = sed_script_writes(args, cwd)
-            .iter()
-            .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
-        {
-            return Some(hook_integrity_violation(
-                level,
-                format!("a `sed` script `w` command or backup writes the integrity path `{p}`"),
-            ));
+        match sed_script_writes(args, cwd) {
+            SedRead::Read(paths) => {
+                if let Some(p) = paths
+                    .iter()
+                    .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
+                {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!(
+                            "a `sed` script `w` command or backup writes the integrity path `{p}`"
+                        ),
+                    ));
+                }
+            }
+            SedRead::Unreadable { file, why } => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read `sed` script `{file}`: {why}"),
+                ))
+            }
         }
     }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
@@ -4392,10 +4628,17 @@ fn git_config_destination(
         }
         (Some(dest), false) => {
             let path = integrity_shell_path(dest, cwd);
-            if dest.ends_with('/') || path.is_dir() {
-                read.sources.iter().map(|op| entry_in(&path, op)).collect()
+            let entries = || read.sources.iter().map(|op| entry_in(&path, op));
+            if dest.ends_with('/') {
+                entries().collect()
             } else {
-                vec![path]
+                match crate::absence::is_kind(&path, true) {
+                    Some(true) => entries().collect(),
+                    Some(false) => vec![path.clone()],
+                    // Kept strict: a destination whose type cannot be read
+                    // is judged as the file and as a directory.
+                    None => entries().chain([path.clone()]).collect(),
+                }
             }
         }
         (None, _) if cmd == "ln" && read.sources.len() == 1 => {
@@ -4414,14 +4657,19 @@ fn git_config_destination(
         );
     }
     destinations.into_iter().find_map(|path| {
+        // OS text rule (issue 79): a name that is not text is neither
+        // `config` nor `config.worktree`, as its bytes are not. A git
+        // directory the guard cannot read may be one, so it refuses.
         let config = |p: &Path| {
-            p.file_name().is_some_and(|name| {
-                let name = name.to_string_lossy().to_lowercase();
-                name == "config" || name == "config.worktree"
-            }) && repository_config_file(p, true)
+            p.file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|name| {
+                    matches!(name.to_lowercase().as_str(), "config" | "config.worktree")
+                })
+                && repository_config_file(p, true) != Some(false)
         };
         (config(&path) || real(&path).as_deref().is_some_and(config))
-            .then(|| path.to_string_lossy().into_owned())
+            .then(|| path.display().to_string())
     })
 }
 
@@ -5260,7 +5508,8 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             // A group or process substitution in command position belongs to
             // the pipeline it sits in (`cat <<EOF | { bash; }`, `>(sh)`).
             '(' => {
-                let in_pipeline = cur.trim().is_empty() || cur.ends_with(['<', '>']);
+                let in_pipeline =
+                    cur.trim_matches(shell_blank).is_empty() || cur.ends_with(['<', '>']);
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
@@ -5295,8 +5544,8 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                     i += 2;
                 }
             }
-            '{' if i + 1 >= chars.len() || chars[i + 1].is_whitespace() => {
-                let in_pipeline = cur.trim().is_empty();
+            '{' if i + 1 >= chars.len() || shell_blank(chars[i + 1]) => {
+                let in_pipeline = cur.trim_matches(shell_blank).is_empty();
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
@@ -5304,7 +5553,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 groups += 1;
                 i += 1;
             }
-            '}' if i == 0 || chars[i - 1].is_whitespace() => {
+            '}' if i == 0 || shell_blank(chars[i - 1]) => {
                 line.end_segment(out, &mut cur, false);
                 groups = groups.saturating_sub(1);
                 i += 1;
@@ -5410,7 +5659,9 @@ impl Line {
     /// new one.
     fn end_segment(&mut self, out: &mut Vec<String>, cur: &mut String, pipe: bool) {
         let text = std::mem::take(cur);
-        let text = text.trim();
+        // Only the shell's blanks are trimmed: a command ends in a no-break
+        // space when its last word does (OS text rule, issue 79).
+        let text = text.trim_matches([' ', '\t', '\n']);
         if !text.is_empty() {
             out.push(text.to_string());
             self.segments.push((self.pipeline, text.to_string()));
@@ -5518,15 +5769,15 @@ const COMMAND_POSITION_WORDS: &[&str] = &[
 /// caller also judges the text inside a word's parentheses as commands
 /// (TSK-216 rounds 17 and 18).
 fn paren_in_word(cur: &str) -> bool {
-    let attached = cur.chars().last().is_some_and(|c| !c.is_whitespace());
-    let trimmed = cur.trim_end();
+    let attached = cur.chars().last().is_some_and(|c| !shell_blank(c));
+    let trimmed = cur.trim_end_matches(shell_blank);
     let Some(last) = trimmed.chars().last() else {
         return false;
     };
     if matches!(last, '<' | '>' | '|' | '&') {
         return !attached;
     }
-    let mut words = trimmed.split_whitespace();
+    let mut words = trimmed.split(shell_blank).filter(|word| !word.is_empty());
     let first = words.next().unwrap_or_default();
     first != "case"
         && !std::iter::once(first)
@@ -5582,7 +5833,7 @@ fn qualifier_code(group: &str) -> Vec<String> {
             let Some(&open) = chars.get(at + 1) else {
                 continue;
             };
-            if open.is_alphanumeric() || open.is_whitespace() {
+            if open.is_alphanumeric() || shell_blank(open) {
                 continue;
             }
             let close = match open {
@@ -5600,7 +5851,7 @@ fn qualifier_code(group: &str) -> Vec<String> {
                 .iter()
                 .take_while(|&&d| !matches!(d, ',' | ')' | ':'))
                 .collect();
-            if !rest.trim().is_empty() {
+            if !rest.trim_matches(shell_blank).is_empty() {
                 code.push(rest);
             }
         }
@@ -5663,7 +5914,7 @@ fn parse_heredoc_operator(chars: &[char], start: usize) -> Option<(Heredoc, usiz
                     }
                 }
                 '$' | '`' => return None,
-                c if c.is_whitespace() || ";&|<>()".contains(c) => break,
+                c if shell_blank(c) || ";&|<>()".contains(c) => break,
                 c => delimiter.push(c),
             },
         }
@@ -6090,12 +6341,11 @@ fn check_authority(
     cwd: &Path,
     violations: &mut Vec<Violation>,
 ) {
-    if moved.transport_env
-        && git_subcommand(args).is_some_and(|(sub, rest)| {
-            matches!(sub, "fetch" | "pull" | "push")
-                || super::ref_authority::remote_transport_args(sub, rest).is_some()
-        })
-    {
+    let transport = git_subcommand(args).is_some_and(|(sub, rest)| {
+        matches!(sub, "fetch" | "pull" | "push")
+            || super::ref_authority::remote_transport_args(sub, rest).is_some()
+    });
+    if moved.transport_env && transport {
         violations.push(Violation::always_blocking(
             "git.policy_authority",
             "command-local configuration can redirect the configured remote".into(),
@@ -6103,26 +6353,39 @@ fn check_authority(
         ));
         return;
     }
-    if let Ok(specs) = compose_targets(args, moved) {
-        for spec in specs {
-            let target = spec
-                .as_ref()
-                .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
-            if let Err(reason) = super::landed_policy::load(&target) {
-                let recovery = git_subcommand(args)
-                    .is_some_and(|(sub, rest)| sub == "fetch" && rest.len() <= 1)
-                    && super::ref_authority::check(&target, args).is_none();
-                if !recovery {
-                    violations.push(Violation::always_blocking(
-                        "git.policy_authority",
-                        reason,
-                        "restore the named remote-tracking policy authority",
-                    ));
-                }
+    let specs = match compose_targets(args, moved) {
+        Ok(specs) => specs,
+        Err(reason) => {
+            if transport {
+                violations.push(Violation::always_blocking(
+                    "git.policy_authority",
+                    format!("cannot determine the transport repository: {reason}"),
+                    "use a readable explicit repository and its configured remote",
+                ));
             }
-            if let Some(reason) = super::ref_authority::check(&target, args) {
-                violations.push(Violation::always_blocking("git.policy_authority", reason, "the operator repairs the configured remote; agents use its ordinary fetch mapping"));
+            return;
+        }
+    };
+    for spec in specs {
+        let target = spec
+            .as_ref()
+            .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
+        if let Err(reason) = super::landed_policy::load(&target) {
+            let recovery = super::ref_authority::recovery_args(&target, args);
+            if !recovery {
+                violations.push(Violation::always_blocking(
+                    "git.policy_authority",
+                    reason,
+                    "restore the named remote-tracking policy authority",
+                ));
             }
+        }
+        if let Some(reason) = super::ref_authority::check(&target, args) {
+            violations.push(Violation::always_blocking(
+                "git.policy_authority",
+                reason,
+                "the operator repairs the configured remote; agents use its ordinary fetch mapping",
+            ));
         }
     }
 }
@@ -6227,14 +6490,21 @@ fn check_git(
                     .collect()
             })
             .unwrap_or_default();
-        let variable = git_config_variable(moved, std::env::var("GIT_CONFIG").ok());
+        // OS text rule (issue 79): an inherited `GIT_CONFIG` that is not
+        // text names a file the guard cannot judge, never no file.
+        let inherited_config = match std::env::var("GIT_CONFIG") {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => Some("$GIT_CONFIG".to_string()),
+        };
+        let variable = git_config_variable(moved, inherited_config);
         // The file a repository-scope write opens, read only for a write
         // that sets a key not known to run nothing. Git takes the git
         // directory from the environment it inherits too, as it takes
         // `GIT_CONFIG` (review round 13); a relative `--file` above is still
         // read from the directories git runs in, which that does not move.
-        let inherited = inherited_locations(|name| std::env::var(name).ok());
-        let located = compose_targets_with(args, moved, &inherited);
+        let located = inherited_locations(|name| std::env::var(name))
+            .and_then(|inherited| compose_targets_with(args, moved, &inherited));
         let worktree = parse_options(rest, &GIT_CONFIG_OPTIONS).has_long("--worktree");
         let local = || {
             located
@@ -6300,6 +6570,13 @@ fn check_git(
     // A plain checkout only moves HEAD; one that force-creates a branch
     // resets that branch and is judged below.
     if matches!(sub, "checkout" | "switch") && forced_branch_target(sub, rest).is_none() {
+        if let Some(why) = &judged.unresolved {
+            out.push(Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read target repository policy and root-checkout state: {why}"),
+                "use a readable explicit repository before changing it",
+            ));
+        }
         return;
     }
     // A branch expression is judged as the branch git resolves it to in the
@@ -6351,6 +6628,14 @@ fn check_git(
     }
     if let Some(why) = judged.unresolved {
         notes.push(disclose_unresolved(sub, &why, &mut found));
+        if !discard_readonly_git(sub, rest) && !found.iter().any(|v| v.level == PolicyLevel::Block)
+        {
+            found.push(Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read target repository policy and root-checkout state: {why}"),
+                "use a readable explicit repository before changing it",
+            ));
+        }
     }
     if !found.is_empty() && ctx.dir_target_lookup.is_some() {
         if let Ok(specs) = compose_targets(args, moved) {
@@ -6867,7 +7152,7 @@ fn expand_alias(
             AliasAnswer::Unreadable(why) => return Err(why),
             AliasAnswer::Expansion(value) => value,
         };
-        if value.trim_start().starts_with('!') {
+        if value.starts_with('!') {
             return Err("a `!` shell alias".to_string());
         }
         let words =
@@ -6893,7 +7178,7 @@ fn expand_alias(
 /// whitespace, with single and double quotes grouping and a backslash
 /// escaping the next character outside single quotes. `None` for an
 /// unterminated quote or a trailing backslash.
-fn split_alias(value: &str) -> Option<Vec<String>> {
+pub(crate) fn split_alias(value: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
@@ -6912,7 +7197,8 @@ fn split_alias(value: &str) -> Option<Vec<String>> {
                 quote = Some(c);
                 in_word = true;
             }
-            (None, c) if c.is_whitespace() => {
+            // Git's sane_ctype blanks exclude vertical tab and form feed.
+            (None, ' ' | '\t' | '\n' | '\r') => {
                 if in_word {
                     words.push(std::mem::take(&mut word));
                     in_word = false;
@@ -6959,7 +7245,8 @@ struct Judged<'p> {
 /// When every directory the shell could run the op in resolves to a readable
 /// repository, the op is judged against each of them, by that repository's
 /// branch and its own policy, and blocks if any of them is protected.
-/// Otherwise the target is unresolved: the op is judged as if it ran on a
+/// Otherwise the target is unresolved: mutation refuses independently of the
+/// session policy, and the op is also judged as if it ran on a
 /// protected branch under the session policy, so a mutation blocks, and the
 /// verdict says why and how to make the target resolvable.
 fn judge_target<'p>(
@@ -7048,15 +7335,27 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
 
 /// The git location variables set in the environment git inherits, here
 /// the hook's own, as `(name, value)` pairs, read through `var`.
-fn inherited_locations(var: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
-    GIT_LOCATION_VARS
-        .iter()
-        .filter_map(|name| {
-            var(name)
-                .filter(|value| !value.is_empty())
-                .map(|value| (*name, value))
-        })
-        .collect()
+///
+/// OS text rule (issue 79): a variable set to a value that is not text
+/// moves git somewhere the guard cannot read, so it leaves the location
+/// unresolved; only an unset variable is absent.
+fn inherited_locations(
+    var: impl Fn(&str) -> Result<String, std::env::VarError>,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let mut found = Vec::new();
+    for name in GIT_LOCATION_VARS {
+        match var(name) {
+            Ok(value) if value.is_empty() => {}
+            Ok(value) => found.push((*name, value)),
+            Err(std::env::VarError::NotPresent) => {}
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(format!(
+                    "`{name}` in the environment the hook runs in, which is not text"
+                ))
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// [`compose_targets`] for git that also inherits `inherited`: an inherited
@@ -7470,9 +7769,10 @@ enum FileScope {
 fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
     let file = file.replace('\\', "/");
     let home = crate::portable_path::user_home();
-    let expanded = match &home {
+    // OS text rule (issue 79): a home that is not text is not spelled into
+    // the path; the `~` or `$HOME` word stays, which reads as `Other`.
+    let expanded = match home.as_deref().and_then(Path::to_str) {
         Some(home) => {
-            let home = home.to_string_lossy();
             if file == "~" || file == "$HOME" || file == "${HOME}" {
                 home.to_string()
             } else if let Some(rest) = file
@@ -7503,17 +7803,25 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
             user_paths.push(PathBuf::from(path));
         }
     }
+    // The user files compare as text. One whose path is not text never
+    // equals a path that is, and every path judged below is text.
     let mut user: Vec<String> = user_paths
         .iter()
-        .map(|p| lexical(&p.to_string_lossy()).to_lowercase())
+        .filter_map(|p| p.to_str())
+        .map(|p| lexical(p).to_lowercase())
         .collect();
     user.extend(
         user_paths
             .iter()
             .filter_map(|p| real(p))
-            .map(|p| p.to_string_lossy().to_lowercase()),
+            .filter_map(|p| p.to_str().map(str::to_lowercase)),
     );
-    let scope_of = |path: &str| {
+    let scope_of = |path: &Path| {
+        // OS text rule (issue 79): a path that is not text, as written or
+        // through its links, is not shown to be a repository's own file.
+        let Some(path) = path.to_str() else {
+            return FileScope::Other;
+        };
         // A link the guard cannot follow (a broken one, which git creates
         // the file behind) is not shown to be a repository's own file.
         // Any other failure (a `.git` file in place of a directory, where
@@ -7528,11 +7836,15 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
             }
             Err(_) => PathBuf::from(lexical(path)),
         };
+        let Some(real_text) = real.to_str() else {
+            return FileScope::Other;
+        };
         let is_user = user.contains(&lexical(path).to_lowercase())
-            || user.contains(&real.to_string_lossy().to_lowercase());
+            || user.contains(&real_text.to_lowercase());
         if is_user {
             FileScope::User
-        } else if repository_config_file(&real, true) {
+        } else if repository_config_file(&real, true) == Some(true) {
+            // A git directory the guard cannot read is not shown to be one.
             FileScope::Repository
         } else {
             FileScope::Other
@@ -7540,7 +7852,7 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
     };
     // A drive path is as absolute as a rooted one (review round 14).
     if host_absolute(&expanded) {
-        return scope_of(&expanded);
+        return scope_of(Path::new(&expanded));
     }
     let trimmed = expanded.trim_start_matches("./");
     if trimmed.split('/').any(|part| part == "..")
@@ -7552,11 +7864,12 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
         return FileScope::User;
     }
     // Without the directory, only the name can show a repository's file.
-    let named_repository = repository_config_file(Path::new(&lexical(trimmed)), false);
+    let named_repository =
+        repository_config_file(Path::new(&lexical(trimmed)), false) == Some(true);
     match dirs {
         Some(dirs) if !dirs.is_empty() => dirs
             .iter()
-            .map(|dir| scope_of(&dir.join(trimmed).to_string_lossy()))
+            .map(|dir| scope_of(&dir.join(trimmed)))
             .max_by_key(|scope| match scope {
                 FileScope::User => 3,
                 FileScope::Other | FileScope::Undecided => 2,
@@ -7602,38 +7915,41 @@ fn real(path: &Path) -> Option<PathBuf> {
 /// `worktrees/<name>` and `modules/...` directories), or one holding `HEAD`
 /// beside `objects` or `commondir`, as a bare repository does; that one is
 /// read from the disk only with `on_disk`. Names compare without case, as
-/// on the case-insensitive file systems git runs on.
-fn repository_config_file(path: &Path, on_disk: bool) -> bool {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    if matches!(name.as_str(), ".gitmodules" | ".lfsconfig") {
-        return true;
+/// on the case-insensitive file systems git runs on. `None` when the disk
+/// cannot answer: each caller reads that as the answer that refuses.
+fn repository_config_file(path: &Path, on_disk: bool) -> Option<bool> {
+    // OS text rule (issue 79): the names compare as text. A name that is
+    // not text is none of the ASCII names below, as its bytes are not.
+    let text = |part: &std::ffi::OsStr| part.to_str().map(str::to_lowercase);
+    let name = path.file_name().and_then(text);
+    if matches!(name.as_deref(), Some(".gitmodules" | ".lfsconfig")) {
+        return Some(true);
     }
-    if !matches!(name.as_str(), "config" | "config.worktree") {
-        return false;
+    if !matches!(name.as_deref(), Some("config" | "config.worktree")) {
+        return Some(false);
     }
     let dir = match path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
     };
-    let parts: Vec<String> = dir
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
-        .collect();
-    if let Some(at) = parts.iter().rposition(|part| part == ".git") {
+    let parts: Vec<Option<String>> = dir.components().map(|c| text(c.as_os_str())).collect();
+    let is = |part: &Option<String>, name: &str| part.as_deref() == Some(name);
+    if let Some(at) = parts.iter().rposition(|part| is(part, ".git")) {
         let inner = &parts[at + 1..];
         if inner.is_empty()
-            || (inner.len() == 2 && inner[0] == "worktrees")
-            || inner.first().is_some_and(|part| part == "modules")
+            || (inner.len() == 2 && is(&inner[0], "worktrees"))
+            || inner.first().is_some_and(|part| is(part, "modules"))
         {
-            return true;
+            return Some(true);
         }
     }
-    on_disk
-        && dir.join("HEAD").is_file()
-        && (dir.join("objects").is_dir() || dir.join("commondir").is_file())
+    if !on_disk {
+        return Some(false);
+    }
+    // Kept strict: an entry whose type cannot be read leaves the answer
+    // unknown, never a "no".
+    let kind = |name: &str, want_dir: bool| crate::absence::is_kind(&dir.join(name), want_dir);
+    Some(kind("HEAD", false)? && (kind("objects", true)? || kind("commondir", false)?))
 }
 
 /// Where a `git config` write that [`config_writes_code_key`] judged lands.
@@ -7830,18 +8146,22 @@ fn config_writes_code_key(
     if place.is_none() && repository_scope {
         place = match local.map(|resolve| resolve()) {
             Some(Ok(paths)) => paths.iter().find_map(|path| {
-                let text = path.to_string_lossy();
-                (config_file_scope(&text, None) != FileScope::Repository).then(|| {
+                // OS text rule (issue 79): a configuration path that is not
+                // text is not shown to be the repository's own file.
+                let Some(text) = path.to_str() else {
+                    return Some(ConfigPlace::File(path.display().to_string()));
+                };
+                (config_file_scope(text, None) != FileScope::Repository).then(|| {
                     let link = std::fs::symlink_metadata(path)
                         .is_ok_and(|meta| meta.file_type().is_symlink());
                     if !link {
-                        return ConfigPlace::File(text.into_owned());
+                        return ConfigPlace::File(text.to_string());
                     }
                     let real = real(path).map_or_else(
                         || "a link the guard cannot follow".to_string(),
                         |real| format!("`{}`", real.display()),
                     );
-                    ConfigPlace::Linked(text.into_owned(), real)
+                    ConfigPlace::Linked(text.to_string(), real)
                 })
             }),
             Some(Err(why)) => Some(ConfigPlace::Unlocated(why)),
@@ -8480,17 +8800,35 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
 /// Scan a `gh pr create` or `gh pr edit` body for AI attribution / emoji
 /// (charter §6.4) and policy characters (ADR-0067).
 ///
-/// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
-/// file are scanned. Fail-open (matching the guard's doctrine): a missing or
-/// unreadable body file passes rather than blocking. A stdin body (`-F -`) is
-/// out of scope — its content is not available to the guard, so it is not read.
+/// Both inline and file bodies are read before allowing publication.
 fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
-    let inline = flag_value(rest, &["--body", "-b"]);
-    let from_file = flag_value(rest, &["--body-file", "-F"])
-        .filter(|path| *path != "-")
-        .and_then(|path| std::fs::read_to_string(path).ok());
-    for body in inline.into_iter().chain(from_file.as_deref()) {
+    if let Some(body) = flag_value(rest, &["--body", "-b"]) {
         scan_pr_body(body, policy, out);
+    }
+    if let Some(path) = flag_value(rest, &["--body-file", "-F"]) {
+        let body = if path == "-" {
+            Err("cannot read PR body from stdin".to_string())
+        } else {
+            std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read PR body {path}: {error}"))
+        };
+        match body {
+            Ok(body) => scan_pr_body(&body, policy, out),
+            Err(error)
+                if policy.ai_attribution.is_active()
+                    || policy.commit_emoji.is_active()
+                    || policy.policy_characters.is_active() =>
+            {
+                // A body that cannot be read is unscanned, whatever level
+                // the scans it would have run hold: a fixed block (R-80).
+                out.push(Violation::always_blocking(
+                    "git.pr_body",
+                    error,
+                    "use a readable UTF-8 body file or an inline body",
+                ));
+            }
+            Err(_) => {}
+        }
     }
 }
 
@@ -9056,30 +9394,75 @@ fn sed_file_operands(args: &[String]) -> Vec<&str> {
 /// legitimate script. The backup an in-place edit writes is a candidate
 /// too: the file name plus its suffix, or a GNU suffix with `*` replaced
 /// by the file name (`-i'dir/*'`).
-fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
+#[derive(Debug)]
+enum SedRead<T> {
+    Read(T),
+    Unreadable { file: String, why: String },
+}
+
+fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
+    use std::io::Read;
+    let unreadable = |why: String| SedRead::Unreadable {
+        file: file.into(),
+        why,
+    };
+    let metadata = match std::fs::metadata(cwd.join(file)) {
+        Ok(metadata) => metadata,
+        Err(error) => return unreadable(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return unreadable("not a regular script file".into());
+    }
+    if metadata.len() > SED_SCRIPT_LIMIT {
+        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    }
+    let input = match std::fs::File::open(cwd.join(file)) {
+        Ok(input) => input,
+        Err(error) => return unreadable(error.to_string()),
+    };
+    match input.metadata() {
+        Ok(metadata) if !metadata.is_file() => {
+            return unreadable("script is no longer a regular file".into())
+        }
+        Ok(metadata) if metadata.len() > SED_SCRIPT_LIMIT => {
+            return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"))
+        }
+        Ok(_) => {}
+        Err(error) => return unreadable(error.to_string()),
+    }
+    let mut bytes = Vec::new();
+    if let Err(error) = input.take(SED_SCRIPT_LIMIT + 1).read_to_end(&mut bytes) {
+        return unreadable(error.to_string());
+    }
+    if bytes.len() as u64 > SED_SCRIPT_LIMIT {
+        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => SedRead::Read(text),
+        Err(error) => unreadable(format!("not valid UTF-8: {error}")),
+    }
+}
+
+fn sed_script_writes(args: &[String], cwd: &Path) -> SedRead<Vec<String>> {
     let mut scripts: Vec<String> = args.to_vec();
     for spec in SED_GRAMMARS {
         let parsed = parse_options(args, spec);
         for file in parsed.values_of('f', "--file") {
-            let path = cwd.join(file);
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if meta.len() <= 1 << 16 {
-                    if let Ok(text) = std::fs::read_to_string(&path) {
-                        scripts.push(text);
-                    }
-                }
+            match read_sed_script(file, cwd) {
+                SedRead::Read(text) => scripts.push(text),
+                SedRead::Unreadable { file, why } => return SedRead::Unreadable { file, why },
             }
         }
     }
     let mut out: Vec<String> = Vec::new();
     let mut add = |candidate: &str| {
-        let candidate = candidate.trim();
+        let candidate = candidate.trim_start_matches([' ', '\t']);
         if !candidate.is_empty() && !out.iter().any(|c| c == candidate) {
             out.push(candidate.to_string());
         }
     };
     for script in &scripts {
-        for line in script.lines() {
+        for line in script.split('\n') {
             for (at, _) in line.match_indices(['w', 'W']) {
                 let rest = &line[at + 1..];
                 add(rest);
@@ -9113,7 +9496,7 @@ fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
             }
         }
     }
-    out
+    SedRead::Read(out)
 }
 
 /// For commands where only the presence of a long flag matters and no option
@@ -9477,7 +9860,11 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     }
                 }
             }
-            c if c.is_whitespace() && !in_single && !in_double => {
+            // The shell splits words at its blanks (space, tab, newline); any
+            // other whitespace, a no-break space included, is part of the word
+            // (OS text rule, issue 79), so a protected name that holds one is
+            // still compared whole.
+            ' ' | '\t' | '\n' if !in_single && !in_double => {
                 if started {
                     words.push(ShellWord {
                         text: std::mem::take(&mut cur),
@@ -10107,10 +10494,596 @@ mod registry_guard_tests {
     }
 }
 
+/// Unquoted shell separators. Other whitespace belongs to the word.
+pub(crate) fn shell_blank(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n')
+}
+
 #[cfg(test)]
 mod tests {
+    // R22-GUARD-TESTS-BEGIN
+    #[cfg(unix)]
+    #[test]
+    fn r22_recursive_glob_reader_error_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken")).unwrap();
+        let args = vec!["-R".to_string(), "uchg".to_string(), "*(D)".to_string()];
+        let result = recursive_change_violation(
+            "chflags",
+            &args,
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "chflags -R uchg *(D)",
+        );
+        assert!(result.is_some(), "an unreadable glob must refuse");
+        assert!(worktree_delete_check(
+            "rm",
+            &["*(D)"],
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "rm -rf *(D)",
+            None
+        )
+        .is_some());
+        std::fs::remove_file(dir.path().join("broken")).unwrap();
+        assert!(recursive_change_violation(
+            "chflags",
+            &args,
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "chflags -R uchg *(D)"
+        )
+        .is_none());
+        assert_eq!(
+            resolve_targets("absent*", dir.path(), "").unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_target_environment_decode_error_refuses() {
+        use std::os::unix::ffi::OsStrExt;
+        const CHILD: &str = "CODEFLOW_R22_TARGET_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(resolve_targets("$CODEFLOW_R22_BAD_TARGET", dir.path(), "").is_err());
+            let args = vec![
+                "-R".to_string(),
+                "uchg".to_string(),
+                "$CODEFLOW_R22_BAD_TARGET".to_string(),
+            ];
+            assert!(recursive_change_violation(
+                "chflags",
+                &args,
+                PolicyLevel::Block,
+                dir.path(),
+                dir.path(),
+                "chflags -R uchg $CODEFLOW_R22_BAD_TARGET"
+            )
+            .is_some());
+            assert!(
+                resolve_targets("$CODEFLOW_R22_ABSENT_TARGET", dir.path(), "")
+                    .unwrap()
+                    .is_none()
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_target_environment_decode_error_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(
+                "CODEFLOW_R22_BAD_TARGET",
+                std::ffi::OsStr::from_bytes(b"bad\xff"),
+            )
+            .env_remove("CODEFLOW_R22_ABSENT_TARGET")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_enforcement_discovery_error_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
+        assert!(in_enforcement_dir(dir.path()).is_err());
+        let command = format!("{}/$unknown", dir.path().display());
+        assert!(token_integrity_path_spelled(&command, dir.path(), dir.path()).is_some());
+        std::fs::remove_file(dir.path().join(".git")).unwrap();
+        assert!(!in_enforcement_dir(dir.path()).unwrap());
+        assert!(!in_enforcement_dir(&dir.path().join("absent")).unwrap());
+    }
+
+    #[test]
+    fn r22_pr_body_policy_characters_alone_requires_readable_file() {
+        let policy = GitPolicy {
+            ai_attribution: PolicyLevel::Off,
+            commit_emoji: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Block,
+            ..default_policy()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.md");
+        let mut found = Vec::new();
+        check_gh_pr_body(
+            &["--body-file", missing.to_str().unwrap()],
+            &policy,
+            &mut found,
+        );
+        assert!(blocks(&found));
+        found.clear();
+        check_gh_pr_body(&[], &policy, &mut found);
+        assert!(
+            found.is_empty(),
+            "no body-file option does not require a file"
+        );
+        std::fs::write(&missing, "Plain body.").unwrap();
+        check_gh_pr_body(
+            &["--body-file", missing.to_str().unwrap()],
+            &policy,
+            &mut found,
+        );
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn r22_unresolved_target_refuses_with_session_protection_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = GitPolicy {
+            protected_branches: vec![],
+            commit_to_protected: PolicyLevel::Off,
+            root_checkout_commits: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let missing = |_: &Retarget<'_>| None;
+        let context = ctx_with_dir_branch(&policy, "feat/x", &missing);
+        for command in ["git -C . commit -m x", "git -C . switch topic"] {
+            let result = evaluate_report_at(command, &context, dir.path());
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule == "git.policy_authority" && v.level == PolicyLevel::Block),
+                "{command}: {:?}",
+                result.violations
+            );
+        }
+        assert!(evaluate_report_at("git -C . status", &context, dir.path())
+            .violations
+            .is_empty());
+        let readable = |_: &Retarget<'_>| same_repo("feat/x");
+        let context = ctx_with_dir_branch(&policy, "feat/x", &readable);
+        assert!(
+            evaluate_report_at("git -C . commit -m x", &context, dir.path())
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_home_unset_reaches_bash_home() {
+        const CHILD: &str = "CODEFLOW_R22_HOME_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let output = std::process::Command::new("/bin/bash")
+                .args(["--noprofile", "--norc", "-c", "printf '%s' ~"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let expected = PathBuf::from(String::from_utf8(output.stdout).unwrap());
+            let dir = tempfile::tempdir().unwrap();
+            let mut run = RunDirs {
+                dirs: vec![dir.path().to_path_buf()],
+                unknown: None,
+                home: crate::portable_path::user_home(),
+            };
+            assert_eq!(reach_dirs("~", &mut run), vec![expected.clone()]);
+            assert_eq!(
+                integrity_shell_path("~/ordinary", dir.path()),
+                expected.join("ordinary")
+            );
+            assert!(run.unknown.is_none());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_home_unset_reaches_bash_home",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("HOME")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r22_missing_working_directory_refuses() {
+        const CHILD: &str = "CODEFLOW_R22_CWD_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempfile::tempdir().unwrap();
+            std::env::set_current_dir(dir.path()).unwrap();
+            std::fs::remove_dir(dir.path()).unwrap();
+            let policy = default_policy();
+            let result = evaluate_report("git status", &ctx(&policy, "feat/x"));
+            assert!(result
+                .violations
+                .iter()
+                .any(|v| v.level == PolicyLevel::Block
+                    && v.message.contains("cannot read the working directory")));
+            return;
+        }
+        let policy = default_policy();
+        assert!(evaluate_report("git status", &ctx(&policy, "feat/x"))
+            .violations
+            .is_empty());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_missing_working_directory_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    #[test]
+    fn r22_target_identity_error_is_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        real_repo(dir.path(), "feat/x");
+        let missing_common = dir.path().join("missing-common");
+        let spec = Retarget {
+            path: ".",
+            git_dir: false,
+        };
+        assert!(read_target(dir.path(), Some(&missing_common), &spec).is_none());
+        assert!(read_target(dir.path(), None, &spec).is_some());
+        assert!(
+            read_target(dir.path(), Some(&dir.path().join(".git")), &spec)
+                .unwrap()
+                .policy
+                .is_none()
+        );
+    }
+    // R22-GUARD-TESTS-END
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_empty_branch_answer_refuses() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_BRANCH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(super::read_branch_name(root.path(), None, "topic").is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\nprintf '\\n'\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r20_empty_branch_answer_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_glob_dangling_descendant_is_unproven() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tree")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("tree/broken"))
+            .unwrap();
+        assert_eq!(
+            super::every_path_below(&dir.path().join("tree"), &mut 0),
+            Err(super::GlobStop::Unreadable)
+        );
+        assert!(super::glob_reach("tree/*(D)", dir.path(), dir.path()).is_some());
+        assert!(super::glob_directory(&dir.path().join("missing"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_root_dot_pattern_dangling_parent_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &link).unwrap();
+        assert_eq!(
+            super::root_dot_pattern_target(&link.join(".*")),
+            Some("repository root pattern (cannot read directory)")
+        );
+        assert_eq!(
+            super::root_dot_pattern_target(&dir.path().join("missing/.*")),
+            None
+        );
+    }
+
+    #[test]
+    fn r17_root_pattern_under_absent_directory_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        assert!(root_dot_pattern_target(&dir.path().join("absent/.*")).is_none());
+        assert!(root_dot_pattern_target(&dir.path().join(".*")).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r17_root_pattern_under_unreadable_directory_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("closed");
+        std::fs::create_dir_all(parent.join("child")).unwrap();
+        let original = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let probe = parent.join("child").canonicalize();
+        let target = root_dot_pattern_target(&parent.join("child/.*"));
+        std::fs::set_permissions(&parent, original).unwrap();
+        match probe {
+            Ok(_) => eprintln!("EACCES directory probe unavailable under this test identity"),
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(
+                    target,
+                    Some("repository root pattern (cannot read directory)")
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r15_extra_unreadable_root_pattern_is_unproven() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let path = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b".[\xff]*".to_vec()));
+        assert!(root_dot_pattern_target(&path).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_cd_keeps_a_quote_in_the_dequoted_directory_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::create_dir(root.join("safe'")).unwrap();
+        std::os::unix::fs::symlink("../.git/config", root.join("safe'/link")).unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "cd \"safe'\"; printf x > link",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_sed_unreadable_script_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::os::unix::fs::symlink(".git/config", root.join("link")).unwrap();
+        std::fs::write(root.join("script.sed"), b"# caf\xe9\nw link\n").unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f script.sed in.txt",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_sed_oversized_script_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::os::unix::fs::symlink(".git/config", root.join("link")).unwrap();
+        let mut script = vec![b'#'; 65 * 1024];
+        script.extend_from_slice(b"\nw link\n");
+        std::fs::write(root.join("script.sed"), script).unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f script.sed in.txt",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn r16_sed_shared_limit_refuses_even_without_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.sed");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(SED_SCRIPT_LIMIT + 1)
+            .unwrap();
+        assert!(matches!(
+            read_sed_script("large.sed", dir.path()),
+            SedRead::Unreadable { why, .. } if why.contains("limit")
+        ));
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f large.sed in.txt",
+            &ctx(&policy, "task/local"),
+            dir.path(),
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn r15_owned_sed_keeps_carriage_return_in_write_operand() {
+        let SedRead::Read(paths) =
+            sed_script_writes(&["w notes.md\r\nw other.md".into()], Path::new("."))
+        else {
+            panic!("inline script")
+        };
+        assert!(paths.contains(&"notes.md\r".to_string()), "{paths:?}");
+        assert!(!paths.contains(&"notes.md".to_string()), "{paths:?}");
+    }
+
+    #[test]
+    fn r15_environment_alias_is_refused_by_git_guard() {
+        for command in [
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin release' git ship",
+            "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin release'\" git ship",
+        ] {
+            let result = report(command, "task/work");
+            assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
+            assert!(result.violations.iter().any(|v| v.message.contains("an alias the guard cannot resolve")), "{:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn alias_reader_removes_only_its_output_terminator() {
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let value = "!printf value\r\n";
+        let config = vec![format!("alias.x={value}")];
+        assert_eq!(
+            read_alias(
+                temp.path(),
+                &AliasQuery {
+                    target: None,
+                    config: &config,
+                    name: "x"
+                }
+            ),
+            AliasAnswer::Expansion(value.into())
+        );
+    }
+
+    #[test]
+    fn unicode_blanks_stay_in_shell_operands() {
+        for blank in ['\u{a0}', '\u{2003}', '\u{202f}', '\r', '\u{b}', '\u{c}'] {
+            let name = format!("release{blank}");
+            assert_eq!(command_argv(&format!("git push origin {name}"))[3], name);
+            let chars: Vec<_> = format!("{name} next").chars().collect();
+            assert_eq!(redirect_word(&chars, 0).0, name);
+            assert_eq!(
+                line_words(&format!("echo {name}")).last(),
+                Some(name.as_str())
+            );
+            let chars: Vec<_> = format!("<<{name}\n").chars().collect();
+            assert_eq!(parse_heredoc_operator(&chars, 0).unwrap().0.delimiter, name);
+            assert_eq!(
+                expand_commands(&format!("echo {name}"))[0],
+                format!("echo {name}")
+            );
+            assert!(paren_in_word(&format!("case{blank}")));
+        }
+        assert_eq!(
+            qualifier_code("e\u{a0}git push origin main\u{a0}"),
+            vec!["git push origin main"]
+        );
+        assert_eq!(qualifier_code("+\u{a0}"), vec!["\u{a0}"]);
+        assert!(expand_commands("{\u{a0}echo ok")
+            .iter()
+            .any(|s| s.starts_with("{\u{a0}")));
+        assert!(expand_commands("echo x\u{a0}} tail")
+            .iter()
+            .any(|s| s.contains("x\u{a0}}")));
+        assert_eq!(
+            match sed_script_writes(&["w file\u{a0}".into()], Path::new(".")) {
+                SedRead::Read(paths) => paths,
+                other @ SedRead::Unreadable { .. } => panic!("{other:?}"),
+            },
+            vec!["file\u{a0}"]
+        );
+        assert_eq!(
+            split_alias("push origin release\u{a0}").unwrap()[2],
+            "release\u{a0}"
+        );
+        assert_eq!(
+            split_alias("push\torigin\nrelease").unwrap(),
+            ["push", "origin", "release"]
+        );
+        assert_eq!(split_alias("version\u{c}").unwrap(), ["version\u{c}"]);
+    }
     use super::super::policy::PolicyLevel;
     use super::*;
+
+    /// Round seven on issue 79: a link whose name is not valid UTF-8 and that
+    /// points at an enforcement file is followed on its exact path, not on a
+    /// storage key that resolves to nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_glob_reach_follows_a_link_whose_name_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        let odd = root.join(std::ffi::OsStr::from_bytes(b"alias-\xe9"));
+        if std::os::unix::fs::symlink(".codeflow/policy.json", &odd).is_err() {
+            return; // this volume refuses names that are not UTF-8
+        }
+        std::os::unix::fs::symlink(".codeflow/policy.json", root.join("alias-plain")).unwrap();
+        assert!(
+            glob_reach("alias-p*", &root, &root).is_some(),
+            "the valid control"
+        );
+        std::fs::remove_file(root.join("alias-plain")).unwrap();
+        assert!(glob_reach("alias-*", &root, &root).is_some());
+    }
+
+    /// Issue 79: `-name '??'` may match a name of two bytes that is not valid
+    /// UTF-8 (one replacement character as text), so the candidate stays; a
+    /// literal pattern is judged as before.
+    #[cfg(unix)]
+    #[test]
+    fn a_find_name_filter_keeps_a_candidate_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let odd = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/repo/.git/\xe2\x82"));
+        let wildcard = vec![("??".to_string(), false)];
+        assert!(find_name_matches(Some(&wildcard), &odd));
+        let literal = vec![("config".to_string(), false)];
+        assert!(!find_name_matches(Some(&literal), &odd));
+        let star = vec![("*".to_string(), false)];
+        assert!(find_name_matches(Some(&star), &odd));
+    }
 
     fn ctx<'a>(policy: &'a GitPolicy, branch: &'a str) -> GuardContext<'a> {
         GuardContext {
@@ -10456,6 +11429,31 @@ mod tests {
     }
 
     // -- push / force-push / delete --
+
+    /// Round sixteen on issue 79: a protected branch whose name ends in a
+    /// no-break space is compared whole, so an unquoted push to it is blocked
+    /// as the quoted one is, and an alias that runs it is judged the same.
+    #[test]
+    fn a_push_to_a_protected_name_with_a_no_break_space_is_blocked() {
+        let p = GitPolicy {
+            protected_branches: vec!["release\u{a0}".into()],
+            ..GitPolicy::default()
+        };
+        for command in [
+            "git push origin HEAD:release\u{a0}",
+            "git push origin 'HEAD:release\u{a0}'",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert_eq!(
+                v.first().map(|v| v.rule.as_str()),
+                Some("git.push_to_protected"),
+                "{command}"
+            );
+        }
+        assert!(evaluate("git push origin release", &ctx(&p, "feat/x")).is_empty());
+        let words = split_alias("push origin HEAD:release\u{a0}").unwrap();
+        assert_eq!(words.last().map(String::as_str), Some("HEAD:release\u{a0}"));
+    }
 
     #[test]
     fn test_push_to_protected_explicit_refspec_blocked() {
@@ -10830,11 +11828,28 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_body_file_missing_passes() {
-        // Fail-open: an unreadable / missing body file must not block.
+    fn r16_missing_sed_script_and_unreadable_pr_stdin_refuse() {
+        let policy = default_policy();
+        for command in [
+            "sed -i -f /no/such/script.sed README.md",
+            "gh pr create --body-file -",
+        ] {
+            assert!(
+                blocks(&evaluate(command, &ctx(&policy, "feat/x"))),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pr_body_file_missing_refuses() {
+        // An unreadable publication body cannot be certified.
         let p = default_policy();
         let cmd = "gh pr create -t 'feat: x' --body-file '/no/such/body/file.md'";
-        assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
+        let violations = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert!(violations
+            .iter()
+            .any(|v| v.rule == "git.pr_body" && v.message.contains("cannot read")));
     }
 
     // -- gh pr merge (ADR-0007) --
@@ -11761,6 +12776,74 @@ mod tests {
         );
     }
 
+    /// Issue 79 on the TSK-242 paths: an inherited location variable that is
+    /// not text leaves the location unresolved, never unset.
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_location_that_is_not_text_is_unresolved() {
+        use std::os::unix::ffi::OsStringExt;
+        let found = inherited_locations(|name| match name {
+            "GIT_DIR" => Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(b"/tmp/\xff/.git".to_vec()),
+            )),
+            _ => Err(std::env::VarError::NotPresent),
+        });
+        assert!(found.unwrap_err().contains("`GIT_DIR`"));
+        let found = inherited_locations(|name| match name {
+            "GIT_DIR" => Ok("/tmp/repo/.git".to_string()),
+            "GIT_WORK_TREE" => Ok(String::new()),
+            _ => Err(std::env::VarError::NotPresent),
+        });
+        assert_eq!(found.unwrap(), [("GIT_DIR", "/tmp/repo/.git".to_string())]);
+    }
+
+    /// Issue 79 on the TSK-242 paths: a directory that is not text was read
+    /// through its lossy spelling, which names no file, so its `.git/config`
+    /// read as the repository's own by name alone and its links were never
+    /// followed. It is not shown to be the repository's own file.
+    #[cfg(unix)]
+    #[test]
+    fn a_config_below_a_directory_that_is_not_text_is_not_the_repositorys() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/caf\xff".to_vec()));
+        assert_eq!(
+            config_file_scope(".git/config", Some(std::slice::from_ref(&dir))),
+            FileScope::Other
+        );
+        let text = PathBuf::from("/tmp/cafe");
+        assert_eq!(
+            config_file_scope(".git/config", Some(std::slice::from_ref(&text))),
+            FileScope::Repository
+        );
+    }
+
+    /// Issue 79 on the TSK-242 paths: a bare git directory whose `HEAD`
+    /// cannot be read is neither shown to be one nor shown not to be one.
+    #[cfg(unix)]
+    #[test]
+    fn an_unread_git_directory_is_neither_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("bare");
+        std::fs::create_dir_all(bare.join("objects")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), bare.join("HEAD")).unwrap();
+        assert_eq!(repository_config_file(&bare.join("config"), true), None);
+        assert_eq!(
+            repository_config_file(&bare.join("config"), false),
+            Some(false)
+        );
+        std::fs::remove_file(bare.join("HEAD")).unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(
+            repository_config_file(&bare.join("config"), true),
+            Some(true)
+        );
+        std::fs::remove_file(bare.join("HEAD")).unwrap();
+        assert_eq!(
+            repository_config_file(&bare.join("config"), true),
+            Some(false)
+        );
+    }
+
     #[test]
     fn git_config_variable_names_the_file_a_scopeless_write_lands_in() {
         // Review round eleven: with no scope option, `git config` writes the
@@ -12013,7 +13096,6 @@ mod tests {
             "sed -i '' -e s/a/b/ README.md",
             "sed -i .bak s/a/b/ README.md",
             "sed -i -e s/.codeflow/x/ README.md",
-            "sed -i -f .codeflow/script.sed README.md",
             "rm -f '' README.md",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -12428,6 +13510,55 @@ mod tests {
             );
             assert!(token_integrity_path("(.codeflow|x)/policy.json", &root, &root).is_some());
         }
+    }
+
+    /// A word that cannot name an existing path names no enforcement file,
+    /// as on main: a path beneath a file (how Windows reads the word
+    /// `README.md\n`, with `\` as a separator) and a name the platform
+    /// refuses (Windows refuses `"$d"` and `*` with os error 123; Unix
+    /// refuses a name past its length limit with the same error kind). A
+    /// nameable word still reaches the policy file (PR 84 Windows run).
+    #[test]
+    fn test_a_word_that_cannot_name_a_path_is_no_enforcement_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        std::fs::write(root.join("README.md"), "x").unwrap();
+        let refused = if cfg!(windows) {
+            "a*b".to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        let policy = default_policy();
+        for command in [
+            "printf 'README.md/n' | xargs sort".to_string(),
+            "printf 'README.md/n' | xargs -I{} uniq {}".into(),
+            "rm -f README.md/child".into(),
+            format!("rm -f {refused}"),
+            format!("rm -f {refused}/child"),
+            format!("rm -f build/{refused}"),
+        ] {
+            let report = evaluate_report_at(&command, &ctx(&policy, "feat/x"), &root);
+            assert!(
+                !has_rule(&report.violations, "git.hook_integrity"),
+                "{command:.60}: {:?}",
+                report.violations
+            );
+        }
+        assert_eq!(token_integrity_path("README.md/n", &root, &root), None);
+        assert_eq!(
+            token_integrity_path(&format!("build/{refused}"), &root, &root),
+            None
+        );
+        let report = evaluate_report_at(
+            "rm -f .codeflow/policy.json",
+            &ctx(&policy, "feat/x"),
+            &root,
+        );
+        assert!(has_rule(&report.violations, "git.hook_integrity"));
     }
 
     /// Glob expansion reads the file system as the shell does: a leading
@@ -13136,16 +14267,30 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("a1")).unwrap();
         let cwd = dir.path();
         assert_eq!(
-            resolve_targets("a*", cwd, "rm -rf a*").map(|p| p.len()),
+            resolve_targets("a*", cwd, "rm -rf a*")
+                .unwrap()
+                .map(|p| p.len()),
             Some(1)
         );
-        assert!(resolve_targets("$d", cwd, "d=x; rm -rf $d").is_none());
-        assert!(resolve_targets("$(pwd)", cwd, "rm -rf $(pwd)").is_none());
-        assert!(resolve_targets("{a,b}", cwd, "rm -rf {a,b}").is_none());
+        assert!(resolve_targets("$d", cwd, "d=x; rm -rf $d")
+            .unwrap()
+            .is_none());
+        assert!(resolve_targets("$(pwd)", cwd, "rm -rf $(pwd)")
+            .unwrap()
+            .is_none());
+        assert!(resolve_targets("{a,b}", cwd, "rm -rf {a,b}")
+            .unwrap()
+            .is_none());
         // `PATH` is set wherever the tests run.
-        assert!(resolve_targets("$PATH/x", cwd, "rm -rf $PATH/x").is_some());
-        assert!(resolve_targets("${PATH}/x", cwd, "rm -rf ${PATH}/x").is_some());
-        assert!(resolve_targets("$PATH/x", cwd, "PATH=/; rm -rf $PATH/x").is_none());
+        assert!(resolve_targets("$PATH/x", cwd, "rm -rf $PATH/x")
+            .unwrap()
+            .is_some());
+        assert!(resolve_targets("${PATH}/x", cwd, "rm -rf ${PATH}/x")
+            .unwrap()
+            .is_some());
+        assert!(resolve_targets("$PATH/x", cwd, "PATH=/; rm -rf $PATH/x")
+            .unwrap()
+            .is_none());
     }
 
     /// TSK-216 review findings 2 and 3, against the `sed` on this machine:
@@ -13201,7 +14346,9 @@ mod tests {
             }
             ran.push(format!("{form:?}"));
             let args: Vec<String> = form.iter().map(ToString::to_string).collect();
-            let mut judged: Vec<String> = sed_script_writes(&args, dir.path());
+            let SedRead::Read(mut judged) = sed_script_writes(&args, dir.path()) else {
+                panic!("script fixture unreadable")
+            };
             if requests_in_place(&args) {
                 judged.extend(sed_file_operands(&args).into_iter().map(String::from));
             }
@@ -13235,15 +14382,22 @@ mod tests {
     #[test]
     fn test_integrity_stream_read_with_sed_allowed() {
         let p = default_policy();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("script.sed"), "p\n").unwrap();
         for cmd in [
             "sed -n 1,5p .codeflow/policy.json",
             "sed -e s/block/off/ .codeflow/policy.json",
             "sed -es/input/output/ .codeflow/policy.json",
             "sed -f script.sed .codeflow/policy.json",
             "sed -n -e p .codeflow/policy.json",
-            "sed -Ef /tmp/script.sed .codeflow/policy.json",
+            "sed -Ef script.sed .codeflow/policy.json",
         ] {
-            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+            let report = evaluate_report_at(cmd, &ctx(&p, "feat/x"), dir.path());
+            assert!(
+                report.violations.is_empty(),
+                "{cmd}: {:?}",
+                report.violations
+            );
         }
     }
 
@@ -13556,18 +14710,32 @@ mod tests {
         // The resolver cannot read the target repository (TSK-112, T112-4):
         // the guard cannot prove the target is unprotected, so a commit
         // blocks whatever the session branch is, and says how to resolve it.
+        // The target is a folder that does not exist on any host: a folder
+        // that exists but cannot be read (`/root` for a user other than
+        // root) adds its own `git.policy_authority` refusal (issue 79).
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("absent");
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| None;
         for session in ["feat/x", "main"] {
+            // Quoted, as a shell reads `\` in an unquoted word as an escape
+            // and a Windows path would lose its separators.
             let v = evaluate(
-                "git -C /root commit -m x",
+                &format!("git -C '{}' commit -m x", target.display()),
                 &ctx_with_dir_branch(&p, session, &resolver),
             );
-            assert!(has_rule(&v, "git.commit_to_protected"), "{session}: {v:?}");
-            assert!(v[0]
-                .message
-                .contains("target unresolved: no readable repository at `/root`"));
-            assert!(v[0].remedy.contains("literal path"));
+            let commit = v
+                .iter()
+                .find(|x| x.rule == "git.commit_to_protected")
+                .unwrap_or_else(|| panic!("{session}: {v:?}"));
+            assert!(
+                commit.message.contains(&format!(
+                    "target unresolved: no readable repository at `{}`",
+                    target.display()
+                )),
+                "{session}: {v:?}"
+            );
+            assert!(commit.remedy.contains("literal path"));
         }
     }
 
@@ -13968,12 +15136,16 @@ mod tests {
         assert!(evaluate("bash -x script.sh", &ctx(&p, "main")).is_empty());
         assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
         // `git -C <subdir>` resolving to a feature branch stays allowed.
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
         let resolver = |_: &Retarget<'_>| same_repo("feat/y");
-        assert!(evaluate(
+        let report = evaluate_report_at(
             "git -C sub status",
-            &ctx_with_dir_branch(&p, "main", &resolver)
-        )
-        .is_empty());
+            &ctx_with_dir_branch(&p, "main", &resolver),
+            dir.path(),
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
     }
 
     // -- data is not a command: heredoc bodies, quoted arguments, comments --
@@ -13998,7 +15170,6 @@ mod tests {
             "x=$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)",
             "cat > f <<'EOF' && git add f\nnever `gh pr merge 12`\nEOF",
             "cat <<'EOF' | tee -a f | grep -c x\n`gh pr merge 12`\nEOF",
-            "gh pr create --title t --body-file - <<'EOF'\nnever `gh pr merge 12`\nEOF",
             "jq -n --arg b \"$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)\" '$b'",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));

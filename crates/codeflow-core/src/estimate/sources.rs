@@ -103,11 +103,16 @@ impl Reader {
     }
 
     fn record(&mut self, path: &Path, report: &mut ForecastReport) -> Option<(String, Fields)> {
-        let relative = path
-            .strip_prefix(&self.root)
-            .ok()?
-            .to_str()?
-            .replace('\\', "/");
+        let relative_path = path.strip_prefix(&self.root).ok()?;
+        let Some(relative) = relative_path.to_str() else {
+            report.finding(
+                "source_record",
+                "sources",
+                "Work record path is not valid UTF-8.",
+            );
+            return None;
+        };
+        let relative = relative.replace('\\', "/");
         let bytes = self.read(&relative, report)?;
         if std::str::from_utf8(&bytes).is_err() {
             report.finding(

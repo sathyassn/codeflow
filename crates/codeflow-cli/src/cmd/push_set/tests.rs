@@ -1,5 +1,81 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn r20_git_absence_statuses_are_command_specific() {
+    use std::os::unix::process::ExitStatusExt;
+    for args in [
+        vec!["merge-base", "--independent", "HEAD"],
+        vec!["rev-parse", "--is-shallow-repository"],
+        vec!["config", "--list"],
+    ] {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(git_answer(&args, output).is_err(), "{args:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_documented_absence_and_success_remain_supported() {
+    use std::os::unix::process::ExitStatusExt;
+    for args in [
+        vec!["merge-base", "first", "second"],
+        vec!["merge-base", "--is-ancestor", "first", "second"],
+        vec!["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        vec!["config", "--get", "remote.upstream.url"],
+        vec!["config", "--bool", "core.sparseCheckout"],
+        vec!["config", "-z", "--get-all", "remote.origin.fetch"],
+    ] {
+        for code in [1, 128] {
+            let output = std::process::Output {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            };
+            let answer = git_answer(&args, output);
+            if code == 1 {
+                assert_eq!(answer, Ok(None), "{args:?}");
+            } else {
+                assert!(answer.is_err(), "{args:?}");
+            }
+        }
+    }
+    let oid = format!("{}\n", "a".repeat(40));
+    assert_eq!(
+        git_answer(
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+            std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: oid.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            }
+        ),
+        Ok(Some(oid))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_revision_success_requires_an_object_id() {
+    use std::os::unix::process::ExitStatusExt;
+    for stdout in [Vec::new(), b"not-an-object-id\n".to_vec()] {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout,
+            stderr: Vec::new(),
+        };
+        assert!(git_answer(
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+            output
+        )
+        .is_err());
+    }
+}
+
 struct SelectedRange {
     base: String,
     note: Option<Finding>,
@@ -21,7 +97,10 @@ impl History {
         history.git(&["config", "user.name", "Test"]);
         history.git(&["config", "user.email", "test@example.invalid"]);
         history.commit("base.txt", "base", "chore: base");
-        command(history.remote.path(), &["init", "--bare", "-q"]);
+        command(
+            history.remote.path(),
+            &["init", "--bare", "-q", "-b", "main"],
+        );
         history.advertise("main", "main");
         history
     }
@@ -60,6 +139,10 @@ impl History {
     }
 
     fn range(&self, branch: &str, head: &str, old: &str) -> SelectedRange {
+        self.try_range(branch, head, old).unwrap()
+    }
+
+    fn try_range(&self, branch: &str, head: &str, old: &str) -> Result<SelectedRange, String> {
         let listing = OnceCell::new();
         let advertised = OnceCell::new();
         let answer = OnceCell::new();
@@ -84,12 +167,13 @@ impl History {
         };
         let mut notices = Vec::new();
         let RangeBase { base, note } =
-            range_base(self.local.path(), &pushed, &destination, &mut notices).unwrap();
-        SelectedRange {
+            range_base(self.local.path(), &pushed, &destination, &mut notices)?
+                .ok_or("no range")?;
+        Ok(SelectedRange {
             base,
             note,
             notices,
-        }
+        })
     }
 }
 
@@ -313,7 +397,7 @@ fn push_set_task_target_ignores_unrelated_malformed_records() {
 }
 
 #[test]
-fn push_set_unreadable_task_target_keeps_advertised_history_fallback() {
+fn r16_push_set_unreadable_task_target_refuses() {
     let h = History::new();
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
     let old = h.commit("old", "old", "feat: first push");
@@ -323,9 +407,7 @@ fn push_set_unreadable_task_target_keeps_advertised_history_fallback() {
         "malformed",
         "docs: unreadable target",
     );
-    let range = h.range("task/TSK-001-change", &head, &old);
-    assert_eq!(range.base, old);
-    assert!(range.note.is_none());
+    assert!(h.try_range("task/TSK-001-change", &head, &old).is_err());
 }
 
 #[test]
@@ -394,7 +476,7 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         .any(|text| text.contains("declared target 'integration/line'")
             && text.contains(&tip)
             && text.contains("not fetched here")));
-    assert!(!is_commit(h.local.path(), &tip));
+    assert!(!is_commit(h.local.path(), &tip).unwrap());
 
     // With no usable advertised tip, the range stays unresolved but its
     // missing-target notice must still reach the caller.
@@ -404,6 +486,11 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
             &["update-ref", "-d", &format!("refs/heads/{branch}")],
         );
     }
+    // Keep the advertisement well formed while its only commit is unfetched.
+    command(
+        h.remote.path(),
+        &["symbolic-ref", "HEAD", "refs/heads/integration/line"],
+    );
     let listing = OnceCell::new();
     let advertised = OnceCell::new();
     let answer = OnceCell::new();
@@ -427,9 +514,166 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         remote_sha: NEW.into(),
     };
     let mut notices = Vec::new();
-    assert!(range_base(h.local.path(), &pushed, &destination, &mut notices).is_none());
+    assert!(
+        range_base(h.local.path(), &pushed, &destination, &mut notices)
+            .unwrap()
+            .is_none()
+    );
     assert!(notices
         .iter()
         .any(|text| text.contains(&tip) && text.contains("not fetched here")));
-    assert!(!is_commit(h.local.path(), &tip));
+    assert!(!is_commit(h.local.path(), &tip).unwrap());
+}
+
+#[test]
+fn r15_tracking_namespace_preserves_config_bytes() {
+    let history = History::new();
+    history.git(&[
+        "config",
+        "remote.fixture.fetch",
+        "+refs/heads/*:refs/remotes/fixture/*\u{a0}",
+    ]);
+    assert_eq!(
+        tracking_namespace(history.local.path(), "fixture").unwrap(),
+        None
+    );
+}
+#[cfg(unix)]
+#[test]
+fn r17_remote_query_exit_codes_keep_absence_distinct() {
+    use std::os::unix::process::ExitStatusExt;
+    let output = |code| std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    assert_eq!(
+        git_answer(&["remote", "get-url", "missing"], output(2)),
+        Ok(None)
+    );
+    for code in [1, 3, 128] {
+        assert!(git_answer(&["remote", "get-url", "missing"], output(code)).is_err());
+    }
+    assert!(git_answer(&["remote", "update"], output(2)).is_err());
+}
+
+#[test]
+fn r22_missing_binary_blocks_even_when_push_gate_is_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let policy = GitPolicy {
+        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Off,
+        ..GitPolicy::default()
+    };
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let mut report = StageReport::default();
+    run_checked_with_binary(dir.path(), &policy, &refs, None, None, &mut report, || {
+        Err(std::io::Error::other("binary location unavailable"))
+    })
+    .unwrap();
+    assert!(codeflow_core::hooks::any_blocking(&report.violations));
+    assert!(report.violations[0]
+        .message
+        .contains("binary location unavailable"));
+}
+
+#[test]
+fn r22_empty_push_set_does_not_require_a_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut report = StageReport::default();
+    run_checked_with_binary(
+        dir.path(),
+        &GitPolicy::default(),
+        &[],
+        None,
+        None,
+        &mut report,
+        || panic!("an empty push set has no checks to launch"),
+    )
+    .unwrap();
+    assert!(report.violations.is_empty());
+}
+
+#[test]
+fn r22_release_preflight_errors_are_precise_nonblocking_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let exe = std::env::current_exe().unwrap();
+    let run = |root: &Path| {
+        let mut report = StageReport::default();
+        release_preflight(
+            &exe,
+            root,
+            &refs[0],
+            "origin",
+            &GitPolicy::default(),
+            &mut report,
+            &mut Vec::new(),
+        );
+        assert!(report.violations.is_empty());
+        assert_eq!(report.notes.len(), 1);
+        let note = report.notes[0].line("codeflow", "note");
+        assert!(note.contains("could not complete"), "{note}");
+        assert!(note.contains("the pull request job checks it"), "{note}");
+        note
+    };
+    // The process cannot launch from an absent working directory.
+    let note = run(&dir.path().join("absent"));
+    assert!(note.contains("python3 scripts/release.py"), "{note}");
+    std::fs::create_dir(dir.path().join("scripts")).unwrap();
+    std::fs::write(dir.path().join("scripts/release.py"), "print('not JSON')\n").unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("preflight printed no result"), "{note}");
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "import sys\nprint('preflight failure', file=sys.stderr)\nsys.exit(3)\n",
+    )
+    .unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("preflight failure"), "{note}");
+    // The unsuccessful status is named beside the script's own text.
+    assert!(note.contains("exited with code 3"), "{note}");
+    // With no text, the status alone is the diagnostic.
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "import sys\nsys.exit(4)\n",
+    )
+    .unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("exited with code 4"), "{note}");
+}
+
+#[test]
+fn r22_release_preflight_valid_empty_notes_stay_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("scripts")).unwrap();
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "print('{\"status\":\"ok\",\"notes\":[]}')\n",
+    )
+    .unwrap();
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let mut report = StageReport::default();
+    release_preflight(
+        &std::env::current_exe().unwrap(),
+        dir.path(),
+        &refs[0],
+        "origin",
+        &GitPolicy::default(),
+        &mut report,
+        &mut Vec::new(),
+    );
+    assert!(report.notes.is_empty());
+    assert!(report.violations.is_empty());
 }

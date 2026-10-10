@@ -997,6 +997,11 @@ fn verify_page_class(
         .source_blobs
         .get(&page.source_path)
         .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    if source.is_none() {
+        report.issues.push(format!(
+            "{route} page-class source is unreadable or not valid UTF-8"
+        ));
+    }
     // Sections are the adapter's: headings of the body after frontmatter.
     let body = source.map(source_body);
     let allowed = match class {

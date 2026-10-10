@@ -19,8 +19,23 @@ pub struct DoctorArgs {
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
 pub fn run(args: &DoctorArgs) -> i32 {
     let home = registry::codeflow_home();
+    // OS text rule (issue 79): doctor takes the project folder as text, so one
+    // that is not valid UTF-8 is refused, not read as a lossy lookalike.
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
+    let Some(project_dir) = root.to_str() else {
+        eprintln!(
+            "codeflow doctor: the project folder is not valid UTF-8, so it cannot be checked"
+        );
+        return 1;
+    };
     let opts = Options {
-        project_dir: super::repo_root().to_string_lossy().into_owned(),
+        project_dir: project_dir.to_string(),
         qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
         codeflow_home: home,
         // The grok guard canary judges the exec-guard in this process; it
@@ -130,8 +145,18 @@ mod tests {
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("policy.json"), "{\"schema_version\": 1}\n").unwrap();
-        std::fs::write(cf.join("manifest.json"), "{\"files\": {}}\n").unwrap();
-        std::fs::write(cf.join("project.toml"), "tier = \"standard\"\n").unwrap();
+        // A complete installed-file record: doctor refuses one it cannot
+        // parse instead of skipping the checks that read it.
+        std::fs::write(
+            cf.join("manifest.json"),
+            "{\"schema_version\": 1, \"scaffold_version\": \"3.1.0\", \"files\": {}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cf.join("project.toml"),
+            "schema_version = 1\ntier = \"standard\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = false\ngit_hooks = \"unwired\"\npermission_preset = \"acceptEdits\"\n",
+        )
+        .unwrap();
         let opts = Options {
             project_dir: dir.path().to_string_lossy().into_owned(),
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
@@ -225,6 +250,23 @@ mod tests {
             out.contains("permissions: file permissions correct"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn r21_incomplete_existing_project_refuses() {
+        let (dir, opts) = initialized_project();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "tier = \"standard\"\n",
+        )
+        .unwrap();
+        let (code, out) = run_to_string(&args(None, false), &opts);
+        assert_eq!(
+            code, 1,
+            "incomplete existing state cannot be healthy: {out}"
+        );
+        assert!(out.contains("cannot read existing CodeFlow state"), "{out}");
+        assert!(out.contains("project.toml"), "{out}");
     }
 
     #[test]

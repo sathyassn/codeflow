@@ -55,8 +55,8 @@ impl Window {
     pub fn numbers(text: &str) -> Result<Self, String> {
         let bad = || format!("`{text}` is not a range of pull request numbers such as 568..644");
         let (first, last) = text.split_once("..").ok_or_else(bad)?;
-        let first: u64 = first.trim().parse().map_err(|_| bad())?;
-        let last: u64 = last.trim().parse().map_err(|_| bad())?;
+        let first: u64 = first.trim_matches([' ', '\t']).parse().map_err(|_| bad())?;
+        let last: u64 = last.trim_matches([' ', '\t']).parse().map_err(|_| bad())?;
         if first > last {
             return Err(bad());
         }
@@ -207,8 +207,10 @@ fn refusals(repo_root: &Path, window: &Window, prs: &[MergedPr]) -> Refusals {
             (start, Some(end))
         }
     };
-    let Some(info) = crate::hooks::RepoInfo::discover(repo_root) else {
-        return Refusals::Unknown("not a git repository".to_string());
+    let info = match crate::hooks::RepoInfo::discover(repo_root) {
+        Ok(Some(info)) => info,
+        Ok(None) => return Refusals::Unknown("not a git repository".to_string()),
+        Err(error) => return Refusals::Unknown(format!("cannot read repository: {error}")),
     };
     let log = match refusal::read(&info.ledger_dir()) {
         Ok(log) => log,

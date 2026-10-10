@@ -55,13 +55,42 @@ fn field(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
     map.get(serde_yaml::Value::String(key.to_string()))
         .and_then(serde_yaml::Value::as_str)
         .map(str::to_owned)
-        .filter(|value| !value.trim().is_empty() && value != "null")
+        .filter(|value| !value.is_empty() && value != "null")
 }
 
-fn current_branch(repo_root: &Path) -> Option<String> {
-    let repo = git2::Repository::discover(repo_root).ok()?;
-    let head = repo.head().ok()?;
-    head.shorthand().ok().map(str::to_owned)
+pub(super) fn current_branch(repo_root: &Path) -> Result<Option<String>, StoreError> {
+    let read_error =
+        |error: git2::Error| StoreError::Invalid(format!("cannot read current branch: {error}"));
+    let repo = match git2::Repository::discover(repo_root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(read_error(error)),
+    };
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+            let head = repo.find_reference("HEAD").map_err(read_error)?;
+            let target = head.symbolic_target_bytes().ok_or_else(|| {
+                StoreError::Invalid("unborn HEAD has no symbolic branch target".into())
+            })?;
+            let branch = target.strip_prefix(b"refs/heads/").ok_or_else(|| {
+                StoreError::Invalid("unborn HEAD does not name a local branch".into())
+            })?;
+            return std::str::from_utf8(branch)
+                .map(|name| Some(name.to_owned()))
+                .map_err(|error| {
+                    StoreError::Invalid(format!("cannot decode current branch: {error}"))
+                });
+        }
+        Err(error) => return Err(read_error(error)),
+    };
+    if !head.is_branch() {
+        return Ok(None);
+    }
+    crate::git::name::reference_shorthand(&head)
+        .rule_text()
+        .map(|name| Some(name.to_owned()))
+        .map_err(|error| StoreError::Invalid(format!("cannot decode current branch: {error}")))
 }
 
 /// File a follow-up of `source_id` (R-73): the new task records
@@ -107,7 +136,7 @@ pub fn create_follow_up_with(
     allocate: Option<&mut Allocator<'_>>,
 ) -> Result<NewRecord, StoreError> {
     let pm_root = repo_root.join("project-management");
-    let source = crate::workgraph::layout::task_record_files(&pm_root)
+    let source = crate::workgraph::layout::task_record_files(&pm_root)?
         .into_iter()
         .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(source_id))
         .ok_or_else(|| StoreError::NotFound(format!("task:{source_id}")))?;
@@ -115,7 +144,7 @@ pub fn create_follow_up_with(
     let target = field(&map, "integration_target").ok_or_else(|| {
         StoreError::Invalid(format!("{source_id} has no integration_target to follow"))
     })?;
-    let branch = current_branch(repo_root).unwrap_or_default();
+    let branch = current_branch(repo_root)?.unwrap_or_default();
     let epic = field(&map, "epic_id");
     let planning = branch.starts_with("plan/");
     if epic.is_some() && !planning {
@@ -193,7 +222,8 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
+        Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
@@ -213,11 +243,12 @@ pub fn create_integration_branch(
     title: &str,
 ) -> Result<IntegrationBranch, String> {
     let from = crate::workgraph::default_work_target(repo_root)
+        .map_err(|error| error.to_string())?
         .ok_or("no main or master branch (local or origin) to cut the integration branch from")?;
     let name = format!("integration/{epic_id}-{}", slug(title));
     git(repo_root, &["branch", &name, &from])?;
     let has_origin = git(repo_root, &["remote"])?
-        .lines()
+        .split('\n')
         .any(|remote| remote == "origin");
     if has_origin {
         git(repo_root, &["push", "-u", "origin", &name])
@@ -231,19 +262,42 @@ pub fn create_integration_branch(
 }
 
 /// The next `ADR-NNNN` after the highest one in `docs/decisions/`.
-#[must_use]
-pub fn next_adr_id(repo_root: &Path) -> String {
-    let highest = fs::read_dir(repo_root.join("docs/decisions"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            name.strip_prefix("ADR-")?.get(..4)?.parse::<u32>().ok()
+///
+/// # Errors
+///
+/// Returns an error if the ADR directory or an entry cannot be read.
+pub fn next_adr_id(repo_root: &Path) -> Result<String, StoreError> {
+    let directory = repo_root.join("docs/decisions");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&directory)? =>
+        {
+            return Ok("ADR-0001".into())
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let mut highest = 0;
+    for entry in entries {
+        let entry = entry?;
+        // Non-ASCII/non-ID names are not ADR identities, but directory I/O errors refuse allocation.
+        if let Some(number) = adr_number(entry.file_name().as_encoded_bytes()) {
+            highest = highest.max(number);
+        }
+    }
+    Ok(format!("ADR-{:04}", highest + 1))
+}
+
+fn adr_number(name: &[u8]) -> Option<u32> {
+    name.strip_prefix(b"ADR-")?
+        .get(..4)?
+        .iter()
+        .try_fold(0, |value, digit| {
+            digit
+                .is_ascii_digit()
+                .then(|| value * 10 + u32::from(*digit - b'0'))
         })
-        .max()
-        .unwrap_or(0);
-    format!("ADR-{:04}", highest + 1)
 }
 
 /// Write the next ADR from `template` with `status: proposed` (R-36),
@@ -256,7 +310,7 @@ pub fn next_adr_id(repo_root: &Path) -> String {
 /// overwritten).
 pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRecord, StoreError> {
     create_adr_with(repo_root, template, title, &mut |_| {
-        Ok((next_adr_id(repo_root), crate::ids::new_uid()))
+        Ok((next_adr_id(repo_root)?, crate::ids::new_uid()))
     })
 }
 
@@ -282,7 +336,7 @@ pub fn create_adr_with(
     }
     let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(
         &repo_root.join("project-management"),
-    ))?;
+    )?)?;
     let date = crate::workgraph::now_rfc3339()[..10].to_string();
     // The frontmatter title is a YAML scalar; the heading keeps the text.
     let encoded =
@@ -325,10 +379,10 @@ pub fn create_adr_with(
 /// template already carries a `uid:` line.
 fn with_uid(content: &str, uid: &str) -> Option<String> {
     let front = content.strip_prefix("---\n")?.split_once("\n---\n")?.0;
-    if front.lines().any(|line| line.starts_with("uid:")) {
+    if front.split('\n').any(|line| line.starts_with("uid:")) {
         return Some(content.replace("{{UID}}", uid));
     }
-    let at = front.lines().position(|line| line.starts_with("id:"))?;
+    let at = front.split('\n').position(|line| line.starts_with("id:"))?;
     let mut lines: Vec<&str> = content.split('\n').collect();
     let line = format!("uid: {uid}");
     lines.insert(at + 2, &line);
@@ -366,6 +420,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn r22_current_branch_absent_repository_is_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(current_branch(dir.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn r22_standalone_follow_up_on_unborn_plan_branch_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.set_head("refs/heads/plan/new").unwrap();
+        fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+        fs::write(
+            dir.path().join("project-management/tasks/TSK-001.md"),
+            "---\nid: TSK-001\nintegration_target: main\n---\n",
+        )
+        .unwrap();
+        let error = create_follow_up(dir.path(), "", "TSK-001", "Follow up").unwrap_err();
+        assert!(error.to_string().contains("standalone task"), "{error}");
+    }
+
+    #[test]
+    fn r22_adr_number_uses_ascii_prefix_only() {
+        assert_eq!(adr_number(b"ADR-0042-\xff.md"), Some(42));
+        assert_eq!(adr_number(b"not-an-adr"), None);
+        assert_eq!(adr_number(b"ADR-nope.md"), None);
+    }
+
+    #[test]
+    fn r22_unborn_planning_branch_keeps_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.set_head("refs/heads/plan/new").unwrap();
+        assert!(format!("{:?}", current_branch(dir.path())).contains("plan/new"));
+    }
+
+    #[test]
+    fn r22_current_branch_refuses_bad_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        fs::write(repo.path().join("config"), "[broken").unwrap();
+        assert!(format!("{:?}", current_branch(dir.path())).starts_with("Err("));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_adr_allocation_refuses_dangling_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(next_adr_id(dir.path()).unwrap(), "ADR-0001");
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("docs/decisions")).unwrap();
+        assert!(next_adr_id(dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_adr_non_utf8_slug_keeps_its_number() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let decisions = dir.path().join("docs/decisions");
+        fs::create_dir_all(&decisions).unwrap();
+        let path = decisions.join(std::ffi::OsString::from_vec(b"ADR-0042-\xff.md".to_vec()));
+        if let Err(error) = fs::write(path, "record") {
+            if cfg!(target_os = "macos") && matches!(error.raw_os_error(), Some(1 | 92)) {
+                eprintln!("filesystem refuses a non-UTF-8 ADR name: {error}; byte-prefix regression covers allocation");
+                return;
+            }
+            panic!("{error}");
+        }
+        assert_eq!(next_adr_id(dir.path()).unwrap(), "ADR-0043");
+    }
+
+    #[test]
+    fn git_stdout_preserves_framing_and_refuses_failed_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = repo.path().join("config");
+        let mut config = std::fs::read(&path).unwrap();
+        config.extend_from_slice(b"\n[test]\nvalue = \"name\\n\"\ninvalid = \xff\n");
+        std::fs::write(path, config).unwrap();
+        assert_eq!(
+            super::git(dir.path(), &["config", "--get", "test.value"]).unwrap(),
+            "name\n"
+        );
+        assert!(super::git(dir.path(), &["config", "--get", "test.invalid"]).is_err());
+    }
+
+    #[test]
     fn adr_uid_goes_after_the_id_line_or_fills_the_placeholder() {
         let uid = "0f8c6e2a-1b3d-4c5e-8f90-a1b2c3d4e5f6";
         assert_eq!(
@@ -395,7 +536,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let decisions = dir.path().join("docs/decisions");
         fs::create_dir_all(&decisions).unwrap();
-        assert_eq!(next_adr_id(dir.path()), "ADR-0001");
+        assert_eq!(next_adr_id(dir.path()).unwrap(), "ADR-0001");
         fs::write(decisions.join("ADR-0007-old.md"), "x").unwrap();
         fs::write(decisions.join("template.md"), "x").unwrap();
         let template = "---\nid: ADR-NNNN\ntitle: <short decision title>\ndate: YYYY-MM-DD\nstatus: accepted          # proposed | accepted | superseded\n---\n\n# ADR-NNNN: <short decision title>\n";

@@ -129,7 +129,9 @@ impl CiWaitConfig {
     /// safe range.
     pub fn load(project_dir: &std::path::Path) -> Result<Self, CiWaitError> {
         let path = project_dir.join(".codeflow").join("ci-wait.json");
-        if !path.exists() {
+        if crate::absence::proven_absent(&path)
+            .map_err(|error| CiWaitError::ReadConfig(format!("{}: {error}", path.display())))?
+        {
             return Ok(Self::default());
         }
         let body = std::fs::read_to_string(&path)
@@ -287,10 +289,8 @@ pub async fn wait_for_ci_green(
     pr_number: u64,
     cfg: &CiWaitConfig,
 ) -> Result<CiOutcome, CiWaitError> {
-    // Resolve required contexts from branch protection (best-effort; missing
-    // protection is not fatal — we fall back to the include_checks filter
-    // or "all reported checks" per cfg).
-    let required_contexts = fetch_required_contexts(pr_number).await.unwrap_or_default();
+    // Required-context discovery must succeed before selecting a wait policy.
+    let required_contexts = fetch_required_contexts(pr_number).await?;
     wait_for_ci_green_with(
         pr_number,
         cfg,
@@ -485,9 +485,8 @@ fn parse_pr_checks_output(
 
 /// Look up the list of required status checks for the PR's base branch.
 ///
-/// Best-effort: returns an empty list when branch protection is absent or
-/// when `gh` returns a non-zero exit code. Callers decide whether to fall
-/// back to "all reported checks are required" via [`CiWaitConfig`].
+/// Obtaining errors refuse. A successful empty contexts array follows
+/// the explicit no-required-checks behavior in [`CiWaitConfig`].
 async fn fetch_required_contexts(pr_number: u64) -> Result<Vec<String>, CiWaitError> {
     fetch_required_contexts_with(
         |args| async move {
@@ -506,10 +505,8 @@ async fn fetch_required_contexts(pr_number: u64) -> Result<Vec<String>, CiWaitEr
 /// The pure 3-step state machine of [`fetch_required_contexts`] with the
 /// `gh` subprocess spawn injected as a closure.
 ///
-/// Each step either yields a trimmed string (success + non-empty output) or
-/// short-circuits the whole function to an empty context list (failed
-/// exit or empty output). This mirrors the "best-effort, fall back on
-/// anything weird" behaviour the caller expects.
+/// Identity steps require nonempty exact text; failed exits and malformed
+/// protection data propagate errors to the wait decision.
 ///
 /// The closure receives the argv (as a `Vec<String>`) for the step and
 /// must return `Result<(success, stdout_bytes), CiWaitError>`.
@@ -532,9 +529,7 @@ where
         ".baseRefName".to_string(),
     ];
     let (base_success, base_stdout) = run(base_args).await?;
-    let Some(base) = parse_gh_single_string_output(base_success, &base_stdout) else {
-        return Ok(Vec::new());
-    };
+    let base = parse_gh_single_string_output(base_success, &base_stdout)?;
 
     // Step 2: resolve the repo slug from `gh`'s current context.
     let repo_args = vec![
@@ -546,53 +541,50 @@ where
         ".nameWithOwner".to_string(),
     ];
     let (repo_success, repo_stdout) = run(repo_args).await?;
-    let Some(repo) = parse_gh_single_string_output(repo_success, &repo_stdout) else {
-        return Ok(Vec::new());
-    };
+    let repo = parse_gh_single_string_output(repo_success, &repo_stdout)?;
 
-    // Step 3: query branch protection. If the endpoint 404s (no protection),
-    // `gh api` exits non-zero; treat as "no required contexts".
+    // Step 3: obtain protection contexts; an unsuccessful query is unproven.
     let protect_args = vec![
         "api".to_string(),
         format!("repos/{repo}/branches/{base}/protection/required_status_checks/contexts"),
     ];
     let (protect_success, protect_stdout) = run(protect_args).await?;
-    Ok(parse_gh_protected_contexts_output(
-        protect_success,
-        &protect_stdout,
-    ))
+    parse_gh_protected_contexts_output(protect_success, &protect_stdout)
 }
 
-/// Parse a single-string `gh` output (e.g., `gh pr view --json baseRefName`).
-///
-/// Returns `Some(trimmed)` when the subprocess succeeded AND stdout is
-/// non-empty after trim. Otherwise returns `None` (empty stdout or failed
-/// exit), which the caller treats as "fallback to no-contexts".
-///
-/// Extracted from [`fetch_required_contexts`] so every branch — success,
-/// failure-exit, success-but-empty — can be exercised with synthetic bytes.
-fn parse_gh_single_string_output(success: bool, stdout: &[u8]) -> Option<String> {
+/// Read a branch or repository identity from `gh` with exactly one framing LF.
+/// Failed or empty queries are absent; undecodable identity is an error and
+/// must not select the no-contexts fallback.
+fn parse_gh_single_string_output(success: bool, stdout: &[u8]) -> Result<String, CiWaitError> {
     if !success {
-        return None;
+        return Err(CiWaitError::Parse("cannot read gh identity".to_string()));
     }
-    let s = String::from_utf8_lossy(stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
+    let text = std::str::from_utf8(stdout)
+        .map_err(|error| CiWaitError::Parse(format!("gh identity is not valid UTF-8: {error}")))?;
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    if text.is_empty() {
+        return Err(CiWaitError::Parse(
+            "cannot read empty gh identity".to_string(),
+        ));
     }
+    Ok(text.to_string())
 }
 
 /// Parse the output of `gh api repos/<repo>/branches/<base>/protection/required_status_checks/contexts`.
 ///
-/// Returns an empty vec on failure exit (404 = no branch protection) or on
-/// malformed JSON (protection disabled mid-request, etc.). Extracted for
-/// testability — the real `gh api` subprocess result is passed through.
-fn parse_gh_protected_contexts_output(success: bool, stdout: &[u8]) -> Vec<String> {
+/// Failed exits and malformed JSON are unproven and refuse. The real
+/// subprocess wrapper and scripted tests use the same reader.
+fn parse_gh_protected_contexts_output(
+    success: bool,
+    stdout: &[u8],
+) -> Result<Vec<String>, CiWaitError> {
     if !success {
-        return Vec::new();
+        return Err(CiWaitError::Parse(
+            "cannot read required protection contexts".into(),
+        ));
     }
-    serde_json::from_slice(stdout).unwrap_or_default()
+    serde_json::from_slice(stdout)
+        .map_err(|error| CiWaitError::Parse(format!("cannot parse protection contexts: {error}")))
 }
 
 #[cfg(test)]
@@ -1244,23 +1236,30 @@ mod tests {
     // --- parse_gh_single_string_output: branches of fetch_required_contexts step 1/2 ---
 
     #[test]
-    fn test_parse_gh_single_string_success_returns_trimmed() {
+    fn test_parse_gh_single_string_success_returns_the_exact_text() {
         assert_eq!(
-            parse_gh_single_string_output(true, b"  main\n"),
-            Some("main".to_string())
+            parse_gh_single_string_output(true, b"main\n").unwrap(),
+            "main".to_string()
         );
+        // Round fourteen on issue 79: the name is looked up as it is, so
+        // whitespace that is part of it stays, and only the newline goes.
+        assert_eq!(
+            parse_gh_single_string_output(true, "release\u{a0}\n".as_bytes()).unwrap(),
+            "release\u{a0}".to_string()
+        );
+        assert!(parse_gh_single_string_output(true, b"caf\xe9\n").is_err());
     }
 
     #[test]
-    fn test_parse_gh_single_string_success_but_empty_returns_none() {
-        assert!(parse_gh_single_string_output(true, b"   \n").is_none());
-        assert!(parse_gh_single_string_output(true, b"").is_none());
+    fn test_parse_gh_single_string_success_but_empty_refuses() {
+        assert!(parse_gh_single_string_output(true, b"\n").is_err());
+        assert!(parse_gh_single_string_output(true, b"").is_err());
     }
 
     #[test]
-    fn test_parse_gh_single_string_failure_returns_none() {
-        // Non-zero exit → None regardless of stdout content.
-        assert!(parse_gh_single_string_output(false, b"main\n").is_none());
+    fn test_parse_gh_single_string_failure_refuses() {
+        // A nonzero exit refuses regardless of stdout content.
+        assert!(parse_gh_single_string_output(false, b"main\n").is_err());
     }
 
     // --- parse_gh_protected_contexts_output: branches of step 3 ---
@@ -1268,7 +1267,7 @@ mod tests {
     #[test]
     fn test_parse_gh_protected_contexts_success_valid_list() {
         let stdout = br#"["ci","lint","test"]"#;
-        let contexts = parse_gh_protected_contexts_output(true, stdout);
+        let contexts = parse_gh_protected_contexts_output(true, stdout).unwrap();
         assert_eq!(
             contexts,
             vec!["ci".to_string(), "lint".to_string(), "test".to_string()]
@@ -1277,22 +1276,22 @@ mod tests {
 
     #[test]
     fn test_parse_gh_protected_contexts_success_empty_array() {
-        let contexts = parse_gh_protected_contexts_output(true, b"[]");
+        let contexts = parse_gh_protected_contexts_output(true, b"[]").unwrap();
         assert!(contexts.is_empty());
     }
 
     #[test]
-    fn test_parse_gh_protected_contexts_failure_exit_returns_empty() {
-        // 404 = no branch protection → empty, not an error.
+    fn test_parse_gh_protected_contexts_failure_exit_refuses() {
+        // An unsuccessful protection query cannot prove an empty policy.
         let contexts = parse_gh_protected_contexts_output(false, b"not found");
-        assert!(contexts.is_empty());
+        assert!(contexts.is_err());
     }
 
     #[test]
-    fn test_parse_gh_protected_contexts_success_malformed_json_returns_empty() {
-        // Protection briefly misconfigured → treat as empty, don't crash.
+    fn test_parse_gh_protected_contexts_success_malformed_json_refuses() {
+        // Malformed protection is unreadable and refuses.
         let contexts = parse_gh_protected_contexts_output(true, b"not json");
-        assert!(contexts.is_empty());
+        assert!(contexts.is_err());
     }
 
     // --- Smoke test for the real subprocess-backed wrapper ---
@@ -1373,6 +1372,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn r15_ci_unreadable_identity_refuses_required_context_lookup() {
+        let runner = scripted_gh_runner(vec![Ok((true, b"caf\xff\n".to_vec()))]);
+        assert!(matches!(
+            fetch_required_contexts_with(runner, 42).await,
+            Err(CiWaitError::Parse(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn test_fetch_required_contexts_all_three_steps_succeed() {
         // PR view → base ref "main"
         // repo view → "org/repo"
@@ -1387,63 +1395,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step1_fails_returns_empty() {
-        // gh pr view fails (exit non-zero) → empty contexts, no further steps.
+    async fn test_fetch_required_contexts_step1_fails_refuses() {
+        // Failed identity lookup refuses before any later step.
         let runner = scripted_gh_runner(vec![Ok((false, b"pr not found".to_vec()))]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step1_empty_output_returns_empty() {
-        // gh pr view succeeds but emits no base branch → empty contexts.
+    async fn test_fetch_required_contexts_step1_empty_output_refuses() {
+        // A successful query without a branch still cannot prove the required contexts.
         let runner = scripted_gh_runner(vec![Ok((true, b"\n".to_vec()))]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step2_fails_returns_empty() {
+    async fn test_fetch_required_contexts_step2_fails_refuses() {
         let runner = scripted_gh_runner(vec![
             Ok((true, b"main\n".to_vec())),
             Ok((false, b"not authed".to_vec())),
         ]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step2_empty_output_returns_empty() {
+    async fn test_fetch_required_contexts_step2_empty_output_refuses() {
         let runner = scripted_gh_runner(vec![
             Ok((true, b"main\n".to_vec())),
             Ok((true, b"   \n".to_vec())),
         ]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step3_fails_returns_empty() {
-        // 404 from gh api (branch protection disabled) → empty contexts,
-        // not an error.
+    async fn test_fetch_required_contexts_step3_fails_refuses() {
+        // An unsuccessful protection query refuses instead of claiming no requirements.
         let runner = scripted_gh_runner(vec![
             Ok((true, b"main\n".to_vec())),
             Ok((true, b"org/repo\n".to_vec())),
             Ok((false, b"HTTP 404".to_vec())),
         ]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fetch_required_contexts_step3_malformed_json_returns_empty() {
+    async fn test_fetch_required_contexts_step3_malformed_json_refuses() {
         let runner = scripted_gh_runner(vec![
             Ok((true, b"main\n".to_vec())),
             Ok((true, b"org/repo\n".to_vec())),
             Ok((true, b"not json at all".to_vec())),
         ]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
-        assert!(result.is_empty());
+        let result = fetch_required_contexts_with(runner, 42).await;
+        assert!(result.is_err());
     }
 
     /// Exercise the "sequence saturation" branch of both scripted helpers —
@@ -1504,16 +1511,15 @@ mod tests {
     #[tokio::test]
     async fn test_scripted_gh_runner_saturates_past_sequence_end() {
         // Only 2 entries in a 3-step function → step 3 gets the saturated
-        // (last entry) value, which is a successful empty-protection
-        // result, producing an empty vec.
+        // (last entry) value, which is invalid protection data and refuses.
         let runner = scripted_gh_runner(vec![
             Ok((true, b"main\n".to_vec())),
             Ok((true, b"org/repo\n".to_vec())),
         ]);
-        let result = fetch_required_contexts_with(runner, 42).await.unwrap();
+        let result = fetch_required_contexts_with(runner, 42).await;
         // Saturation returned `org/repo` as the protection JSON — which is
-        // not valid JSON for a contexts array → empty vec (graceful).
-        assert!(result.is_empty());
+        // not valid JSON for a contexts array, so obtaining the policy refuses.
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1546,5 +1552,18 @@ mod tests {
         let required = vec!["ci".to_string()];
         let outcome = classify_checks(&checks, &required, &cfg);
         assert_eq!(outcome, CiOutcome::NoRequiredChecks);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_ci_config_requires_proven_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(CiWaitConfig::load(dir.path()).is_ok());
+        std::os::unix::fs::symlink("missing", dir.path().join(".codeflow")).unwrap();
+        assert!(CiWaitConfig::load(dir.path()).is_err());
     }
 }

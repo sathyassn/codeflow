@@ -774,7 +774,7 @@ fn epic_close_counts_the_closing_epic_as_the_last_spec_consumer() {
     repo.commit("plan");
     close_epic_with_block(&repo).unwrap();
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
 
@@ -855,7 +855,7 @@ fn spec_state_is_derived_from_its_consumers() {
         "project-management/specs/SPC-001.md",
         &spec("SPC-001", "approved", ""),
     );
-    let graph = || Graph::from_worktree(repo.root());
+    let graph = || Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(
         spec_state(&graph(), "SPC-001"),
         Some(SpecState::NoDeliveringConsumer)
@@ -964,7 +964,7 @@ fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
         if state == "implemented" {
             repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
             repo.commit("consumer complete");
-            let graph = Graph::from_worktree(repo.root());
+            let graph = Graph::from_worktree(repo.root()).unwrap();
             assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
         }
         let before = repo.read(SPEC);
@@ -1077,7 +1077,7 @@ fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
     );
     repo.write(TASK_PATH, &escaped("complete"));
     repo.commit("consumer complete");
-    let graph = Graph::from_worktree(repo.root());
+    let graph = Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
     let reopen = StatusChange {
         reason: Some("regression".into()),
@@ -1110,7 +1110,7 @@ fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
         repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
         repo.write(&path, &consumer("TSK-001", "complete", "SPC-001"));
         repo.commit("ship with a nested legacy record path");
-        let graph = Graph::from_worktree(repo.root());
+        let graph = Graph::from_worktree(repo.root()).unwrap();
         assert_eq!(
             spec_state(&graph, "SPC-001"),
             Some(SpecState::Implemented),
@@ -1912,7 +1912,7 @@ fn an_approved_spec_with_done_consumers_is_healthy_and_real_mismatches_warn() {
     );
     let base = repo.commit("approved spec, consumers done");
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
     let healthy = validate_lifecycle(repo.root());
@@ -1944,7 +1944,7 @@ fn a_spec_without_a_complete_consumer_is_not_implemented() {
     repo.write(EPIC_PATH, &epic("archived", "SPC-001", EPIC_CRITERION));
     repo.write(TASK_PATH, &consumer("TSK-001", "cancelled", "SPC-001"));
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Open)
     );
 }
@@ -3057,14 +3057,17 @@ fn the_single_string_baseline_still_works() {
     );
     let commit = repo.commit("records");
     repo.set_baseline(&commit);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit.clone()]);
+    assert_eq!(
+        recorded_baseline(repo.root()).unwrap(),
+        vec![commit.clone()]
+    );
     assert!(matches!(
         Baseline::load(repo.root()),
         Baseline::Available { .. }
     ));
     assert!(validate_lifecycle(repo.root()).is_clean());
     repo.set_baselines(&[&commit, &commit]);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit]);
+    assert_eq!(recorded_baseline(repo.root()).unwrap(), vec![commit]);
     assert!(validate_lifecycle(repo.root()).is_clean());
 }
 
@@ -3142,4 +3145,327 @@ fn recompletion_preserves_the_anchored_acceptance_even_with_equal_active_block()
             assert!(!verdict.is_clean(), "{fault} must refuse the recompletion");
         }
     }
+}
+
+/// Review finding on issue 79: a task branch whose name is not valid UTF-8
+/// was dropped, so a task with live work on it read as having none.
+#[test]
+fn a_task_branch_that_is_not_utf8_is_active_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = crate::git::repo_with_refs(dir.path(), &[b"refs/heads/task/TSK-001-caf\xe9"]);
+    let record = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        // A target that resolves nowhere, so the tip has not "landed".
+        &task("TSK-001", "todo", CRITERIA, "")
+            .replace("integration_target: main", "integration_target: nowhere"),
+    )
+    .unwrap();
+    assert!(has_active_branch(&repo, &record, &["task/".to_string()]));
+}
+
+/// Issue 79: the graph of a revision is read through a tree that holds a
+/// directory whose name is not valid UTF-8. git2's own walk stopped there
+/// with an error; the record beside it is read and the odd name is no record.
+#[test]
+fn a_revision_graph_is_read_beside_a_directory_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let text: &[u8] = b"---\nid: TSK-003\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: late\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n";
+    let (repo, _) = crate::git::repo_with_tree(
+        dir.path(),
+        &[
+            (b"project-management/tasks/TSK-003.md", text),
+            (b"project-management/tasks\xff/TSK-004.md", text),
+            (b"src/dir\xff/f.rs", b"x"),
+        ],
+    );
+    let graph = Graph::from_revision(&repo, "main").expect("the walk reads the whole tree");
+    assert!(graph.get("TSK-003", RecordKind::Task).is_some());
+    assert!(graph.get("TSK-004", RecordKind::Task).is_none());
+}
+
+/// Issue 79: the paths a range changes keep two names that differ only in an
+/// invalid byte apart, and valid text is unchanged.
+#[test]
+fn changed_paths_keep_a_lookalike_name_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    let second = crate::git::add_commit(
+        &repo,
+        &[(b"caf\xe9", b"1"), ("caf\u{fffd}".as_bytes(), b"2")],
+    );
+    let paths = changed_paths(&repo, &first.to_string(), Some(&second.to_string())).unwrap();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains(&"caf\u{fffd}".to_string()));
+    assert!(paths.contains(&GitName::from_bytes(b"caf\xe9").storage_key()));
+}
+
+#[test]
+fn baseline_entries_keep_exact_config_values() {
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::String("abc\u{a0}".into()),
+    );
+    let value = toml::Value::Table(table);
+    assert_eq!(
+        super::baseline_entries(Some(&value)).unwrap(),
+        ["abc\u{a0}"]
+    );
+}
+
+#[test]
+fn unreadable_baseline_config_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) =
+        crate::git::repo_with_tree(dir.path(), &[(b".codeflow/project.toml", b"#\xff")]);
+    assert!(super::baseline_at(&repo, oid).is_err());
+    assert!(matches!(
+        super::range_baseline(dir.path(), &repo, oid, Some("HEAD")).0,
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn unreadable_checked_out_baseline_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(dir.path().join(".codeflow/project.toml"), b"#\xff").unwrap();
+    assert!(recorded_baseline(dir.path()).is_err());
+    assert!(matches!(Baseline::load(dir.path()), Baseline::Refused(_)));
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::Array(vec![toml::Value::Integer(1)]),
+    );
+    assert!(super::baseline_entries(Some(&toml::Value::Table(table))).is_err());
+}
+
+#[test]
+fn r16_unreadable_worktree_record_refuses_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("project-management/tasks/TSK-001.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"---\nid: TSK-001\n---\n# bad\xff").unwrap();
+    let verdict = validate_lifecycle(dir.path());
+    assert!(
+        !verdict.errors.is_empty(),
+        "unreadable record must not vanish: {verdict:?}"
+    );
+}
+
+#[test]
+fn r16_unreadable_revision_record_refuses_graph_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(
+            b"project-management/specs/SPC-001.md",
+            b"---\nid: SPC-001\nstatus: implemented\n---\n#\xff",
+        )],
+    );
+    assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
+    assert!(super::shipped_in_history(&repo, oid, "SPC-001").is_err());
+}
+#[test]
+fn r17_working_context_distinguishes_no_repository_from_broken_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    git2::Repository::init(dir.path()).unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    assert_eq!(
+        super::super::work_start::default_work_target(dir.path()).unwrap(),
+        None
+    );
+    std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+    assert!(super::working_context(dir.path()).is_err());
+    assert!(super::super::work_start::default_work_target(dir.path()).is_err());
+}
+
+#[test]
+fn r22_baseline_refuses_malformed_repository_but_keeps_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(matches!(Baseline::load(dir.path()), Baseline::NotRecorded));
+    let fixture = Repo::new();
+    fixture.set_baseline(&"1".repeat(40));
+    fs::write(fixture.root().join(".git/config"), "[broken").unwrap();
+    assert!(matches!(
+        Baseline::load(fixture.root()),
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn r22_baseline_refuses_unreadable_graph_but_keeps_missing_object() {
+    let fixture = Repo::new();
+    fixture.write(TASK_PATH, "---\nid: [broken\n---\n");
+    let head = fixture.commit("broken record");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let oid = git2::Oid::from_str(&head).unwrap();
+    assert!(matches!(
+        Baseline::from_entries(&repo, &["1".repeat(40)], Some(oid)),
+        Baseline::Unavailable(_)
+    ));
+    assert!(matches!(
+        Baseline::from_entries(&repo, &[head], Some(oid)),
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn r22_baseline_refuses_corrupt_existing_object() {
+    let fixture = Repo::new();
+    let head = fixture.commit("base");
+    let oid = git2::Oid::from_str(&head).unwrap();
+    let object = fixture
+        .root()
+        .join(".git/objects")
+        .join(&head[..2])
+        .join(&head[2..]);
+    fs::remove_file(&object).unwrap();
+    fs::write(object, b"not a zlib object").unwrap();
+    let repo = Repository::open(fixture.root()).unwrap();
+    assert!(matches!(
+        Baseline::from_entries(&repo, &[head], Some(oid)),
+        Baseline::Refused(_)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn r22_baseline_dangling_project_is_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    assert!(recorded_baseline(dir.path()).unwrap().is_empty());
+    std::os::unix::fs::symlink("missing", dir.path().join(".codeflow/project.toml")).unwrap();
+    assert!(recorded_baseline(dir.path()).is_err());
+}
+
+#[test]
+fn r22_non_utf8_epic_folder_cannot_hide_historical_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let blob = repo.blob(b"---\nid: TSK-001\nstatus: todo\n---\n").unwrap();
+    let mut tasks = repo.treebuilder(None).unwrap();
+    tasks.insert("TSK-001.md", blob, 0o100_644).unwrap();
+    let mut epic = repo.treebuilder(None).unwrap();
+    epic.insert("tasks", tasks.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut epics = repo.treebuilder(None).unwrap();
+    epics
+        .insert(&b"EPC-001-\xff"[..], epic.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut pm = repo.treebuilder(None).unwrap();
+    pm.insert("epics", epics.write().unwrap(), 0o040_000)
+        .unwrap();
+    let mut root = repo.treebuilder(None).unwrap();
+    root.insert("project-management", pm.write().unwrap(), 0o040_000)
+        .unwrap();
+    let tree = repo.find_tree(root.write().unwrap()).unwrap();
+    let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, "odd folder", &tree, &[])
+        .unwrap();
+    assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
+    assert!(shipped_in_history(&repo, oid, "SPC-001").is_err());
+}
+
+#[test]
+fn r22_recorded_baseline_missing_in_unborn_repository_stays_unavailable() {
+    let fixture = Repo::new();
+    fixture.set_baseline(&"1".repeat(40));
+    assert!(
+        matches!(Baseline::load(fixture.root()), Baseline::Unavailable(_)),
+        "{:?}",
+        Baseline::load(fixture.root())
+    );
+}
+
+#[test]
+fn r22_baseline_controls_keep_unborn_and_empty_graph() {
+    let fixture = Repo::new();
+    assert!(matches!(
+        Baseline::load(fixture.root()),
+        Baseline::NotRecorded
+    ));
+    let head = fixture.commit("empty graph");
+    let repo = Repository::open(fixture.root()).unwrap();
+    assert!(Graph::from_revision(&repo, &head)
+        .unwrap()
+        .records
+        .is_empty());
+    assert!(!shipped_in_history(&repo, git2::Oid::from_str(&head).unwrap(), "SPC-001").unwrap());
+    assert!(matches!(
+        Baseline::from_entries(
+            &repo,
+            std::slice::from_ref(&head),
+            Some(git2::Oid::from_str(&head).unwrap())
+        ),
+        Baseline::Available { .. }
+    ));
+}
+
+#[test]
+fn r22_record_path_controls_exclude_non_record_names() {
+    assert!(
+        record_path_text(&GitName::from_bytes(b"project-management/ref\xff"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(record_path_text(&GitName::from_bytes(
+        b"project-management/epics/\xff/tasks/notes.md"
+    ))
+    .unwrap()
+    .is_none());
+    assert_eq!(
+        record_path_text(&GitName::from_text(TASK_PATH)).unwrap(),
+        Some(TASK_PATH)
+    );
+}
+
+#[test]
+fn r22_spec_history_refuses_missing_base_but_keeps_empty_history() {
+    let fixture = Repo::new();
+    let base = fixture.commit("empty history");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let path = "project-management/specs/SPC-001.md";
+    let content = spec("SPC-001", "approved", "");
+    let mut before = Graph::default();
+    before.insert(RecordKind::Spec, path, &content).unwrap();
+    let mut after = Graph::default();
+    after
+        .insert(
+            RecordKind::Spec,
+            path,
+            &format!("{content}\nChanged behavior.\n"),
+        )
+        .unwrap();
+    let (_, absent) = shipped_specs(&repo, &base, &before, &after);
+    assert!(absent.is_empty(), "{absent:?}");
+    let (_, problems) = shipped_specs(&repo, &"1".repeat(40), &before, &after);
+    assert_eq!(
+        problems.len(),
+        1,
+        "missing base must not erase the freeze proof obligation"
+    );
+    assert!(problems[0].1.contains("cannot read the history"));
+}
+
+#[test]
+fn r22_baseline_ancestry_refuses_unreadable_objects_but_keeps_identity() {
+    let fixture = Repo::new();
+    let head = fixture.commit("present");
+    let repo = Repository::open(fixture.root()).unwrap();
+    let head = git2::Oid::from_str(&head).unwrap();
+    assert!(format!("{:?}", contains(&repo, head, head)).contains("true"));
+    let tree = repo.find_commit(head).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    let unrelated = repo
+        .commit(None, &signature, &signature, "unrelated", &tree, &[])
+        .unwrap();
+    assert!(format!("{:?}", contains(&repo, head, unrelated)).contains("false"));
+    let missing = git2::Oid::from_str(&"1".repeat(40)).unwrap();
+    assert!(format!("{:?}", contains(&repo, head, missing)).starts_with("Err("));
 }
