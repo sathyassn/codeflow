@@ -2716,10 +2716,17 @@ fn reopened_judged(
     // its record from a complete one. A task the target changed after the
     // merge-base, which the range does not touch, is not reopened by this
     // range, whatever the target tip holds (R-119, as `records_correction`
-    // judges a correction). Without a merge-base nothing is excluded.
+    // judges a correction). Without a merge-base nothing is excluded; a
+    // merge-base that cannot be read is an error, never none (issue 79).
     let at_anchor = match repo.merge_base(base_oid, oid(head)?) {
         Ok(anchor) => Some(Graph::from_revision(repo, &anchor.to_string())?),
-        Err(_) => None,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "cannot read the merge-base of {base} and {head}: {}",
+                error.message()
+            ))
+        }
     };
     let mut store = super::landing::RecordStore::new(repo);
     let mut unknown = std::collections::BTreeMap::new();

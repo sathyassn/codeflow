@@ -110,7 +110,9 @@ impl RecordView {
             superseded_by: field("superseded_by"),
             integration_target: field("integration_target"),
             role: field("role"),
-            follow_up_of: field("follow_up_of").map(|id| id.trim().to_string()),
+            // Spaces and tabs only (issue 79): another whitespace character
+            // is part of the id, so a lookalike never names a task.
+            follow_up_of: field("follow_up_of").map(|id| id.trim_matches([' ', '\t']).to_string()),
             id,
             path: path.to_string(),
             content: content.to_string(),

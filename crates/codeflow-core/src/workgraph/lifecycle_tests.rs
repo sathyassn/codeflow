@@ -3835,3 +3835,18 @@ fn r22_baseline_ancestry_refuses_unreadable_objects_but_keeps_identity() {
     let missing = git2::Oid::from_str(&"1".repeat(40)).unwrap();
     assert!(format!("{:?}", contains(&repo, head, missing)).starts_with("Err("));
 }
+
+/// Issue 79: `follow_up_of` keeps a whitespace character other than a
+/// space or tab, so a lookalike never names the task it resembles.
+#[test]
+fn follow_up_of_keeps_a_lookalike_apart_from_the_task() {
+    let text =
+        "---\nid: TSK-002\ntitle: Follow up\nstatus: todo\nfollow_up_of: \"TSK-001\u{a0}\"\n---\n";
+    let record = RecordView::parse(
+        RecordKind::Task,
+        "project-management/tasks/TSK-002.md",
+        text,
+    )
+    .unwrap();
+    assert_eq!(record.follow_up_of.as_deref(), Some("TSK-001\u{a0}"));
+}
