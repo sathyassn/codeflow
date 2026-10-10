@@ -431,7 +431,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "6730abc17f92aecc318a725b7f1cfbd0a0242a7793058ed299bb4c6133df29cf",
+      "sha256": "f7413aef03f4779d0ba3eb8de1e9fa24d8e726f1c61a7ad8dce85716efe1cab8",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -641,7 +641,7 @@
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/task-graph.md",
       "ownership": "managed",
-      "sha256": "7f29fd4f8c12d1bd7c4b884f3d6e2bc8c5ce71522a37295631370b58438fc2f2",
+      "sha256": "0c898f7f632509ec565f1f0dad274ad2eccbed7c0b3f9275e121aae29053f060",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/verification-selection.md": {
@@ -1271,7 +1271,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "6730abc17f92aecc318a725b7f1cfbd0a0242a7793058ed299bb4c6133df29cf",
+      "sha256": "f7413aef03f4779d0ba3eb8de1e9fa24d8e726f1c61a7ad8dce85716efe1cab8",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1481,7 +1481,7 @@
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/task-graph.md",
       "ownership": "managed",
-      "sha256": "7f29fd4f8c12d1bd7c4b884f3d6e2bc8c5ce71522a37295631370b58438fc2f2",
+      "sha256": "0c898f7f632509ec565f1f0dad274ad2eccbed7c0b3f9275e121aae29053f060",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/verification-selection.md": {

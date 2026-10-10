@@ -307,7 +307,12 @@ from every version of its record in the target's history, so a later edit
 or deletion there does not undo the landing; before that, a reopen inside
 its own pull request may change them, also when the target already records
 the task. A history that cannot prove the task never landed (a shallow
-clone, for one) refuses the change.
+clone, for one) refuses the change. A completed standalone task has
+no epic amendment, so its criteria wording (a typo, a person's name) is
+corrected by a pull request of planning records only, off its own task
+branch, whose `Task:` line names the task or a follow-up of it: every
+criterion and tag stays, CI prints the delta, the reviewer confirms the
+meaning is unchanged, and the task stays complete (ADR-0080).
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new

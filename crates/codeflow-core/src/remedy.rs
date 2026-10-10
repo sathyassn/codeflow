@@ -274,6 +274,10 @@ catalog! {
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
+    /// A text correction of a completed standalone task's criteria
+    /// (ADR-0080): evidence, not a refusal.
+    CRITERIA_CORRECTION = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` proves only that the correction keeps every criterion and tag of the completed task; a human reviewer confirms that the substance of each changed criterion is unchanged, so the acceptance block still holds for it";
     /// A release-line legacy criteria change, landed before the release
     /// rule and covered by its line's cutoff (SPC-013 R-120).
     RELEASE_LEGACY_CHANGE = Step::Edit(".codeflow/project.toml"),
