@@ -30,7 +30,8 @@ inside the authorized scope are repaired together; other discoveries route
 through `fix now`, `track once` or `drop` under [materiality](materiality.md);
 separately authorized work stacks only where a dependency justifies it. Run
 the tests of the change's dependents and consumers and of the journey the
-change sits in, and verify each same-mechanism sibling repaired with it.
+change sits in, and verify each same-mechanism sibling repaired with it; the
+consumers' checks are the targeted tests "Prove it at every surface" defines.
 
 ### Findings and remedies
 

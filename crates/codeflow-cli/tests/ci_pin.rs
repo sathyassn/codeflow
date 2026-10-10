@@ -1139,8 +1139,18 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
     for event in ["push:", "schedule:", "workflow_dispatch:"] {
         assert!(on.contains(event), "{on}");
     }
+    // TSK-254: one group per pull request cancels a superseded
+    // pull_request_target run; push, schedule and dispatch runs each get a
+    // group of their own run id and are never cancelled, so a registry run
+    // is never replaced by a queued event.
+    assert_eq!(POLICY.matches("concurrency:").count(), 1, "one group");
     assert!(
-        !POLICY.contains("concurrency:"),
+        POLICY.contains(
+            "\nconcurrency:\n  group: ${{ github.event_name == 'pull_request_target' && \
+             format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || \
+             format('{0}-run-{1}', github.workflow, github.run_id) }}\n  \
+             cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}\n\njobs:\n"
+        ),
         "a registry run is never replaced by a queued event"
     );
     assert!(POLICY.contains("\npermissions:\n  contents: read\n"));
@@ -1148,6 +1158,12 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
         !POLICY.contains("secrets."),
         "no secret reaches the enforcing job"
     );
+    assert!(!POLICY.contains(": write"), "the token stays read-only");
+    // The judging run reads the body when it runs, so the newest body is
+    // judged whichever run survives the group; the event's copy is unused.
+    assert!(!POLICY.contains("github.event.pull_request.body"));
+    assert!(POLICY.contains("CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}"));
+    assert!(POLICY.contains("/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\""));
 
     let enforcing = job(POLICY, "commit-lint");
     assert!(enforcing.contains("name: commit standards"));

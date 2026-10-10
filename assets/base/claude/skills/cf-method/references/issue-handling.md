@@ -53,7 +53,8 @@ report -> intake -> cause and class -> sibling sweep -> group by cause
    cause, the class, the sites fixed, the sites deferred with their issues,
    the durable check or why there is none, and the release. A deliberate
    choice to leave a site as it is goes here too, where the next reader of
-   the issue finds it.
+   the issue finds it. Interim guidance is adopter communication; a
+   shortcut kept in code follows the discipline rules' shortcut rule.
 
 ## Critical defects
 

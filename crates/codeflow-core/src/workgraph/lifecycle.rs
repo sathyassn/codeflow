@@ -53,6 +53,8 @@ pub struct RecordView {
     /// A task's `role` frontmatter value (SPC-013 R-120:
     /// `release-integration`), when set.
     pub role: Option<String>,
+    /// A follow-up task's `follow_up_of`: the task it follows up.
+    pub follow_up_of: Option<String>,
     pub body: String,
     pub criteria: CriteriaList,
     /// A spec's `open_questions` frontmatter list (`None` when absent), or
@@ -107,6 +109,7 @@ impl RecordView {
             superseded_by: field("superseded_by"),
             integration_target: field("integration_target"),
             role: field("role"),
+            follow_up_of: field("follow_up_of").map(|id| id.trim().to_string()),
             id,
             path: path.to_string(),
             content: content.to_string(),

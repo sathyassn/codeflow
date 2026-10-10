@@ -89,6 +89,39 @@ Ask every live question in one round. An authenticated operator direction
 that settles a class of question, such as the trust prompt rule below, holds
 until the operator changes it. It never opens a hard gate.
 
+## While a question is open
+
+A question on rung 3 holds only the step it names, and the answer can take
+time. The work that depends on the answer keeps moving on one of two
+interim states, chosen by what reversing it would cost:
+
+- **A working default.** When your recommended answer is reversible,
+  continue the dependent work on it. Label it where it lands (the record,
+  the pull request body or the artifact itself) as a working default pending
+  the operator's answer, and name what reverses it. Fix what is fixable in
+  the item now instead of parking the whole item.
+- **Fail closed.** When the recommended answer is not reversible, or a fact
+  you need cannot be verified yet, hold the conservative state: the one that
+  is safe whichever way the answer falls, such as `no-store` on a shared
+  cache until the client is verified, or an advisory that cannot be scored
+  blocking admission until the operator rules. State what clears it and
+  continue the work that does not depend on it.
+
+Neither interim state takes the operator-owned step. The default lets
+reversible dependent work continue on the recommended answer; the step the
+question names waits for the answer, and the question stays in the one round
+with its options and recommendation. A working default that turns out to
+touch an operator-owned step keeps its label and the question goes back to
+the operator.
+
+When another task, a reviewer or a later session will rely on the interim
+state, record it where that work is tracked: the task record, the epic's
+planning notes for a cross-task choice, or the pull request body of a
+standalone task. The entry carries the choice, its evidence, what reverses or
+clears it, and its status (working default, fail closed, or settled). A line
+in the running report is not enough for a choice someone else builds on. A
+durable architectural decision still gets an ADR.
+
 ## Trust prompts
 
 When a harness asks whether to trust a folder, answer it yourself for a path
@@ -124,6 +157,9 @@ to repair.
 |---|---|---|
 | A fact the repository, tools or authoritative sources can answer | 1: find it; never ask the operator to do discovery | `cf-plan` clarity gate |
 | A reversible choice inside the accepted outcome | 1: choose from evidence and disclose it | `AGENTS.md` Planning and tracking; CodeFlow ADR-0038 |
+| An operator question is open and your recommended answer is reversible | 1: continue the dependent work on it as a working default, labelled where it lands with what reverses it; the step the question names waits | While a question is open above |
+| A fact cannot be verified yet, or the pending answer is not reversible | 1: hold the conservative state, say what clears it, and continue the work that does not depend on it | While a question is open above; `AGENTS.md` Navigate blockers |
+| A working default or interim state that another task, a reviewer or a later session relies on | 2: record it where that work is tracked, with its evidence, its reversal and its status | While a question is open above |
 | The brief asks for a change | 1: run to the readiness report | `workflow-lifecycle.md` Establish the route |
 | The brief asks only for a plan, research or a review | 1: stop at that stage's output | `workflow-lifecycle.md` Establish the route |
 | The next safe step inside the brief, the first time or again with the same tuple | 1: take it without asking; progress goes in the running report, never in an offer | this reference; `AGENTS.md` Act within legitimate intent |

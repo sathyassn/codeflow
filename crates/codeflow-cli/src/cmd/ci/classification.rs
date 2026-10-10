@@ -562,6 +562,7 @@ pub(super) fn dispatch(
                 own_branch,
                 level,
                 branch,
+                base: range.base,
                 head: range.head,
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
@@ -706,6 +707,7 @@ struct Anchor<'a> {
     /// The branch under judgement and the head its records are read at:
     /// CI judges a pull request head from a base checkout.
     branch: &'a str,
+    base: &'a str,
     head: &'a str,
 }
 
@@ -747,6 +749,25 @@ fn tracked(
             "a task PR may add only its own standalone task record".into(),
             "put the other records in the epic amendment",
         );
+    }
+    // A range of planning records only that corrects a completed
+    // standalone task, named by the Task line or followed up by the task
+    // it names in any status, starts no work, so there is nothing to admit
+    // (ADR-0080). Its own branch keeps the own-branch preflight.
+    if !anchor.own_branch
+        && codeflow_core::workgraph::acceptance::records_correction(
+            root,
+            anchor.base,
+            head,
+            task_id,
+            files,
+        )
+        .unwrap_or(false)
+    {
+        println!(
+            "codeflow ci: this range of planning records only corrects the records of a completed standalone task that {task_id} names or follows up, and starts no work, so the anchored preflight does not apply (ADR-0080)"
+        );
+        return;
     }
     // The record at the head first: a standalone record is on its branch,
     // not in a base checkout.
