@@ -1843,6 +1843,38 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:markdown-ascii-space",
     ),
+    // Reads rendered Markdown table rows; the approving revisions are read from ASCII-padded cells.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviewed_revisions",
+        "lines",
+        1,
+        "framing:reviewed-revision-lines",
+    ),
+    // Rendered Markdown table cells allow explicit ASCII space/tab/CR/LF padding, as review_names_revision reads them.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviewed_revisions",
+        "trim_matches",
+        1,
+        "grammar:markdown-ascii-space",
+    ),
+    // Reads rendered Markdown table rows for an approving verdict cell.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviews_record_none",
+        "lines",
+        1,
+        "framing:reviews-none-lines",
+    ),
+    // Rendered Markdown table cells allow explicit ASCII space/tab/CR/LF padding, as review_names_revision reads them.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviews_record_none",
+        "trim_matches",
+        1,
+        "grammar:markdown-ascii-space",
+    ),
     // Rejects whitespace-only rendered Markdown/HTML. The original body remains unchanged.
     (
         "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
@@ -5555,6 +5587,16 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "reviewed-record-lines",
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "reviewed_part",
+    ),
+    (
+        "reviewed-revision-lines",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviewed_revisions",
+    ),
+    (
+        "reviews-none-lines",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "reviews_record_none",
     ),
     (
         "scaffold-pr-template-headings-records",

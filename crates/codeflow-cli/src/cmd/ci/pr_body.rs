@@ -405,14 +405,17 @@ pub(crate) fn reviewed_revisions(body: &str, heading: &str) -> Vec<String> {
     };
     let mut revisions = Vec::new();
     for line in rendered_text(section.content(), false, false).lines() {
+        // The row grammar `review_names_revision` reads (issue 79): ASCII
+        // space, tab, CR and LF pad a cell, and the verdict's first word
+        // ends at a space or tab.
         let cells: Vec<_> = line
             .split('|')
-            .map(str::trim)
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
             .filter(|cell| !cell.is_empty())
             .collect();
         if cells.len() < 2
             || !cells.last().is_some_and(|verdict| {
-                verdict.split_whitespace().next().is_some_and(|word| {
+                verdict.split([' ', '\t']).next().is_some_and(|word| {
                     matches!(word.to_ascii_lowercase().as_str(), "approved" | "approve")
                 })
             })
@@ -463,6 +466,15 @@ mod review_revision_tests {
             assert!(reviewed_revisions(&body, "Reviews").is_empty(), "{body}");
         }
     }
+
+    /// Issue 79: a cell is padded only by ASCII space, tab, CR and LF, as
+    /// `review_names_revision` reads it, so a verdict padded with another
+    /// whitespace character is not an approval.
+    #[test]
+    fn a_verdict_padded_with_other_whitespace_is_no_approval() {
+        let body = "## Reviews\n| peer | 316c7e8f7 | \u{a0}approved |\n";
+        assert!(reviewed_revisions(body, "Reviews").is_empty(), "{body}");
+    }
 }
 
 /// The Reviews section records no review: it names no commit and has no
@@ -478,8 +490,9 @@ pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
         .split(|c: char| !c.is_ascii_hexdigit())
         .any(|token| token.len() >= 7 && token.bytes().any(|b| b.is_ascii_digit()));
     let approves = text.lines().any(|line| {
+        // The row grammar `review_names_revision` reads (issue 79).
         line.split('|')
-            .map(str::trim)
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
             .rfind(|cell| !cell.is_empty())
             .is_some_and(|verdict| {
                 matches!(
