@@ -23,6 +23,12 @@ github-release = "announce"
 # The authority plan creates the empty draft after its exact-source checks.
 # cargo-dist uploads every artifact to that draft and alone makes it public.
 create-release = false
+# release.yml carries hand-added job timeouts (TSK-254): dist 0.32 can bound
+# a step but not a job, and its integrity check would otherwise fail `dist
+# plan` on the edit. `dist generate` leaves the file alone while this is set.
+# scripts/gate-parity.py fails if any release.yml job loses its timeout, so a
+# regeneration with this key removed cannot drop them unnoticed.
+allow-dirty = ["ci"]
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
