@@ -398,6 +398,58 @@ fn a_rewritten_task_target_cannot_borrow_another_lines_authority() {
     );
 }
 
+/// Review round two: a standalone task whose record already declared one
+/// target cannot borrow the block of a line forked before the record
+/// existed by merging that line in and rewriting the target; a retarget is
+/// not a new arrival, so neither design nor design approval reads it.
+#[test]
+fn a_retargeted_standalone_task_cannot_borrow_an_older_lines_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, CATALOG, &fixture_data::fixture().to_string());
+    git(root, &["init", "-q", "-b", TARGET]);
+    git(root, &["config", "user.email", "fixture@example.test"]);
+    git(root, &["config", "user.name", "Fixture"]);
+    commit_all(root, "test: seed the target");
+    git(root, &["checkout", "-q", "-b", "release/old"]);
+    write(root, SELECTION, &authority().to_string());
+    commit_all(root, "test: an older line carries a block");
+    git(root, &["checkout", "-q", TARGET]);
+    write(
+        root,
+        "project-management/tasks/TSK-900.md",
+        &task("TSK-900", ""),
+    );
+    commit_all(root, "test: the task declares its target");
+    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
+    git(root, &["merge", "-q", "--no-edit", "release/old"]);
+    let record = std::fs::read_to_string(root.join("project-management/tasks/TSK-900.md"))
+        .unwrap()
+        .replace(
+            "integration_target: integration/fixture",
+            "integration_target: release/old",
+        );
+    write(root, "project-management/tasks/TSK-900.md", &record);
+    commit_all(root, "test: rewrite the declared target");
+    let project = Project { dir };
+    let refusal = "an earlier version of task TSK-900 declares integration target \
+                   'integration/fixture', not 'release/old'";
+    let open = project.resolve(DESIGN, 1);
+    assert_eq!(open["participants"], json!([]), "{open}");
+    let reasons = open["open"][0]["reasons"].to_string();
+    assert!(
+        reasons.contains("project design authority not applied") && reasons.contains(refusal),
+        "{reasons}"
+    );
+    let approval = project.resolve(&["--duty", "design-approval", "--task", "TSK-900"], 0);
+    assert_eq!(approval["participants"], json!([]), "{approval}");
+    assert_eq!(approval["open"][0]["participant"], "design-approval");
+    assert!(
+        approval["open"][0]["reasons"].to_string().contains(refusal),
+        "{approval}"
+    );
+}
+
 /// A standalone task, whose record arrives with its own pull request, reads
 /// the block committed on the target it declares, as `codeflow work start`
 /// accepts it; a block that arrives only with the task branch, or a branch

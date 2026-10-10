@@ -346,11 +346,13 @@ labelled. The block confers authority only as committed at the merge-base
 of `HEAD` and the task's integration target, read on the task's own branch
 after the planning anchor rule that `codeflow work start` applies: a task
 already on the anchor must declare the same target there, and a standalone
-record arriving with its own pull request is judged at the head. A
-working-tree copy, a task-branch commit, a rewritten target and a caller
-string confer none. The block names only lines the catalog's design owner seat
-already lists, in that seat's family, each with an active version
-designated or fully qualified for the seat, so repository content still
+record arriving with its own pull request is judged at the head only while
+no version of it in the head's history declares another target, since a
+retarget is not a new arrival. A working-tree copy, a task-branch commit, a
+rewritten target and a caller string confer none. The block names only
+lines the catalog's design owner seat already lists, in that seat's
+family, each with an active version designated or fully qualified for the
+seat, so repository content still
 cannot add a selector, command, family, harness or designation. A
 same-family approval never fills the independent review, and a standing
 review adds a named, labelled participant, so an extra family never votes

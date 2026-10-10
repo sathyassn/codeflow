@@ -1584,7 +1584,9 @@ pub struct AnchoredFile {
 ///
 /// # Errors
 /// Rejects malformed ids, an uncommitted task, an unstable or unresolved
-/// target, a non-regular file and a file over 1 MiB.
+/// target, a standalone record the target does not carry whose history
+/// declares another target or cannot be read, a non-regular file and a
+/// file over 1 MiB.
 pub fn anchored_project_file(
     repo_root: &Path,
     task_id: &str,
@@ -1635,6 +1637,12 @@ pub fn anchored_project_file(
         .find_commit(base)
         .and_then(|commit| commit.tree())
         .map_err(|e| e.to_string())?;
+    // Accepted as a standalone record new at the head: the target does not
+    // carry it, so only a record that never declared another target counts.
+    // A retarget is not a new arrival.
+    if tree.get_path(Path::new(&record)).is_err() {
+        refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
+    }
     let content = match tree.get_path(Path::new(path)) {
         Err(_) => None,
         Ok(entry) => {
@@ -1653,6 +1661,63 @@ pub fn anchored_project_file(
         base: base.to_string(),
         content,
     })
+}
+
+/// Refuse when any version of `record` that `head` reaches declares an
+/// integration target other than `target`. One walk reads that one path per
+/// commit and parses each distinct version once. A history that cannot be
+/// read in full (a shallow clone, a graft or replace ref, an unreadable
+/// commit or version) refuses.
+fn refuse_retarget(
+    repo: &Repository,
+    head: Oid,
+    record: &str,
+    task_id: &str,
+    target: &str,
+) -> Result<(), String> {
+    let unreadable =
+        |reason: String| format!("the history of task {task_id} cannot be read: {reason}");
+    if repo.is_shallow() {
+        return Err(unreadable("this clone is shallow".into()));
+    }
+    if let Some(overlay) = super::release_line::history_overlay(repo).map_err(unreadable)? {
+        return Err(unreadable(format!("this clone has {overlay}")));
+    }
+    let mut walk = repo.revwalk().map_err(|e| unreadable(e.to_string()))?;
+    walk.push(head).map_err(|e| unreadable(e.to_string()))?;
+    let mut seen = std::collections::HashSet::new();
+    for commit in walk {
+        let commit = commit
+            .and_then(|id| repo.find_commit(id))
+            .map_err(|e| unreadable(e.to_string()))?;
+        let tree = commit.tree().map_err(|e| unreadable(e.to_string()))?;
+        let entry = match tree.get_path(Path::new(record)) {
+            Ok(entry) => entry,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => continue,
+            Err(e) => return Err(unreadable(e.to_string())),
+        };
+        if !seen.insert(entry.id()) {
+            continue;
+        }
+        let version = repo
+            .find_blob(entry.id())
+            .map_err(|e| e.to_string())
+            .and_then(|blob| String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string()))
+            .and_then(|text| parse_record(&text, RecordKind::Task))
+            .map_err(|e| unreadable(format!("{record} at {}: {e}", commit.id())))?;
+        if let Some(declared) = version
+            .integration_target
+            .as_deref()
+            .filter(|declared| !declared.trim().is_empty())
+            .filter(|declared| logical_target(declared) != logical_target(target))
+        {
+            return Err(format!(
+                "an earlier version of task {task_id} declares integration target \
+                 '{declared}', not '{target}'; a rewritten target confers no authority"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The commit the check reads: `head` when a caller names one (CI's pull
