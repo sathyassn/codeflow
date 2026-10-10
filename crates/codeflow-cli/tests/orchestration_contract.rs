@@ -935,17 +935,17 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "the orchestrator skill must expose independent discovery in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-one health checks"),
+        normalize_whitespace(&capabilities).contains("twenty-two health checks"),
         "CAP-008 must count the policy-source doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (21): hooks, claude, codex, grok, startup-files, config"),
+        readme.contains("Health checks (22): hooks, claude, codex, grok, startup-files, config"),
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("21 checks: hooks, claude, codex, grok, startup-files, config"),
+        architecture.contains("22 checks: hooks, claude, codex, grok, startup-files, config"),
         "architecture must list the grok doctor check"
     );
     let cap_010 = normalize_whitespace(&read(

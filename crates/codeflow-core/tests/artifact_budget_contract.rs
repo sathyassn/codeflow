@@ -354,6 +354,12 @@ fn referenced_doctrine_keeps_every_moved_duty() {
                 "mandatory lifecycle route",
                 "cf-method/references/workflow-lifecycle.md",
             ),
+            // TSK-255 put the neighbour rule in the build step; TSK-263 moved
+            // it here, where every tier reads it, and the build step points.
+            (
+                "neighbour before adding",
+                "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent",
+            ),
         ],
     );
     assert_contains_all(
@@ -385,15 +391,112 @@ fn referenced_doctrine_keeps_every_moved_duty() {
             ),
         ],
     );
-    // TSK-255: the build step, which every task reads, asks for the
-    // neighbour before adding, and the written rule over a precedent.
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[(
-            "neighbour before adding",
-            "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent",
+            "neighbour rule pointer",
+            "Apply the neighbour rule in the discipline rules' \"Write only what earns its keep\".",
         )],
     );
+}
+
+/// TSK-263: the engineering rigour wording. The every-tier rule file is the
+/// one home of each rule; the skills point at it.
+const RIGOUR_PINS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "assets/base/rules/workflow-discipline.md",
+        &[
+            (
+                "lifetime question",
+                "Ask whether the shape stays sound for the accepted lifetime: cost, security, storage and resource use, reliability, durability, robustness and maintainability;",
+            ),
+            (
+                "greenfield boundary",
+                "when nothing exists yet, choose the boundary the repository will have to live with.",
+            ),
+            (
+                "shortcut rule",
+                "is allowed only when a code comment at the site names the shortcut and its tracked follow-up, and that follow-up is tracked once with its revisit event",
+            ),
+            (
+                "shortcut never weakens a security control",
+                "A shortcut never weakens a guard, hook, gate, policy, credential path, input validation or other security control; those stay under \"Match the gate\".",
+            ),
+            (
+                "scenario classes",
+                "Scenario coverage comes first: happy paths, boundaries, malformed and hostile input, timeouts, partial failure, authorization, concurrency and idempotency, recovery, platform differences where the code meets the operating system, and regression;",
+            ),
+            (
+                "reachable class named",
+                "a class the change can reach and leaves untested is named with its reason where the PR records what was not tested.",
+            ),
+            (
+                "consumer checks",
+                "a target with no `narrow` globs is always selected, one with globs when they match, and a target is owed only in a mode it defines",
+            ),
+            (
+                "heavier-mode check",
+                "a check that exists only in a heavier mode is run in that mode or named as not run.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/coverage.md",
+        &[
+            (
+                "classes stated once",
+                "The scenario classes are stated once in the workflow discipline rules, \"Prove it at every surface\".",
+            ),
+            (
+                "derivation with probe advice",
+                "for a library, parser, state machine or CLI, one failure the contract does not state, unless a regression test already encodes it.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            (
+                "unmarked shortcut",
+                "an unmarked shortcut (the discipline rules' shortcut rule)",
+            ),
+            (
+                "fit clause",
+                "an unexplained departure from an existing mechanism is `axis: standards`.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[(
+            "not tested clause",
+            "On a code range, `Not tested:` names the consumer checks left unrun and a reachable scenario class left untested, with the reason;",
+        )],
+    ),
+];
+
+#[test]
+fn engineering_rigour_rules_keep_one_home() {
+    let root = repo_root();
+    for (path, clauses) in RIGOUR_PINS {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    // The moved sentences have no second copy in the files that point.
+    for (path, needle) in [
+        (
+            "assets/base/agents/skills/cf-develop/SKILL.md",
+            "find the neighbour that already does the job",
+        ),
+        (
+            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/coverage.md",
+            "malformed input",
+        ),
+    ] {
+        assert!(
+            !normalized(&read_text(&root.join(path))).contains(needle),
+            "{path} restates a rule the discipline rules own: {needle}"
+        );
+    }
 }
 
 #[test]

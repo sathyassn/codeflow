@@ -143,6 +143,21 @@ and reversibility, not size alone. If missing context would materially
 change the design, clarify it; otherwise use established safe practices
 and the least speculative reversible choice.
 
+Ask whether the shape stays sound for the accepted lifetime: cost, security,
+storage and resource use, reliability, durability, robustness and
+maintainability; a patch that covers only the requested case is under-design
+when that lifetime needs more. Before adding a helper, type, flag, check,
+key or module, find the neighbour that already does the job and extend it or
+say why not; the written rule wins over a precedent; when nothing exists
+yet, choose the boundary the repository will have to live with. A hotfix or
+other deliberate shortcut, a known-worse shape chosen over the durable one,
+is allowed only when a code comment at the site names the shortcut and its
+tracked follow-up, and that follow-up is tracked once with its revisit event
+in the deferral homes "Find broadly" names; an unmarked shortcut is
+under-design and a reviewer refuses it. A shortcut never weakens a guard,
+hook, gate, policy, credential path, input validation or other security
+control; those stay under "Match the gate".
+
 ## Prove it at every surface
 
 **Prove it at every surface.** Verify the work where it runs: unit,
@@ -155,10 +170,22 @@ infrastructure, and runtime boundaries; a mocked changed boundary is
 disclosed, never called whole-flow proof. Concurrent UI runs isolate
 browser state, endpoints, test data, and artifacts and verify teardown
 without taking over the operator's browser or active desktop. Tests ship in
-the same change. Select property or generative tests, targeted mutation
-testing, or project-owned architecture fitness checks only from the
-orchestrator's evidence triggers; `none selected` is valid, and normal
-scenario coverage remains mandatory. Builders run targeted tests and
+the same change. Scenario coverage comes first: happy paths, boundaries,
+malformed and hostile input, timeouts, partial failure, authorization,
+concurrency and idempotency, recovery, platform differences where the code
+meets the operating system, and regression; a class the change can reach and
+leaves untested is named with its reason where the PR records what was not
+tested. Targeted tests are the checks that read what changed: the tests of
+the changed path's consumers, the test-config targets the change selects (a
+target with no `narrow` globs is always selected, one with globs when they
+match, and a target is owed only in a mode it defines), and every derived
+artifact (a generated registry, a rendered template, a portal figure) that
+reads a changed file; a check that exists only in a heavier mode is run in
+that mode or named as not run. Select property or generative tests, targeted
+mutation testing, or project-owned architecture fitness checks only from the
+orchestrator's evidence triggers; `none selected` is valid and is written
+nowhere per task, and normal scenario coverage remains mandatory. Builders
+run targeted tests and
 `codeflow test --mode quick` as they go and cite them with the revision and
 the command; the full gate runs once on each exact landing candidate, one
 at a time, and a standalone PR is its own candidate. Adopted push and CI

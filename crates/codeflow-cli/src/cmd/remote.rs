@@ -3,6 +3,7 @@
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
+use codeflow_core::hooks::policy_schema;
 use codeflow_core::registry;
 use codeflow_core::remote::{provider_for, ProtectionPlan};
 
@@ -37,8 +38,9 @@ pub enum RemoteCommand {
 ///
 /// # Errors
 ///
-/// Returns an error only for environment problems (no repo, gh missing for
-/// the github provider outside dry-run).
+/// Returns an error for environment problems (no repo, gh missing for the
+/// github provider outside dry-run) and when the policy file fails the
+/// schema, before anything is planned or sent.
 pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     let RemoteCommand::Protect { provider, dry_run } = &args.command;
 
@@ -48,6 +50,18 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if !policy_path.is_file() {
         eprintln!(
             "note: {} not found — using charter defaults (main, master)",
+            policy_path.display()
+        );
+    }
+    // The plan reads the file leniently, so a list the schema refuses (a blank
+    // `git.required_checks` entry) would silently fall back to defaults.
+    // Refuse it here, before any request to the host.
+    if let Err(errors) = policy_schema::validate_policy(&root) {
+        for error in &errors {
+            eprintln!("remote protect: policy error: {error}");
+        }
+        anyhow::bail!(
+            "{} is invalid, so no rules were planned or applied (see `codeflow policy explain`)",
             policy_path.display()
         );
     }
