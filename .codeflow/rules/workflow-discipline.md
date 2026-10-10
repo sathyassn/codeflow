@@ -60,7 +60,15 @@ recommendation. At the standard and full tiers,
 to settle yourself and what to escalate. Before applying a change that newly departs from the
 approved contract, scope, authority, or risk boundary, stop and surface it
 in that form first; the dependent action waits while authorized independent
-work continues. A lost seat or route gets bounded recovery, then an explicit
+work continues. While an operator question or an unverifiable fact is open,
+the work that depends on it moves on an interim state: a working default
+when an operator answer is pending and your recommended answer is
+reversible, labelled where it lands with what reverses it; the conservative
+state when the answer is not reversible or the fact cannot be verified yet,
+stated with what clears it. Neither takes the operator-owned step, and an
+interim state that others rely on is recorded where the work is tracked (at
+the standard and full tiers, `autonomy.md` "While a question is open" has
+the rule). A lost seat or route gets bounded recovery, then an explicit
 limitation, never a silent solo run. A cancellation stops the work and
 preserves approvals, evidence and dirty state for disposition; a resume
 rechecks the facts that may have changed. Honor a red check. An unfinished CI job is missing
@@ -194,7 +202,13 @@ with native, recheckable provenance: verified launch, native identity, a
 verified return, and legible failure; never from a relay or an ungraded,
 unrechecked inferred completion. Never infer a model, effort, route,
 completion, test, coverage, UI result, qualification, availability, cost or
-saving; transport or background completion is not the peer result.
+saving; transport or background completion is not the peer result. How far
+a change reaches is a claim like any other: before stating it, list every
+consumer of the changed thing (each base, branch, environment or reader that
+loads it) and check each; a file that each branch reads from its own base
+has one consumer per branch, and each copy is checked. A rule or record that
+encodes the operator's guidance quotes or closely paraphrases it; a
+restriction the operator never gave is an invented fact.
 
 ## Match the gate
 
@@ -318,6 +332,11 @@ a discoverable fact yourself from the repository, tools and primary
 sources; never ask the operator to do your discovery. Resolve a local
 reversible implementation detail from repository evidence and disclose the
 choice.
+
+Operator feedback that arrives during work is a request like any other: it
+attaches to its unit, takes its place in the plan's order, is acted on after
+a read of the whole aspect it touches, and closes with evidence. Do not edit
+on the spot in reply to a remark; take it through the plan.
 
 Every assignment, research, planning and review with no edits included,
 attaches to an existing task or a new one before substantive work starts;
