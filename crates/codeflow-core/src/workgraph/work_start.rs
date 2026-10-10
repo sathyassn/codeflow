@@ -1958,7 +1958,9 @@ fn refuse_retarget(
         if let Some(declared) = version
             .integration_target
             .as_deref()
-            .filter(|declared| !declared.trim().is_empty())
+            // Spaces and tabs only (issue 79): a value of another whitespace
+            // character is a declared target, never an unset one.
+            .filter(|declared| !declared.trim_matches([' ', '\t']).is_empty())
             .filter(|declared| logical_target(declared) != logical_target(target))
         {
             return Err(format!(

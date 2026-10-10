@@ -516,3 +516,41 @@ fn a_standalone_task_reads_only_its_targets_committed_block() {
         );
     }
 }
+
+/// Issue 79: an earlier version that declared a target of a whitespace
+/// character other than a space or tab declared a target, so rewriting it
+/// is a retarget: the refusal holds and no block is read.
+#[test]
+fn a_target_of_other_whitespace_is_a_declared_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, CATALOG, &fixture_data::fixture().to_string());
+    write(root, SELECTION, &authority().to_string());
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "fixture@example.test"]);
+    git(root, &["config", "user.name", "Fixture"]);
+    commit_all(root, "test: seed the target with a block");
+    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
+    let record = |target: &str| {
+        task("TSK-900", "").replace(
+            "integration_target: integration/fixture",
+            &format!("integration_target: {target}"),
+        )
+    };
+    write(
+        root,
+        "project-management/tasks/TSK-900.md",
+        &record("\"\u{3000}\""),
+    );
+    commit_all(root, "test: a record declaring an ideographic space");
+    write(root, "project-management/tasks/TSK-900.md", &record("main"));
+    commit_all(root, "test: rewrite the declared target");
+    let project = Project { dir };
+    let open = project.resolve(DESIGN, 1);
+    assert_eq!(open["participants"], json!([]), "{open}");
+    let reasons = open["open"][0]["reasons"].to_string();
+    assert!(
+        reasons.contains("an earlier version of task TSK-900 declares integration target"),
+        "{reasons}"
+    );
+}
