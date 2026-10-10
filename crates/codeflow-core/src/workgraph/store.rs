@@ -139,7 +139,9 @@ impl MarkdownStore {
         let root = root.into();
         let base = crate::workgraph::allocate::repository_root(&root);
         // Only tests need this branch; production roots are always project-management.
-        if base == root.as_path() && !base.exists() {
+        // Created only when proven absent (issue 79): a root that cannot be
+        // read is an error, never a missing one.
+        if base == root.as_path() && crate::absence::metadata_optional(base)?.is_none() {
             fs::create_dir_all(base)?;
         }
         let tree = crate::contained::Tree::open(base)?;

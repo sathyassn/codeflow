@@ -251,7 +251,7 @@ pub fn parse_item(path: &str, content: &str) -> Result<Item, String> {
 /// The directory or one of its entries cannot be read (issue 79: never read
 /// as no items).
 pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let Ok(dir) = contained_path(root, FEEDBACK_DIR) else {
+    let Ok(dir) = contain(root, FEEDBACK_DIR)? else {
         return Ok(Vec::new());
     };
     if crate::absence::symlink_metadata_optional(&dir)?.is_none() {
@@ -322,21 +322,34 @@ pub fn is_feedback_path(path: &str) -> bool {
 ///
 /// The reason the path is refused.
 pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    contain(root, rel).map_err(|error| error.to_string())?
+}
+
+/// [`contained_path`] with a part that cannot be read kept apart from a
+/// refused path: the outer error is the read failure (issue 79: never read
+/// as no link), the inner one the refusal.
+fn contain(root: &Path, rel: &str) -> std::io::Result<Result<PathBuf, String>> {
     let mut path = root.to_path_buf();
     for component in Path::new(rel).components() {
         match component {
             Component::Normal(name) => path.push(name),
             Component::CurDir => continue,
-            _ => return Err(format!("{rel} is not a path inside the repository")),
+            _ => return Ok(Err(format!("{rel} is not a path inside the repository"))),
         }
-        if crate::contained::is_link_at(&path) {
-            return Err(format!(
+        let linked = crate::contained::is_link_at(&path).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot read {}: {error}", relative(root, &path)),
+            )
+        })?;
+        if linked {
+            return Ok(Err(format!(
                 "{} is a symbolic link or junction; feedback files are never read or written through one",
                 relative(root, &path)
-            ));
+            )));
         }
     }
-    Ok(path)
+    Ok(Ok(path))
 }
 
 /// Write the index generated from the items: refused when the index or a
@@ -461,7 +474,9 @@ pub fn placement_resolves(root: &Path, reference: &str) -> Result<bool, String> 
         return Ok(false);
     }
     // A path that escapes the repository or crosses a link is refused.
-    let Ok(target) = contained_path(root, path) else {
+    let Ok(target) = contain(root, path)
+        .map_err(|error| format!("cannot read {path} to resolve it: {error}"))?
+    else {
         return Ok(false);
     };
     crate::absence::symlink_metadata_optional(&target)
@@ -951,13 +966,15 @@ pub fn lint(root: &Path) -> Lint {
     for item in &loaded.items {
         lint_item(root, item, &topics, &ids, &mut uids, &mut lint.errors);
     }
-    let written =
-        contained_path(root, INDEX_PATH).and_then(|path| match std::fs::symlink_metadata(&path) {
-            Ok(_) => std::fs::read_to_string(path)
+    let written = contained_path(root, INDEX_PATH).and_then(|path| {
+        // Only a proven-absent index is no index (issue 79).
+        match crate::absence::symlink_metadata_optional(&path).map_err(|e| e.to_string())? {
+            Some(_) => std::fs::read_to_string(path)
                 .map(Some)
                 .map_err(|e| e.to_string()),
-            Err(_) => Ok(None),
-        });
+            None => Ok(None),
+        }
+    });
     if let Err(reason) = &written {
         lint.warnings.push(crate::remedy::Finding::new(
             format!("{INDEX_PATH} cannot be checked: {reason}"),
@@ -1227,6 +1244,34 @@ pub fn open_summary(root: &Path) -> Option<(usize, Vec<(String, usize)>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 79: a part of a feedback path that cannot be read refuses,
+    /// never reads as a part that is no link, and the item list names it
+    /// instead of reading it as no items.
+    #[cfg(unix)]
+    #[test]
+    fn a_part_that_cannot_be_read_is_never_read_as_no_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("project-management");
+        std::fs::create_dir_all(locked.join("feedback")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // A user the mode does not stop (root) cannot exercise this.
+        let denied = std::fs::symlink_metadata(locked.join("feedback"))
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied);
+        let path = contained_path(dir.path(), "project-management/feedback/FB-001.md");
+        let items = item_files(dir.path());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !denied {
+            return;
+        }
+        let error = path.unwrap_err();
+        assert!(
+            error.contains("cannot read project-management/feedback"),
+            "{error}"
+        );
+        assert!(items.is_err(), "{items:?}");
+    }
 
     const TEMPLATE: &str = include_str!("../../../assets/base/pm/feedback.md.tmpl");
 
