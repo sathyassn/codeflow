@@ -121,7 +121,7 @@ fn body(root: &Path, task: &str) -> String {
         .unwrap()
         .replace("Task: `TSK-NNN | none: <reason>`", &format!("Task: {task}"))
         .replace(
-            "Task: `TSK-NNN | EPC-NNN | <unit name>`",
+            "Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`",
             &format!("Task: {task}"),
         )
         .replace(

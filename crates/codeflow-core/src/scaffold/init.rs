@@ -317,7 +317,7 @@ fn init_writes(
     let codex_dir = root.join(".codex");
     if codex_dir.join("hooks.json").exists() || codex_dir.join("config.toml").exists() {
         report.notes.push(
-            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort — production launch also passes --sandbox danger-full-access; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
+            "codex harness present (.codex/): the Claude Code permission preset does not apply to codex; .codex/config.toml enables the guarded profile, public network, live search, approval_policy=never (always-approve), and high default effort, with shell startup files read only; a builder seat launches with -c default_permissions=\"cf-builder\", a reviewer with no --sandbox flag; in-session guards activate after one-time `/hooks` trust inside interactive codex, which `codeflow doctor --check codex` confirms (git hooks + CI enforce regardless)"
                 .to_string(),
         );
     }

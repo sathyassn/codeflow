@@ -15,11 +15,11 @@ only) leaves out Testing; a light range (only Markdown under `docs/` or
 `project-management/`, outside every contract surface) needs only Summary
 and Changes. The rest appear only when their condition holds.
 
-Every PR names its work on a `Task:` line: `TSK-NNN` or `EPC-NNN` where
-durable tracking is active (judged from the tracking state, not the
-installed tier), and a non-empty unit name where it is not. It names its
-task, or its epic for the breakdown PR and the PR to main. A missing, empty,
-malformed, repeated or mismatched `Task:` line is refused.
+Every PR names its work on one `Task:` line. With durable tracking (judged
+from tracking state, not tier): `TSK-NNN` for a task, `EPC-NNN` for the
+breakdown PR and the PR to main, and every epic it changes for a planning
+amendment, `Task: EPC-001, EPC-002`. Without it, a non-empty unit name.
+A missing, empty, malformed, repeated or mismatched line is refused.
 
 | Section | When | Content |
 |---|---|---|
@@ -45,11 +45,9 @@ malformed, repeated or mismatched `Task:` line is refused.
   `Not tested:` line; never drop evidence to shorten a body.
 - `codeflow ci` also warns, and never blocks, when the body passes 1,000
   words as a reader sees it: HTML comments are left out, fenced blocks and
-  tables count. The warning names the count and the three largest `##`
-  sections. A body grows when each review round is appended. Write it to its
-  final state instead: replace it on each update, link records instead of
-  copying them, keep one results block at the head and one review row per
-  reviewer.
+  tables count. A body grows when each review round is appended. Write it to
+  its final state instead: replace it on each update, keep one results block
+  at the head and one review row per reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope as `whole unit at <reviewed>` (the acceptance block's commit, in
   full) and the verdict, nothing more; the verdict and its native

@@ -218,6 +218,9 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_READING", Runs),
     ("DOCTOR_ROOT_CHECKOUT", Runs),
     ("DOCTOR_TEST_CONFIG", Runs),
+    ("DOCTOR_STARTUP_PRESETS", Runs),
+    ("DOCTOR_STARTUP_SOURCED", Runs),
+    ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
@@ -3012,6 +3015,59 @@ fn clears_doctor_root_checkout() {
             git(root, &["switch", "-q", "main"]);
             let step = printed_command(printed, "DOCTOR_ROOT_CHECKOUT", None);
             run_printed(root, &step, &[], &[]);
+        },
+    );
+}
+
+/// `doctor --check startup-files` with `home` as the home and neither
+/// startup directory moved (TSK-242).
+fn startup_doctor(root: &Path, home: &Path) -> String {
+    text(
+        &command(exe().to_str().unwrap(), root)
+            .env("HOME", home)
+            .env_remove("ZDOTDIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .args(["doctor", "--check", "startup-files"])
+            .output()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn clears_doctor_startup_presets() {
+    // Settings without the shell startup class (TSK-242): `codeflow update`
+    // writes them back.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::remove_file(root.join(".claude/settings.json")).unwrap();
+    prove(
+        "DOCTOR_STARTUP_PRESETS",
+        "the harness sandboxes do not deny every shell startup write",
+        || startup_doctor(&root, home.path()),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_STARTUP_PRESETS", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_startup_sourced() {
+    // A startup file that sources a file outside the class (TSK-242): the
+    // operator inlines what the named line sources.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let home = tempfile::tempdir().unwrap();
+    write(home.path(), "extra.sh", "alias ll='ls -l'\n");
+    write(home.path(), ".zshrc", "source ~/extra.sh\n");
+    prove(
+        "DOCTOR_STARTUP_SOURCED",
+        "sourced files outside the protected class",
+        || startup_doctor(&root, home.path()),
+        |printed| {
+            assert!(printed.contains("in ~/.zshrc, moves"), "{printed}");
+            write(home.path(), ".zshrc", "alias ll='ls -l'\n");
         },
     );
 }

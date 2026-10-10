@@ -476,7 +476,7 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
     }
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        if unsafe { libc::kill(-pid, 0) } != 0 {
+        if unsafe { libc::kill(-pid, 0) } != 0 || process_group_holds_only_exited_members(pid)? {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(50));
@@ -504,7 +504,7 @@ fn terminate_qualified_process(pid: u32, instance_id: Uuid, profile_dir: &Path) 
     }
     let kill_deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < kill_deadline {
-        if process_group_is_absent(pid)? {
+        if process_group_is_absent(pid)? || process_group_holds_only_exited_members(pid)? {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(25));
@@ -524,7 +524,7 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
         PresentError::BrowserUnavailable("browser PID is outside the platform range".to_string())
     })?;
     if !output.status.success() || output.stdout.is_empty() {
-        if !process_group_is_absent(pid_i32)? {
+        if !leaderless_group_exits(|| process_group_is_absent(pid_i32))? {
             return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
                 "browser process group exists without its verifiable leader",
             )));
@@ -568,22 +568,28 @@ fn process_identity_from_proc(
     instance_id: Uuid,
     profile_dir: &Path,
 ) -> Result<ProcessIdentity> {
+    // The leader is gone: its group must finish exiting too, or the check
+    // refuses the members it cannot prove.
+    let leader_gone = || {
+        let pid = i32::try_from(pid).map_err(|_| {
+            PresentError::BrowserUnavailable(
+                "browser PID is outside the platform range".to_string(),
+            )
+        })?;
+        if !leaderless_group_exits(|| {
+            Ok(process_group_is_absent(pid)?
+                || linux_group_holds_only_exited_members(proc_root, pid)?)
+        })? {
+            return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
+                "browser process group exists without its verifiable leader",
+            )));
+        }
+        Ok(ProcessIdentity::Absent)
+    };
     let command_path = proc_root.join(pid.to_string()).join("cmdline");
     let metadata = match fs::symlink_metadata(&command_path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let pid = i32::try_from(pid).map_err(|_| {
-                PresentError::BrowserUnavailable(
-                    "browser PID is outside the platform range".to_string(),
-                )
-            })?;
-            if !process_group_is_absent(pid)? {
-                return Err(PresentError::BrowserUnavailable(orphan_recovery_message(
-                    "browser process group exists without its verifiable leader",
-                )));
-            }
-            return Ok(ProcessIdentity::Absent);
-        }
+        Err(error) if proc_entry_exited(&error) => return leader_gone(),
         Err(error) => return Err(PresentError::io(command_path, error)),
     };
     if !metadata.is_file() || metadata.len() > 64 * 1024 {
@@ -591,17 +597,26 @@ fn process_identity_from_proc(
             "browser identity output exceeded its bound".to_string(),
         ));
     }
-    let file = std::fs::OpenOptions::new()
+    // The leader can exit between any two of these reads; a read that finds
+    // it gone takes the same path as an entry that was already gone.
+    let file = match std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(&command_path)
-        .map_err(|error| PresentError::io(&command_path, error))?;
+    {
+        Ok(file) => file,
+        Err(error) if proc_entry_exited(&error) => return leader_gone(),
+        Err(error) => return Err(PresentError::io(&command_path, error)),
+    };
     let mut bytes = Vec::with_capacity(
         usize::try_from(metadata.len()).expect("64-KiB process command bound fits usize"),
     );
     let mut bounded = std::io::Read::take(file, 64 * 1024 + 1);
-    std::io::Read::read_to_end(&mut bounded, &mut bytes)
-        .map_err(|error| PresentError::io(&command_path, error))?;
+    match std::io::Read::read_to_end(&mut bounded, &mut bytes) {
+        Ok(_) => {}
+        Err(error) if proc_entry_exited(&error) => return leader_gone(),
+        Err(error) => return Err(PresentError::io(&command_path, error)),
+    }
     if bytes.len() > 64 * 1024 {
         return Err(PresentError::BrowserUnavailable(
             "browser identity output exceeded its bound".to_string(),
@@ -626,6 +641,122 @@ fn process_group_is_absent(pid: i32) -> Result<bool> {
         Ok(false)
     } else {
         Err(PresentError::io("browser process group probe", error))
+    }
+}
+
+/// How long a process group whose recorded leader is gone may take to
+/// finish exiting. A closed browser's helper processes exit after its main
+/// process, so the group can outlive the leader by a moment.
+#[cfg(unix)]
+const LEADERLESS_GROUP_EXIT_WAIT: Duration = Duration::from_secs(2);
+
+/// Whether a process group whose leader is gone finishes exiting within
+/// [`LEADERLESS_GROUP_EXIT_WAIT`], polling `has_exited`. A group that still
+/// holds a live member after the wait, or one that cannot be read, has not
+/// exited, and the caller refuses it.
+#[cfg(unix)]
+fn leaderless_group_exits(mut has_exited: impl FnMut() -> Result<bool>) -> Result<bool> {
+    let deadline = Instant::now() + LEADERLESS_GROUP_EXIT_WAIT;
+    loop {
+        if has_exited()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Whether every remaining member of process group `pgid` has exited and only
+/// waits to be reaped. Only Linux can tell, from `/proc`; elsewhere a member
+/// that answers a signal probe counts as running.
+#[cfg(unix)]
+#[cfg_attr(target_os = "macos", allow(clippy::unnecessary_wraps))]
+fn process_group_holds_only_exited_members(pgid: i32) -> Result<bool> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        linux_group_holds_only_exited_members(Path::new("/proc"), pgid)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = pgid;
+        Ok(false)
+    }
+}
+
+/// Whether `/proc` shows at least one member of process group `pgid` and
+/// every member it shows has exited: state `Z` (exited, not yet reaped) or
+/// `X` (being removed). An exited process runs nothing and is never
+/// signalled. Any member still running, or any process whose state cannot be
+/// read, means the group has not been shown to have exited.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_group_holds_only_exited_members(proc_root: &Path, pgid: i32) -> Result<bool> {
+    let mut examined = 0_usize;
+    let mut exited_members = 0_usize;
+    for entry in fs::read_dir(proc_root).map_err(|error| PresentError::io(proc_root, error))? {
+        let entry = entry.map_err(|error| PresentError::io(proc_root, error))?;
+        if entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .is_none()
+        {
+            continue;
+        }
+        examined += 1;
+        if examined > 65_536 {
+            return Ok(false);
+        }
+        let mut stat = Vec::new();
+        let read = fs::File::open(entry.path().join("stat")).and_then(|file| {
+            std::io::Read::read_to_end(&mut std::io::Read::take(file, 4096 + 1), &mut stat)
+        });
+        match read {
+            Ok(_) => {}
+            Err(error) if proc_entry_exited(&error) => continue,
+            Err(_) => return Ok(false),
+        }
+        if stat.len() > 4096 {
+            return Ok(false);
+        }
+        let Some((group, state)) = linux_stat_group_and_state(&stat) else {
+            return Ok(false);
+        };
+        if group != pgid {
+            continue;
+        }
+        if !matches!(state, b'Z' | b'X') {
+            return Ok(false);
+        }
+        exited_members += 1;
+    }
+    Ok(exited_members > 0)
+}
+
+/// Whether a `/proc/<pid>` read failed because the process is gone: its entry
+/// no longer exists (`ENOENT`), or it was reaped while the file was open
+/// (`ESRCH`). Any other failure, such as a permission error, proves nothing
+/// about the process and stays an error.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn proc_entry_exited(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
+/// The process group and state letter in one `/proc/<pid>/stat` line. The
+/// command name in parentheses may hold spaces and parentheses, so the
+/// fields are read after its last closing parenthesis.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn linux_stat_group_and_state(stat: &[u8]) -> Option<(i32, u8)> {
+    let close = stat.iter().rposition(|byte| *byte == b')')?;
+    let rest = std::str::from_utf8(stat.get(close + 1..)?).ok()?;
+    let mut fields = rest.split_ascii_whitespace();
+    let state = fields.next()?;
+    let _parent = fields.next()?;
+    let group = fields.next()?.parse().ok()?;
+    match state.as_bytes() {
+        [letter] => Some((group, *letter)),
+        _ => None,
     }
 }
 
@@ -719,7 +850,7 @@ fn owned_process_candidates_from_proc(
         let process_dir = entry.path();
         let metadata = match fs::metadata(&process_dir) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if proc_entry_exited(&error) => continue,
             Err(error) => return Err(PresentError::io(&process_dir, error)),
         };
         if metadata.uid() != current_uid {
@@ -735,7 +866,7 @@ fn owned_process_candidates_from_proc(
         // never taken for unrelated.
         let file = match fs::File::open(&cmdline) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if proc_entry_exited(&error) => continue,
             Err(error) => return Err(PresentError::io(&cmdline, error)),
         };
         let scan_limit = PROCESS_COMMAND_LINE_SCAN_BOUND
@@ -747,7 +878,7 @@ fn owned_process_candidates_from_proc(
             profile_dir,
         ) {
             Ok(scan) => scan,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if proc_entry_exited(&error) => continue,
             Err(error) => return Err(PresentError::io(&cmdline, error)),
         };
         if scan.length > PROCESS_COMMAND_LINE_SCAN_BOUND {
@@ -1903,6 +2034,243 @@ mod tests {
         unsafe { libc::kill(-pid_i32, libc::SIGKILL) };
         assert!(termination.is_err());
         assert!(group_remained);
+    }
+
+    /// The state letter of a process in `/proc/<pid>/stat`, read for a test.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn test_process_state(pid: u32) -> Option<u8> {
+        let stat = fs::read(format!("/proc/{pid}/stat")).ok()?;
+        linux_stat_group_and_state(&stat).map(|(_, state)| state)
+    }
+
+    /// Waits until a child that this test has not reaped is a zombie.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn wait_for_zombie(pid: u32) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while test_process_state(pid) != Some(b'Z') {
+            assert!(Instant::now() < deadline, "process {pid} did not exit");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A child that joins the process group `group`, with no I/O.
+    #[cfg(unix)]
+    fn group_member(group: i32, script: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+
+        crate::platform::restricted_command("/bin/sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(group)
+            .spawn()
+            .unwrap()
+    }
+
+    /// A process group leader that runs until its stdin closes, carrying
+    /// `arguments`.
+    #[cfg(unix)]
+    fn group_leader(arguments: &[String]) -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+
+        crate::platform::restricted_command("/bin/sh")
+            .args(["-c", "read value || true", "cf-present-browser"])
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_stat_line_yields_its_group_and_state_after_the_command_name() {
+        assert_eq!(
+            linux_stat_group_and_state(b"42 (sleep) Z 1 40 40 0 -1 4194560"),
+            Some((40, b'Z'))
+        );
+        assert_eq!(
+            linux_stat_group_and_state(b"42 (a) R 7 (b) S 1 41 41 0"),
+            Some((41, b'S'))
+        );
+        assert_eq!(linux_stat_group_and_state(b"42 (sleep) Z 1"), None);
+        assert_eq!(linux_stat_group_and_state(b"42 sleep Z 1 40"), None);
+        assert_eq!(linux_stat_group_and_state(b"42 (x) ZZ 1 40 40"), None);
+    }
+
+    /// A process can exit between the checks of one `/proc` entry. A read
+    /// of its open `cmdline` after it is reaped fails with `ESRCH`, and a
+    /// fresh open fails with `ENOENT`; both count as gone, while a permission
+    /// error does not.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_proc_read_that_races_with_exit_counts_as_gone() {
+        let mut child = crate::platform::restricted_command("/bin/sh")
+            .args(["-c", "read value || true"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let path = PathBuf::from(format!("/proc/{}/cmdline", child.id()));
+        let mut open = fs::File::open(&path).unwrap();
+        drop(child.stdin.take());
+        child.wait().unwrap();
+
+        let mut bytes = Vec::new();
+        let read = std::io::Read::read_to_end(&mut open, &mut bytes).unwrap_err();
+        assert!(proc_entry_exited(&read), "{read:?}");
+        let reopened = fs::File::open(&path).unwrap_err();
+        assert!(proc_entry_exited(&reopened), "{reopened:?}");
+        assert!(!proc_entry_exited(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
+    }
+
+    /// The `/proc` scan proves an exited group only from readable members
+    /// that have all exited; anything else keeps the refusal.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_group_scan_proves_exit_only_from_exited_members() {
+        fn proc_root(entries: &[(&str, &[u8])]) -> tempfile::TempDir {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir(root.path().join("self")).unwrap();
+            for (pid, stat) in entries {
+                let dir = root.path().join(pid);
+                fs::create_dir(&dir).unwrap();
+                fs::write(dir.join("stat"), stat).unwrap();
+            }
+            root
+        }
+        let other: (&str, &[u8]) = ("7", b"7 (bash) S 1 7 7 0");
+        let zombie: (&str, &[u8]) = ("41", b"41 (sleep) Z 1 40 40 0");
+        let dying: (&str, &[u8]) = ("42", b"42 (chrome) X 1 40 40 0");
+        let running: (&str, &[u8]) = ("43", b"43 (chrome (gpu)) R 1 40 40 0");
+
+        let exited = proc_root(&[other, zombie, dying]);
+        assert!(linux_group_holds_only_exited_members(exited.path(), 40).unwrap());
+        let live = proc_root(&[other, zombie, running]);
+        assert!(!linux_group_holds_only_exited_members(live.path(), 40).unwrap());
+        let unseen = proc_root(&[other]);
+        assert!(!linux_group_holds_only_exited_members(unseen.path(), 40).unwrap());
+        let malformed = proc_root(&[zombie, ("44", b"44 chrome")]);
+        assert!(!linux_group_holds_only_exited_members(malformed.path(), 40).unwrap());
+        let oversize = vec![b'x'; 4097];
+        let too_long = proc_root(&[zombie, ("45", &oversize)]);
+        assert!(!linux_group_holds_only_exited_members(too_long.path(), 40).unwrap());
+        let unreadable = proc_root(&[zombie]);
+        fs::create_dir(unreadable.path().join("46")).unwrap();
+        fs::create_dir(unreadable.path().join("46/stat")).unwrap();
+        assert!(!linux_group_holds_only_exited_members(unreadable.path(), 40).unwrap());
+        let vanished = proc_root(&[zombie]);
+        fs::create_dir(vanished.path().join("47")).unwrap();
+        assert!(linux_group_holds_only_exited_members(vanished.path(), 40).unwrap());
+    }
+
+    /// The browser's leader has exited and been reaped, and another member of
+    /// its group has exited but is not reaped yet, as when the browser was
+    /// just closed or its zombies wait on a parent that never reaps. The
+    /// group still answers `kill(-pgid, 0)`, yet runs nothing: the browser
+    /// has exited. While a live member remains, the check still refuses.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_leaderless_group_of_exited_members_is_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("browser-profile");
+        let instance = Uuid::new_v4();
+        let mut leader = group_leader(&[]);
+        let pid = leader.id();
+        let group = i32::try_from(pid).unwrap();
+        let mut exited = group_member(group, "exit 0");
+        let mut live = group_member(group, "exec sleep 30");
+        wait_for_zombie(exited.id());
+        drop(leader.stdin.take());
+        leader.wait().unwrap();
+
+        let refused = process_identity(pid, instance, &profile).unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("browser process group exists without its verifiable leader"),
+            "{refused}"
+        );
+
+        live.kill().unwrap();
+        live.wait().unwrap();
+        assert!(!process_group_is_absent(group).unwrap());
+        assert_eq!(
+            process_identity(pid, instance, &profile).unwrap(),
+            ProcessIdentity::Absent
+        );
+        exited.wait().unwrap();
+    }
+
+    /// The browser's leader has exited and been reaped while a member of its
+    /// group is still finishing. The check waits for it, within its bound,
+    /// and then reports the browser absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_leaderless_group_that_empties_within_the_wait_is_absent() {
+        #[cfg(target_os = "macos")]
+        let _process_group_test_lease = PROCESS_GROUP_TEST_LEASE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(target_os = "macos")]
+        let _process_group_test_file_lease = acquire_process_group_test_file_lease();
+
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("browser-profile");
+        let instance = Uuid::new_v4();
+        let mut leader = group_leader(&[]);
+        let pid = leader.id();
+        let group = i32::try_from(pid).unwrap();
+        let mut member = group_member(group, "sleep 0.5");
+        let reaper = thread::spawn(move || member.wait().unwrap());
+        drop(leader.stdin.take());
+        leader.wait().unwrap();
+        assert!(!process_group_is_absent(group).unwrap());
+
+        assert_eq!(
+            process_identity(pid, instance, &profile).unwrap(),
+            ProcessIdentity::Absent
+        );
+        assert!(reaper.join().unwrap().success());
+    }
+
+    /// Closing an owned browser: SIGTERM ends the group, and a member that
+    /// has exited stays unreaped. The group is gone, so cleanup succeeds at
+    /// once instead of refusing a group without its leader.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_cleanup_treats_a_group_of_exited_members_as_gone() {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().join("browser-profile");
+        fs::create_dir(&profile).unwrap();
+        let instance = Uuid::new_v4();
+        let mut leader = group_leader(&[
+            format!("--user-data-dir={}", profile.display()),
+            format!("--cf-present-instance={instance}"),
+        ]);
+        let stdin = leader.stdin.take();
+        let pid = leader.id();
+        let group = i32::try_from(pid).unwrap();
+        let mut exited = group_member(group, "exit 0");
+        wait_for_zombie(exited.id());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while process_identity(pid, instance, &profile).unwrap() != ProcessIdentity::Owned {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let reaper = thread::spawn(move || leader.wait().unwrap());
+
+        let started = Instant::now();
+        terminate_qualified_process(pid, instance, &profile).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(!reaper.join().unwrap().success());
+        drop(stdin);
+        exited.wait().unwrap();
     }
 
     #[cfg(windows)]
