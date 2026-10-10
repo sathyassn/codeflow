@@ -822,18 +822,21 @@ fn plan_link_rewrites(
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
     // OS text rule (issue 79): the name is a file system location, so its
-    // exact bytes are used. The contained walk addresses a name as text, so
-    // a name that is not UTF-8 is left out (it is rewritten by no one, never
-    // by a lookalike).
+    // exact bytes are kept. The contained walk addresses a name as text, so a
+    // tracked name that is not UTF-8 refuses the renumber before any write:
+    // skipping it could report success with a link left on the old id.
     let files: BTreeSet<crate::git::GitName> =
         crate::git::name::parse_nul_list(&git.run_bytes(&args)?)
             .into_iter()
             .collect();
     let mut planned = Vec::new();
     for file in &files {
-        let Ok(rel) = file.rule_text() else {
-            continue;
-        };
+        let rel = file.rule_text().map_err(|_| {
+            IdsError::Invalid(format!(
+                "cannot rewrite links in {}: its name is not UTF-8, so the contained walk cannot address it; rename the tracked file, then retry",
+                file.display()
+            ))
+        })?;
         if skip.contains(&rel) {
             continue;
         }
@@ -1576,5 +1579,27 @@ mod r22_tests {
         assert!(plan_link_rewrites(&git, &tree, &from, &to, &[])
             .unwrap()
             .is_empty());
+    }
+
+    /// A tracked name that is not UTF-8 refuses the renumber before any
+    /// write instead of keeping a link on the old id. The name comes from the
+    /// index, so the test runs where the file system refuses it (APFS).
+    #[test]
+    fn r22_link_rewrite_refuses_a_tracked_name_that_is_not_utf8() {
+        let (dir, repo, commit) = repository(b"docs/caf\xe9.md", b"see TSK-001");
+        let mut index = repo.index().unwrap();
+        index
+            .read_tree(&repo.find_commit(commit).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        let from = RegId::parse("TSK-001").unwrap();
+        let to = RegId::parse("TSK-002").unwrap();
+        let git = Git::new(dir.path());
+        let tree = crate::contained::Tree::open(dir.path()).unwrap();
+        let Err(error) = plan_link_rewrites(&git, &tree, &from, &to, &[]) else {
+            panic!("a tracked name that is not UTF-8 was left out of the renumber");
+        };
+        assert!(error.to_string().contains(r"docs/caf\xe9.md"), "{error}");
+        assert!(error.to_string().contains("not UTF-8"), "{error}");
     }
 }
