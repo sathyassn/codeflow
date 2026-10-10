@@ -645,6 +645,67 @@ fn clears_acceptance_binding() {
     );
 }
 
+/// Issue 121: a completed task's Reviews section must approve the commit its
+/// block binds. A shortened sha with a verdict that carries more words is
+/// the house style, and does not count; the printed row does.
+#[test]
+fn clears_review_row_binding() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    commit(root, "x.txt", "feat: add x");
+    let acceptance = review_head(root);
+    let reviewed = rev(root, "HEAD");
+    let out = codeflow(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            &acceptance,
+        ],
+    );
+    assert!(out.contains("todo -> complete"), "{out}");
+    commit_all(root, "chore: complete the work");
+    let body = hosted.dir.path().join("review-row.md");
+    let house = format!(
+        "| Reviewer | whole unit at `{}` | approved, no findings |",
+        &reviewed[..9]
+    );
+    let table = format!("| Seat | Scope | Verdict |\n|---|---|---|\n{house}");
+    std::fs::write(&body, BODY.replace("None: pending review.", &table)).unwrap();
+    let body = body.to_str().unwrap().to_string();
+    prove(
+        "REVIEW_ROW_BINDING",
+        "has no row approving it",
+        || hosted.ci("task/TSK-001-work", &["--pr-body-file", &body]),
+        |printed| {
+            // The remedy shows one passing row; write it as printed.
+            let row = printed
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .find(|span| span.starts_with("| reviewer | whole unit at "))
+                .unwrap_or_else(|| panic!("no example row in:\n{printed}"));
+            assert_eq!(
+                row,
+                format!("| reviewer | whole unit at {reviewed} | approved |")
+            );
+            assert!(printed.contains("do not count"), "{printed}");
+            assert_eq!(
+                printed_command(printed, "REVIEW_ROW_BINDING", None),
+                "codeflow ci"
+            );
+            let fixed = std::fs::read_to_string(&body).unwrap().replace(&house, row);
+            std::fs::write(&body, fixed).unwrap();
+        },
+    );
+}
+
 /// An epic acceptance block for AC-1 reviewing `reviewed`, written beside
 /// the project; returns its path.
 fn epic_block(root: &Path, reviewed: &str, ac1: &str) -> String {

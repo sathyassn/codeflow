@@ -164,7 +164,9 @@ Example, from CodeFlow's `assets/base/agents/skills/cf-editorial-review/referenc
 
 Write identifiers, commands and paths exactly, in code format. Expand an
 acronym once, where it first appears. Use one term for one thing throughout.
-Write numbers as digits with their units.
+When one word names several things in the project, such as `versioning` for
+an API and for a map, qualify it at every use. Write numbers as digits with
+their units.
 
 Example, from CodeFlow's `assets/base/rules/workflow-discipline.md`:
 

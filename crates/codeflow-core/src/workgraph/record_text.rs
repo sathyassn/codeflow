@@ -52,6 +52,18 @@ impl Criterion {
         text.starts_with(tag) || closing.ends_with(tag)
     }
 
+    /// What a text correction of a completed criterion keeps (ADR-0080):
+    /// every tag the parser reads and the listed or checkbox form.
+    #[must_use]
+    pub fn tags(&self) -> CriterionTags {
+        CriterionTags {
+            journey: self.is_journey(),
+            after_release: self.is_after_release(),
+            serves: self.serves(),
+            checkbox: self.checkbox.is_some(),
+        }
+    }
+
     /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
@@ -64,6 +76,19 @@ impl Criterion {
         (parts.next().is_none() && is_criterion_id(criterion))
             .then(|| (epic.to_string(), criterion.to_string()))
     }
+}
+
+/// The tags of one criterion ([`Criterion::tags`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CriterionTags {
+    /// `(journey)` opens or closes the criterion.
+    pub journey: bool,
+    /// `(after release)` opens or closes the criterion.
+    pub after_release: bool,
+    /// The epic criterion named by `(serves EPC-NNN AC-m)`.
+    pub serves: Option<(String, String)>,
+    /// The legacy checkbox form, ticked or not.
+    pub checkbox: bool,
 }
 
 /// The parsed `## Acceptance Criteria` section.

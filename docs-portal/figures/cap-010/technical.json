@@ -33,7 +33,7 @@
         "derive": "the discovery sentence",
         "check": {
           "kind": "contains",
-          "text": "from the same immutable brief and\nrepository scope, and neither sees"
+          "text": "from the same immutable brief, whose\nscope is where each starts, and neither sees"
         },
         "value": true
       },

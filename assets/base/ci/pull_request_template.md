@@ -50,6 +50,8 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
+     Not tested: on a code range, the consumer checks left unrun and a
+     reachable scenario class left untested, with the reason.
      Missing required checks keep the PR draft. Docs or planning only: the
      section is optional; when kept, say so and name the doc checks run.
      Scripts, hook settings, shipped templates and agent instructions are
@@ -67,8 +69,9 @@ Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 
 ## Reviews
 
-<!-- One row per current review: reviewer (human or tool), scope (commit
-     range), verdict. Findings live in the linked record. A row is review
+<!-- One row per current review: reviewer (human or tool), scope
+     (`whole unit at <reviewed>`, the acceptance block's commit in full),
+     verdict. Findings live in the linked record. A row is review
      provenance, not authorship attribution. "None: reason" if unreviewed. -->
 
 | Reviewer | Scope | Verdict |

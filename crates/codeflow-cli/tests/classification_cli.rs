@@ -131,7 +131,7 @@ fn ci_into(root: &Path, base: &str, branch: &str, pr_body: &str) -> (i32, String
             "--branch",
             branch,
             "--pr-body",
-            pr_body,
+            &with_reviews(root, "HEAD", pr_body),
         ])
         .current_dir(root)
         .output()
@@ -1099,4 +1099,44 @@ fn a_cancelled_only_epic_criterion_closes_only_on_a_bound_own_block() {
         &ci(root, "plan/close", &body("Task: EPC-001")),
         "bound own block",
     );
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
+}
+
+/// `body` with a Reviews section approving each bound commit at `rev`,
+/// unless it already has one or nothing is bound.
+fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
+    let rows = review_rows(root, rev, "");
+    if rows.is_empty() || body.contains("## Reviews") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
+    }
 }

@@ -1961,7 +1961,10 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
 /// pull request's own task) is printed as its delta while no completion of
 /// it has landed; once one has, or when that cannot be told, it is refused,
 /// since a landed task's criteria change only through a planning amendment
-/// that names its epic. Any other change is refused. A predecessor's record
+/// that names its epic. The text correction of each task in `correctable`
+/// (ADR-0080), a completed standalone task, is printed as its delta when it
+/// keeps the criteria set and every tag, and refused otherwise. Any other
+/// change is refused. A predecessor's record
 /// that is its record at the reviewed head this branch stacks on, byte for
 /// byte (`stacked`, SPC-013 R-42, issue #69), changed in that predecessor's
 /// own reviewed pull request, which judges it: it is printed as a note,
@@ -1972,6 +1975,7 @@ pub fn frozen_criteria(
     target: &Graph,
     changed_paths: &[String],
     exempt: &std::collections::BTreeSet<String>,
+    correctable: &std::collections::BTreeSet<String>,
     stacked: &[StackedHead],
     judging: &mut Judging<'_>,
 ) -> Vec<Finding> {
@@ -2028,6 +2032,17 @@ pub fn frozen_criteria(
             }
         };
         if authority.is_some_and(same) {
+            // The signature leaves out the checkbox mark, so ticking a box
+            // is no change; a correction still keeps the form and the
+            // structure, so adding or removing the mark, or a list item
+            // that is no criterion, with the text unchanged is refused,
+            // never passed over.
+            if correctable.contains(&record.id) {
+                found.extend(
+                    correction_structure_problem(record, authority)
+                        .map(|problem| correction_refusal(record, &problem)),
+                );
+            }
             continue;
         }
         if own {
@@ -2062,11 +2077,72 @@ pub fn frozen_criteria(
                     ),
                 )),
             }
+        } else if correctable.contains(&record.id) && authority.is_some() {
+            found.push(correction_finding(record, authority));
         } else if authority.is_some() {
-            found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or by a planning amendment that names its epic (ADR-0078)", record.id)));
+            found.push(finding(FROZEN_RULE, frozen_message(record)));
         }
     }
     found
+}
+
+/// The frozen finding's message for a task whose criteria another task's
+/// range changed.
+fn frozen_message(record: &RecordView) -> String {
+    format!("{} changes its criteria on this branch; another task's criteria change by its own PR or by a planning amendment that names its epic (ADR-0078)", record.id)
+}
+
+/// The refusal of a correction (ADR-0080) that is more than a text change.
+fn correction_refusal(record: &RecordView, problem: &str) -> Finding {
+    finding(
+        FROZEN_RULE,
+        format!("{}; a correction of a completed standalone task changes only the text of its existing criteria, and {problem}", frozen_message(record)),
+    )
+}
+
+/// What a correction (ADR-0080) may not change in `record` against the
+/// `authority` criteria: the criteria set, the tags and form, and the
+/// section's structure.
+fn correction_structure_problem(
+    record: &RecordView,
+    authority: Option<&RecordView>,
+) -> Option<String> {
+    let old = authority
+        .map(|r| r.criteria.items.as_slice())
+        .unwrap_or_default();
+    let errors = authority
+        .map(|r| r.criteria.errors.as_slice())
+        .unwrap_or_default();
+    correction_problem(old, &record.criteria.items).or_else(|| {
+        (record.criteria.errors.as_slice() != errors).then(|| {
+            format!(
+                "this changes the structure of its criteria section ({})",
+                record.criteria.errors.join("; ")
+            )
+        })
+    })
+}
+
+/// The finding of a correction (ADR-0080) of `record`'s criteria against
+/// the `authority` criteria: the delta as a note when only the text
+/// changed, a refusal when anything else did.
+fn correction_finding(record: &RecordView, authority: Option<&RecordView>) -> Finding {
+    if let Some(problem) = correction_structure_problem(record, authority) {
+        return correction_refusal(record, &problem);
+    }
+    let old = authority
+        .map(|r| r.criteria.items.as_slice())
+        .unwrap_or_default();
+    Finding {
+        epic_record: None,
+        rule: FROZEN_RULE,
+        message: format!(
+            "{} {CORRECTION}: {}",
+            record.id,
+            criteria_delta(old, &record.criteria.items).join("; ")
+        ),
+        note: true,
+    }
 }
 
 /// One run's judgement of tasks for a pull request (TSK-234): the range,
@@ -2093,6 +2169,201 @@ impl<'r> Judging<'r> {
     pub(super) fn judge(&mut self, task: &RecordView) -> super::landing::TaskJudgement {
         judge_in_range(&mut self.store, self.repo, task, self.range, &self.criteria)
     }
+}
+
+/// What the note of a text correction (ADR-0080) says it is, after the
+/// task id.
+pub const CORRECTION: &str = "criteria correction (a completed standalone task, text only), delta";
+
+/// Whether `found` is the note of a text correction (ADR-0080), which
+/// `codeflow ci` prints with its own remedy.
+#[must_use]
+pub fn is_correction(found: &Finding) -> bool {
+    found.note && found.rule == FROZEN_RULE && found.message.contains(CORRECTION)
+}
+
+/// Why `new` is not a text correction of `old` (ADR-0080): the same
+/// criteria in the same order, each with the tags and form it had. `None`
+/// when only the text of existing criteria changes.
+pub(super) fn correction_problem(old: &[Criterion], new: &[Criterion]) -> Option<String> {
+    let ids = |items: &[Criterion]| {
+        items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if ids(old) != ids(new) {
+        return Some(format!(
+            "this changes the criteria set itself (the target has {}; this range has {})",
+            ids(old),
+            ids(new)
+        ));
+    }
+    old.iter()
+        .zip(new)
+        .find(|(before, after)| before.tags() != after.tags())
+        .map(|(before, _)| {
+            format!(
+                "this changes the tags of {} (`(journey)`, `(after release)`, `(serves ...)` or the checkbox form)",
+                before.id
+            )
+        })
+}
+
+/// The completed standalone tasks whose criteria text this range may
+/// correct (ADR-0080): the range changes planning records only, as a
+/// planning amendment may carry them, and each task is `named` by the
+/// pull request, or is the task `named` follows up (`follow_up_of`, read
+/// at the target when `named` is there, so the range cannot authorise
+/// itself), complete and standalone at the target and at the head, and not
+/// reopened by the range.
+fn correctable(
+    repo: &Repository,
+    target: &Graph,
+    head: &Graph,
+    changed_paths: &[String],
+    named: &str,
+    tips: (Oid, Oid),
+    reopened: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    if !records_only(repo, tips, changed_paths) {
+        return std::collections::BTreeSet::new();
+    }
+    let follows = target
+        .records
+        .get(named)
+        .or_else(|| head.records.get(named))
+        .and_then(|record| record.follow_up_of.as_deref());
+    head.records
+        .values()
+        .filter(|record| record.id == named || follows == Some(record.id.as_str()))
+        .filter(|record| !reopened.contains(&record.id))
+        .filter(|record| {
+            standalone_complete(record)
+                && target
+                    .records
+                    .get(&record.id)
+                    .is_some_and(standalone_complete)
+        })
+        .map(|record| record.id.clone())
+        .collect()
+}
+
+/// A task record that is complete and belongs to no epic.
+fn standalone_complete(record: &RecordView) -> bool {
+    record.kind == RecordKind::Task && record.status == "complete" && record.epic_id.is_none()
+}
+
+/// Whether the change of `changed_paths` from the target (`tips.0`) to the
+/// head (`tips.1`) carries planning records only, as a planning amendment
+/// may carry them (ADR-0078): records and plans, with no symbolic link,
+/// submodule or unreadable name.
+fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -> bool {
+    changed_paths.iter().all(|path| is_planning_path(path))
+        && super::amendment::range_problem(repo, tips.0, tips.1, changed_paths).is_none()
+}
+
+/// Whether the range from `base` (the target tip) to `head`, which changes
+/// `changed_paths`, only corrects the records of a completed standalone
+/// task that `task_id` names or follows up (ADR-0080), and so starts no
+/// work. The range is judged on its own diff: the change from the
+/// merge-base of `base` and `head` through to `head`, the same range
+/// `changed_paths` lists. A task record the target changed after that
+/// merge-base, which the head does not touch, is not a change of this
+/// range, so a branch behind the target keeps the skip, and a task record
+/// that the range's own diff changes is a change of it even when the
+/// target tip holds the same bytes. The range qualifies when all of these
+/// hold: it changes planning records only; the correctable set (complete
+/// and standalone at the target and at the head, and not reopened by the
+/// range) is not empty; every task record the range's own diff adds,
+/// removes or changes is in that set; at least one changed path is the
+/// record of a task in that set; and, when `task_id` is not itself in that
+/// set, it is a follow-up the target already holds and the range's own
+/// diff leaves its record unchanged. `task_id` may be that follow-up in
+/// any status, including blocked, cancelled or awaiting selection, so a
+/// range that also changes the follow-up's own record, or that changes no
+/// record of the completed task (a plan note, or another task's
+/// description), is not a correction and keeps the anchored preflight for
+/// tracked work (R-72). The criteria and binding rules still judge a
+/// correction.
+///
+/// # Errors
+///
+/// Returns a message when the repository, a revision, the merge-base or
+/// the records cannot be read.
+pub fn records_correction(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    task_id: &str,
+    changed_paths: &[String],
+) -> Result<bool, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("{revision}: {}", error.message()))
+    };
+    let (base_oid, head_oid) = (oid(base)?, oid(head)?);
+    let target = Graph::from_revision(&repo, base)?;
+    let at_head = Graph::from_revision(&repo, head)?;
+    let reopened = reopened_ids(&repo, base, head, &at_head)?;
+    let correcting = correctable(
+        &repo,
+        &target,
+        &at_head,
+        changed_paths,
+        task_id,
+        (base_oid, head_oid),
+        &reopened,
+    );
+    if correcting.is_empty() {
+        return Ok(false);
+    }
+    // What the range changes is read against the merge-base, never the
+    // target tip: the target may have moved other records since the branch
+    // point, or reached the same bytes the range did.
+    let anchor = repo
+        .merge_base(base_oid, head_oid)
+        .map_err(|error| error.message().to_string())?;
+    let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
+    let touched = |id: &str| match (at_anchor.records.get(id), at_head.records.get(id)) {
+        (None, None) => false,
+        (Some(before), Some(after)) => before.content != after.content || before.path != after.path,
+        _ => true,
+    };
+    // A follow-up named only by the range is read from the head, so the
+    // range could authorise itself; only a follow-up the target holds, with
+    // its record unchanged by the range, takes the skip.
+    if !correcting.contains(task_id) && (!target.records.contains_key(task_id) || touched(task_id))
+    {
+        return Ok(false);
+    }
+    // Every task record the range's diff touches is a correcting one, so a
+    // plan note, or a change to the follow-up's own record or to another
+    // task, is more than a correction.
+    let task_ids: std::collections::BTreeSet<&String> = at_anchor
+        .records
+        .iter()
+        .chain(&at_head.records)
+        .filter(|(_, record)| record.kind == RecordKind::Task)
+        .map(|(id, _)| id)
+        .collect();
+    if task_ids
+        .iter()
+        .any(|id| touched(id) && !correcting.contains(*id))
+    {
+        return Ok(false);
+    }
+    // At least one changed path is a correcting task's record.
+    Ok(correcting.iter().any(|id| {
+        [&at_anchor, &at_head]
+            .iter()
+            .filter_map(|graph| graph.records.get(id))
+            .any(|record| changed_paths.contains(&record.path))
+    }))
 }
 
 /// The change from `old` to `new` criteria, one entry per criterion
@@ -2158,10 +2429,14 @@ pub(super) fn reopened_message(id: &str) -> String {
 
 /// The tasks complete at `base` whose criteria differ at `head` and which
 /// the range reopened: no longer complete, a block superseded, or a commit
-/// of the range moving them from complete. A task `base` no longer holds is
-/// judged against the newest version in its history, so deleting a landed
-/// record and adding it again reopened is still a reopen; when that
-/// history cannot tell, such a task counts as reopened too.
+/// of the range moving them from complete. The range is its own diff, the
+/// merge-base of `base` and `head` through `head`: a task whose record the
+/// range leaves as the merge-base holds it, or whose record is not complete
+/// there, is not reopened by it, so a target that moved on after the
+/// merge-base reopens nothing for a branch behind it. A task `base` no
+/// longer holds is judged against the newest version in its history, so
+/// deleting a landed record and adding it again reopened is still a reopen;
+/// when that history cannot tell, such a task counts as reopened too.
 ///
 /// # Errors
 /// Returns an error if the range cannot be read.
@@ -2198,6 +2473,16 @@ fn reopened_judged(
             .map_err(|e| e.to_string())
     };
     let base_oid = oid(base)?;
+    // A reopen is the range's own change, so a task is a candidate only
+    // when the range's own diff (the merge-base through the head) changes
+    // its record from a complete one. A task the target changed after the
+    // merge-base, which the range does not touch, is not reopened by this
+    // range, whatever the target tip holds (R-119, as `records_correction`
+    // judges a correction). Without a merge-base nothing is excluded.
+    let at_anchor = match repo.merge_base(base_oid, oid(head)?) {
+        Ok(anchor) => Some(Graph::from_revision(repo, &anchor.to_string())?),
+        Err(_) => None,
+    };
     let mut store = super::landing::RecordStore::new(repo);
     let mut unknown = std::collections::BTreeMap::new();
     let mut candidates: Vec<(&RecordView, RecordView)> = Vec::new();
@@ -2206,6 +2491,15 @@ fn reopened_judged(
         .values()
         .filter(|record| record.kind == RecordKind::Task)
     {
+        if let Some(before) = at_anchor
+            .as_ref()
+            .and_then(|graph| graph.records.get(&record.id))
+        {
+            let changed = before.content != record.content || before.path != record.path;
+            if !changed || before.status != "complete" {
+                continue;
+            }
+        }
         let old = match target.records.get(&record.id) {
             Some(old) => old.clone(),
             None => match store.recovered(&super::landing::Identity::of(record), &[base_oid]) {
@@ -2498,8 +2792,15 @@ pub fn journey_requirement_at(
 pub enum Criteria {
     /// Criteria stay as the target has them.
     Frozen,
-    /// Only the named, not previously complete task may amend its criteria.
+    /// Only the named, not previously complete task may amend its criteria;
+    /// in a range of planning records only, the text of the completed
+    /// standalone task it follows up may also be corrected (ADR-0080).
     OwnTask(String),
+    /// The named task is complete at the target, on a branch that does not
+    /// carry it. Criteria stay frozen, except that a range of planning
+    /// records only may correct the text of its criteria, or of the task it
+    /// follows up, when that task is standalone (ADR-0080).
+    Complete(String),
     /// A validated epic line or the workspace root branch may change them.
     Amendable,
     /// A planning amendment (ADR-0078) may change them, and every change is
@@ -2518,7 +2819,11 @@ impl Criteria {
     }
 }
 
-/// Select the own-task amendment only for a task not complete at the target.
+/// Select the own-task amendment only for a task not complete at the
+/// target. A task complete there keeps its criteria frozen, and on a branch
+/// that does not carry it (`own_branch` false) its text correction route
+/// applies (ADR-0080); on its own branch, a range is its reopen and keeps
+/// them frozen (R-119).
 ///
 /// # Errors
 /// Returns an error when the target records cannot be read.
@@ -2526,20 +2831,19 @@ pub fn task_criteria(
     root: &std::path::Path,
     base: &str,
     task_id: &str,
+    own_branch: bool,
 ) -> Result<Criteria, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let graph = Graph::from_revision(&repo, base)?;
-    Ok(
-        if graph
-            .records
-            .get(task_id)
-            .is_some_and(|record| record.status == "complete")
-        {
-            Criteria::Frozen
-        } else {
-            Criteria::OwnTask(task_id.to_string())
-        },
-    )
+    let complete = graph
+        .records
+        .get(task_id)
+        .is_some_and(|record| record.status == "complete");
+    Ok(match (complete, own_branch) {
+        (false, _) => Criteria::OwnTask(task_id.to_string()),
+        (true, true) => Criteria::Frozen,
+        (true, false) => Criteria::Complete(task_id.to_string()),
+    })
 }
 
 /// The findings of a pull request from `base` (the target tip) to `head`:
@@ -2598,21 +2902,37 @@ pub fn pull_request_findings_judged(
     let target_tip = oid(base)?;
     let candidate = authority.map(oid).transpose()?;
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
+    let head_tip = oid(head)?;
     let at_head = Graph::from_revision(&repo, head)?;
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
     let mut found = reopened_criteria(&repo, base, head, &at_head)?;
     if *criteria != Criteria::Amendable {
         let anchor = repo
-            .merge_base(target_tip, oid(head)?)
+            .merge_base(target_tip, head_tip)
             .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
         let at_target = Graph::from_revision(&repo, base)?;
         let range = Range {
             anchor,
-            head: oid(head)?,
+            head: head_tip,
         };
         let mut judging = Judging::new(&repo, range, run.criteria());
+        // ADR-0080: the named task, or the task it follows up, may have the
+        // text of its completed standalone criteria corrected.
+        let reopened = reopened_ids(&repo, base, head, &at_head)?;
+        let correcting = |named: &str| {
+            correctable(
+                &repo,
+                &at_target,
+                &at_head,
+                &paths,
+                named,
+                (target_tip, head_tip),
+                &reopened,
+            )
+        };
+        let none = std::collections::BTreeSet::new;
         match criteria {
             Criteria::Amendment(named) => found.extend(super::amendment::findings(
                 &repo,
@@ -2628,6 +2948,16 @@ pub fn pull_request_findings_judged(
                 &at_target,
                 &paths,
                 &std::collections::BTreeSet::from([id.clone()]),
+                &correcting(id),
+                &stacked,
+                &mut judging,
+            )),
+            Criteria::Complete(id) => found.extend(frozen_criteria(
+                &at_head,
+                &at_target,
+                &paths,
+                &none(),
+                &correcting(id),
                 &stacked,
                 &mut judging,
             )),
@@ -2635,7 +2965,8 @@ pub fn pull_request_findings_judged(
                 &at_head,
                 &at_target,
                 &paths,
-                &std::collections::BTreeSet::new(),
+                &none(),
+                &none(),
                 &stacked,
                 &mut judging,
             )),
@@ -2756,6 +3087,54 @@ fn stacked_heads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn items(section: &str) -> Vec<Criterion> {
+        super::super::record_text::parse_criteria(&format!("## Acceptance Criteria\n\n{section}"))
+            .items
+    }
+
+    /// ADR-0080: a correction changes only the text of existing criteria;
+    /// the set, its order and every tag the parser reads stay.
+    #[test]
+    fn a_correction_keeps_the_criteria_set_and_every_tag() {
+        let old = items("- AC-1 When run, it shall work for Jane Doe.\n- AC-2 (journey) On a fresh project, it shall pass.\n- AC-3 It shall serve (serves EPC-001 AC-1).\n");
+        let text = items("- AC-1 When run, it shall work for the owner.\n- AC-2 (journey) On a new project, it shall pass.\n- AC-3 It shall still serve (serves EPC-001 AC-1).\n");
+        assert_eq!(correction_problem(&old, &text), None);
+        for (changed, reason) in [
+            ("- AC-1 a\n- AC-2 (journey) b\n", "criteria set"),
+            (
+                "- AC-1 a\n- AC-2 (journey) b\n- AC-3 c (serves EPC-001 AC-1)\n- AC-4 d\n",
+                "criteria set",
+            ),
+            (
+                "- AC-1 a\n- AC-3 c (serves EPC-001 AC-1)\n- AC-2 (journey) b\n",
+                "criteria set",
+            ),
+            (
+                "- AC-1 a\n- AC-2 (journey) b\n- AC-4 c (serves EPC-001 AC-1)\n",
+                "criteria set",
+            ),
+            (
+                "- AC-1 a\n- AC-2 b\n- AC-3 c (serves EPC-001 AC-1)\n",
+                "tags of AC-2",
+            ),
+            (
+                "- AC-1 a (after release)\n- AC-2 (journey) b\n- AC-3 c (serves EPC-001 AC-1)\n",
+                "tags of AC-1",
+            ),
+            (
+                "- AC-1 a\n- AC-2 (journey) b\n- AC-3 c (serves EPC-001 AC-2)\n",
+                "tags of AC-3",
+            ),
+            (
+                "- [x] AC-1 a\n- AC-2 (journey) b\n- AC-3 c (serves EPC-001 AC-1)\n",
+                "tags of AC-1",
+            ),
+        ] {
+            let problem = correction_problem(&old, &items(changed)).unwrap_or_default();
+            assert!(problem.contains(reason), "{changed}: {problem}");
+        }
+    }
 
     #[test]
     fn only_the_status_line_and_the_closeout_are_outside_review() {

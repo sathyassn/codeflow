@@ -98,6 +98,14 @@ assertion result, that is missing job evidence, not an assertion-red of the
 checks that already completed green elsewhere. Model consensus still cannot
 override a check that ran and failed.
 
+## Note (2026-10-08)
+
+The sentence in Consequences that says remote protection is unavailable on
+this repo described the private, Free-plan repository at the time. The
+repository is public and `main` now requires a pull request, the CI checks
+and an up-to-date branch, so ADR-0081 is the current rule. (Append-only note;
+the paragraph above is unchanged.)
+
 ## Architecture impact
 
 `docs/architecture.md` is updated in this PR: the four-planes paragraph now states

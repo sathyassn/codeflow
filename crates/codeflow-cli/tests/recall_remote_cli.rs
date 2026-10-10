@@ -152,7 +152,171 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
         text.contains("require a pull request before merging"),
         "{text}"
     );
+    // Without git.required_checks the shipped CI job names are required, on
+    // a branch that is up to date with its base.
+    assert!(
+        text.contains(
+            "require status checks to pass on a branch that is up to date with its base: \
+             codeflow gates, secret scan, security review, commit standards"
+        ),
+        "{text}"
+    );
     assert!(text.contains("status: dry-run"), "{text}");
+
+    fs::write(
+        repo.path().join(".codeflow/policy.json"),
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "required_checks": ["build", "windows"] } }"#,
+    )
+    .unwrap();
+    let text = stdout(&run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    ));
+    assert!(
+        text.contains("up to date with its base: build, windows"),
+        "{text}"
+    );
+}
+
+/// A policy the schema refuses stops `remote protect` before it sends
+/// anything: a blank `git.required_checks` entry would otherwise be dropped
+/// and the default checks applied in its place (TSK-261).
+#[cfg(unix)]
+#[test]
+fn remote_protect_refuses_an_invalid_policy_and_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "bad-policy");
+    fs::write(
+        repo.path().join(".codeflow/policy.json"),
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "required_checks": [" "] } }"#,
+    )
+    .unwrap();
+
+    // gh shim: records every write call and answers reads like a host with
+    // no rules, so an applied plan would be visible in `writes`.
+    let shims = tempfile::tempdir().unwrap();
+    let writes = shims.path().join("writes");
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+               \"repo view\"*) printf '%s' '{{\"nameWithOwner\":\"o/r\",\"isPrivate\":false,\"defaultBranchRef\":{{\"name\":\"main\"}}}}' ;;\n\
+               \"api -X \"*) echo \"$*\" >> '{}'; cat >/dev/null; printf '{{}}' ;;\n\
+               \"api repos/o/r/rulesets?\"*) printf '[]' ;;\n\
+               *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+             esac\n",
+            writes.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for args in [
+        &["remote", "protect"][..],
+        &["remote", "protect", "--dry-run"][..],
+    ] {
+        let out = codeflow()
+            .args(args)
+            .current_dir(repo.path())
+            .env("CODEFLOW_HOME", home.path())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "{args:?} must refuse: {}",
+            stdout(&out)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("required_checks"), "{args:?}: {err}");
+        assert!(
+            err.contains("no rules were planned or applied"),
+            "{args:?}: {err}"
+        );
+        assert!(
+            !writes.exists(),
+            "{args:?} sent a write: {}",
+            fs::read_to_string(&writes).unwrap_or_default()
+        );
+    }
+}
+
+/// The doctor reads the default branch's live rules through `gh` and warns
+/// when they do not require an up-to-date branch (TSK-261).
+#[cfg(unix)]
+#[test]
+fn doctor_warns_when_the_default_branch_does_not_require_up_to_date_checks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "racy");
+    // A git directory libgit2 opens, with a GitHub origin; no git binary.
+    let git = repo.path().join(".git");
+    fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::create_dir_all(git.join("objects")).unwrap();
+    fs::create_dir_all(git.join("refs/heads")).unwrap();
+    fs::write(
+        git.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/o/r.git\n",
+    )
+    .unwrap();
+
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+case "$*" in
+  "api repos/o/r") printf '%s' '{"default_branch":"main"}' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]},"ruleset_id":7}]' ;;
+  "api repos/o/r/rulesets/7") printf '%s' '{"id":7,"bypass_actors":[]}' ;;
+  *) echo 'gh: Branch not protected (HTTP 404)' >&2; exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let out = codeflow()
+        .args(["doctor", "--check", "remote-perimeter"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(out.status.success(), "a warning never fails doctor: {text}");
+    assert!(
+        text.contains(
+            "warn  remote-perimeter: o/r: main requires status checks but not that a branch be up to date (ruleset 7)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Require branches to be up to date before merging"),
+        "{text}"
+    );
 }
 
 #[cfg(unix)]

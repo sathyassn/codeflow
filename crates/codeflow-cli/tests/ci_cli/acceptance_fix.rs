@@ -56,8 +56,13 @@ fn merge(root: &Path, branch: &str) {
 }
 
 fn ci(root: &Path, branch: &str, named: bool) -> std::process::Output {
+    ci_reviewed(root, branch, named, "")
+}
+
+/// `reviews` is the body's Reviews section, or empty for none.
+fn ci_reviewed(root: &Path, branch: &str, named: bool, reviews: &str) -> std::process::Output {
     let body = format!(
-        "## Summary\nRepair work.\n\n- repair\n\n{}\n## Changes\n- repair\n\n## Testing\n- fixture\n",
+        "## Summary\nRepair work.\n\n- repair\n\n{}\n## Changes\n- repair\n\n## Testing\n- fixture\n{reviews}",
         if named { "Task: TSK-001" } else { "" }
     );
     run_in(
@@ -74,6 +79,97 @@ fn ci(root: &Path, branch: &str, named: bool) -> std::process::Output {
             &body,
         ],
     )
+}
+
+/// A Reviews section with one approving row for the whole unit at `sha`.
+fn reviews(sha: &str) -> String {
+    format!("\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n| Grok 4.7 | whole unit at {sha} | approved |\n")
+}
+
+/// Issue 121: a completed task's body approves the commit its acceptance
+/// block binds. `light` changes only prose; `row` names a commit or none.
+fn completed(light: bool, row: Option<bool>) -> (tempfile::TempDir, String, String) {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    let file = if light { "docs/notes.md" } else { "work.rs" };
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join(file), "first\n").unwrap();
+    let earlier = commit(root, "docs: first pass");
+    std::fs::write(root.join(file), "second\n").unwrap();
+    let reviewed = commit(root, "docs: second pass");
+    task(root, "complete", &block(&reviewed));
+    commit(root, "docs: complete task");
+    let section = match row {
+        Some(bound) => reviews(if bound { &reviewed } else { &earlier }),
+        None => String::new(),
+    };
+    (dir, reviewed, section)
+}
+
+#[test]
+fn a_completion_needs_a_review_row_for_its_reviewed_commit() {
+    // The PR 114 shape: the row names the round-1 head, the block a later one.
+    let (dir, reviewed, stale) = completed(false, Some(false));
+    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &stale);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("work.acceptance_binding"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "binds the reviewed commit {reviewed}, and the Reviews section has no row approving it"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("`whole unit at {reviewed}`")),
+        "{text}"
+    );
+
+    let (dir, _, bound) = completed(false, Some(true));
+    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &bound);
+    assert!(out.status.success(), "{}", combined(&out));
+}
+
+#[test]
+fn a_light_completion_may_leave_reviews_out_but_never_name_an_earlier_head() {
+    let (dir, _, none) = completed(true, None);
+    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &none);
+    assert!(out.status.success(), "{}", combined(&out));
+    // A light range that records no review is not asked to invent one.
+    let (dir, _, _) = completed(true, None);
+    let out = ci_reviewed(
+        dir.path(),
+        "task/TSK-001-work",
+        true,
+        "\n## Reviews\n\nNone: documentation only\n",
+    );
+    assert!(out.status.success(), "{}", combined(&out));
+
+    let (dir, reviewed, stale) = completed(true, Some(false));
+    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &stale);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains(&format!("`whole unit at {reviewed}`")),
+        "{text}"
+    );
+}
+
+#[test]
+fn work_in_progress_with_a_pending_review_passes() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    commit(root, "feat: work");
+    let out = ci_reviewed(
+        root,
+        "task/TSK-001-work",
+        true,
+        "\n## Reviews\n\nNone: pending\n",
+    );
+    assert!(out.status.success(), "{}", combined(&out));
 }
 
 #[test]
@@ -111,7 +207,7 @@ fn one_pr_fix_ci_validates_the_new_and_superseded_reviews() {
             ),
         );
         commit(root, "docs: re-complete task");
-        let out = ci(root, "task/TSK-001-fix", true);
+        let out = ci_reviewed(root, "task/TSK-001-fix", true, &reviews(&fixed));
         let text = combined(&out);
         if fault == "valid" {
             assert!(out.status.success(), "{text}");

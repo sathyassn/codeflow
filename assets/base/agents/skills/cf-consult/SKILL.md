@@ -15,16 +15,17 @@ its recorded native fallback through `cf-delegate`, never headless
 The peer must be another vendor. Same-vendor scrutiny is useful, but it never
 counts as independent cross-lineage review.
 
-1. Frame the ask: state exactly what to review (paths, diff, or question) and
-   the criteria to judge against, and ask for an explicit closing verdict line
-   (`VERDICT: approved|changes_requested`) so the reply is checkable, and for
+1. Frame the ask: state what to review (paths, diff, or question) as the
+   starting scope, and the criteria to judge against, and ask for an
+   explicit closing verdict line
+   (`VERDICT: approved|changes_requested at <head>`) so the reply is
+   checkable, and for
    each blocker and major finding the smallest evidenced remedy and its
    verification criterion, or the options when the fix is an operator decision.
-   For a unit of work, the brief asks for one holistic pass under the review
-   brief contract in the orchestrator's `resources/quality/findings.md`: the
-   whole unit at one head, its full diff against its base and its blast
-   radius, with earlier findings as checks within that pass, never its whole
-   scope. Do your own analysis first; the consult sharpens it. Start the
+   For a unit of work, the brief follows the review brief contract in the
+   orchestrator's `resources/quality/findings.md` (its `<base>...<head>`
+   range, the pass the workflow discipline rules define, earlier findings as
+   checks within it). Do your own analysis first; the consult sharpens it. Start the
    delegated prompt with `ROLE: peer`, bound it to this consult, and prohibit
    starting
    the top-level orchestrator or delegating back to the host lineage.

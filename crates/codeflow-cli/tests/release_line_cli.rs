@@ -4800,7 +4800,11 @@ fn an_own_task_amendment_landed_by_its_reviewed_pr_is_accepted() {
                 "--into",
                 LINE_A,
                 "--pr-body",
-                "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+                &with_reviews(
+                    &fx.root,
+                    "HEAD",
+                    "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+                ),
             ])
             .current_dir(&fx.root)
             .output()
@@ -4886,4 +4890,44 @@ fn a_direct_product_commit_on_a_line_is_refused_into_main() {
         "a direct product change on the line",
         &["work.acceptance_binding", "also changes src/direct.rs"],
     );
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
+}
+
+/// `body` with a Reviews section approving each bound commit at `rev`,
+/// unless it already has one or nothing is bound.
+fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
+    let rows = review_rows(root, rev, "");
+    if rows.is_empty() || body.contains("## Reviews") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
+    }
 }
