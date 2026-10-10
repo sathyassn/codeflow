@@ -1100,3 +1100,149 @@ fn a_cancelled_only_epic_criterion_closes_only_on_a_bound_own_block() {
         "bound own block",
     );
 }
+
+/// An epic block deferring AC-1 with `result`, listing `follow_ups`.
+fn deferred_epic_block(reviewed: &str, result: &str, follow_ups: &str) -> String {
+    epic_block(reviewed, result).replace(
+        "follow_ups: none: done",
+        &format!("follow_ups: {follow_ups}"),
+    )
+}
+
+/// sathyassn/codeflow#106 (SPC-013 R-33, R-62): an `(after release)` epic
+/// criterion served by an open follow-up task closes on the epic block's
+/// `deferred` line that names that task, through the verb and CI. The same
+/// block still refuses a criterion that is not after-release, a line that
+/// names a task which does not serve it, and any line once every serving task
+/// is cancelled.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture walks the controls, the verb and CI in order.
+fn an_after_release_epic_criterion_closes_as_deferred_to_its_open_follow_up() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    let scratch = tempfile::tempdir().unwrap();
+    let file = scratch.path().join("acceptance.yaml");
+    let epic_path = "project-management/epics/EPC-001.md";
+    let after_release = EPIC.replace(
+        "- AC-1 When run, the system shall deliver.",
+        "- AC-1 When run, the system shall deliver (after release)",
+    );
+    let follow_up = task("TSK-003", "feat", "todo")
+        .replace(
+            "epic_id: EPC-001\nstandalone_reason: null",
+            "epic_id: null\nstandalone_reason: \"runs after the epic lands\"",
+        )
+        .replace(
+            "- AC-1 When run, the system shall work.",
+            "- AC-1 When run, the system shall work (serves EPC-001 AC-1)",
+        );
+    // Planned on `main`, so the pull request adds no record.
+    std::fs::write(root.join(epic_path), &after_release).unwrap();
+    std::fs::write(root.join("project-management/tasks/TSK-003.md"), &follow_up).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(records): plan the follow-up"]);
+    git(root, &["switch", "-C", "plan/close", "main"]);
+    for id in ["TSK-001", "TSK-002"] {
+        let (code, out) = run(
+            root,
+            &[
+                "task",
+                "status",
+                id,
+                "cancelled",
+                "--reason",
+                "replaced",
+                "--scope",
+                "the follow-up",
+            ],
+        );
+        assert_eq!(code, 0, "{out}");
+    }
+    git(root, &["add", "-A"]);
+    git(
+        root,
+        &["commit", "-m", "docs(tasks): cancel the other tasks"],
+    );
+    let reviewed = head(root);
+    let close = |block: String| {
+        std::fs::write(&file, block).unwrap();
+        run(
+            root,
+            &[
+                "epic",
+                "status",
+                "EPC-001",
+                "complete",
+                "--acceptance",
+                file.to_str().unwrap(),
+            ],
+        )
+    };
+    let deferred = "deferred | owner: coordinator; window: the first nightly run after release; follow-up: TSK-003";
+
+    // Control: a line naming a task that does not serve the criterion.
+    let (code, out) = close(deferred_epic_block(
+        &reviewed,
+        &deferred.replace("TSK-003", "TSK-001"),
+        "TSK-001",
+    ));
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("does not defer it to an open serving task"),
+        "{out}"
+    );
+
+    // Control: the same block for a criterion that is not after-release.
+    std::fs::write(root.join(epic_path), EPIC).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(epics): drop the tag"]);
+    let (code, out) = close(deferred_epic_block(&head(root), deferred, "TSK-003"));
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("no complete serving task verified it"),
+        "{out}"
+    );
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // Control: every serving task cancelled, so no open server exists, and
+    // the line names the cancelled task or an id that is no record.
+    let (code, out) = run(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-003",
+            "cancelled",
+            "--reason",
+            "replaced",
+            "--scope",
+            "dropped",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(tasks): cancel the follow-up"]);
+    for name in ["TSK-003", "TSK-009"] {
+        let (code, out) = close(deferred_epic_block(
+            &head(root),
+            &deferred.replace("TSK-003", name),
+            name,
+        ));
+        assert_ne!(code, 0, "{name}: {out}");
+        assert!(
+            out.contains("does not defer it to an open serving task"),
+            "{name}: {out}"
+        );
+    }
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // The issue's reproduction: the documented block closes the epic.
+    let (code, out) = close(deferred_epic_block(&reviewed, deferred, "TSK-003"));
+    assert_eq!(code, 0, "{out}");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(epics): close the epic"]);
+    assert_passes(
+        &ci(root, "plan/close", &body("Task: EPC-001")),
+        "deferred after-release criterion",
+    );
+}

@@ -26,9 +26,9 @@ use git2::{Repository, TreeWalkMode, TreeWalkResult};
 use crate::remedy::{self, Finding};
 
 use super::record_text::{
-    acceptance_blocks, check_acceptance, check_block, historical_acceptance, outcome_word,
-    parse_blocker, parse_cancellation, parse_criteria, reopen_reasons, AcceptanceBlock,
-    CriteriaList, Criterion, FencedAcceptance,
+    acceptance_blocks, check_acceptance, check_block, deferred_follow_up, historical_acceptance,
+    outcome_word, parse_blocker, parse_cancellation, parse_criteria, reopen_reasons,
+    AcceptanceBlock, CriteriaList, Criterion, FencedAcceptance,
 };
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 use super::{is_legacy_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id};
@@ -1180,18 +1180,67 @@ fn ticked_ordinary(criterion: &Criterion) -> bool {
 }
 
 /// Whether every task serving `criterion` is cancelled. A cancelled child
-/// never satisfies the epic's outcome (R-33), so such a criterion is proven
-/// by the epic's own acceptance block, as an unserved one is.
+/// never satisfies the epic's outcome (R-33).
 fn served_only_by_cancelled(epic: &RecordView, criterion: &Criterion, graph: &Graph) -> bool {
     let serving = serving_tasks(epic, criterion, graph);
     !serving.is_empty() && serving.iter().all(|(task, _)| task.status == "cancelled")
 }
 
+/// Whether the epic's own acceptance block proves `criterion`, as it does an
+/// unserved one: it is served only by cancelled tasks and is not observable
+/// only after release. An `(after release)` criterion has no open serving
+/// task to defer to (R-62), so the block alone never closes it.
+fn proven_by_own_block_after_cancellation(
+    epic: &RecordView,
+    criterion: &Criterion,
+    graph: &Graph,
+) -> bool {
+    !criterion.is_after_release() && served_only_by_cancelled(epic, criterion, graph)
+}
+
+/// Whether a task serving `criterion` has verified it: a complete task with
+/// no superseded spec whose block records `verified` or `waived` for the
+/// serving criterion (and, for a journey criterion, a verified journey).
+fn serving_verified(
+    criterion: &Criterion,
+    serving: &[(&RecordView, &Criterion)],
+    graph: &Graph,
+) -> bool {
+    serving.iter().any(|(task, item)| {
+        task.status == "complete"
+            && superseded_specs(task, graph).is_empty()
+            && task.active_blocks().first().is_some_and(|block| {
+                block.parsed.as_ref().is_ok_and(|parsed| {
+                    let result_ok = parsed.criteria.iter().any(|(id, result)| {
+                        *id == item.id && matches!(result.outcome.as_str(), "verified" | "waived")
+                    });
+                    let journey_ok =
+                        !criterion.is_journey() || outcome_word(&parsed.journey) == "verified";
+                    result_ok && journey_ok
+                })
+            })
+    })
+}
+
+/// Whether `criterion` is observable only after release and is served by a
+/// task that has not verified it. Such a criterion is closed by the epic's
+/// own `deferred` line naming a serving follow-up task (R-62), because its
+/// natural follow-up can only run once the epic has landed.
+fn awaits_follow_up(epic: &RecordView, criterion: &Criterion, graph: &Graph) -> bool {
+    let serving = serving_tasks(epic, criterion, graph);
+    criterion.is_after_release()
+        && !serving.is_empty()
+        && !served_only_by_cancelled(epic, criterion, graph)
+        && !serving_verified(criterion, &serving, graph)
+}
+
 /// The epic's own acceptance block, when it is the one active block and it
 /// passes the structural rules of R-60 for the criteria it must prove: those
-/// no task serves, unless a legacy tick verifies them, and those served only
-/// by cancelled tasks, which a tick never verifies. Problems with it are
-/// reported, and an invalid block proves nothing.
+/// no task serves, unless a legacy tick verifies them, those served only by
+/// cancelled tasks, which a tick never verifies (an after-release one is
+/// refused whatever the block says), and the after-release
+/// criteria a task serves but has not verified, which the block defers.
+/// Problems with it are reported, and an invalid block proves nothing.
 fn epic_own_block(
     epic: &RecordView,
     graph: &Graph,
@@ -1202,7 +1251,8 @@ fn epic_own_block(
         .items
         .iter()
         .filter(|criterion| {
-            served_only_by_cancelled(epic, criterion, graph)
+            proven_by_own_block_after_cancellation(epic, criterion, graph)
+                || awaits_follow_up(epic, criterion, graph)
                 || (serving_tasks(epic, criterion, graph).is_empty() && !ticked_ordinary(criterion))
         })
         .cloned()
@@ -1238,6 +1288,30 @@ fn epic_own_block(
     }
 }
 
+/// R-62 for a criterion a task serves: the epic's own block records it as
+/// `deferred` and its `follow-up` names a serving task that is still open.
+/// A complete follow-up has decided the criterion by its own result and a
+/// cancelled one never will, so neither stands in for the deferral. The
+/// block's structure, including the follow-up being listed in `follow_ups`,
+/// was checked when the block was accepted as `own_block`.
+fn deferred_to_open_follow_up(
+    criterion: &Criterion,
+    serving: &[(&RecordView, &Criterion)],
+    own_block: Option<&AcceptanceBlock>,
+) -> bool {
+    criterion.is_after_release()
+        && own_block
+            .and_then(|block| block.criteria.iter().find(|(id, _)| *id == criterion.id))
+            .filter(|(_, result)| result.outcome == "deferred")
+            .and_then(|(_, result)| deferred_follow_up(result))
+            .is_some_and(|follow_up| {
+                serving.iter().any(|(task, _)| {
+                    task.id == follow_up
+                        && !matches!(task.status.as_str(), "complete" | "cancelled")
+                })
+            })
+}
+
 fn epic_criterion_verified(
     epic: &RecordView,
     criterion: &Criterion,
@@ -1246,7 +1320,7 @@ fn epic_criterion_verified(
 ) -> Result<(), String> {
     let serving = serving_tasks(epic, criterion, graph);
     if !serving.is_empty() {
-        if serving.iter().all(|(task, _)| task.status == "cancelled") {
+        if proven_by_own_block_after_cancellation(epic, criterion, graph) {
             // A valid own block was checked against every criterion served
             // only by cancelled tasks; cancelling a task proves nothing.
             return if own_block.is_some() {
@@ -1255,31 +1329,24 @@ fn epic_criterion_verified(
                 Err("served only by cancelled tasks, and the epic has no valid acceptance block verifying it".into())
             };
         }
-        let verified = serving.iter().any(|(task, item)| {
-            task.status == "complete"
-                && superseded_specs(task, graph).is_empty()
-                && task.active_blocks().first().is_some_and(|block| {
-                    block.parsed.as_ref().is_ok_and(|parsed| {
-                        let result_ok = parsed.criteria.iter().any(|(id, result)| {
-                            *id == item.id
-                                && matches!(result.outcome.as_str(), "verified" | "waived")
-                        });
-                        let journey_ok =
-                            !criterion.is_journey() || outcome_word(&parsed.journey) == "verified";
-                        result_ok && journey_ok
-                    })
-                })
-        });
-        return if verified {
-            Ok(())
-        } else if serving
-            .iter()
-            .any(|(task, _)| task.status == "complete" && !superseded_specs(task, graph).is_empty())
+        // An after-release criterion whose serving tasks are all cancelled
+        // falls through: no serving task is open, so no deferral stands.
+        if serving_verified(criterion, &serving, graph)
+            || deferred_to_open_follow_up(criterion, &serving, own_block)
         {
-            Err("its serving task's acceptance cites a superseded spec; reconcile the task with the successor".into())
-        } else {
-            Err("no complete serving task verified it".into())
-        };
+            return Ok(());
+        }
+        return Err(
+            if serving.iter().any(|(task, _)| {
+                task.status == "complete" && !superseded_specs(task, graph).is_empty()
+            }) {
+                "its serving task's acceptance cites a superseded spec; reconcile the task with the successor".into()
+            } else if criterion.is_after_release() {
+                "no complete serving task verified it, and the epic's acceptance block does not defer it to an open serving task (`deferred | owner: <who>; window: <when>; follow-up: TSK-NNN`, the follow-up serving this criterion and listed in `follow_ups`)".into()
+            } else {
+                "no complete serving task verified it".into()
+            },
+        );
     }
     if ticked_ordinary(criterion) || own_block.is_some() {
         // A valid own block was checked against every unserved criterion.
