@@ -9,7 +9,8 @@ fights the repository's established patterns.
 Before selecting a fix or a design, name the bounded impact set (callers,
 consumers, inputs, effects, same-mechanism siblings, data, configuration,
 tests, docs) and verify the adjacent behavior the change could disturb as well
-as the changed path.
+as the changed path. If the path meets the trigger in
+[performance](performance.md), read it.
 
 Follow the language, framework, and repository idioms; keep business rules
 single-sourced; use focused composable units, clear interfaces, and explicit
@@ -17,7 +18,8 @@ state and side effects. Do not hard-code supported variability, secrets, or
 duplicated domain decisions; named stable invariants need not become
 configuration. Unexplained hard-coding, duplicated business knowledge,
 swallowed errors, or missing accepted edge/error handling is brittle
-under-design and is `changes_requested`, even when the smaller diff passes.
+under-design and is `changes_requested`, even when the smaller diff passes;
+so is an unmarked shortcut (the discipline rules' shortcut rule).
 
 Use the existing stack's type system and checking tools to make domain states
 and interface contracts explicit where they prevent material errors; justify

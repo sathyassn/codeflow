@@ -78,7 +78,21 @@ class GateContracts(unittest.TestCase):
         for path in ['assets/base/claude/workflows/pipeline.workflow.js', '.claude/workflows/pipeline.workflow.js']:
             source = read(path)
             self.assertIn('affected targeted checks', source)
+            # TSK-263: review keeps the quick gate; verify runs essential
+            # where the config defines it, so the unattended path runs the
+            # suite a crates change owes.
             self.assertIn('codeflow test --mode quick --strict', source)
+            self.assertIn('codeflow test --mode essential --strict', source)
+            # Pin each command to its stage, so swapping the two prompts fails.
+            review = source[source.index("review: gate('review',"):source.index("qa: gate('qa',")]
+            verify = source[source.index("qa: gate('qa',"):source.index('Then check every acceptance criterion')]
+            self.assertIn('codeflow test --mode quick --strict', review)
+            self.assertNotIn('--mode essential', review)
+            self.assertIn(
+                '`codeflow test --mode essential --strict` when a target in `.codeflow/test-config.json` '
+                'defines an `essential` mode, else `codeflow test --mode quick --strict`',
+                verify,
+            )
             self.assertIn('primary runs the full gate once on the exact landing candidate', source)
         self.assertEqual(read('assets/base/claude/workflows/pipeline.workflow.js'), read('.claude/workflows/pipeline.workflow.js'))
 
@@ -138,6 +152,12 @@ class GateContracts(unittest.TestCase):
         self.assertIn('--fail-under-lines 90', targets['rust-coverage']['modes']['full']['command'])
         self.assertIn('nextest', targets['rust-coverage']['modes']['full']['command'])
         self.assertNotIn('full', targets['rust-workspace']['modes'])
+        # TSK-263: an essential run checks figure fidelity, so a capability
+        # wording change fails before review; every prerequisite defines the
+        # mode, or the config is refused at load.
+        self.assertIn('workflow.mjs verify', targets['docs-portal']['modes']['essential']['command'])
+        for name in closure('docs-portal'):
+            self.assertIn('essential', targets[name]['modes'], name)
         self.assertEqual(targets['rust-doctest']['modes']['full']['command'], 'cargo test --workspace --doc')
         self.assertIn('npm run supply-chain', targets['present-supply-chain']['modes']['full']['command'])
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
