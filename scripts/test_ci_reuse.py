@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Controls for scripts/ci-reuse.py (TSK-265 AC-4).
+
+A push reuses a pull request run's verdict only on an exact match: one
+merged pull request, the same tree, main before the merge inside the head,
+no cache input changed, and the head's newest codeflow-ci pull_request run
+green in every job. Each other case runs every job.
+"""
+
+import importlib.util
+import io
+import os
+import subprocess
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location("ci_reuse", ROOT / "scripts" / "ci-reuse.py")
+reuse = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(reuse)
+
+PUSHED, HEAD, MAIN = "a" * 40, "b" * 40, "c" * 40
+WORKFLOW = ".github/workflows/codeflow-ci.yml"
+PUSH_ONLY = {"reuse a pull request verdict"}
+REQUIRED = {"codeflow gates", "windows"}
+
+
+class FakeGit:
+    def __init__(self, trees=None, parents=None, contains=True, changed=()):
+        self.trees = trees or {PUSHED: "t1", HEAD: "t1"}
+        self.parent_list = parents if parents is not None else [MAIN, HEAD]
+        self.contains = contains
+        self.changed_paths = list(changed)
+
+    def tree(self, commit):
+        return self.trees[commit]
+
+    def parents(self, commit):
+        return self.parent_list
+
+    def is_ancestor(self, ancestor, commit):
+        return self.contains
+
+    def changed(self, base, commit):
+        return self.changed_paths
+
+
+def job(name, conclusion="success"):
+    return {"name": name, "conclusion": conclusion}
+
+
+GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("windows tests (1 of 10)"),
+              job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
+
+
+def run(**changes):
+    record = {"id": 77, "run_number": 5, "run_attempt": 1, "event": "pull_request", "head_sha": HEAD,
+              "path": WORKFLOW, "status": "completed", "conclusion": "success"}
+    record.update(changes)
+    return record
+
+
+class FakeApi:
+    def __init__(self, pulls=None, runs=None, jobs=None):
+        self.pull_list = pulls if pulls is not None else [
+            {"number": 95, "merged_at": "2026-10-11T00:43:00Z", "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}]
+        self.run_list = runs if runs is not None else [run()]
+        self.job_lists = jobs if jobs is not None else {77: GREEN_JOBS}
+
+    def pulls(self, sha):
+        return self.pull_list
+
+    def runs(self, head):
+        return self.run_list
+
+    def jobs(self, run_id):
+        return self.job_lists.get(run_id, [])
+
+
+def decide(event="push", git=None, api=None):
+    return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi())
+
+
+class DecisionTests(unittest.TestCase):
+    def skipped(self, **kwargs):
+        with self.assertRaises(reuse.Skip) as caught:
+            decide(**kwargs)
+        return str(caught.exception)
+
+    def test_an_exact_match_reuses_the_run(self):
+        self.assertEqual(decide(), 77)
+
+    def test_a_pull_request_run_never_reuses(self):
+        self.assertIn("pull_request run never reuses", self.skipped(event="pull_request"))
+
+    def test_a_different_tree_runs_everything(self):
+        self.assertIn("differs", self.skipped(git=FakeGit(trees={PUSHED: "t1", HEAD: "t2"})))
+
+    def test_a_head_without_main_before_the_merge_runs_everything(self):
+        self.assertIn("does not contain", self.skipped(git=FakeGit(contains=False)))
+
+    def test_a_push_that_changes_a_cache_input_runs_everything(self):
+        for path in ("Cargo.lock", "crates/codeflow-cli/Cargo.toml", "rust-toolchain.toml",
+                     ".cargo/config.toml", "docs-portal/package-lock.json", "docs-portal/.node-version"):
+            with self.subTest(path=path):
+                self.assertIn("cache inputs", self.skipped(git=FakeGit(changed=["README.md", path])))
+        self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])), 77)
+
+    def test_no_pull_request_or_an_unmerged_or_other_one_runs_everything(self):
+        for pulls in ([], [{"number": 1, "merged_at": None, "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}],
+                      [{"number": 1, "merged_at": "x", "merge_commit_sha": MAIN, "head": {"sha": HEAD}}]):
+            with self.subTest(pulls=pulls):
+                self.assertIn("reuse needs exactly one", self.skipped(api=FakeApi(pulls=pulls)))
+
+    def test_a_failed_cancelled_running_or_missing_run_runs_everything(self):
+        for runs in ([run(conclusion="failure")], [run(conclusion="cancelled")],
+                     [run(status="in_progress", conclusion=None)], []):
+            with self.subTest(runs=runs):
+                self.skipped(api=FakeApi(runs=runs))
+
+    def test_the_newest_run_decides_even_when_an_older_one_passed(self):
+        runs = [run(), run(id=78, run_number=6, conclusion="failure")]
+        self.assertIn("run 78", self.skipped(api=FakeApi(runs=runs)))
+
+    def test_another_workflow_another_event_or_another_head_runs_everything(self):
+        for other in (run(path=".github/workflows/codeflow-policy.yml"), run(event="push"),
+                      run(event="pull_request_target"), run(head_sha=MAIN)):
+            with self.subTest(run=other):
+                self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run",
+                              self.skipped(api=FakeApi(runs=[other])))
+
+    def test_a_skipped_failed_or_missing_job_runs_everything(self):
+        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 10)", "skipped"), *GREEN_JOBS[3:]],
+                     [*GREEN_JOBS[:3], job("windows", "failure"), *GREEN_JOBS[4:]],
+                     [*GREEN_JOBS[:5], job("reuse a pull request verdict", "success")],
+                     [job for job in GREEN_JOBS if job["name"] != "windows"],
+                     []):
+            with self.subTest(jobs=jobs):
+                self.skipped(api=FakeApi(jobs={77: jobs}))
+
+    def test_cache_inputs_match_only_their_files(self):
+        self.assertTrue(reuse.cache_input("Cargo.toml"))
+        self.assertFalse(reuse.cache_input("docs/Cargo.toml.md"))
+        self.assertFalse(reuse.cache_input("scripts/release.py"))
+
+    def test_the_workflow_path_comes_from_the_workflow_ref(self):
+        self.assertEqual(reuse.workflow_path(f"sathyassn/codeflow/{WORKFLOW}@refs/heads/main", "sathyassn/codeflow"),
+                         WORKFLOW)
+        with self.assertRaises(reuse.Skip):
+            reuse.workflow_path(f"someone/else/{WORKFLOW}@refs/heads/main", "sathyassn/codeflow")
+
+
+class MainTests(unittest.TestCase):
+    def main(self, decision):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            output.write_text("")
+            argv = ["ci-reuse.py", "--repo", "sathyassn/codeflow", "--sha", PUSHED, "--event", "push",
+                    "--workflow-ref", f"sathyassn/codeflow/{WORKFLOW}@refs/heads/main",
+                    "--push-only", "reuse a pull request verdict", "--require", "windows"]
+            with mock.patch.object(reuse, "decide", side_effect=decision), mock.patch("sys.argv", argv), \
+                    mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), redirect_stdout(io.StringIO()):
+                code = reuse.main()
+            return code, output.read_text()
+
+    def test_reuse_writes_the_run_id(self):
+        self.assertEqual(self.main(lambda *args: 77), (0, "run=77\n"))
+
+    def test_a_reason_or_an_error_writes_nothing_and_never_fails(self):
+        def refuse(*args):
+            raise reuse.Skip("trees differ")
+
+        def broken(*args):
+            raise KeyError("head")
+        self.assertEqual(self.main(refuse), (0, ""))
+        self.assertEqual(self.main(broken), (0, ""))
+
+
+class GitTests(unittest.TestCase):
+    """The git reader against a real repository: a merge of an up-to-date
+    head has the head's tree, and main before the merge is in the head."""
+
+    def test_trees_parents_ancestry_and_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def git(*args):
+                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                                       *args], cwd=directory, check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q", "-b", "main")
+            Path(directory, "a.txt").write_text("a\n")
+            git("add", "a.txt")
+            git("commit", "-q", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("switch", "-q", "-c", "topic")
+            Path(directory, "Cargo.lock").write_text("lock\n")
+            git("add", "Cargo.lock")
+            git("commit", "-q", "-m", "topic")
+            head = git("rev-parse", "HEAD")
+            git("switch", "-q", "main")
+            git("merge", "-q", "--no-ff", "-m", "merge", "topic")
+            merged = git("rev-parse", "HEAD")
+            reader = reuse.Git(directory)
+            self.assertEqual(reader.tree(merged), reader.tree(head))
+            self.assertEqual(reader.parents(merged), [base, head])
+            self.assertTrue(reader.is_ancestor(base, head))
+            self.assertFalse(reader.is_ancestor(merged, head))
+            self.assertEqual(reader.changed(base, merged), ["Cargo.lock"])
+
+
+if __name__ == "__main__":
+    unittest.main()
