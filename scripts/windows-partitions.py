@@ -26,7 +26,10 @@ therefore runs without a data refresh, only less evenly.
 partition's JUnit report, and fails when a listed test ran in no partition,
 ran in two, or ran outside the partition this plan gives it.
 
-Refresh the data from a few green runs (artifacts are kept seven days):
+Refresh the data from a few green runs of these partitions (artifacts are
+kept seven days). Leave out runs of the older compiling partitions: they
+ran the slow tests about 10 percent faster in total, and a few of them in
+half the time (TSK-265):
 
     gh run download <run id> --repo sathyassn/codeflow -p 'windows-junit-*' -D runs/<run id>
     python3 -B scripts/windows-partitions.py measure runs/<oldest> ... runs/<newest>
