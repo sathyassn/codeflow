@@ -288,7 +288,9 @@ A finding is **material** when, shipped unfixed, it would:
 
 - leave a criterion or the outcome unmet, or met only in the tested case;
 - give a user, adopter or operator wrong behaviour, a wrong message or a
-  wrong refusal;
+  wrong refusal, or a name, message, figure or example that a plausible
+  reader takes as wrong, unsafe, alarming, offensive or a false promise
+  (`writing.md` "Meaning the reader takes");
 - let a guard, hook, policy, CI or credential path be evaded, or give false
   assurance;
 - lose, corrupt or rewrite data, records or history;
@@ -299,8 +301,9 @@ A finding is **material** when, shipped unfixed, it would:
 - repeat a small symptom that points at one mechanism.
 
 Confidence is stated apart from consequence, and the effort to fix never
-lowers materiality. Everything else is a **nit**: style, naming, wording,
-structure preference, or an alternative with no demonstrated defect. Each
+lowers materiality. Everything else is a **nit**: style, naming and wording
+with no such reading, structure preference, or an alternative with no
+demonstrated defect. Each
 nit gets one disposition in the PR body: `fix now`, `track once` (one line
 in the epic's planning notes, or the task's follow-ups when there is no
 epic, or one entry in the harness's task tools, with the event that

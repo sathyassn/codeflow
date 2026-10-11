@@ -6,11 +6,12 @@ description: Review or revise substantial repository and user-facing prose witho
 # cf-editorial-review: preserve meaning, improve delivery
 
 **Write plainly.** Everything an agent writes, replies and status updates
-included, is simple, straightforward and clear, with the detail the reader
-needs and no more. Avoid mannered prose, writing that performs for effect:
-slogans, "not X but Y" turns, rhetorical triplets, dramatic fragments,
-stacked hedges, colon reveals, self-narration, ceremonial framing and walls
-of text. State the fact directly. Default to short prose and bullets, and
+included, is simple, straightforward, clear and unambiguous, with the detail
+the reader needs and no more. Avoid mannered prose, writing that performs
+for effect: slogans, "not X but Y" turns, rhetorical triplets, dramatic
+fragments, stacked hedges, colon reveals, self-narration, ceremonial framing
+and walls of text. State the fact directly, and check what a reader could
+take it to mean. Default to short prose and bullets, and
 write long prose only when the reader asks for it or the artifact is prose
 by nature. "Mannered prose" in
 [references/editorial-smells.md](references/editorial-smells.md) lists each
@@ -58,8 +59,11 @@ style direction outranks this skill's defaults.
 4. **Diagnose before rewriting.** Find actual problems: missing context,
    unsupported confidence, sycophancy, inflated importance, generic filler,
    repeated conclusions, abrupt fragments, muddled hierarchy, inconsistent
-   terminology, or formatting that obscures the message. For ambiguous cases,
-   consult [references/editorial-smells.md](references/editorial-smells.md).
+   terminology, a second reading a plausible reader takes (a name, message,
+   image or colour that suggests what is not meant; "Meaning taken" in
+   [references/editorial-smells.md](references/editorial-smells.md)), or
+   formatting that obscures the message. For ambiguous cases, consult
+   [references/editorial-smells.md](references/editorial-smells.md).
 5. **Make the smallest sufficient edit.** Preserve sound language, useful
    structure, domain terms, and the author's recognizable register. Rewrite a
    sentence, paragraph, or section only when the diagnosed issue warrants it;
@@ -88,7 +92,8 @@ style direction outranks this skill's defaults.
    universal word, punctuation, formatting, or emoji blacklist; the only fixed
    exclusions are the ones project policy names, and ADR-0067 lists them.
 7. **Verify the revision.** Compare original and revision for lost meaning,
-   changed certainty, dropped caveats, altered terminology, unsupported new
+   changed certainty, a reading the author did not intend, dropped caveats,
+   altered terminology, unsupported new
    claims, accidental policy violations, and visual/verbal mismatch where the
    copy belongs to an interface. Claim localized quality only from reviewable
    localized copy and relevant language evidence; English-only review is not

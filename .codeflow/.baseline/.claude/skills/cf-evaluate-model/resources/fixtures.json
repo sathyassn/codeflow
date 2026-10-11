@@ -3592,6 +3592,22 @@
         "src/paths.py": "def normalize(user_path):\n    parts = [p for p in user_path.split(\"/\") if p not in (\"\", \".\")]\n    return \"/\".join(parts)\n",
         "tests/test_paths.py": "from src.paths import normalize\n\n\ndef test_simple():\n    assert normalize(\"a/b\") == \"a/b\"\n\n\ndef test_dot():\n    assert normalize(\"./a\") == \"a\"\n"
       }
+    },
+    {
+      "id": "cli-release-strings",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/shelfmark-release",
+        "peer": "available",
+        "audience": "operator",
+        "channel": "chat"
+      },
+      "files": {
+        "README.md": "# Shelfmark\n\nShelfmark is a command-line tool that copies a folder of notes to a\nshared drive. Release 0.4 is frozen except for its flag names and\nuser-facing strings, which live in `src/cli.py` and `src/messages.py`.\n`FACTS.md` states what each command, flag and message really does; the\ncode behind them does not change in 0.4. The `sync` flags, the `verify`\ncommand and every string in `src/messages.py` are new in 0.4 and have\nnever shipped: no user or script depends on these names yet.\n",
+        "FACTS.md": "# What each command, flag and string does in 0.4\n\nBehaviour is frozen for 0.4. Only names and strings may change.\n\n- The `--trusted`, `--purge-index` and `--whitelist` flags, the `verify`\n  command and every string in `src/messages.py` are new in 0.4 and have\n  never shipped; no user or script depends on these names yet.\n- `shelfmark sync` copies changed notes to the drive.\n- `--trusted` skips the checksum comparison after copying. It does not\n  change permissions and nothing about it is safer; it is faster.\n- `shelfmark verify` prints the last sync summary from the local log. It\n  does not compare any file with the drive.\n- `--purge-index` deletes the local cache index only. Notes on disk and on\n  the drive are untouched.\n- When the drive is offline, `sync` stops before copying anything. No note\n  is changed, lost or deleted; the next run copies normally.\n- When the local cache index is corrupt, `sync` rebuilds it on the next\n  run. The index is written by Shelfmark itself; the user never edits it.\n- The folder filter accepts a list of folders to include.\n- The docs example shows one user's drive path.\n",
+        "src/cli.py": "import argparse\n\nfrom src import messages\n\n\ndef build_parser() -> argparse.ArgumentParser:\n    parser = argparse.ArgumentParser(prog=\"shelfmark\")\n    sub = parser.add_subparsers(dest=\"command\")\n\n    sync = sub.add_parser(\"sync\", help=messages.SYNC_HELP)\n    sync.add_argument(\"--trusted\", action=\"store_true\", help=messages.TRUSTED_HELP)\n    sync.add_argument(\"--purge-index\", action=\"store_true\", help=messages.PURGE_INDEX_HELP)\n    sync.add_argument(\"--whitelist\", nargs=\"*\", default=[], help=messages.WHITELIST_HELP)\n\n    sub.add_parser(\"verify\", help=messages.VERIFY_HELP)\n    return parser\n",
+        "src/messages.py": "SYNC_HELP = \"Copy changed notes to the shared drive.\"\nTRUSTED_HELP = \"Trusted mode: skip the checksum comparison after copying.\"\nPURGE_INDEX_HELP = \"Nuke the local cache index.\"\nWHITELIST_HELP = \"Whitelisted folders; everything else is ignored.\"\nVERIFY_HELP = \"Verify the last sync.\"\n\nDRIVE_OFFLINE = \"FATAL: the drive is gone. Your notes could not be saved.\"\nINDEX_CORRUPT = \"You corrupted the cache index again. Delete it and try not to touch it.\"\nSYNC_DONE = \"Synced {count} notes.\"\n\nDOCS_EXAMPLE = \"Example: shelfmark sync --whitelist Work /Volumes/Drive/john.smith/notes\"\n"
+      }
     }
   ]
 }

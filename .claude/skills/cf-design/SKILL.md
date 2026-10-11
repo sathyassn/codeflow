@@ -78,7 +78,10 @@ Resolve only the dimensions that materially steer the surface:
    actions, guidance, validation, empty, loading, error, success, destructive,
    and recovery states need. Write the copy plainly: simple, straightforward
    and clear, no mannered prose (see `.codeflow/rules/writing.md`), within
-   the product's documented voice. Refer substantial language judgment to
+   the product's documented voice. Check what each name, label, image,
+   colour and icon could be taken to mean by a viewer who does not know the
+   intent, and in another culture or language (`.codeflow/rules/writing.md`
+   "Meaning the reader takes"). Refer substantial language judgment to
    `cf-editorial-review`; do not invent a product personality.
 5. **Appearance modes.** Decide only the applicable light, dark, high-contrast,
    system-following, override, persistence, reduced-motion, and mode-safe media
