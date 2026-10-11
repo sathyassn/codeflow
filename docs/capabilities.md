@@ -120,7 +120,7 @@ Its harness starters are executable policy (ADR-0025, ADR-0026).
 
 | Written file | What it holds |
 |---|---|
-| `AGENTS.md`, every tier | a moment-keyed rule map rendered from one kernel, `assets/base/rule-map.toml`: at most 12 one-line always rules, a "when you are about to" table, and pointers one hop away to the references in `.codeflow/rules/`; it leaves at least 16 KiB for the project section under Codex's 32 KiB limit |
+| `AGENTS.md`, every tier | a moment-keyed rule map rendered from one kernel, `assets/base/rule-map.toml`: always rules of one line each with a pointer, a "when you are about to" table, and pointers one hop away to the references in `.codeflow/rules/`; it leaves at least 16 KiB for the project section under Codex's 32 KiB limit |
 | Claude starter | no ask rules: the actions the operator performs are denied by rules generated from one action table, which also generates the Codex command rules (ADR-0075) |
 | Grok starter | a sandbox profile (ADR-0075) |
 
@@ -408,7 +408,7 @@ advisory command, `session-orient`, is wired on `SessionStart` and
 
 | Event | What it adds |
 |---|---|
-| Compaction, resume or Claude fork (source `compact`, `resume` or `fork`) | a guidance block after the digest, about 1.5 KB: the always rules by title, the "when you are about to" moments with their first pointer, and every skill and agent the tier installs, from the rule-map kernel and the scaffold manifest |
+| Compaction, resume or Claude fork (source `compact`, `resume` or `fork`) | a short guidance block after the digest: the always rules by title, the "when you are about to" moments with their first pointer, and every skill and agent the tier installs, from the rule-map kernel and the scaffold manifest |
 | A prompt that asks for a duration, a status or a complex explanation | one rule line, about 300 bytes |
 | Any other prompt | nothing |
 

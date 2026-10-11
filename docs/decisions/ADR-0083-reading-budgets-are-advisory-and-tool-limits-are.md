@@ -60,7 +60,8 @@ section 4.4.
   guideline" an acceptance criterion on an advisory number, and a reviewer
   reads the note as a prompt to look at structure.
 - A fresh install reports clean with headroom (the largest shipped skill
-  is 408 lines; the chain is 132 KiB), so a note still points at a change.
+  is 408 lines; the chain is 132,118 bytes, about 129 KiB of 160 KiB), so
+  a note still points at a change.
 - The Codex check, the one byte failure, moves with a project's own
   `project_doc_max_bytes`; a project that raised it is not warned at 32
   KiB. The derived kernel number moves with it too.
@@ -75,7 +76,7 @@ section 4.4.
   defaults; `codeflow update` writes neither, and an older policy file
   parses unchanged.
 - The description limit becomes a failing contract test on shipped files,
-  since the API refuses such a file; the longest shipped description is 685
+  since the API refuses such a file; the longest shipped description is 681
   characters.
 - Ruled out: a byte number per skill anywhere, a count cap on rules, and a
   convention that resets a number to the measured size.

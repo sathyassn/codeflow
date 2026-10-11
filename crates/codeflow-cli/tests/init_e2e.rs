@@ -1893,7 +1893,7 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
                 assert_eq!(head, digest, "{flag} {harness} {source}");
                 let heading = "## Rules after compaction or resume";
                 println!(
-                    "{flag} {harness} {source}: block {} bytes (guideline 1536)",
+                    "{flag} {harness} {source}: block {} bytes",
                     heading.len() + block.len()
                 );
             }

@@ -106,7 +106,7 @@ pub const CHAIN_BASIS: &str = "about one fifth of a 200k context window at four 
 /// The basis a note states for a skill or agent body guideline.
 pub const BODY_BASIS: &str = "the skill authoring convention of Anthropic and Cursor";
 /// The basis a note states for the always-loaded instruction guideline.
-pub const INSTRUCTIONS_BASIS: &str = "Claude Code's target for always-loaded instructions";
+pub const INSTRUCTIONS_BASIS: &str = "Claude Code's published target of under 200 lines per CLAUDE.md file; CodeFlow sums the file and its imports because imports load at launch";
 /// The basis a warning states for the description limit.
 pub const DESCRIPTION_BASIS: &str = "the API limit";
 
