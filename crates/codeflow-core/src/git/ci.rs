@@ -169,33 +169,19 @@ impl CiWaitConfig {
 ///
 /// `state` is GitHub's conclusion string (`SUCCESS`, `FAILURE`, `CANCELLED`,
 /// `TIMED_OUT`, `ACTION_REQUIRED`, `NEUTRAL`, `SKIPPED`, `STALE`) when the
-/// check has concluded, or empty/absent when in-flight. Older `gh` versions
-/// surface the conclusion in `conclusion` and the live status in `status`,
-/// so we read both.
+/// check has concluded, or empty/absent when in-flight.
 #[derive(Debug, Clone, Deserialize)]
 struct GhCheck {
     #[serde(default)]
     name: String,
     #[serde(default)]
     state: String,
-    #[serde(default)]
-    conclusion: String,
-    #[serde(default)]
-    status: String,
 }
 
 impl GhCheck {
     /// Normalized state: "success", "failure", "pending", or "unknown".
     fn normalized_state(&self) -> &'static str {
-        // Prefer GitHub's CheckRunState when present (newer gh).
-        let raw = if !self.state.is_empty() {
-            self.state.as_str()
-        } else if !self.conclusion.is_empty() {
-            self.conclusion.as_str()
-        } else {
-            self.status.as_str()
-        };
-        match raw.to_ascii_uppercase().as_str() {
+        match self.state.to_ascii_uppercase().as_str() {
             "SUCCESS" | "NEUTRAL" | "SKIPPED" => "success",
             "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" => "failure",
             // "IN_PROGRESS" | "QUEUED" | "PENDING" | "WAITING" | "" (in-flight)
@@ -438,7 +424,7 @@ fn is_transient(err: &CiWaitError) -> bool {
     }
 }
 
-/// Invoke `gh pr checks <pr> --json name,state,conclusion,status`.
+/// Invoke `gh pr checks <pr> --json name,state`.
 ///
 /// Fails loud when `gh` is missing or the command exits non-zero with stderr
 /// on the clipboard (rate-limits, auth failures, PR not found).
@@ -449,7 +435,7 @@ async fn fetch_pr_checks(pr_number: u64) -> Result<Vec<GhCheck>, CiWaitError> {
             "checks",
             &pr_number.to_string(),
             "--json",
-            "name,state,conclusion,status",
+            "name,state",
         ])
         .output()
         .await
@@ -603,8 +589,6 @@ mod tests {
         GhCheck {
             name: name.to_string(),
             state: state.to_string(),
-            conclusion: String::new(),
-            status: String::new(),
         }
     }
 
@@ -851,31 +835,19 @@ mod tests {
     }
 
     #[test]
-    fn test_gh_check_state_precedence() {
-        // `state` > `conclusion` > `status`.
-        let c = GhCheck {
-            name: "x".into(),
-            state: "SUCCESS".into(),
-            conclusion: "FAILURE".into(),
-            status: "IN_PROGRESS".into(),
-        };
-        assert_eq!(c.normalized_state(), "success");
-
-        let c2 = GhCheck {
-            name: "y".into(),
-            state: String::new(),
-            conclusion: "FAILURE".into(),
-            status: "COMPLETED".into(),
-        };
-        assert_eq!(c2.normalized_state(), "failure");
-
-        let c3 = GhCheck {
-            name: "z".into(),
-            state: String::new(),
-            conclusion: String::new(),
-            status: "IN_PROGRESS".into(),
-        };
-        assert_eq!(c3.normalized_state(), "pending");
+    fn test_gh_check_state_is_never_read_as_passing_unless_success() {
+        for (state, expected) in [
+            ("SUCCESS", "success"),
+            ("skipped", "success"),
+            ("FAILURE", "failure"),
+            ("CANCELLED", "failure"),
+            ("", "pending"),
+            ("IN_PROGRESS", "pending"),
+            ("STALE", "unknown"),
+            ("SOMETHING_NEW", "unknown"),
+        ] {
+            assert_eq!(check("x", state).normalized_state(), expected, "{state}");
+        }
     }
 
     // --- transient vs permanent error classification ---
@@ -968,8 +940,6 @@ mod tests {
         GhCheck {
             name: name.to_string(),
             state: state.to_string(),
-            conclusion: String::new(),
-            status: String::new(),
         }
     }
 
@@ -1197,8 +1167,6 @@ mod tests {
         let c = GhCheck {
             name: "x".into(),
             state: "ALIEN_STATE".into(),
-            conclusion: String::new(),
-            status: String::new(),
         };
         assert_eq!(c.normalized_state(), "unknown");
     }
@@ -1207,7 +1175,7 @@ mod tests {
 
     #[test]
     fn test_parse_pr_checks_success_valid_json() {
-        let stdout = br#"[{"name":"ci","state":"SUCCESS","conclusion":"","status":""}]"#;
+        let stdout = br#"[{"name":"ci","state":"SUCCESS"}]"#;
         let checks = parse_pr_checks_output(42, true, stdout, b"").unwrap();
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].name, "ci");
