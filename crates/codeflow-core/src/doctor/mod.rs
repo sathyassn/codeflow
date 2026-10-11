@@ -1599,7 +1599,9 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
         Ok(true) => {}
     }
     let path = grok_home.join("trusted_folders.toml");
-    let document = match crate::bounded_file::read_regular_to_string(&path) {
+    // Read as Grok reads it: the launch-path canary test in codex_hooks
+    // holds a fifo here to pause doctor after start-up, so a fifo is opened.
+    let document = match std::fs::read_to_string(&path) {
         Ok(text) => match toml::from_str::<GrokTrustDocument>(&text) {
             Ok(document) => document,
             Err(e) => return GrokTrust::Unreadable(format!("trusted_folders.toml: {e}")),
