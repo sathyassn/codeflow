@@ -618,6 +618,47 @@ export async function runDesignKitCheck({ kit = KIT_DIR, only = '', log = consol
   return report;
 }
 
+// The kit renders page data and page content into its own chrome, so a value
+// there must stay text. Mount each reference page again with markup in the
+// fields the kit writes as HTML (an earlier note's kind, a heading id) and
+// report what the rail and the table of contents made of it.
+export const HOSTILE_KIND = '<b data-cf-injected="kind">kind</b>';
+export const HOSTILE_ID = 'hostile" data-cf-injected="toc';
+export async function reviewDataInjectionProbe({ kit = KIT_DIR } = {}) {
+  kitDir = kit;
+  const browser = await chromium.launch({ env: hardenedChildEnvironment() });
+  try {
+    const { ctx, page } = await newPage(browser, 1280);
+    await load(page, 'present.reference.html', 'graphite', 'light');
+    const present = await page.evaluate(kind => {
+      const dataEl = document.getElementById('cf-data');
+      const data = JSON.parse(dataEl.textContent);
+      data.earlier[0].notes[0].kind = kind;
+      dataEl.textContent = JSON.stringify(data);
+      CF.mount(document.querySelector('[data-cf-view]'));
+      const body = document.querySelector('[data-cf-earlier-body]');
+      return { injected: body.querySelectorAll('[data-cf-injected]').length, text: body.textContent.includes(kind) };
+    }, HOSTILE_KIND);
+    await load(page, 'portal.reference.html', 'graphite', 'light');
+    const portal = await page.evaluate(id => {
+      const view = document.querySelector('[data-cf-view]');
+      const panel = [...view.querySelectorAll('h2[id]')].map(h => h.parentElement).find(p => !p.closest('[hidden]'));
+      const heading = document.createElement('h2');
+      heading.id = id;
+      heading.textContent = 'Hostile heading';
+      panel.append(heading);
+      CF.mount(view);
+      const links = [...document.querySelectorAll('[data-cf-toc] a')];
+      return { injected: document.querySelectorAll('[data-cf-toc] [data-cf-injected]').length, href: links.some(a => a.getAttribute('href') === `#${id}`) };
+    }, HOSTILE_ID);
+    const errors = [...page.errors];
+    await ctx.close();
+    return { present, portal, errors };
+  } finally {
+    await browser.close();
+  }
+}
+
 function headSha() {
   try {
     return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPOSITORY, env: hardenedChildEnvironment(), encoding: 'utf8' }).trim();

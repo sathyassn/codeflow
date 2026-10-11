@@ -691,7 +691,7 @@
     function buildToc() {
       const panel = panels.find(p => !p.hidden);
       heads = $$('h2[id], h3[id]', panel);
-      const html = heads.map(h => `<li><a class="cf-toc-link${h.tagName === 'H3' ? ' is-l3' : ''}" href="#${h.id}" data-target="${h.id}">${esc(h.textContent.trim())}</a></li>`).join('');
+      const html = heads.map(h => `<li><a class="cf-toc-link${h.tagName === 'H3' ? ' is-l3' : ''}" href="#${esc(h.id)}" data-target="${esc(h.id)}">${esc(h.textContent.trim())}</a></li>`).join('');
       tocLists.forEach(l => { l.innerHTML = html; });
       activeId = '';
       spy();
@@ -1129,7 +1129,7 @@
         const row = mk('div', 'cf-note-row');
         row.setAttribute('role', 'listitem');
         row.tabIndex = 0;
-        row.innerHTML = `<div class="cf-note-kicker">${SPEECH}<span class="cf-kicker">${n.kind} · #${i + 1}</span><button type="button" class="cf-link-btn" data-act="remove">Remove</button></div>
+        row.innerHTML = `<div class="cf-note-kicker">${SPEECH}<span class="cf-kicker">${esc(n.kind)} · #${i + 1}</span><button type="button" class="cf-link-btn" data-act="remove">Remove</button></div>
           <div class="cf-note-target">${esc(targetText(n))}</div><div class="cf-note-body">${esc(n.body)}</div>`;
         row.addEventListener('click', e => { if (e.target.closest('[data-act="remove"]')) { removeNote(n); return; } openComposer({ mode: 'edit', note: n }); });
         row.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === row) { e.preventDefault(); openComposer({ mode: 'edit', note: n }); } });
@@ -1262,7 +1262,7 @@
       return `<div class="cf-earlier-head"><span>Revision ${esc(rv.revision)}</span><span class="cf-status-chip"><span class="cf-shape cf-shape--${v[0]} cf-tone-${v[1]}" aria-hidden="true"></span>${v[2]}</span><span>${esc(rv.date)}</span></div>` +
         rv.notes.map(n => {
           const orphan = n.state === 'orphaned';
-          return `<div class="cf-earlier-note"><span class="cf-earlier-state"><span class="cf-shape cf-shape--${orphan ? 'ring' : 'dot'} cf-tone-${orphan ? 'warning' : 'positive'}" aria-hidden="true"></span>${orphan ? 'Unresolved: ' + esc(n.reason) : 'Reanchored'}</span><p class="cf-note-target">${n.kind} · ${esc(n.target)}</p><p class="cf-note-body">${esc(n.body)}</p></div>`;
+          return `<div class="cf-earlier-note"><span class="cf-earlier-state"><span class="cf-shape cf-shape--${orphan ? 'ring' : 'dot'} cf-tone-${orphan ? 'warning' : 'positive'}" aria-hidden="true"></span>${orphan ? 'Unresolved: ' + esc(n.reason) : 'Reanchored'}</span><p class="cf-note-target">${esc(n.kind)} · ${esc(n.target)}</p><p class="cf-note-body">${esc(n.body)}</p></div>`;
         }).join('');
     }).join('') : '<p class="cf-note-target">No earlier feedback.</p>';
 

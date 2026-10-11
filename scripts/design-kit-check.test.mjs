@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PAIRS, WIDTHS, runDesignKitCheck } from "./design-kit-check.mjs";
+import { PAIRS, WIDTHS, reviewDataInjectionProbe, runDesignKitCheck } from "./design-kit-check.mjs";
 
 // The rows every run must report, so a control that silently stops being
 // driven fails here instead of vanishing from the output.
@@ -29,4 +29,11 @@ test("both reference pages pass the kit checklist in every skin and mode", { ski
   }
   assert.equal(report.motion.length, 2 * WIDTHS.length);
   assert.ok(report.motion.every((probe) => probe.ok && probe.matched), "reduced motion must leave no transition, animation or loop");
+});
+
+test("the kit writes review data and heading ids as text", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const { present, portal, errors } = await reviewDataInjectionProbe();
+  assert.deepEqual(present, { injected: 0, text: true }, "an earlier note's kind became markup in the rail");
+  assert.deepEqual(portal, { injected: 0, href: true }, "a heading id became markup in the table of contents");
+  assert.deepEqual(errors, []);
 });
