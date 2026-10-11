@@ -1,0 +1,11 @@
+id = "TSK-269"
+uid = "c01e6a56-1d9d-4378-8fdd-125ab959d77c"
+kind = "TSK"
+title = "CodeQL findings are triaged and the design kit escapes review data"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T17:28:02Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
