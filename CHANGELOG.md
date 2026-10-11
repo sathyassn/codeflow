@@ -19,6 +19,33 @@ erratum below, never an edit of the section.
 
 ## [3.1.0]
 
+> **Upgrading from 3.0.0.** Take these steps in order; the entries below give
+> the detail.
+>
+> 1. Install the 3.1.0 `codeflow` on `PATH` first. The hooks run that
+>    binary, and a project that sets any of the optional keys in step 5
+>    needs 3.1.0 or later locally and in CI, because an older binary rejects
+>    an unknown policy key and blocks every commit.
+> 2. On a new branch, run `codeflow update --pin 3.1.0`. It checks the
+>    release archives against `sha256.sum` and writes only `scaffold_version`
+>    and a `[scaffold_sha256]` table to `.codeflow/project.toml`. Land that
+>    pull request so CI installs the pinned, digest-checked binary.
+> 3. Run `codeflow update` on a new branch and review what it proposes. A
+>    policy that lacks `git.security_review` or `git.dep_audit` lands
+>    those two keys before the 3.1.0 workflow, because the security review
+>    job reads them from the base.
+> 4. A pull request that names several epics writes them on one `Task:`
+>    line (`Task: EPC-001, EPC-002`), which only 3.1.0 reads. Before
+>    completing a task, write each Reviews row as
+>    `reviewer | whole unit at <40-character sha> | approved`.
+> 5. These keys are new and optional, and `codeflow update` never writes
+>    them. Set one only to change its default: `git.pr_summary` (blocks by
+>    default), `git.pr_body_max_words` (1000, `0` turns the warning off),
+>    `git.required_checks` (the four shipped CI job names) and the
+>    `[reading]` section of `.codeflow/project.toml` (`kernel_max_bytes`,
+>    `chain_max_bytes`, `skill_max_lines`, `instructions_max_lines`). At the
+>    full tier, `[feedback] topics` is written on first use.
+
 ### Added
 
 <!-- codeflow:release-impact minor -->
