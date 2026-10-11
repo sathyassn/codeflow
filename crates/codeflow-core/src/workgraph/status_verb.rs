@@ -8,7 +8,6 @@
 //! since the read (a concurrent edit), and replaces it atomically through a
 //! temporary file in the same directory.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -176,7 +175,7 @@ pub fn set_status(
     if change.target == "complete" {
         bind_completion_of(repo_root, kind, &graph, &after, &mut warnings)?;
     }
-    replace_if_unchanged(&path, digest.as_slice(), &proposed)?;
+    replace_if_unchanged(repo_root, &record.path, digest.as_slice(), &proposed)?;
     Ok(VerbOutcome {
         path,
         from: record.status.clone(),
@@ -444,40 +443,31 @@ fn verb_authorities(
     )
 }
 
-/// Replace `path` with `content` only when its bytes still hash to
-/// `expected` (SHA-256); the new bytes land through an atomic rename.
+/// Replace the record at `relative` (a `/`-separated path beneath
+/// `repo_root`) with `content` only when its bytes still hash to `expected`
+/// (SHA-256). The record is read and written through `crate::contained`,
+/// so a link at any component refuses the change (issue 94), and the new
+/// bytes land through an atomic rename that keeps the file's Unix
+/// permission bits.
 ///
 /// # Errors
 ///
 /// [`VerbError::Concurrent`] when the file changed, [`VerbError::Io`] on I/O
-/// failure. The temporary file is removed on a failed write.
-pub fn replace_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Result<(), VerbError> {
-    let current = std::fs::read(path).map_err(io(path))?;
+/// failure or a refused link. The temporary file is removed on a failed
+/// write.
+pub fn replace_if_unchanged(
+    repo_root: &Path,
+    relative: &str,
+    expected: &[u8],
+    content: &str,
+) -> Result<(), VerbError> {
+    let path = repo_root.join(relative);
+    let tree = crate::contained::Tree::open(repo_root).map_err(io(&path))?;
+    let current = tree.read(relative, u64::MAX).map_err(io(&path))?;
     if Sha256::digest(&current).as_slice() != expected {
-        return Err(VerbError::Concurrent(path.to_path_buf()));
+        return Err(VerbError::Concurrent(path));
     }
-    let name = path.file_name().map_or_else(
-        || "record".into(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .and_then(|mut file| {
-            file.write_all(content.as_bytes())?;
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, path));
-    if let Err(source) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(VerbError::Io {
-            path: path.to_path_buf(),
-            source,
-        });
-    }
-    Ok(())
+    tree.write(relative, content.as_bytes()).map_err(io(&path))
 }
 
 fn required<'a>(value: Option<&'a String>, flag: &str, why: &str) -> Result<&'a str, String> {
@@ -725,6 +715,41 @@ mod tests {
         ));
     }
 
+    /// Issue 94: the status verb's write refuses a link above the record
+    /// and leaves the record where it points unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_above_the_record_refuses_the_status_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("tasks")).unwrap();
+        std::fs::write(outside.path().join("tasks/TSK-001.md"), "one").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("project-management")).unwrap();
+        let digest = Sha256::digest(b"one");
+        let error = replace_if_unchanged(
+            dir.path(),
+            "project-management/tasks/TSK-001.md",
+            digest.as_slice(),
+            "two",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, VerbError::Io { source, .. }
+                if source.to_string().starts_with("project-management is a symbolic link")),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("tasks/TSK-001.md")).unwrap(),
+            "one"
+        );
+        assert_eq!(
+            std::fs::read_dir(outside.path().join("tasks"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn a_concurrent_edit_is_detected_by_digest() {
         let dir = tempfile::tempdir().unwrap();
@@ -733,12 +758,12 @@ mod tests {
         let stale = Sha256::digest(b"one");
         std::fs::write(&path, "two").unwrap();
         assert!(matches!(
-            replace_if_unchanged(&path, stale.as_slice(), "three"),
+            replace_if_unchanged(dir.path(), "TSK-001.md", stale.as_slice(), "three"),
             Err(VerbError::Concurrent(_))
         ));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
         let fresh = Sha256::digest(b"two");
-        replace_if_unchanged(&path, fresh.as_slice(), "three").unwrap();
+        replace_if_unchanged(dir.path(), "TSK-001.md", fresh.as_slice(), "three").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "three");
         let leftovers = std::fs::read_dir(dir.path()).unwrap().count();
         assert_eq!(leftovers, 1, "no temporary file is left behind");
