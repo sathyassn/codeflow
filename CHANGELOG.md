@@ -270,6 +270,115 @@ erratum below, never an edit of the section.
   `FB` kind: an older binary's `ids check` reports an `ids/FB/` entry as a
   repaired-history warning and still passes.
 
+<!-- codeflow:release-impact minor -->
+- **Guidance for working while something is uncertain (issue 70).** The
+  managed instructions now say how dependent work keeps moving while an
+  operator question is open, a fact cannot be verified yet, or operator
+  feedback arrives mid-run. The full rule sits in the autonomy reference,
+  read only when a step may need the operator, so the per-task reading
+  chain does not grow.
+  - `autonomy.md` "While a question is open", with three decision-table
+    rows: while an operator answer is pending and the recommended answer is
+    reversible, dependent work continues on a working default, labelled
+    where it lands with what reverses it; when the answer is not reversible,
+    or a fact cannot be verified yet, the work holds the conservative state
+    and says what clears it; neither interim state takes the operator-owned
+    step; an interim state another task, a reviewer or a later session
+    relies on is recorded where the work is tracked, with its evidence,
+    reversal and status.
+  - `workflow-discipline.md`: the rule at every tier in "Navigate
+    blockers"; under "Claims need evidence", how far a change reaches is a
+    claim (list and check every consumer of the changed thing), and a rule
+    encoding the operator's guidance adds nothing the operator never gave;
+    under "Planning", operator feedback during work is a request like any
+    other: attached to its unit, placed in the plan's order, acted on after
+    a read of the whole aspect, closed with evidence.
+  - `writing.md` asks for a qualifier on a word the project uses for
+    several things; `project-organization.md` names the record home for an
+    interim state; `cf-reviewer` checks a reach claim, a working default's
+    label and encoded guidance.
+
+<!-- codeflow:release-impact minor -->
+- **A project can configure design authority.** `.codeflow/model-selection.json`
+  schema 2 adds two optional blocks (issue 43). `design_authority` names
+  roles inside the catalog's design owner seat: one `owner`, which must be
+  the seat's first line, and later lines of the same seat as `co-owner` or
+  `consultant`, with the stages they approve at or are consulted before. A
+  co-owner designs after the owner with no task override and without the
+  reduced-assurance label. The block counts only as committed on the
+  task's integration target, so `codeflow models resolve --duty design`
+  needs `--task` to apply it; a working-tree or task-branch copy confers
+  nothing. A new engine-owned duty, `design-approval`, resolves the
+  co-owner as a required same-family approver and each consultant as an
+  advisory one, labelled as never the independent review; unconfigured, it
+  is an optional open gap with exit 0. `standing_reviews` makes an
+  extra-family seat a standing reviewer for an area: a `unit-review` or
+  `body-review` resolved with the new `--area` flag owes that catalog
+  participant as a standing assignment. Another family still designs only
+  through a task `OPERATOR_OVERRIDE`, any invalid entry rejects the whole
+  file, `codeflow doctor --check model-bindings` prints both blocks, and a
+  schema 1 file or no file resolves every duty exactly as before. The
+  design routing reference and cf-design's revision reference say that a
+  same-family design approval and a cross-family review are separate
+  duties, both required when both are configured.
+
+<!-- codeflow:release-impact minor -->
+- **A completed standalone task's criteria wording can be corrected.**
+  `work.criteria_frozen` refused every change to a completed standalone
+  task's criteria, on any branch, and the one route for a completed task,
+  the planning amendment that names its epic, does not exist without an
+  epic, so a typo or a person's name stayed in the record
+  (sathyassn/codeflow#103). A pull request whose range changes planning
+  records only may now change the text of that task's existing criteria
+  when its `Task:` line names the task, or a follow-up whose
+  `follow_up_of` is that task (ADR-0080). `codeflow ci` prints the delta
+  as a `work.criteria_frozen` note for the reviewer, who confirms that the
+  meaning is unchanged; the task stays `complete`, its acceptance block
+  stays bound, and the anchored work-start preflight does not apply to
+  a range that corrects the task's records (a range of only a plan note,
+  the follow-up's own record or another task's record keeps it). An added, removed, renumbered or reordered criterion, a
+  changed `(journey)`, `(after release)` or `(serves ...)` tag, a
+  changed checkbox form, or an added list item that is no criterion is
+  still refused, and so is the same change on the
+  task's own `task/` branch, in a range that reopens it, in a range that
+  also changes a path outside the planning records, or for an epic task,
+  whose route stays its epic's amendment. A reopen is judged on the
+  range's own diff, so a branch behind its target is not refused for a
+  task the target completed after the branch point and the range leaves
+  alone. CodeFlow 3.0.0 still
+  refuses the correction, so the CI that judges it needs 3.1.0.
+
+<!-- codeflow:release-impact minor -->
+- **Required checks must run on the current base before a merge.** A pull
+  request's checks test its merge with the base as it was when the run
+  started, so two pull requests each green on an older base could both
+  merge and leave the base red, as happened to this repository's `main` on
+  2026-10-08. `codeflow remote protect` now requires the checks on a branch
+  that is up to date with its base on both host paths: the ruleset rule
+  sets `strict_required_status_checks_policy`, as classic protection sets
+  `strict`, and pins each check it adds to GitHub Actions; an update keeps
+  each existing check's app pin. It reads the live rules first, updates every active ruleset
+  that already targets the branch in place instead of adding another, and
+  keeps the classic settings it does not own, such as conversation
+  resolution. It matches ruleset ref patterns as GitHub does; a ruleset
+  whose pattern it cannot read is reported, and no ruleset or classic
+  protection is added beside it. The check names come from a new optional
+  `git.required_checks` key whose default is the four shipped CI job names;
+  the shipped policy file does not list it, so an older binary never meets
+  the key. `codeflow doctor --check remote-perimeter` reads the default
+  branch's live rules through `gh` and warns when they require no checks,
+  do not require an up-to-date branch, or miss a listed check, and when
+  only rules that someone can bypass require a listed check or the
+  up-to-date setting; without `gh`, the network or a GitHub `origin`, with
+  a `git.required_checks` list the schema refuses (empty, a blank name or
+  the wrong type), a misspelt key in its place or a policy file that does
+  not parse, or when it cannot read a bypass list that decides the answer,
+  it is a note.
+  Nothing changes on a host until you run `codeflow remote protect` or turn
+  the setting on yourself (ADR-0081). The git rules say a pull request is
+  ready when its checks ran on the current target tip; `codeflow update`
+  replaces the unmodified rules file and portal skill references.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -397,6 +506,64 @@ erratum below, never an edit of the section.
   `codeflow update` replaces the unmodified files.
 
 <!-- codeflow:release-impact minor -->
+- **Review and research briefs ask for the whole unit at one head.** Several
+  review briefs asked the other-lineage seat for a fix delta or a merge
+  only, and verdicts carried an earlier approval forward to a head they did
+  not cover (sathyassn/codeflow#121). The workflow discipline rules now state
+  once what a review reads (the full diff, criteria, acceptance evidence,
+  blast radius and fit), how review and research look (a five-item manner),
+  that a named scope is where the work starts, never a fence, and that a
+  material fix is confirmed inside the finder's next whole-unit pass. The
+  review brief contract names that file and the `<base>...<head>` range; the
+  `cf-reviewer` verdict names its `head:`, what it `widened:` and what it did
+  not verify; a hand-resolved product hunk at a batch landing returns its task
+  to a whole-unit review. Two checks back the words:
+  `deliver.py --review <base>...<head>` sends nothing and exits 6 when a Herdr
+  brief names a narrower range, a diff narrowed by a path or option, or a
+  later line of the same fence that is not itself the whole-unit command, and
+  `codeflow ci` refuses a completed task's PR body whose Reviews section has
+  no approving row for the acceptance block's `reviewed` commit (a light range
+  may leave the section out or write `None: <reason>`). The pipeline workflow seed gains
+  a `base` argument; existing copies of that user-owned file are not changed.
+  Migration: before completing a task, write each Reviews row as
+  `reviewer | whole unit at <reviewed> | approved`, with the acceptance
+  block's commit in full (40 characters) and a verdict cell of only
+  `approved` or `approve`; a shorter sha or any further words in that cell
+  do not count;
+  `codeflow update` replaces the unmodified instruction files.
+
+<!-- codeflow:release-impact minor -->
+- **The shipped guidance asks builders and reviewers to reason through
+  cases, fit and the long term, and to run the checks that read a change.**
+  Two hosted CI breaks came from checks nobody ran: a guard change skipped
+  the essential-only workspace suite, and a capability wording change
+  skipped the full-only portal figure check. After `codeflow update`, the
+  workflow discipline rules, which every tier reads, ask whether a shape
+  stays sound for its accepted lifetime, hold the neighbour rule with a
+  greenfield boundary clause, allow a hotfix or other shortcut only when a
+  code comment names it and its follow-up is tracked once, list the
+  scenario classes with hostile input and platform differences, and define
+  targeted tests as the checks that read what changed: consumers' tests,
+  the test-config targets the change selects (an empty `narrow` always
+  selects; a target is owed only in a mode it defines) and derived
+  artifacts such as portal figures. At the standard and full tiers,
+  `cf-develop` points at those rules, `coverage.md` derives cases from the
+  contract's decisions, `performance.md` defines when a path is sensitive,
+  the reviewer checks fit and refuses an unmarked shortcut, and a code PR's
+  `Not tested:` line names unrun consumer checks and reachable scenario
+  classes left untested, with the reason; `codeflow ci` still checks only
+  that the line exists. A newly scaffolded pipeline's verify stage runs
+  `codeflow test --mode essential --strict` where the test config defines
+  `essential`, so an unattended run costs that suite once; the review stage
+  keeps the quick gate, and an existing
+  `.claude/workflows/pipeline.workflow.js` is user-owned and unchanged. A
+  shortcut never weakens a guard, hook, gate, policy, credential path,
+  input validation or other security control. The model evaluation kit adds three requirements and cases.
+  The `cf-develop` and `cf-reviewer` reading guidelines rise by 256 bytes
+  each, and the per-task reading chain guideline rises from 128 KiB to 130
+  KiB, because these duties reach every task.
+
+<!-- codeflow:release-impact minor -->
 - **Each pull request carries its pending changelog entry in its own
   fragment (issue 119).** CodeFlow's own pending entries moved out of the one
   pending section of `CHANGELOG.md`, where every open pull request inserted
@@ -416,6 +583,49 @@ erratum below, never an edit of the section.
   withdrawal. `scripts/changelog_split.py` moved the existing entries and
   moves an open pull request's entries at its next main merge. See
   "Pending entries, local checks and repairs" in `docs/releasing.md`.
+
+<!-- codeflow:release-impact patch -->
+- **CodeFlow's own CI finishes in about half the time.** This changes this
+  repository's CI only; the managed CI templates adopters receive are
+  unchanged.
+  - The Windows test binaries are built once into a nextest archive, and
+    twelve partitions run that archive without compiling. Each partition runs
+    the tests `scripts/windows-partitions.py` gives it from durations
+    measured on hosted runs (`scripts/windows-test-times.json`), and the
+    journeys job fails when a listed test ran in no partition, in two, or
+    in a partition other than the one the plan gives it.
+  - The release-script journey runs in its own job from the start of the
+    run, so the job after the partitions only reads their results.
+  - A push to main whose merge commit has exactly the tree of a pull
+    request head reuses that head's green `codeflow-ci` run: the gate and
+    Windows jobs are skipped and the `codeflow gates` and `windows` checks
+    pass and name the reused run. `scripts/ci-reuse.py` decides from git
+    tree ids and GitHub's run and job records. Every job still runs on any
+    other push, on a push that changes a build cache input, on a push for
+    which main lacks the browser-library cache for the current runner
+    image, and on every pull request.
+
+<!-- codeflow:release-impact minor -->
+- **Reading sizes are advisory notes with a basis, and a project can tune
+  them.** `codeflow doctor --check reading` now reports each shipped skill
+  and agent body and the always-loaded instruction set in lines (500 and
+  200, the conventions Anthropic, Cursor and Claude Code publish), the
+  kernel and the per-task reading chain in bytes (the kernel derived from
+  Codex's instruction limit, the chain 160 KiB), and a measure above its
+  guideline is a note that states the basis, never a warning. Two real
+  limits still warn: a skill or agent description over the API's 1,024
+  characters, and in `--check instructions` an `AGENTS.md` chain over
+  Codex's limit, which is now `project_doc_max_bytes` from the project's
+  `.codex/config.toml` when set, else 32 KiB. The sixteen per-skill byte
+  numbers, the class fallbacks, the rule count and the guidance block
+  number are gone (ADR-0083). A project sets its own advisory numbers in a
+  `[reading]` section of `.codeflow/project.toml` (`kernel_max_bytes`,
+  `chain_max_bytes`, `skill_max_lines`, `instructions_max_lines`), and the
+  PR body length warning of `codeflow ci` follows `git.pr_body_max_words`
+  (1000 by default, `0` off). When the installed skills' read edges differ
+  from the map the binary ships, the chain is reported as information
+  naming both versions. Nothing that passed before fails; `codeflow update`
+  writes neither new key.
 
 ### Fixed
 
@@ -1162,6 +1372,71 @@ erratum below, never an edit of the section.
   managed file behind it, and it allows certified prose without refusing
   anything allowed before.
 
+<!-- codeflow:release-impact patch -->
+- **The deletion guard reads `xargs` and `parallel` input by its
+  delimiter.** A protected path containing a blank, passed through
+  `xargs -0`, `xargs -d`, quoted xargs input or `parallel`, was split on the
+  blank and not judged as one path, so the deletion was allowed. The guard
+  now splits by the delimiter the command selects and refuses it, including
+  clustered options such as `-t0` and whole-line `-I` replacement mode.
+  Input options or replacement forms it cannot model refuse as unproven.
+
+<!-- codeflow:release-impact patch -->
+- **Text from the operating system or git that is not valid UTF-8 no
+  longer stops `present`, `codeflow test` or the discard guard, and no
+  guard reads such a name as a different one.** A project with a file name
+  that is not UTF-8 could not run `codeflow test`, because the gate's
+  snapshot of tracked files refused the name. `present show` and
+  `present close` refused to read the identity of the recorded browser
+  process when its command line held such bytes, the discard guard failed
+  with uncertainty on such a name, and `git remote update` was refused for
+  such a value in the effective git configuration. Names from git and the
+  operating system are now read as exact bytes through one layer
+  (`GitName`): a name is compared, keyed and matched as bytes, shown with
+  an escape for each invalid byte, and refused where a rule needs text, so
+  a lossy spelling can no longer equal a different name. A checked-out
+  branch with such a name stays protected instead of reading as detached,
+  a task branch, linked worktree, remote or tracking ref with such a name
+  is kept or refused instead of dropped, and tree walks (task records,
+  landed policy, the release check) go through a directory with such a
+  name instead of stopping. `codeflow integrate` refuses to start from a
+  branch it could not restore. The release check, the CI path inventory,
+  the changed-path parsers, the conflict-marker check and the claim
+  refresh read paths and remote names exactly. A hosting remote or hooks
+  path in the configuration that is not UTF-8 is refused or kept, never read
+  as unset, so `codeflow init` does not overwrite an existing hooks path and
+  a review lookup does not fall back to another remote; failed Git queries now
+  refuse instead of selecting defaults, including hook wiring when an included
+  Git configuration cannot be read. An unreadable or malformed
+  `.codeflow/policy.json` now blocks the hooks instead of selecting the
+  built-in defaults. The deletion guard
+  and `find -name` keep a name that a `?` or `[..]` pattern may match, the
+  structural check refuses a source or test folder that holds a name that
+  is not UTF-8 instead of leaving it out, and the id registry reads name lists as bytes,
+  refuses a renumber when a tracked file it reads for links has a name that
+  is not UTF-8, and refuses an issuer email that is not UTF-8. An `origin` URL that is not
+  UTF-8 refuses the release policy lookup, a remote name that holds `/` is
+  split by the configured remotes, and the release script reads changed paths
+  as exact bytes. The judgement of whether a reopened task's completion
+  landed treats a task record that is not UTF-8 as unknown instead of
+  reading a lossy copy, and refuses a branch or an ancestry it cannot read
+  instead of skipping it. `codeflow estimate outcomes` reports a record,
+  tree, commit or forecast directory it cannot read instead of leaving
+  tasks or forecasts out, `codeflow doctor` names a CI setup hook it cannot
+  read instead of reporting none, `codeflow ci` names a security level or
+  setup hook change it cannot check, and `codeflow update --pin` refuses a
+  `CODEFLOW_RELEASE_URL` or `sha256.sum` that is not UTF-8. The review
+  row check in `codeflow ci` refuses a task record it cannot read instead
+  of passing it, `work claim --on` reads review table cells with the same
+  spacing as that check, and the feedback commands refuse a path they
+  cannot check for a link instead of reading it as no link. Ledger
+  compaction waits up to one second for a lock
+  another process holds for a moment, as a child process started while the
+  lock was open does, and still refuses a lock that stays held. One rule is
+  in `docs/architecture.md`, a source scan fails on a new lossy decode that
+  is not listed with its reason, and each site that stays strict says why
+  next to the code.
+
 <!-- codeflow:release-impact minor -->
 - **The guards and sandboxes refuse writes to shell startup files.** A
   function or alias planted in `~/.zshrc` or another startup file ran under
@@ -1208,6 +1483,84 @@ erratum below, never an edit of the section.
   Relocated startup directories and nested `.envrc` files have the limits
   listed per harness in the enforcement planes page. For reviewers, a new
   copier option is a residual, not a new member of the startup class.
+
+<!-- codeflow:release-impact patch -->
+- **Record commands no longer write through a symbolic link above the
+  record** (issue 94). A branch that committed `project-management`, a
+  kind folder, `docs` or `docs/decisions` as a link made `epic new`,
+  `task new`, `spec new`, `adr new`, `task status` and their siblings
+  write, create folders or delete files where the link pointed. Every
+  record write, delete and folder creation under `project-management/`
+  and `docs/` now opens each path component from the repository root
+  without following a link, junction or other reparse point, and refuses
+  with the linked component named; this covers the status verbs,
+  follow-ups, the feedback commands, `ids backfill` and `ids retarget`,
+  and the folders that
+  `codeflow status` and the orient digest create, which now say why the
+  work summary is missing. A link at the old `<record>.tmp` name is no
+  longer written through. Other visible changes: a replaced record keeps
+  its Unix permission bits and is synced to disk; `ids retarget` refuses a
+  file already at the new number before it changes anything; `codeflow
+  status` and the orient digest name a linked records folder instead of
+  reading through it. Migration: none.
+
+<!-- codeflow:release-impact patch -->
+- **Reviewed predecessor pins accept task closeout commits.** `work start`
+  and `work claim` read the repository owner and name that `gh pr view`
+  returns. A pin still names the predecessor branch tip. A review may name
+  that tip or an ancestor whose later commits touch only the predecessor's
+  own task record, and in it only its status and Closeout. Every
+  intervening commit is checked, so a change later reverted still needs a
+  new review, and a merge after the review is refused: the predecessor's
+  own acceptance binding refuses a merge unless it is a clean re-merge of
+  its target, and that re-merge changes more than the record, so this check
+  refuses it too. The visible Reviews table may
+  use a scope column or an approving prose verdict with a uniquely resolved
+  abbreviated revision. A push of a stacked branch honours a predecessor
+  head by the same rule. Other changes require a new review. A clone with a
+  graft file, a replace ref or a shallow cut in that span cannot verify an
+  ancestor review, since those can rewrite the commits checked. The CI
+  reader also requests only the supported `name,state` fields from
+  `gh pr checks`.
+
+<!-- codeflow:release-impact patch -->
+- **An after-release epic criterion closes as deferred while its follow-up
+  task serves it.** An epic criterion tagged `(after release)` is observable
+  only once the epic has landed, so its follow-up task is the task that
+  serves it and can only run later. Epic close counted a serving task's
+  result alone, so the epic block's valid `deferred` line was ignored and
+  `codeflow epic status <id> complete` refused with `no complete serving
+  task verified it`, `codeflow validate` and `codeflow ci` with it. The
+  `deferred` line now closes the criterion when its `follow-up` names a
+  serving task that is still open and the block lists it in `follow_ups`.
+  A complete serving task's `verified` or `waived` result still decides; a
+  criterion that is not after-release, a line that names a task which does
+  not serve it, a complete or cancelled follow-up, and a malformed line are
+  refused as before, and so is an after-release criterion whose serving
+  tasks are all cancelled, since none is open to defer to. File the
+  follow-up outside the epic, which still closes only when its own tasks
+  are terminal (SPC-013 R-33 and R-62, sathyassn/codeflow#106).
+
+<!-- codeflow:release-impact patch -->
+- **A stalled CI job no longer holds a runner for six hours, and a body
+  edit no longer runs the policy check twice.** The managed `secret scan`
+  and `security review` jobs now stop after 30 minutes and the enforcing
+  `commit standards` job after 20, where GitHub's default is six hours;
+  the `gates` job runs the project's own suite and keeps no cap. The
+  policy workflow now cancels a superseded pull request run (a push
+  followed by a body edit sends two events seconds apart), and the run that
+  judges reads the pull request's body from the API when it runs, so the
+  newest body is judged whichever run survives; the job's token gains
+  `pull-requests: read` and stays read-only. Push, schedule and dispatch
+  runs each get a group of their own and are never cancelled.
+  CodeFlow's own CI also bounds every job in every workflow it runs (the
+  release, portal and release-support workflows included, checked by
+  `scripts/gate-parity.py`), installs the Playwright browsers and their
+  system libraries only where a browser runs, from cached apt archives
+  with a bounded, retried install, and stops a hung read benchmark after
+  15 minutes instead of 40.
+  To adopt: run `codeflow update`; it merges the change into an edited
+  copy.
 
 ## [3.0.0]
 
