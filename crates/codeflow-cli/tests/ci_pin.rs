@@ -999,6 +999,22 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
         assert!(text.contains("fails closed"), "{base:?}: {text}");
     }
 
+    // A key missing from the base is set by hand: `codeflow update` keeps a
+    // key that a policy from 3.0.0 or later deleted, so the error must not
+    // send the adopter there.
+    let (_, text) = run(
+        Some("{\"git\": {\"dep_audit\": \"block\"}}\n"),
+        &levels("off", "off"),
+        "",
+    );
+    assert!(
+        text.contains("git.security_review in .codeflow/policy.json")
+            && text.contains("Set it to block, warn or off")
+            && text.contains("does not restore a deleted key")
+            && !text.contains("to add a missing key"),
+        "{text}"
+    );
+
     // The base's own levels still decide: warn reports, off skips, and a
     // suppression the base holds applies.
     let (ok, text) = run(Some(&levels("warn", "warn")), &block, "");
