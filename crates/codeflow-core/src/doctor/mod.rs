@@ -3400,6 +3400,244 @@ fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static s
     Ok((files, ".claude/skills"))
 }
 
+/// One reading measure with the path its note or warning names.
+type Measured = (crate::reading::Measure, String);
+
+/// What one reading run measured.
+#[derive(Debug, Default)]
+struct ReadingSizes {
+    /// Advisory measures: a note above the guideline, never a warning.
+    advisory: Vec<Measured>,
+    /// Description measures against the API limit: a warning above it.
+    descriptions: Vec<Measured>,
+    /// Lines reported as information, such as a chain whose installed read
+    /// edges differ from the shipped map.
+    information: Vec<String>,
+}
+
+/// Measure the kernel, the always-loaded set, the per-task chain and each
+/// shipped skill and agent under `root` against `guidelines`.
+fn reading_sizes(
+    root: &Path,
+    agents: Option<&str>,
+    files: &crate::reading::SkillFiles,
+    skill_tree: &str,
+    guidelines: &crate::reading::Guidelines,
+) -> ReadingSizes {
+    use crate::hooks::guidance::{installed_inventory, SCAFFOLD_MANIFEST};
+    use crate::reading::{self, Inventory, Measure, Unit};
+    use crate::scaffold::rule_map;
+    use crate::scaffold::Tier;
+
+    let mut sizes = ReadingSizes::default();
+    if let Some(block) = agents.and_then(rule_map::managed_block) {
+        sizes.advisory.push((
+            Measure {
+                subject: "kernel (AGENTS.md managed block)".to_string(),
+                value: reading::authored_len(block.as_bytes()),
+                guideline: guidelines.kernel_bytes,
+                unit: Unit::Bytes,
+                basis: reading::KERNEL_BASIS,
+            },
+            "the managed block of AGENTS.md".to_string(),
+        ));
+    }
+    if let Some(set) = reading::always_loaded(root) {
+        let file = set.file.clone();
+        sizes
+            .advisory
+            .push((set.measure(guidelines.instructions_lines), file));
+    }
+
+    let mut shipped_skills = BTreeSet::new();
+    let mut shipped_agents = BTreeSet::new();
+    for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
+        let inventory = installed_inventory(SCAFFOLD_MANIFEST, tier);
+        shipped_skills.extend(inventory.skills);
+        shipped_agents.extend(inventory.agents);
+    }
+    if !files.is_empty() {
+        let chain = reading::reading_chain(files, &Inventory::SHIPPED);
+        if !chain.files.is_empty() {
+            if chain.errors.is_empty() {
+                sizes.advisory.push((
+                    chain.measure(guidelines),
+                    "the files of the per-task reading chain".to_string(),
+                ));
+            } else {
+                sizes.information.push(format!(
+                    "per-task reading chain {} bytes (information only: {} installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold {}; `codeflow update` aligns them)",
+                    chain.total,
+                    chain.errors.len(),
+                    env!("CARGO_PKG_VERSION"),
+                    installed_scaffold_version(root, agents)
+                ));
+            }
+        }
+        for measure in reading::skill_measures(files, guidelines) {
+            if shipped_skills.contains(&measure.subject) {
+                let path = format!("{skill_tree}/{}/", measure.subject);
+                sizes.advisory.push((measure, path));
+            }
+        }
+        for measure in reading::description_measures(files) {
+            let name = measure
+                .subject
+                .strip_suffix(" description")
+                .unwrap_or(&measure.subject)
+                .to_string();
+            if shipped_skills.contains(&name) {
+                sizes
+                    .descriptions
+                    .push((measure, format!("{skill_tree}/{name}/SKILL.md")));
+            }
+        }
+    }
+    for name in &shipped_agents {
+        let path = format!(".claude/agents/{name}.md");
+        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
+            continue;
+        };
+        sizes.advisory.push((
+            reading::body_measure(name, &text, guidelines.body_lines),
+            path.clone(),
+        ));
+        if let Some(measure) = reading::description_measure(name, &text) {
+            sizes.descriptions.push((measure, path));
+        }
+    }
+    sizes
+}
+
+/// The measures joined for a report.
+fn listed_measures(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The measures above their guidelines, each with its basis.
+fn listed_with_basis(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.with_basis())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The reading verdict: a description over the API limit or an unreadable
+/// `[reading]` section warns, an advisory measure above its guideline
+/// notes, and within every number the check passes and states them.
+/// `own` names the `[reading]` keys the project set.
+fn reading_verdict(
+    sizes: &ReadingSizes,
+    own: &[&str],
+    config_error: Option<&str>,
+) -> (Status, String) {
+    use std::fmt::Write as _;
+
+    use crate::reading;
+
+    let (over, within): (Vec<&Measured>, Vec<&Measured>) = sizes
+        .advisory
+        .iter()
+        .partition(|(measure, _)| measure.over());
+    let long: Vec<&Measured> = sizes
+        .descriptions
+        .iter()
+        .filter(|(measure, _)| measure.over())
+        .collect();
+    let mut tail = String::new();
+    if let Some(longest) = sizes
+        .descriptions
+        .iter()
+        .map(|(measure, _)| measure.value)
+        .max()
+    {
+        let _ = write!(
+            tail,
+            "; descriptions at most {longest} of {} characters",
+            reading::DESCRIPTION_LIMIT_CHARS
+        );
+    }
+    if !own.is_empty() {
+        let _ = write!(
+            tail,
+            " (project values for {} in the [reading] section of project.toml)",
+            own.join(", ")
+        );
+    }
+    for item in &sizes.information {
+        let _ = write!(tail, "; {item}");
+    }
+
+    if sizes.advisory.is_empty() && sizes.descriptions.is_empty() {
+        return (
+            Status::Pass,
+            "no AGENTS.md managed block or installed skills (reading sizes not applicable)"
+                .to_string(),
+        );
+    }
+    if let Some(error) = config_error {
+        return (
+            Status::Warn(remedy::DOCTOR_READING_CONFIG.remedy()),
+            format!(
+                "the [reading] section of project.toml was not read ({error}), so the shipped guidelines apply: {}{tail}",
+                listed_measures(&sizes.advisory.iter().collect::<Vec<_>>())
+            ),
+        );
+    }
+    if !long.is_empty() {
+        let named: Vec<String> = long
+            .iter()
+            .map(|(measure, path)| {
+                format!(
+                    "{} ({path}) is {} characters, over the {}-character API limit (Claude Code cuts the listing at {})",
+                    measure.subject,
+                    measure.value,
+                    measure.guideline,
+                    reading::DESCRIPTION_LISTING_CHARS
+                )
+            })
+            .collect();
+        let paths: Vec<&str> = long.iter().map(|(_, path)| path.as_str()).collect();
+        let above = if over.is_empty() {
+            String::new()
+        } else {
+            format!("; above guideline: {}", listed_with_basis(&over))
+        };
+        return (
+            Status::Warn(remedy::DOCTOR_DESCRIPTION.with(&[("path", &paths.join(", "))])),
+            format!(
+                "{}{above}. Within: {}{tail}",
+                named.join("; "),
+                listed_measures(&within)
+            ),
+        );
+    }
+    if over.is_empty() {
+        return (
+            Status::Pass,
+            format!("within guidelines: {}{tail}", listed_measures(&within)),
+        );
+    }
+    let subjects = over
+        .iter()
+        .map(|(_, path)| path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        Status::Note(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
+        format!(
+            "above guideline: {}. Guidelines are notes, never failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{tail}",
+            listed_with_basis(&over),
+            listed_measures(&within)
+        ),
+    )
+}
+
 /// Reading sizes (TSK-150, TSK-267): the always-read kernel (the managed
 /// block of `AGENTS.md`), the always-loaded instruction set, the per-task
 /// reading chain of the installed shipped skills, and each shipped skill
@@ -3412,13 +3650,9 @@ fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static s
 /// Codex limit on the whole `AGENTS.md` in the `instructions` check. An
 /// `AGENTS.md` or skill tree that cannot be read fails (TSK-238).
 fn check_reading(opts: &Options) -> CheckResult {
-    use std::fmt::Write as _;
-
-    use crate::hooks::guidance::{installed_inventory, SCAFFOLD_MANIFEST};
-    use crate::reading::{self, Guidelines, Inventory, Measure, Unit};
+    use crate::reading::Guidelines;
     use crate::scaffold::rule_map;
     use crate::scaffold::state::ReadingConfig;
-    use crate::scaffold::Tier;
 
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -3453,188 +3687,8 @@ fn check_reading(opts: &Options) -> CheckResult {
         Ok(config) => (config.guidelines(defaults), config.set_keys(), None),
         Err(error) => (defaults, Vec::new(), Some(error.to_string())),
     };
-
-    // Each advisory measure with the path its note names; each description
-    // measure with the file its warning names.
-    let mut advisory: Vec<(Measure, String)> = Vec::new();
-    let mut descriptions: Vec<(Measure, String)> = Vec::new();
-    let mut information: Vec<String> = Vec::new();
-
-    if let Some(block) = agents.as_deref().and_then(rule_map::managed_block) {
-        advisory.push((
-            Measure {
-                subject: "kernel (AGENTS.md managed block)".to_string(),
-                value: reading::authored_len(block.as_bytes()),
-                guideline: guidelines.kernel_bytes,
-                unit: Unit::Bytes,
-                basis: reading::KERNEL_BASIS,
-            },
-            "the managed block of AGENTS.md".to_string(),
-        ));
-    }
-    if let Some(set) = reading::always_loaded(&root) {
-        let file = set.file.clone();
-        advisory.push((set.measure(guidelines.instructions_lines), file));
-    }
-
-    let mut shipped_skills = BTreeSet::new();
-    let mut shipped_agents = BTreeSet::new();
-    for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
-        let inventory = installed_inventory(SCAFFOLD_MANIFEST, tier);
-        shipped_skills.extend(inventory.skills);
-        shipped_agents.extend(inventory.agents);
-    }
-    if !files.is_empty() {
-        let chain = reading::reading_chain(&files, &Inventory::SHIPPED);
-        if !chain.files.is_empty() {
-            if chain.errors.is_empty() {
-                advisory.push((
-                    chain.measure(&guidelines),
-                    "the files of the per-task reading chain".to_string(),
-                ));
-            } else {
-                information.push(format!(
-                    "per-task reading chain {} bytes (information only: {} installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold {}; `codeflow update` aligns them)",
-                    chain.total,
-                    chain.errors.len(),
-                    env!("CARGO_PKG_VERSION"),
-                    installed_scaffold_version(&root, agents.as_deref())
-                ));
-            }
-        }
-        for measure in reading::skill_measures(&files, &guidelines) {
-            if shipped_skills.contains(&measure.subject) {
-                let path = format!("{skill_tree}/{}/", measure.subject);
-                advisory.push((measure, path));
-            }
-        }
-        for measure in reading::description_measures(&files) {
-            let name = measure
-                .subject
-                .strip_suffix(" description")
-                .unwrap_or(&measure.subject)
-                .to_string();
-            if shipped_skills.contains(&name) {
-                descriptions.push((measure, format!("{skill_tree}/{name}/SKILL.md")));
-            }
-        }
-    }
-    for name in &shipped_agents {
-        let path = format!(".claude/agents/{name}.md");
-        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
-            continue;
-        };
-        advisory.push((
-            reading::body_measure(name, &text, guidelines.body_lines),
-            path.clone(),
-        ));
-        if let Some(measure) = reading::description_measure(name, &text) {
-            descriptions.push((measure, path));
-        }
-    }
-
-    let listed = |items: &[&(Measure, String)]| {
-        items
-            .iter()
-            .map(|(measure, _)| measure.to_string())
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
-    let (over, within): (Vec<&(Measure, String)>, Vec<&(Measure, String)>) =
-        advisory.iter().partition(|(measure, _)| measure.over());
-    let long: Vec<&(Measure, String)> = descriptions
-        .iter()
-        .filter(|(measure, _)| measure.over())
-        .collect();
-    let mut tail = String::new();
-    if let Some(longest) = descriptions.iter().map(|(measure, _)| measure.value).max() {
-        let _ = write!(
-            tail,
-            "; descriptions at most {longest} of {} characters",
-            reading::DESCRIPTION_LIMIT_CHARS
-        );
-    }
-    if !own.is_empty() {
-        let _ = write!(
-            tail,
-            " (project values for {} in the [reading] section of project.toml)",
-            own.join(", ")
-        );
-    }
-    for item in &information {
-        let _ = write!(tail, "; {item}");
-    }
-
-    let (status, message) = if advisory.is_empty() && descriptions.is_empty() {
-        (
-            Status::Pass,
-            "no AGENTS.md managed block or installed skills (reading sizes not applicable)"
-                .to_string(),
-        )
-    } else if let Some(error) = config_error {
-        (
-            Status::Warn(remedy::DOCTOR_READING_CONFIG.remedy()),
-            format!(
-                "the [reading] section of project.toml was not read ({error}), so the shipped guidelines apply: {}{tail}",
-                listed(&advisory.iter().collect::<Vec<_>>())
-            ),
-        )
-    } else if !long.is_empty() {
-        let named: Vec<String> = long
-            .iter()
-            .map(|(measure, path)| {
-                format!(
-                    "{} ({path}) is {} characters, over the {}-character API limit (Claude Code cuts the listing at {})",
-                    measure.subject,
-                    measure.value,
-                    measure.guideline,
-                    reading::DESCRIPTION_LISTING_CHARS
-                )
-            })
-            .collect();
-        let paths: Vec<&str> = long.iter().map(|(_, path)| path.as_str()).collect();
-        let above = if over.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "; above guideline: {}",
-                over.iter()
-                    .map(|(measure, _)| measure.with_basis())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )
-        };
-        (
-            Status::Warn(remedy::DOCTOR_DESCRIPTION.with(&[("path", &paths.join(", "))])),
-            format!(
-                "{}{above}. Within: {}{tail}",
-                named.join("; "),
-                listed(&within)
-            ),
-        )
-    } else if over.is_empty() {
-        (
-            Status::Pass,
-            format!("within guidelines: {}{tail}", listed(&within)),
-        )
-    } else {
-        let subjects = over
-            .iter()
-            .map(|(_, path)| path.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            Status::Note(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
-            format!(
-                "above guideline: {}. Guidelines are notes, never failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{tail}",
-                over.iter()
-                    .map(|(measure, _)| measure.with_basis())
-                    .collect::<Vec<_>>()
-                    .join("; "),
-                listed(&within)
-            ),
-        )
-    };
+    let sizes = reading_sizes(&root, agents.as_deref(), &files, skill_tree, &guidelines);
+    let (status, message) = reading_verdict(&sizes, &own, config_error.as_deref());
     CheckResult {
         name: "reading".into(),
         status,
