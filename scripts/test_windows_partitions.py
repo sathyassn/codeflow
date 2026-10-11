@@ -73,8 +73,9 @@ class PlanTests(unittest.TestCase):
         mean = sum(plan.estimates) / plan.count
         self.assertLessEqual(max(plan.estimates), mean * 1.25)
         for partition in range(1, plan.count + 1):
-            # Windows limits a whole command line to 32,767 characters.
-            self.assertLess(len(plan.filterset(partition)), 12000)
+            # Windows limits a whole command line to 32,767 characters;
+            # this leaves room for the rest of the command and for growth.
+            self.assertLess(len(plan.filterset(partition)), 20000)
 
     def test_a_partition_outside_the_count_is_refused(self):
         for partition in (0, self.plan.count + 1):

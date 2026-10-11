@@ -9,8 +9,9 @@ measured, and each partition runs the filterset this script prints for it.
 The measurements live in scripts/windows-test-times.json:
 
 - `binaries`: a whole test binary, with its total and serial seconds;
-- `split`: a binary too large for one partition: its slowest tests by name,
-  with their seconds, and the total and serial seconds of the rest.
+- `split`: a binary with a test of at least NAMED_SECONDS, or too large for
+  one partition: its slow tests by name, with their seconds, and the total
+  and serial seconds of the rest.
 
 The assignment places the largest unit first, each into the partition whose
 estimated time grows least. A partition's estimate is the larger of its test
@@ -57,6 +58,8 @@ SPLIT_SHARE = 0.6
 # A split binary names its slowest tests until the rest is this share of a
 # partition or less.
 REST_SHARE = 0.25
+# A test at least this slow (median seconds) is always its own unit.
+NAMED_SECONDS = 20.0
 # Defaults for `measure`; the data file records the values in use.
 PARTITIONS = 10
 THREADS = 4
@@ -248,18 +251,23 @@ def measure(directories: list[Path], partitions: int, threads: int) -> dict:
     for binary, tests in sorted(by_binary.items()):
         total = sum(tests.values())
         serial_total = sum(v for name, v in tests.items() if serial(binary, name))
-        if total <= share and serial_total <= serial_share:
-            whole[binary] = [round(total, 3), round(serial_total, 3)]
-            continue
-        # Name the slowest tests until what is left is small enough to place
-        # anywhere; the rest stays one unit, so the filtersets stay short.
+        # Every slow test is its own unit, so slow tests spread across the
+        # partitions instead of travelling together inside one binary: run
+        # together, the slow scaffold and update tests slowed each other to
+        # two or three times their measured time (run 38101487324). A
+        # binary too large for one partition also names its slowest tests
+        # until the rest is small enough to place anywhere.
         named, rest, rest_serial = {}, total, serial_total
         for name, value in sorted(tests.items(), key=lambda item: (-item[1], item[0])):
-            if rest <= share * REST_SHARE and rest_serial <= serial_share * REST_SHARE:
+            large = rest > share * REST_SHARE or rest_serial > serial_share * REST_SHARE
+            if value < NAMED_SECONDS and not (large and (total > share or serial_total > serial_share)):
                 break
             named[name] = value
             rest -= value
             rest_serial -= value if serial(binary, name) else 0.0
+        if not named:
+            whole[binary] = [round(total, 3), round(serial_total, 3)]
+            continue
         split[binary] = {"rest": [round(max(rest, 0.0), 3), round(max(rest_serial, 0.0), 3)],
                          "tests": dict(sorted(named.items()))}
     return {
