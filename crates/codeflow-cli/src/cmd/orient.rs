@@ -7,6 +7,15 @@ use codeflow_core::hooks::orient;
 #[must_use]
 pub fn run() -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    print!("{}", orient::generate(&super::project_root(&cwd)));
+    print!(
+        "{}",
+        orient::generate(&match super::project_root(&cwd) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("codeflow: cannot read project root: {error}");
+                return 2;
+            }
+        })
+    );
     0
 }

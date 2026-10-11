@@ -181,7 +181,8 @@ fn run_gate_resolved(
     };
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
-    let (mut targets, execution, effective_mode) = if config_path.exists() {
+    let has_config = !crate::absence::proven_absent(&config_path)?;
+    let (mut targets, execution, effective_mode) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -191,7 +192,7 @@ fn run_gate_resolved(
         let effective = resolve(&config.targets);
         (config.targets, config.execution, effective)
     } else {
-        let detected = detect_stacks(project_dir);
+        let detected = detect_stacks(project_dir)?;
         if detected.is_empty() {
             return Ok(GateOutcome::NoTargets {
                 reason: format!("no {TEST_CONFIG_PATH} and no test stack detected"),
@@ -202,7 +203,7 @@ fn run_gate_resolved(
         (targets, ExecutionConfig::default(), effective)
     };
 
-    let config_digest = if config_path.exists() {
+    let config_digest = if has_config {
         // Bind evidence to the complete configured input, including defaults.
         delivery::digest(&std::fs::read(&config_path)?)
     } else {
@@ -278,7 +279,7 @@ fn run_gate_resolved(
         &target_dir,
         &run_dir,
         options.all,
-    );
+    )?;
     let before = delivery::tracked(project_dir)?;
     let raw = run_dependency_targets(
         &targets,
@@ -434,31 +435,26 @@ fn configure_run_targets(
     target_dir: &Path,
     run_dir: &Path,
     with_repeat: bool,
-) {
+) -> Result<(), TestingError> {
     let binary = targets
         .iter()
         .find(|t| t.name == "codeflow-bin")
         .and_then(|t| t.outputs.first())
         .map(|output| resolve_output(output, root, target_dir));
+    // OS text rule (issue 79): these values are text in a target's
+    // environment. A path that is not valid UTF-8 is left unset, so a target
+    // that needs it fails on its own, never on a lossy lookalike path.
+    let text = |path: &Path| path.to_str().map(str::to_string);
     for target in targets {
-        if let Some(binary) = &binary {
+        if let Some(binary) = binary.as_deref().and_then(text) {
             if target.name != "codeflow-bin" {
-                target
-                    .env
-                    .insert("CODEFLOW_BIN".into(), binary.to_string_lossy().into_owned());
-                target.env.insert(
-                    "CF_PRESENT_CODEFLOW".into(),
-                    binary.to_string_lossy().into_owned(),
-                );
+                target.env.insert("CODEFLOW_BIN".into(), binary.clone());
+                target.env.insert("CF_PRESENT_CODEFLOW".into(), binary);
             }
         }
-        target.env.insert(
-            "CODEFLOW_GATE_RESULTS".into(),
-            run_dir
-                .join("rust-coverage/junit.xml")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        if let Some(results) = text(&run_dir.join("rust-coverage/junit.xml")) {
+            target.env.insert("CODEFLOW_GATE_RESULTS".into(), results);
+        }
         target.env.insert(
             "CODEFLOW_GATE_STARTED_AT".into(),
             std::time::SystemTime::now()
@@ -469,39 +465,42 @@ fn configure_run_targets(
         );
         target.env.insert(
             "CODEFLOW_GATE_RUN_ID".into(),
+            // Named by this tool in ASCII.
             run_dir
                 .file_name()
+                .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+                .to_string(),
         );
         if target
             .modes
             .values()
             .any(|m| m.command.contains("cargo llvm-cov"))
         {
-            target.env.insert(
-                "CARGO_LLVM_COV_TARGET_DIR".into(),
-                target_dir
-                    .join("llvm-cov-target")
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            if let Some(dir) = text(&target_dir.join("llvm-cov-target")) {
+                target.env.insert("CARGO_LLVM_COV_TARGET_DIR".into(), dir);
+            }
         }
         target.outputs = target
             .outputs
             .iter()
             .map(|p| {
-                resolve_output(p, root, target_dir)
-                    .to_string_lossy()
-                    .into_owned()
+                let resolved = resolve_output(p, root, target_dir);
+                text(&resolved).ok_or_else(|| TestingError::ConfigInvalid {
+                    path: resolved,
+                    message: "resolved output path is not UTF-8; use a UTF-8 output directory"
+                        .into(),
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         if let Some(report) = &mut target.report {
             if report.path.starts_with("target/") {
-                report.path = resolve_output(&report.path, root, target_dir)
-                    .to_string_lossy()
-                    .into_owned();
+                let resolved = resolve_output(&report.path, root, target_dir);
+                report.path = text(&resolved).ok_or_else(|| TestingError::ConfigInvalid {
+                    path: resolved,
+                    message: "resolved report path is not UTF-8; use a UTF-8 output directory"
+                        .into(),
+                })?;
             }
         }
         if with_repeat {
@@ -513,6 +512,7 @@ fn configure_run_targets(
             }
         }
     }
+    Ok(())
 }
 
 fn resolve_output(output: &str, root: &Path, target_dir: &Path) -> std::path::PathBuf {
@@ -541,16 +541,19 @@ fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
 #[must_use]
 pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
     let config_path = project_dir.join(TEST_CONFIG_PATH);
-    let targets: Vec<TargetConfig> = if config_path.exists() {
+    let Ok(absent) = crate::absence::proven_absent(&config_path) else {
+        return false; // The actual gate reports this obtaining error.
+    };
+    let targets: Vec<TargetConfig> = if absent {
+        let Ok(detected) = detect_stacks(project_dir) else {
+            return false;
+        };
+        detected.into_iter().map(|d| d.config).collect()
+    } else {
         match load_test_config(&config_path) {
             Ok(config) => config.targets,
             Err(_) => return false,
         }
-    } else {
-        detect_stacks(project_dir)
-            .into_iter()
-            .map(|d| d.config)
-            .collect()
     };
     let effective = resolve_mode(mode, &targets);
     targets
@@ -559,7 +562,10 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
         .filter_map(|t| t.modes.get(&effective).map(|m| (t, m)))
         .any(|(t, m)| {
             matches!(t.runner, crate::testing::config::RunnerType::Cargo)
-                || m.command.split_whitespace().any(|word| word == "cargo")
+                || m.command
+                    .split([' ', '\t', '\n'])
+                    .filter(|word| !word.is_empty())
+                    .any(|word| word == "cargo")
         })
 }
 
@@ -735,6 +741,25 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_leaf_refuses_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+        std::fs::create_dir(&config).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        assert!(run_gate_exact(dir.path(), "quick").is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_ancestor_refuses_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
+        assert!(run_gate_exact(dir.path(), "quick").is_err());
+    }
+
     fn cov(failed: usize) -> CoverageReport {
         CoverageReport {
             target: "t".into(),
@@ -1210,5 +1235,45 @@ mod tests {
             2,
             "defaults are part of the evidence identity"
         );
+    }
+
+    /// Issue 79: a path that is not valid UTF-8 is left out of a target's
+    /// environment, not written as its lossy spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_dir_that_is_not_utf8_is_not_written_into_the_environment() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let target: TargetConfig = serde_json::from_str(
+            r#"{"name": "t", "runner": "custom", "modes": {"full": {"command": "exit 0"}}}"#,
+        )
+        .unwrap();
+        let mut targets = [target];
+        let root = Path::new("/project");
+        let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
+        let run_dir = Path::new("/project/target/run-1");
+        configure_run_targets(&mut targets, root, odd, run_dir, false).unwrap();
+        assert!(!targets[0].env.contains_key("CARGO_LLVM_COV_TARGET_DIR"));
+        assert_eq!(
+            targets[0]
+                .env
+                .get("CODEFLOW_GATE_RUN_ID")
+                .map(String::as_str),
+            Some("run-1")
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_resolved_non_utf8_output_refuses() {
+        use std::os::unix::ffi::OsStrExt;
+        let target: TargetConfig = serde_json::from_str(r#"{"name":"t","runner":"custom","outputs":["target/out"],"modes":{"quick":{"command":"true"}}}"#).unwrap();
+        let root = Path::new("/repo");
+        let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/odd\xff"));
+        assert!(configure_run_targets(&mut [target.clone()], root, odd, root, false).is_err());
+        assert!(configure_run_targets(&mut [target], root, root, root, false).is_ok());
     }
 }

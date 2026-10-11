@@ -38,37 +38,49 @@ pub enum RemoteCommand {
 ///
 /// # Errors
 ///
-/// Returns an error for environment problems (no repo, gh missing for the
-/// github provider outside dry-run) and when the policy file fails the
-/// schema, before anything is planned or sent.
+/// Returns an error for unreadable repository, policy or tracking state,
+/// when the policy file fails the schema (before anything is planned or
+/// sent), or for environment problems such as a missing gh outside dry-run.
 pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     let RemoteCommand::Protect { provider, dry_run } = &args.command;
 
     let cwd = std::env::current_dir().context("cannot resolve current directory")?;
-    let root = registry::find_repo_root(&cwd).unwrap_or(cwd);
+    let root = registry::find_repo_root(&cwd)
+        .context("cannot locate repository; repair .codeflow paths before applying protection")?
+        .unwrap_or(cwd);
     let policy_path = root.join(".codeflow/policy.json");
-    if !policy_path.is_file() {
+    // The plan reads the protection fields and the schema judges the whole
+    // file: a policy either one cannot read or refuses (a blank
+    // `git.required_checks` entry included) is refused here, before any
+    // request to the host, with every reason each gives.
+    let read = ProtectionPlan::from_policy_file(&policy_path);
+    let schema = policy_schema::validate_policy(&root);
+    let mut plan = match (read, schema) {
+        (Ok(plan), Ok(())) => plan,
+        (read, schema) => {
+            if let Err(error) = read {
+                eprintln!("remote protect: {error}");
+            }
+            for error in schema.err().unwrap_or_default() {
+                eprintln!("remote protect: policy error: {error}");
+            }
+            anyhow::bail!(
+                "{} is invalid or cannot be read, so no rules were planned or applied (see `codeflow policy explain`)",
+                policy_path.display()
+            );
+        }
+    };
+    // Only a policy proven missing gives the defaults; an unreadable one
+    // was refused above.
+    if ProtectionPlan::policy_absent(&policy_path).map_err(anyhow::Error::msg)? {
         eprintln!(
             "note: {} not found — using charter defaults (main, master)",
             policy_path.display()
         );
     }
-    // The plan reads the file leniently, so a list the schema refuses (a blank
-    // `git.required_checks` entry) would silently fall back to defaults.
-    // Refuse it here, before any request to the host.
-    if let Err(errors) = policy_schema::validate_policy(&root) {
-        for error in &errors {
-            eprintln!("remote protect: policy error: {error}");
-        }
-        anyhow::bail!(
-            "{} is invalid, so no rules were planned or applied (see `codeflow policy explain`)",
-            policy_path.display()
-        );
-    }
-    let mut plan = ProtectionPlan::from_policy_file(&policy_path);
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
     // durable work is tracked; the rules of every other branch are unchanged.
-    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root).unwrap_or(false);
+    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root)?;
     if tracked {
         plan = plan.with_registry_profile();
     }

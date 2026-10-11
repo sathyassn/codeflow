@@ -34,7 +34,7 @@ pub fn compact_ledger_type(
     current_session_id: Option<&str>,
 ) -> Result<CompactionResult, LedgerError> {
     let subdir = ledger_dir.join(type_name);
-    if !subdir.is_dir() {
+    if crate::absence::proven_absent(&subdir)? {
         return Ok(CompactionResult {
             type_name: type_name.to_string(),
             merged_count: 0,
@@ -51,14 +51,16 @@ pub fn compact_ledger_type(
         .truncate(false)
         .open(&lock_path)?;
 
-    lock_file.try_lock_exclusive().map_err(|_| {
-        LedgerError::Lock(format!("compaction already in progress for {type_name}"))
-    })?;
+    if !lock_within(&lock_file, &lock_path)? {
+        return Err(LedgerError::Lock(format!(
+            "compaction already in progress for {type_name}"
+        )));
+    }
 
     // Find compactable fragments.
-    let completed_sessions = find_completed_sessions(ledger_dir);
+    let completed_sessions = find_completed_sessions(ledger_dir)?;
     let fragments =
-        compactable_fragments(&subdir, type_name, &completed_sessions, current_session_id);
+        compactable_fragments(&subdir, type_name, &completed_sessions, current_session_id)?;
 
     if fragments.is_empty() {
         drop(lock_file);
@@ -71,7 +73,7 @@ pub fn compact_ledger_type(
                 type_name,
                 &completed_sessions,
                 current_session_id,
-            ),
+            )?,
         });
     }
 
@@ -89,7 +91,7 @@ pub fn compact_ledger_type(
                 type_name,
                 &completed_sessions,
                 current_session_id,
-            ),
+            )?,
         });
     };
 
@@ -97,7 +99,7 @@ pub fn compact_ledger_type(
     // here, BEFORE the write/delete below, so a corrupt or partially written
     // source is never merged-and-deleted (permanent data loss).
     let mut all_events: Vec<Event> = Vec::new();
-    if base_path.exists() {
+    if !crate::absence::proven_absent(&base_path)? {
         read_events_from_file(&base_path, &mut all_events)?;
     }
     for frag_path in &fragments {
@@ -151,7 +153,7 @@ pub fn compact_ledger_type(
             type_name,
             &completed_sessions,
             current_session_id,
-        ),
+        )?,
     })
 }
 
@@ -194,126 +196,103 @@ pub fn compact_all(
 }
 
 /// Find session IDs that have a `session_end` event in the sessions type.
-fn find_completed_sessions(ledger_dir: &Path) -> std::collections::HashSet<String> {
+fn find_completed_sessions(
+    ledger_dir: &Path,
+) -> Result<std::collections::HashSet<String>, LedgerError> {
     let mut completed = std::collections::HashSet::new();
     let sessions_dir = ledger_dir.join("sessions");
-    if !sessions_dir.is_dir() {
-        return completed;
+    if crate::absence::proven_absent(&sessions_dir)? {
+        return Ok(completed);
     }
-
-    // Check base file.
     let base = sessions_dir.join("sessions.jsonl");
-    scan_for_session_ends(&base, &mut completed);
-
-    // Check all fragment files.
-    if let Ok(entries) = fs::read_dir(&sessions_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("sessions-ses-")
-                && super::is_jsonl_file(name)
-                && !super::is_lock_file(name)
-            {
-                scan_for_session_ends(&path, &mut completed);
-            }
+    if !crate::absence::proven_absent(&base)? {
+        scan_for_session_ends(&base, &mut completed)?;
+    }
+    for entry in fs::read_dir(&sessions_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.as_encoded_bytes().starts_with(b"sessions-ses-")
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        {
+            scan_for_session_ends(&path, &mut completed)?;
         }
     }
-
-    completed
+    Ok(completed)
 }
-
-/// Scan a JSONL file for `session_end` events and record their session IDs.
-fn scan_for_session_ends(path: &Path, completed: &mut std::collections::HashSet<String>) {
-    let Ok(content) = fs::read_to_string(path) else {
-        return;
-    };
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(event) = serde_json::from_str::<Event>(trimmed) {
-            if event.event_type == "session_end" {
-                if let Some(sid) = &event.session_id {
-                    completed.insert(sid.clone());
-                }
+fn scan_for_session_ends(
+    path: &Path,
+    completed: &mut std::collections::HashSet<String>,
+) -> Result<(), LedgerError> {
+    let mut events = Vec::new();
+    read_events_from_file(path, &mut events)?;
+    for event in events {
+        if event.event_type == "session_end" {
+            if let Some(sid) = event.session_id {
+                completed.insert(sid);
             }
         }
     }
+    Ok(())
 }
 
 /// Find fragment files that can be compacted (their session is completed).
+fn fragment_sessions(
+    subdir: &Path,
+    type_name: &str,
+) -> Result<Vec<(PathBuf, String)>, LedgerError> {
+    let prefix = format!("{type_name}-");
+    let mut fragments = Vec::new();
+    for entry in fs::read_dir(subdir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let filename = entry.file_name();
+        if !filename.as_encoded_bytes().starts_with(prefix.as_bytes())
+            || !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        {
+            continue;
+        }
+        let name = filename.to_str().ok_or_else(|| {
+            LedgerError::Corrupt("cannot read fragment session identity as UTF-8".into())
+        })?;
+        let sid = name
+            .strip_prefix(&prefix)
+            .and_then(|name| name.strip_suffix(".jsonl"))
+            .ok_or_else(|| LedgerError::Corrupt("cannot read fragment filename framing".into()))?;
+        fragments.push((path, sid.to_string()));
+    }
+    Ok(fragments)
+}
 fn compactable_fragments(
     subdir: &Path,
     type_name: &str,
     completed_sessions: &std::collections::HashSet<String>,
     current_session_id: Option<&str>,
-) -> Vec<PathBuf> {
-    let mut fragments = Vec::new();
-    let prefix = format!("{type_name}-");
-
-    if let Ok(entries) = fs::read_dir(subdir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with(&prefix)
-                || !super::is_jsonl_file(name)
-                || super::is_lock_file(name)
-            {
-                continue;
-            }
-
-            // Extract session ID from filename: {type}-{session_id}.jsonl
-            let sid = name
-                .strip_prefix(&prefix)
-                .and_then(|s| s.strip_suffix(".jsonl"));
-            if let Some(sid) = sid {
-                // Skip current session.
-                if current_session_id == Some(sid) {
-                    continue;
-                }
-                // Only compact if session is completed.
-                if completed_sessions.contains(sid) {
-                    fragments.push(path);
-                }
-            }
-        }
-    }
-
-    fragments
+) -> Result<Vec<PathBuf>, LedgerError> {
+    Ok(fragment_sessions(subdir, type_name)?
+        .into_iter()
+        .filter(|(_, sid)| {
+            current_session_id != Some(sid.as_str()) && completed_sessions.contains(sid)
+        })
+        .map(|(path, _)| path)
+        .collect())
 }
-
-/// Count fragments that were skipped (active sessions).
 fn count_active_fragments(
     subdir: &Path,
     type_name: &str,
     completed_sessions: &std::collections::HashSet<String>,
     current_session_id: Option<&str>,
-) -> usize {
-    let prefix = format!("{type_name}-");
-    let mut count = 0;
-
-    if let Ok(entries) = fs::read_dir(subdir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_str().unwrap_or("").to_string();
-            if !name.starts_with(&prefix)
-                || !super::is_jsonl_file(&name)
-                || super::is_lock_file(&name)
-            {
-                continue;
-            }
-            let sid = name
-                .strip_prefix(&prefix)
-                .and_then(|s| s.strip_suffix(".jsonl"));
-            if let Some(sid) = sid {
-                if current_session_id == Some(sid) || !completed_sessions.contains(sid) {
-                    count += 1;
-                }
-            }
-        }
-    }
-
-    count
+) -> Result<usize, LedgerError> {
+    Ok(fragment_sessions(subdir, type_name)?
+        .into_iter()
+        .filter(|(_, sid)| {
+            current_session_id == Some(sid.as_str()) || !completed_sessions.contains(sid)
+        })
+        .count())
 }
 
 /// Try to acquire the writer lock for the base file and every fragment (each
@@ -338,12 +317,42 @@ fn acquire_file_locks(
             .write(true)
             .truncate(false)
             .open(target.with_extension("jsonl.lock"))?;
-        if lock.try_lock_exclusive().is_err() {
+        if !lock_within(&lock, &target.with_extension("jsonl.lock"))? {
             return Ok(None);
         }
         held.push(lock);
     }
     Ok(Some(held))
+}
+
+/// How long a compaction waits for a contended lock before it treats the
+/// holder as a real compaction or writer. A child process spawned by any
+/// thread while a lock descriptor was open keeps that lock until it execs,
+/// so a lock just released can read as held for a moment.
+const LOCK_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Take `lock` exclusively, waiting up to [`LOCK_SETTLE`] while it is
+/// contended: `Ok(false)` when it is still held after that, an error when
+/// the lock cannot be taken for another reason.
+fn lock_within(lock: &fs::File, path: &Path) -> Result<bool, LedgerError> {
+    let deadline = std::time::Instant::now() + LOCK_SETTLE;
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => return Ok(true),
+            Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(LedgerError::Lock(format!(
+                    "acquiring lock on {}: {error}",
+                    path.display()
+                )))
+            }
+        }
+    }
 }
 
 /// Parse JSONL events from a file, appending to `events`.
@@ -354,8 +363,8 @@ fn acquire_file_locks(
 /// (which would be permanent ledger data loss).
 fn read_events_from_file(path: &Path, events: &mut Vec<Event>) -> Result<(), LedgerError> {
     let content = fs::read_to_string(path)?;
-    for (i, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
+    for (i, line) in content.split_terminator('\n').enumerate() {
+        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
         if trimmed.is_empty() {
             continue;
         }
@@ -433,7 +442,7 @@ mod tests {
 
         // Base should contain both events, sorted.
         let content = fs::read_to_string(&base).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
+        let lines: Vec<&str> = content.split_terminator('\n').collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("task_created"));
         assert!(lines[1].contains("task_status_changed"));
@@ -620,5 +629,121 @@ mod tests {
         assert_eq!(result.merged_count, 1);
         assert!(!frag.exists(), "fragment is merged and removed");
         assert!(frag_lock.exists(), "sidecar lock must not be unlinked");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    /// A ledger folder with one completed session's work-graph fragment.
+    fn one_fragment() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["sessions", "work-graph"] {
+            std::fs::create_dir(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(dir.path().join("sessions/sessions.jsonl"), "{\"event\":\"session_end\",\"timestamp\":\"2026-01-01T01:00:00Z\",\"session_id\":\"ses-done\"}\n").unwrap();
+        std::fs::write(
+            dir.path().join("work-graph/work-graph-ses-done.jsonl"),
+            "{\"event\":\"task_created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"session_id\":\"ses-done\"}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A second descriptor holding the lock at `path`, as a child process
+    /// spawned while the lock was open holds it until it execs; released
+    /// after `held_for`, or never when `None`.
+    fn hold(path: &Path, held_for: Option<std::time::Duration>) -> std::thread::JoinHandle<()> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        std::thread::spawn(move || {
+            if let Some(held_for) = held_for {
+                std::thread::sleep(held_for);
+                drop(lock);
+            } else {
+                std::mem::forget(lock);
+            }
+        })
+    }
+
+    /// A lock held for a moment, by a child spawned while it was open,
+    /// delays compaction instead of refusing or deferring it; a lock held
+    /// past the wait still refuses or defers.
+    #[test]
+    fn r23_compaction_waits_out_a_briefly_held_lock() {
+        let brief = Some(std::time::Duration::from_millis(100));
+        for lock in [".compaction.lock", "work-graph-ses-done.jsonl.lock"] {
+            let dir = one_fragment();
+            let holder = hold(&dir.path().join("work-graph").join(lock), brief);
+            let result = compact_ledger_type(dir.path(), "work-graph", None).unwrap();
+            assert_eq!(result.merged_count, 1, "{lock}");
+            holder.join().unwrap();
+        }
+
+        let dir = one_fragment();
+        let _held = hold(&dir.path().join("work-graph/.compaction.lock"), None);
+        assert!(matches!(
+            compact_ledger_type(dir.path(), "work-graph", None),
+            Err(LedgerError::Lock(message)) if message.contains("already in progress")
+        ));
+        let dir = one_fragment();
+        let _held = hold(
+            &dir.path().join("work-graph/work-graph-ses-done.jsonl.lock"),
+            None,
+        );
+        let deferred = compact_ledger_type(dir.path(), "work-graph", None).unwrap();
+        assert_eq!(deferred.merged_count, 0);
+    }
+
+    #[test]
+    fn r22_compaction_directory_and_session_inputs_refuse() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            compact_ledger_type(dir.path(), "work-graph", None)
+                .unwrap()
+                .merged_count,
+            0
+        );
+        let subdir = dir.path().join("work-graph");
+        std::os::unix::fs::symlink("missing", &subdir).unwrap();
+        assert!(compact_ledger_type(dir.path(), "work-graph", None).is_err());
+        std::fs::remove_file(&subdir).unwrap();
+        std::fs::create_dir(&subdir).unwrap();
+        assert!(find_completed_sessions(dir.path()).unwrap().is_empty());
+        let sessions = dir.path().join("sessions");
+        std::os::unix::fs::symlink("missing", &sessions).unwrap();
+        assert!(find_completed_sessions(dir.path()).is_err());
+        std::fs::remove_file(&sessions).unwrap();
+        std::fs::create_dir(&sessions).unwrap();
+        std::os::unix::fs::symlink("missing", sessions.join("sessions.jsonl")).unwrap();
+        assert!(find_completed_sessions(dir.path()).is_err());
+    }
+    #[test]
+    fn r22_compaction_refuses_unreadable_base_preserving_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["sessions", "work-graph"] {
+            std::fs::create_dir(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(dir.path().join("sessions/sessions.jsonl"), "{\"event\":\"session_end\",\"timestamp\":\"2026-01-01T01:00:00Z\",\"session_id\":\"ses-done\"}\n").unwrap();
+        let fragment = dir.path().join("work-graph/work-graph-ses-done.jsonl");
+        let bytes = "{\"event\":\"task_created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"session_id\":\"ses-done\"}\n";
+        std::fs::write(&fragment, bytes).unwrap();
+        let base = dir.path().join("work-graph/work-graph.jsonl");
+        std::os::unix::fs::symlink("missing", &base).unwrap();
+        assert!(compact_ledger_type(dir.path(), "work-graph", None).is_err());
+        assert_eq!(std::fs::read_to_string(&fragment).unwrap(), bytes);
+        std::fs::remove_file(base).unwrap();
+        assert_eq!(
+            compact_ledger_type(dir.path(), "work-graph", None)
+                .unwrap()
+                .merged_count,
+            1
+        );
     }
 }

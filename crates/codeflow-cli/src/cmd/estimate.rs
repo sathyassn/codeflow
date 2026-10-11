@@ -106,8 +106,20 @@ fn is_date(text: &str) -> bool {
 }
 
 fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) -> i32 {
-    let root = super::repo_root();
-    let cwd = std::env::current_dir().unwrap_or_else(|_| root.clone());
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("estimate outcomes: cannot read the current directory: {error}");
+            return 2;
+        }
+    };
     let report = codeflow_core::estimate::outcomes::outcomes(&root, &cwd, options);
     if json {
         let Ok(text) = serde_json::to_string_pretty(&report) else {
@@ -122,7 +134,13 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
 }
 
 fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let input = if forecast_path.is_absolute() {
         forecast_path.to_path_buf()
     } else {

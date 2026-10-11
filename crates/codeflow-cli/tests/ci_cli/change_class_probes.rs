@@ -329,7 +329,7 @@ fn a_breaking_marker_keeps_release_impact_required() {
 /// that fails only the tree diff turns a light range full.
 #[cfg(unix)]
 #[test]
-fn an_unlisted_range_is_checked_in_full() {
+fn an_unreadable_range_refuses_instead_of_falling_back() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -357,10 +357,9 @@ fn an_unlisted_range_is_checked_in_full() {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    assert_full(
-        &ci_with(dir.path(), LIGHT, Some(&path)),
-        "range whose tree diff failed",
-    );
+    let output = ci_with(dir.path(), LIGHT, Some(&path));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot read changed paths"));
 }
 
 /// The planes agree on the class: the shipped policy workflow runs the same

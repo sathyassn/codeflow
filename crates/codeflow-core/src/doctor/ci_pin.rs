@@ -75,7 +75,7 @@ const INSTALLS: [(&str, &str, &str); 5] = [
 /// at any indentation. Doctor claims the pin only for such a file: marker
 /// text, a comment or an edited install says nothing about what CI runs.
 pub(super) fn recognized(content: &str) -> bool {
-    let lines: Vec<&str> = content.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let lines: Vec<&str> = content.lines().collect();
     INSTALLS.iter().any(|(template, first, last)| {
         let Some(span) = span(template, first, last) else {
             return false;
@@ -83,9 +83,9 @@ pub(super) fn recognized(content: &str) -> bool {
         lines
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.trim() == span[0])
+            .filter(|(_, line)| line.trim_matches([' ', '\t']) == span[0])
             .any(|(at, line)| {
-                let indent = &line[..line.len() - line.trim_start().len()];
+                let indent = &line[..line.len() - line.trim_start_matches([' ', '\t']).len()];
                 lines.len() >= at + span.len()
                     && lines[at..at + span.len()]
                         .iter()
@@ -101,7 +101,8 @@ fn span(template: &str, first: &str, last: &str) -> Option<Vec<String>> {
     let lines: Vec<&str> = template.lines().collect();
     let start = lines.iter().position(|line| line.contains(first))?;
     let end = start + lines[start..].iter().position(|line| line.contains(last))?;
-    let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
+    let indent =
+        &lines[start][..lines[start].len() - lines[start].trim_start_matches([' ', '\t']).len()];
     lines[start..=end]
         .iter()
         .map(|line| dedent(line, indent).map(str::to_string))
@@ -111,41 +112,91 @@ fn span(template: &str, first: &str, last: &str) -> Option<Vec<String>> {
 /// `line` without `indent`; a blank line is empty, and a line indented
 /// less than `indent` does not belong to the span.
 fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
-    if line.trim().is_empty() {
+    if line.trim_matches([' ', '\t']).is_empty() {
         return Some("");
     }
     line.strip_prefix(indent)
 }
 
-/// The pin state of the checkout at `root`.
-pub(super) fn report(root: &Path) -> PinReport {
-    let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
-    let head_state = read(STATE);
-    if let Some(state) = head_state.as_deref() {
+/// The project state and policy texts; a proven missing file is `None`.
+struct PinInputs {
+    state: Option<String>,
+    policy: Option<String>,
+}
+
+fn current_inputs(root: &Path) -> Result<PinInputs, String> {
+    let read = |name: &str| -> Result<Option<String>, String> {
+        let path = root.join(name);
+        // Only a proven missing input is absent; a dangling link is read
+        // and refused.
+        if crate::absence::proven_absent(&path).map_err(|error| format!("{name}: {error}"))? {
+            return Ok(None);
+        }
+        std::fs::read_to_string(path)
+            .map(Some)
+            .map_err(|error| format!("{name}: {error}"))
+    };
+    read_inputs(read)
+}
+
+fn read_inputs(read: impl Fn(&str) -> TargetText) -> Result<PinInputs, String> {
+    Ok(PinInputs {
+        state: read(STATE)?,
+        policy: read(POLICY)?,
+    })
+}
+
+/// A report that stops at an input that cannot be read.
+fn refused(error: &str) -> PinReport {
+    PinReport {
+        status: Status::Fail,
+        message: format!("cannot read CI pin inputs: {error}"),
+    }
+}
+
+/// The checkout's own pin: its state text, policy, pin and what CI checks
+/// the pinned release against, or the report that stops there.
+fn checkout_pin(root: &Path) -> Result<(String, Option<String>, String, String), PinReport> {
+    let PinInputs { state, policy } = current_inputs(root).map_err(|error| refused(&error))?;
+    // A table the installers refuse may not parse as TOML at all (one
+    // declared twice), so name it before reading the pin.
+    if let Some(state) = state.as_deref() {
         if let PinnedDigests::Unreadable(reason) = pinned_digests(state) {
-            return unreadable("", state, &reason);
+            return Err(unreadable("", state, &reason));
         }
     }
-    let Some(head_pin) = head_state.as_deref().and_then(pinned) else {
-        return PinReport {
+    let pin = state
+        .as_deref()
+        .map(pinned)
+        .transpose()
+        .map_err(|error| refused(&error))?
+        .flatten();
+    let (Some(state), Some(pin)) = (state, pin) else {
+        return Err(PinReport {
             status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
             message: format!(
                 "no scaffold_version is pinned in {STATE}, so the pinned CI install fails closed"
             ),
-        };
+        });
     };
-    let verified = match digest_mode(head_state.as_deref().unwrap_or_default(), &head_pin) {
-        Ok(verified) => verified,
-        Err(problem) => {
-            return PinReport {
-                status: Status::Warn(
-                    remedy::DOCTOR_CI_DIGEST.with(&[("version", head_pin.as_str())]),
-                ),
-                message: problem,
-            }
-        }
+    let verified = digest_mode(&state, &pin).map_err(|problem| PinReport {
+        status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", pin.as_str())])),
+        message: problem,
+    })?;
+    Ok((state, policy, pin, verified))
+}
+
+/// The pin state of the checkout at `root`.
+pub(super) fn report(root: &Path) -> PinReport {
+    let (head_state, head_policy, head_pin, verified) = match checkout_pin(root) {
+        Ok(checked) => checked,
+        Err(report) => return report,
     };
-    let Some((target, show)) = target_files(root) else {
+    let target_files = match target_files(root) {
+        Ok(target) => target,
+        Err(error) => return refused(&error),
+    };
+    let Some((target, show)) = target_files else {
         return PinReport {
             status: Status::Pass,
             message: format!(
@@ -153,17 +204,32 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
-    let target_state = show(STATE).unwrap_or_default();
-    let (target_pin, target_verified) = match target_check(&target, &target_state) {
-        Ok(checked) => checked,
-        Err(report) => return report,
+    let PinInputs {
+        state: target_state,
+        policy: target_policy,
+    } = match read_inputs(show) {
+        Ok(inputs) => inputs,
+        Err(error) => return refused(&error),
     };
+    if let Err(error) = head_policy
+        .as_deref()
+        .map(policy_keys)
+        .transpose()
+        .and_then(|_| target_policy.as_deref().map(policy_keys).transpose())
+    {
+        return refused(&error);
+    }
+    let (target_text, target_pin, target_verified) =
+        match target_check(&target, target_state.as_deref()) {
+            Ok(checked) => checked,
+            Err(report) => return report,
+        };
     if target_pin == head_pin {
         return same_pin(
             &target,
             &target_pin,
-            (&target_state, &target_verified),
-            (head_state.as_deref().unwrap_or_default(), &verified),
+            (target_text, &target_verified),
+            (&head_state, &verified),
         );
     }
     if is_older(&head_pin, &target_pin) {
@@ -177,11 +243,15 @@ pub(super) fn report(root: &Path) -> PinReport {
         };
     }
     let carried = carried_upgrade(
-        head_state.as_deref(),
-        show(STATE).as_deref(),
-        read(POLICY).as_deref(),
-        show(POLICY).as_deref(),
+        Some(head_state.as_str()),
+        target_state.as_deref(),
+        head_policy.as_deref(),
+        target_policy.as_deref(),
     );
+    let carried = match carried {
+        Ok(carried) => carried,
+        Err(error) => return refused(&error),
+    };
     if carried.is_empty() {
         return PinReport {
             status: Status::Pass,
@@ -247,26 +317,41 @@ fn unreadable(prefix: &str, state: &str, reason: &str) -> PinReport {
 /// The target's pin and what CI checks its release against, or the warning
 /// that stops the report. CI installs the target's pin first, checked against
 /// the target's table, whatever the checkout raises or lowers it to.
-fn target_check(target: &str, state: &str) -> Result<(String, String), PinReport> {
+fn target_check<'s>(
+    target: &str,
+    state: Option<&'s str>,
+) -> Result<(&'s str, String, String), PinReport> {
     let digest_warning = |version: &str, problem: String| PinReport {
         status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", version)])),
         message: format!("on {target}, {problem}"),
+    };
+    let no_pin = || PinReport {
+        status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", target)])),
+        message: format!(
+            "{target} pins no scaffold_version, so CI on it fails closed until a pin lands there"
+        ),
+    };
+    // A target without the state file pins nothing.
+    let Some(state) = state else {
+        return Err(no_pin());
     };
     // A table the installers refuse may not parse as TOML at all (one
     // declared twice), so name it before reading the pin.
     if let PinnedDigests::Unreadable(reason) = pinned_digests(state) {
         return Err(unreadable(&format!("on {target}, "), state, &reason));
     }
-    let Some(pin) = pinned(state) else {
-        return Err(PinReport {
-            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", target)])),
-            message: format!(
-                "{target} pins no scaffold_version, so CI on it fails closed until a pin lands there"
-            ),
-        });
+    let pin = match pinned(state) {
+        Ok(Some(pin)) => pin,
+        Ok(None) => return Err(no_pin()),
+        Err(error) => {
+            return Err(PinReport {
+                status: Status::Fail,
+                message: format!("cannot read CI pin inputs: on {target}, {error}"),
+            })
+        }
     };
     match digest_mode(state, &pin) {
-        Ok(verified) => Ok((pin, verified)),
+        Ok(verified) => Ok((state, pin, verified)),
         Err(problem) => Err(digest_warning(&pin, problem)),
     }
 }
@@ -302,7 +387,7 @@ fn table_lines(state: &str) -> Vec<&str> {
     let mut inside = false;
     state
         .lines()
-        .map(str::trim)
+        .map(|line| line.trim_matches([' ', '\t', '\x0B', '\x0C']))
         .filter(|line| {
             if line.starts_with('[') {
                 inside = is_table_header(line);
@@ -320,11 +405,32 @@ pub(super) const SETUP_HOOK: &str = ".codeflow/ci-setup.sh";
 /// The line of a shipped CI file that sources [`SETUP_HOOK`].
 const SETUP_LINE: &str = ". ./.codeflow/ci-setup.sh";
 
+/// Whether the CI file `content` sources [`SETUP_HOOK`]: a line that is
+/// [`SETUP_LINE`] with only spaces or tabs around it, as the shell reads it.
+fn sources_setup_hook(content: &str) -> bool {
+    content
+        .lines()
+        .any(|line| line.trim_matches([' ', '\t']) == SETUP_LINE)
+}
+
 /// Whether the project has a setup hook, whether the CI file `dest` (with
 /// `content`) sources it, and its first command.
 pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
-    let Ok(script) = std::fs::read_to_string(root.join(SETUP_HOOK)) else {
-        return format!("no project setup hook ({SETUP_HOOK})");
+    // Only a proven missing hook is "no hook"; one that cannot be read is
+    // named as such, since CI still sources whatever the file holds.
+    let path = root.join(SETUP_HOOK);
+    let script = match crate::absence::proven_absent(&path) {
+        Ok(true) => return format!("no project setup hook ({SETUP_HOOK})"),
+        Ok(false) => std::fs::read_to_string(&path),
+        Err(error) => Err(error),
+    };
+    let script = match script {
+        Ok(script) => script,
+        Err(error) => {
+            return format!(
+                "the project setup hook {SETUP_HOOK} cannot be read ({error}), so what CI runs before `codeflow test` is unknown"
+            )
+        }
     };
     let first = script
         .lines()
@@ -354,7 +460,7 @@ pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
             format!("first command `{shown}{more}`")
         },
     );
-    if content.lines().any(|line| line.trim() == SETUP_LINE) {
+    if sources_setup_hook(content) {
         format!("project setup hook {SETUP_HOOK} runs before `codeflow test` ({what})")
     } else {
         format!(
@@ -364,42 +470,73 @@ pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
 }
 
 /// The `scaffold_version` a project state pins, if any.
-fn pinned(state: &str) -> Option<String> {
-    let value: toml::Value = toml::from_str(state).ok()?;
-    value
+fn pinned(state: &str) -> Result<Option<String>, String> {
+    let value: toml::Value =
+        toml::from_str(state).map_err(|error| format!("cannot parse state: {error}"))?;
+    Ok(value
         .get("scaffold_version")
         .and_then(toml::Value::as_str)
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
+        .map(str::to_string))
 }
 
 /// The first target ref that exists, and a reader of files at its commit.
-fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> Option<String>)> {
-    let repo = git2::Repository::discover(root).ok()?;
-    let (name, tree) = TARGETS.iter().find_map(|name| {
-        let reference = repo.find_reference(name).ok()?;
-        let resolved = reference.resolve().ok()?;
-        let tree = resolved.peel_to_commit().ok()?.tree().ok()?.id();
-        let shown = resolved
-            .shorthand()
-            .map_or_else(|_| (*name).to_string(), str::to_string);
-        Some((shown, tree))
-    })?;
-    let prefix = repo
-        .workdir()
-        .and_then(|workdir| {
-            let root = root.canonicalize().ok()?;
-            let workdir = workdir.canonicalize().ok()?;
-            root.strip_prefix(workdir).ok().map(Path::to_path_buf)
-        })
-        .unwrap_or_default();
-    let show = move |path: &str| {
-        let tree = repo.find_tree(tree).ok()?;
-        let entry = tree.get_path(&prefix.join(path)).ok()?;
-        let blob = repo.find_blob(entry.id()).ok()?;
-        String::from_utf8(blob.content().to_vec()).ok()
+type TargetText = Result<Option<String>, String>;
+
+type TargetFiles<R> = Result<Option<(String, R)>, String>;
+
+fn target_files(root: &Path) -> TargetFiles<impl Fn(&str) -> TargetText> {
+    let Some(repo) = crate::hooks::repo::open(root)? else {
+        return Ok(None);
     };
-    Some((name, show))
+    let mut target = None;
+    for name in TARGETS {
+        let reference = match repo.find_reference(name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let resolved = reference.resolve().map_err(|error| error.to_string())?;
+        let tree = resolved
+            .peel_to_commit()
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?
+            .id();
+        target = Some((
+            crate::git::name::reference_shorthand(&resolved)
+                .display()
+                .to_string(),
+            tree,
+        ));
+        break;
+    }
+    let Some((name, tree)) = target else {
+        return Ok(None);
+    };
+    let prefix = if let Some(workdir) = repo.workdir() {
+        root.canonicalize()
+            .map_err(|error| error.to_string())?
+            .strip_prefix(workdir.canonicalize().map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?
+            .to_path_buf()
+    } else {
+        return Err("target repository has no worktree".into());
+    };
+    let show = move |path: &str| -> TargetText {
+        let tree = repo.find_tree(tree).map_err(|error| error.to_string())?;
+        let entry = match tree.get_path(&prefix.join(path)) {
+            Ok(entry) => entry,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        String::from_utf8(blob.content().to_vec())
+            .map(Some)
+            .map_err(|error| error.to_string())
+    };
+    Ok(Some((name, show)))
 }
 
 /// What an upgrade carries beyond the pin: policy keys the target's policy
@@ -409,33 +546,43 @@ fn carried_upgrade(
     target_state: Option<&str>,
     head_policy: Option<&str>,
     target_policy: Option<&str>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut carried = Vec::new();
-    let head_keys = head_policy.map(policy_keys).unwrap_or_default();
-    let target_keys = target_policy.map(policy_keys).unwrap_or_default();
+    let head_keys = head_policy
+        .map(policy_keys)
+        .transpose()?
+        .unwrap_or_default();
+    let target_keys = target_policy
+        .map(policy_keys)
+        .transpose()?
+        .unwrap_or_default();
     let added: Vec<String> = head_keys.difference(&target_keys).cloned().collect();
     if !added.is_empty() {
         carried.push(format!("new policy keys ({})", added.join(", ")));
     }
     let state_schema = |text: Option<&str>| {
-        text.and_then(|t| toml::from_str::<toml::Value>(t).ok())
-            .and_then(|v| v.get("schema_version").map(ToString::to_string))
+        text.map(toml::from_str::<toml::Value>)
+            .transpose()
+            .map(|value| value.and_then(|v| v.get("schema_version").map(ToString::to_string)))
+            .map_err(|error| error.to_string())
     };
-    if state_schema(head_state) != state_schema(target_state) {
+    if state_schema(head_state)? != state_schema(target_state)? {
         carried.push(format!("a new {STATE} schema_version"));
     }
     let policy_schema = |text: Option<&str>| {
-        text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
-            .and_then(|v| v.get("schema_version").map(ToString::to_string))
+        text.map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map(|value| value.and_then(|v| v.get("schema_version").map(ToString::to_string)))
+            .map_err(|error| error.to_string())
     };
-    if policy_schema(head_policy) != policy_schema(target_policy) {
+    if policy_schema(head_policy)? != policy_schema(target_policy)? {
         carried.push(format!("a new {POLICY} schema_version"));
     }
-    carried
+    Ok(carried)
 }
 
 /// Every object key path in a policy, dotted (`git.commit_format`).
-fn policy_keys(text: &str) -> BTreeSet<String> {
+fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
     fn walk(value: &serde_json::Value, prefix: &str, out: &mut BTreeSet<String>) {
         if let Some(map) = value.as_object() {
             for (key, child) in map {
@@ -450,15 +597,24 @@ fn policy_keys(text: &str) -> BTreeSet<String> {
         }
     }
     let mut out = BTreeSet::new();
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-        walk(&value, "", &mut out);
-    }
-    out
+    let value = serde_json::from_str::<serde_json::Value>(text)
+        .map_err(|error| format!("cannot parse policy: {error}"))?;
+    walk(&value, "", &mut out);
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r17_target_files_without_repository_are_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(target_files(dir.path()).unwrap().is_none());
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        assert!(target_files(dir.path()).is_err());
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = crate::git::command()
@@ -737,6 +893,56 @@ mod tests {
         assert!(!note.chars().any(char::is_control), "{note}");
     }
 
+    /// Issue 79: a state that does not parse, or cannot be read, fails the
+    /// check on the checkout and on the target; it is never read as a state
+    /// that pins nothing.
+    #[test]
+    fn r24_a_state_that_cannot_be_read_fails_instead_of_reading_as_unpinned() {
+        const BROKEN: &str = "schema_version = 1\nscaffold_version = \"1.2.3\"\nbroken = [\n";
+        let dir = project("1.2.3");
+        write(dir.path(), STATE, BROKEN);
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Fail, "{}", found.message);
+        assert!(
+            found.message.contains("cannot parse state"),
+            "{}",
+            found.message
+        );
+
+        #[cfg(unix)]
+        {
+            let dir = project("1.2.3");
+            std::fs::remove_file(dir.path().join(STATE)).unwrap();
+            std::os::unix::fs::symlink("gone", dir.path().join(STATE)).unwrap();
+            let found = report(dir.path());
+            assert_eq!(found.status, Status::Fail, "{}", found.message);
+        }
+
+        let dir = project("1.2.3");
+        commit_on_main(dir.path(), BROKEN);
+        write(dir.path(), STATE, &state("1.2.3"));
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Fail, "{}", found.message);
+        assert!(found.message.contains("on main"), "{}", found.message);
+    }
+
+    /// Issue 79: a setup hook that cannot be read is named as such, never
+    /// reported as no hook, since CI still sources whatever it holds.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_setup_hook_is_not_reported_missing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ci = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        write(dir.path(), SETUP_HOOK, "corepack enable\n");
+        let hook = dir.path().join(SETUP_HOOK);
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let note = setup_note(dir.path(), "ci.yml", ci);
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(note.contains("cannot be read"), "{note}");
+        assert!(!note.starts_with("no project setup hook"), "{note}");
+    }
+
     /// Commits `state` on `main` of `dir` and returns to `feat/x` at it.
     fn commit_on_main(dir: &Path, state: &str) {
         git(dir, &["checkout", "-q", "main"]);
@@ -933,6 +1139,9 @@ mod tests {
             Some(POLICY_TEXT),
             Some(POLICY_TEXT),
         );
-        assert_eq!(carried, vec![format!("a new {STATE} schema_version")]);
+        assert_eq!(
+            carried.unwrap(),
+            vec![format!("a new {STATE} schema_version")]
+        );
     }
 }

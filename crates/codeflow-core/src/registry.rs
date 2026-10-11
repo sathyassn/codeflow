@@ -86,26 +86,74 @@ pub fn qualified_bindings_path(home: &Path) -> PathBuf {
 // Repo shape helpers
 // ---------------------------------------------------------------------------
 
+/// A candidate project root whose `CodeFlow` state could not be inspected:
+/// the file read and the error, so a caller can name what to repair.
+#[derive(Debug)]
+pub struct RootUnreadable {
+    /// The `.codeflow` file whose presence could not be established.
+    pub path: PathBuf,
+    /// The metadata error.
+    pub error: std::io::Error,
+}
+
+impl std::fmt::Display for RootUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot inspect {}: {}", self.path.display(), self.error)
+    }
+}
+
+impl std::error::Error for RootUnreadable {}
+
+impl From<RootUnreadable> for std::io::Error {
+    fn from(unreadable: RootUnreadable) -> Self {
+        Self::new(unreadable.error.kind(), unreadable.to_string())
+    }
+}
+
 /// Whether `repo_root` looks like an initialized codeflow repo: a
 /// `.codeflow/` directory containing `project.toml` or `policy.json`.
-#[must_use]
-pub fn is_initialized(repo_root: &Path) -> bool {
+/// # Errors
+/// Returns metadata errors, naming the file, instead of skipping a possible
+/// repository root.
+pub fn is_initialized(repo_root: &Path) -> std::io::Result<bool> {
+    initialized_at(repo_root).map_err(Into::into)
+}
+
+fn initialized_at(repo_root: &Path) -> Result<bool, RootUnreadable> {
     let dir = repo_root.join(".codeflow");
-    dir.join("project.toml").is_file() || dir.join("policy.json").is_file()
+    for name in ["project.toml", "policy.json"] {
+        let path = dir.join(name);
+        let file = crate::absence::proven_absent(&path)
+            .and_then(|absent| Ok(!absent && std::fs::metadata(&path)?.is_file()));
+        match file {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => return Err(RootUnreadable { path, error }),
+        }
+    }
+    Ok(false)
 }
 
 /// Walk upward from `start` to find the nearest directory containing a
 /// `.codeflow/` directory (an initialized repo root).
-#[must_use]
-pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+/// # Errors
+/// Returns an error when a candidate root cannot be inspected.
+pub fn find_repo_root(start: &Path) -> std::io::Result<Option<PathBuf>> {
+    find_repo_root_checked(start).map_err(Into::into)
+}
+
+/// [`find_repo_root`], with the file that could not be inspected.
+/// # Errors
+/// Returns the candidate file whose presence could not be established.
+pub fn find_repo_root_checked(start: &Path) -> Result<Option<PathBuf>, RootUnreadable> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if is_initialized(dir) {
-            return Some(dir.to_path_buf());
+        if initialized_at(dir)? {
+            return Ok(Some(dir.to_path_buf()));
         }
         current = dir.parent();
     }
-    None
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,32 +204,54 @@ pub struct ProjectInfo {
 /// `scaffold_version` at the top level, then under a `[project]` table.
 /// Missing file or keys fall back to the directory name, the default tier
 /// (`standard`), and `unknown`.
-#[must_use]
-pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
+///
+/// # Errors
+///
+/// Returns an error when existing project metadata cannot be read or parsed.
+pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
+    // A label for a person (OS text rule, issue 79): the exact name, with
+    // an invalid byte shown as an escape.
     let dir_name = repo_root.file_name().map_or_else(
         || "unnamed".to_string(),
-        |n| n.to_string_lossy().into_owned(),
+        |n| crate::git::GitName::from_os_str(n).display().to_string(),
     );
 
-    let table: Option<toml::Table> =
-        std::fs::read_to_string(repo_root.join(".codeflow/project.toml"))
-            .ok()
-            .and_then(|s| s.parse::<toml::Table>().ok());
-
-    let lookup = |key: &str| -> Option<String> {
-        let table = table.as_ref()?;
-        table
-            .get(key)
-            .or_else(|| table.get("project").and_then(|p| p.get(key)))
-            .and_then(toml::Value::as_str)
-            .map(ToString::to_string)
+    let path = repo_root.join(".codeflow/project.toml");
+    let table: Option<toml::Table> = if path
+        .try_exists()
+        .map_err(|error| format!("cannot inspect project metadata: {error}"))?
+    {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read project metadata: {error}"))?;
+        Some(
+            toml::from_str(&text)
+                .map_err(|error| format!("cannot parse project metadata: {error}"))?,
+        )
+    } else {
+        None
     };
 
-    ProjectInfo {
-        name: lookup("name").unwrap_or(dir_name),
-        tier: lookup("tier").unwrap_or_else(|| "standard".to_string()),
-        scaffold_version: lookup("scaffold_version").unwrap_or_else(|| "unknown".to_string()),
-    }
+    let lookup = |key: &str| -> Result<Option<String>, String> {
+        let Some(table) = &table else {
+            return Ok(None);
+        };
+        let value = table
+            .get(key)
+            .or_else(|| table.get("project").and_then(|project| project.get(key)));
+        value
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("project {key} must be a string"))
+            })
+            .transpose()
+    };
+    Ok(ProjectInfo {
+        name: lookup("name")?.unwrap_or(dir_name),
+        tier: lookup("tier")?.unwrap_or_else(|| "standard".to_string()),
+        scaffold_version: lookup("scaffold_version")?.unwrap_or_else(|| "unknown".to_string()),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -206,14 +276,20 @@ pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
 /// Returns `Err(String)` when the lock cannot be acquired or the registry
 /// file cannot be read, parsed, or written for another reason.
 pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
-    if !is_initialized(repo_root) {
+    if !is_initialized(repo_root).map_err(|error| error.to_string())? {
         return Ok(false);
     }
     let canonical = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
-    let info = read_project_info(&canonical);
+    let info = read_project_info(&canonical)?;
+    // OS text rule (issue 79): the path is the row's identity, and a lossy
+    // spelling would let two repositories share one row. A path that is not
+    // valid UTF-8 is not recorded (a registry write is best effort).
+    let Some(path) = canonical.to_str() else {
+        return Ok(false);
+    };
     let entry = RegistryEntry {
-        path: canonical.to_string_lossy().into_owned(),
+        path: path.to_string(),
         name: info.name,
         tier: info.tier,
         scaffold_version: info.scaffold_version,
@@ -224,11 +300,12 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
         // Prune stale rows: a cheap existence check per entry, inside the
         // same lock so concurrent touches never resurrect a pruned path.
-        // try_exists distinguishes "definitively missing" (Ok(false), prune)
-        // from permission/transient stat errors (Err, KEEP) — exists() would
-        // collapse both and could permanently drop a live repo row.
+        // Only a path proven missing is pruned (Ok(true)); a stat error or
+        // a path below a dangling link is kept, since either could hide a
+        // live repo.
         reg.repos.retain(|r| {
-            r.path == entry.path || !matches!(Path::new(&r.path).try_exists(), Ok(false))
+            r.path == entry.path
+                || !matches!(crate::absence::proven_absent(Path::new(&r.path)), Ok(true))
         });
         match reg.repos.iter_mut().find(|r| r.path == entry.path) {
             Some(existing) => *existing = entry.clone(),
@@ -415,9 +492,9 @@ mod tests {
     #[test]
     fn test_is_initialized_requires_codeflow_dir() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!is_initialized(dir.path()));
+        assert!(!is_initialized(dir.path()).unwrap());
         init_repo(dir.path(), None);
-        assert!(is_initialized(dir.path()));
+        assert!(is_initialized(dir.path()).unwrap());
     }
 
     #[test]
@@ -426,14 +503,14 @@ mod tests {
         init_repo(dir.path(), None);
         let nested = dir.path().join("src/deep/module");
         fs::create_dir_all(&nested).unwrap();
-        let found = find_repo_root(&nested).unwrap();
+        let found = find_repo_root(&nested).unwrap().unwrap();
         assert_eq!(found, dir.path());
     }
 
     #[test]
     fn test_find_repo_root_none_outside() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(find_repo_root(dir.path()), None);
+        assert_eq!(find_repo_root(dir.path()).unwrap(), None);
     }
 
     #[test]
@@ -448,14 +525,14 @@ mod tests {
         let nested = dir.path().join("AppData/Local/Temp/project");
         fs::create_dir_all(&nested).unwrap();
 
-        assert_eq!(find_repo_root(&nested), None);
+        assert_eq!(find_repo_root(&nested).unwrap(), None);
     }
 
     #[test]
     fn test_read_project_info_lenient_defaults() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), None); // empty project.toml
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.tier, "standard");
         assert_eq!(info.scaffold_version, "unknown");
         // name falls back to directory name
@@ -466,7 +543,7 @@ mod tests {
     fn test_read_project_info_from_toml() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), Some("myproj"));
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.name, "myproj");
         assert_eq!(info.tier, "full");
         assert_eq!(info.scaffold_version, "2.0.0-dev");
@@ -481,7 +558,7 @@ mod tests {
             "[project]\nname = \"tabled\"\ntier = \"minimal\"\n",
         )
         .unwrap();
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.name, "tabled");
         assert_eq!(info.tier, "minimal");
     }
@@ -606,6 +683,37 @@ mod tests {
             vec!["guarded", "live"],
             "entry behind a stat error must be kept"
         );
+    }
+
+    /// A row whose path sits below a dangling link (a volume link whose
+    /// target is gone) is not proven missing, so it is kept; a row whose
+    /// directory is truly gone is pruned.
+    #[test]
+    #[cfg(unix)]
+    fn r23_touch_registry_keeps_rows_below_a_dangling_link() {
+        let home = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        init_repo(live.path(), Some("live"));
+        let parent = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(parent.path()).unwrap();
+        let (linked, gone) = (parent.join("volume").join("linked"), parent.join("gone"));
+        for (path, name) in [(&linked, "linked"), (&gone, "gone")] {
+            std::fs::create_dir_all(path).unwrap();
+            init_repo(path, Some(name));
+            touch_registry(home.path(), path).unwrap();
+        }
+        std::fs::remove_dir_all(parent.join("volume")).unwrap();
+        std::os::unix::fs::symlink("unmounted", parent.join("volume")).unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        touch_registry(home.path(), live.path()).unwrap();
+        let mut names: Vec<String> = list_repos(home.path())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["linked", "live"]);
     }
 
     #[test]
@@ -742,5 +850,65 @@ mod tests {
         fs::write(user_config_path(home.path()), "not = [valid").unwrap();
         let err = UserConfig::load(home.path()).unwrap_err();
         assert!(err.contains("config.toml parse"), "got: {err}");
+    }
+
+    /// Issue 79: a repository whose path is not valid UTF-8 is not recorded
+    /// under a lossy spelling that another repository could share.
+    #[cfg(unix)]
+    #[test]
+    fn a_repository_path_that_is_not_utf8_is_not_recorded() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        if std::fs::create_dir(&repo).is_err() {
+            return; // this file system refuses the name
+        }
+        init_repo(&repo, Some("odd"));
+        assert_eq!(touch_registry(home.path(), &repo), Ok(false));
+        assert!(list_repos(home.path()).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_registry_metadata_is_not_defaulted_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        let path = dir.path().join(".codeflow/project.toml");
+        for text in [b"name = 4".as_slice(), b"name = \"oops".as_slice(), &[0xff]] {
+            std::fs::write(&path, text).unwrap();
+            assert!(super::read_project_info(dir.path()).is_err());
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_registry_stops_at_unreadable_root() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_initialized(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/policy.json"), "{}").unwrap();
+        let nested = dir.path().join("child");
+        std::fs::create_dir(&nested).unwrap();
+        assert_eq!(
+            find_repo_root(&nested).unwrap(),
+            Some(dir.path().to_path_buf())
+        );
+        std::os::unix::fs::symlink("missing", nested.join(".codeflow")).unwrap();
+        assert!(find_repo_root(&nested).is_err());
+        // The checked form names the file whose presence it could not
+        // establish, for the remedy to point at.
+        let unreadable = find_repo_root_checked(&nested).unwrap_err();
+        assert_eq!(
+            unreadable.path,
+            nested.join(".codeflow").join("project.toml")
+        );
     }
 }

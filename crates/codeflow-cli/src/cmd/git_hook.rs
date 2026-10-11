@@ -56,8 +56,23 @@ pub fn run(args: &GitHookArgs) -> i32 {
         println!("{HOOK_CAPABILITY}");
         return 0;
     }
+    if matches!(args.stage, StageName::ReferenceTransaction)
+        && args.args.first().map(String::as_str) != Some("prepared")
+    {
+        // Notifications cannot cancel a transaction and need no repository.
+        return 0;
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let root = super::project_root(&cwd);
+    let root = match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            if matches!(args.stage, StageName::ReferenceTransaction) {
+                return refuse_reference_transaction(&error);
+            }
+            eprintln!("codeflow: cannot read project root: {error}");
+            return 2;
+        }
+    };
     // reference-transaction fires on every ref update, including the hundreds
     // of remote-tracking refs a `git fetch` touches. Short-circuit before any
     // policy load or full stdin parse when it cannot apply (charter §6.1
@@ -98,7 +113,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
         }
     }
 
-    let (policy, _armed) = Policy::load_effective(&root);
+    let (policy, _armed) = match Policy::load_effective(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let token = super::integrate_token_present();
 
     let (plane, result) = match args.stage {
@@ -118,8 +139,12 @@ pub fn run(args: &GitHookArgs) -> i32 {
             let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,
                 Err(error) => {
-                    eprintln!("{}", degraded_hook_input_note("pre-push", &error));
-                    String::new()
+                    let finding = codeflow_core::remedy::Finding::new(
+                        format!("could not read hook stdin: {error}; operation blocked"),
+                        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
+                    );
+                    eprintln!("{}", finding.line("codeflow pre-push", "error"));
+                    return 1;
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
@@ -142,23 +167,15 @@ pub fn run(args: &GitHookArgs) -> i32 {
 
     match result {
         Ok(report) => super::render_stage(plane, &root, &report, 1),
-        Err(e) => {
-            // A hook that cannot evaluate must not block work invisibly:
-            // report and pass (CI remains the hard line, charter D19).
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("{e}; check skipped"),
-                codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
-            );
-            eprintln!("{}", finding.line(&format!("codeflow {plane}"), "warning"));
-            0
-        }
+        Err(error) => refuse_hook(plane, &error),
     }
 }
 
 /// `ids sync` in pre-push (SPC-013 R-15): publish pending reservations
 /// before code that may carry their records reaches the authority. It warns
 /// and continues when the authority is unreachable or is not the push
-/// target, blocks only on a number held by a different `uid`, and never runs
+/// target, blocks on unreadable registry inputs or a number held by a different
+/// `uid`, and never runs
 /// for a push of the registry itself, so it cannot recurse (R-6).
 fn sync_pending_ids(
     root: &Path,
@@ -172,8 +189,22 @@ fn sync_pending_ids(
             .is_some_and(|branch| branch != REGISTRY_BRANCH)
             && !r.is_delete()
     });
-    if !pushes_code || !issue::has_pending(root) {
+    if !pushes_code {
         return;
+    }
+    match issue::has_pending(root) {
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(error) => {
+            report
+                .violations
+                .push(codeflow_core::hooks::Violation::always_blocking(
+                    "registry.sync",
+                    format!("cannot read pending id reservations: {error}"),
+                    "repair the Git repository and registry state, then push again",
+                ));
+            return;
+        }
     }
     if remote != Some(AUTHORITY) {
         report.notes.push(codeflow_core::remedy::Finding::new(
@@ -205,10 +236,19 @@ fn sync_pending_ids(
                 "renumber the unmerged record with `codeflow ids retarget <id>`, then push again",
             ));
         }
-        Err(error) => report.notes.push(codeflow_core::remedy::Finding::new(
-            format!("ids sync skipped, reservations stay pending: {error}"),
+        Err(IdsError::Offline(error)) => report.notes.push(codeflow_core::remedy::Finding::new(
+            format!(
+                "ids sync skipped, reservations stay pending: id authority is offline: {error}"
+            ),
             codeflow_core::remedy::IDS_SYNC_FAILED.remedy(),
         )),
+        Err(error) => report
+            .violations
+            .push(codeflow_core::hooks::Violation::always_blocking(
+                "registry.sync",
+                format!("cannot verify pending id reservations: {error}"),
+                "repair the Git repository and registry state, then push again",
+            )),
     }
 }
 
@@ -234,7 +274,13 @@ fn run_reference_transaction_with_reader(
             // An explicitly inactive policy has nothing to protect. Otherwise
             // unreadable prepared input leaves the transaction unclassifiable,
             // so Git must cancel it instead of silently moving a protected ref.
-            let (policy, _armed) = Policy::load_effective(root);
+            let (policy, _armed) = match Policy::load_effective(root) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("codeflow: cannot read policy: {error}");
+                    return 2;
+                }
+            };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
             {
@@ -248,36 +294,54 @@ fn run_reference_transaction_with_reader(
     };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
     // only moved remote-tracking refs) — allow without loading policy.
-    if !stdin.lines().any(git_hook::ref_line_touches_local_branch) {
+    if !stdin
+        .split('\n')
+        .any(git_hook::ref_line_touches_local_branch)
+    {
         return 0;
     }
 
-    let (policy, _armed) = Policy::load_effective(root);
+    let (policy, _armed) = match Policy::load_effective(root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
         Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
-        Err(e) => {
-            eprintln!(
-                "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
-            );
-            1
-        }
+        Err(e) => refuse_reference_transaction(&e),
     }
 }
 
+fn refuse_reference_transaction(error: impl std::fmt::Display) -> i32 {
+    eprintln!(
+        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked"
+    );
+    1
+}
+
+// OS text rule (issue 79, `docs/architecture.md`): kept strict, by a recorded
+// decision that `remedy_clearing` pins (`HOOK_STDIN_UNREAD`). The refs git
+// passes name the branches whose protection is judged, and a ref name that is
+// not valid UTF-8 is reported with the rename that clears it, never judged
+// under a lossy name.
 fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
     Ok(input)
 }
 
-fn degraded_hook_input_note(stage: &str, error: &std::io::Error) -> String {
-    codeflow_core::remedy::Finding::new(
-        format!("could not read hook stdin ({error}); ref checks degraded"),
-        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
-    )
-    .line(&format!("codeflow {stage}"), "warning")
+/// Every hook reader error reaches this nonzero refusal boundary.
+fn refuse_hook(stage: &str, error: &impl std::fmt::Display) -> i32 {
+    let finding = codeflow_core::remedy::Finding::new(
+        format!("cannot evaluate {stage}: {error}; operation blocked"),
+        codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
+    );
+    eprintln!("{}", finding.line(&format!("codeflow {stage}"), "error"));
+    1
 }
 
 fn commit_msg(
@@ -298,14 +362,13 @@ fn commit_msg(
             msg_file.display()
         ))
     })?;
-    // The contract-surface tripwire needs the files this commit stages
-    // (ADR-0020); empty on any error, so it simply does not fire.
+    // Both obtaining errors propagate to the outer nonzero hook refusal.
     let mut report = git_hook::commit_msg_with_files(
         &policy.git,
         &message,
-        &staged_files(root),
-        merge_in_progress(root),
-        &git_hook::MessageSource::Pending(pending_cleanup(root)),
+        &staged_files(root)?,
+        merge_in_progress(root)?,
+        &git_hook::MessageSource::Pending(pending_cleanup(root)?),
     );
     // A commit has no pull request body to settle it with (TSK-147 AC-4).
     git_hook::note_watched_paths(&mut report);
@@ -321,83 +384,154 @@ fn commit_msg(
 /// `-v` or `--no-verbose` is not visible to a hook, so the inference can be
 /// wrong in either direction; `codeflow ci` scans the stored message and
 /// stays the authority.
-fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
+fn pending_cleanup(root: &Path) -> Result<git_hook::GitCleanup, codeflow_core::error::HookError> {
     let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
-    let mode = git_config_values(root, &["--get", "commit.cleanup"]).pop();
+    let mode = git_config_values(root, &["--get", "commit.cleanup"])?.pop();
     // core.commentString and core.commentChar set one value; the last wins.
-    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])
+    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])?
         .pop()
         .map(|entry| {
             entry
                 .split_once('\n')
                 .map_or(String::new(), |(_, v)| v.to_string())
         });
-    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, comment.as_deref())
+    Ok(git_hook::GitCleanup::resolve(
+        mode.as_deref(),
+        editor_used,
+        comment.as_deref(),
+    ))
 }
 
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
-/// bytes, value text unchanged; empty when unset or unreadable.
-fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    codeflow_core::git::command()
+/// bytes, value text unchanged; empty only when unset, refusal when unreadable.
+fn git_config_values(
+    root: &Path,
+    args: &[&str],
+) -> Result<Vec<String>, codeflow_core::error::HookError> {
+    let unreadable = |detail: String| {
+        codeflow_core::error::HookError::Config(format!(
+            "cannot read commit cleanup configuration: {detail}"
+        ))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
         .args(args)
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .split_terminator('\0')
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+        .map_err(|error| unreadable(error.to_string()))?;
+    if out.status.code() == Some(1) {
+        return Ok(Vec::new());
+    }
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
+    }
+    let text = String::from_utf8(out.stdout).map_err(|error| unreadable(error.to_string()))?;
+    Ok(text.split_terminator('\0').map(str::to_string).collect())
 }
 
 /// True while git is creating a real merge commit — `MERGE_HEAD` exists in the
 /// git dir. The `Merge ` subject exemption keys off THIS structural fact, not
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
-fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = codeflow_core::git::command()
+fn merge_in_progress(root: &Path) -> Result<bool, codeflow_core::error::HookError> {
+    let unreadable = |why: String| {
+        codeflow_core::error::HookError::Config(format!("cannot read merge state: {why}"))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    match git_dir {
-        Some(dir) => root.join(dir).join("MERGE_HEAD").exists(),
-        None => false,
+        .map_err(|error| unreadable(error.to_string()))?;
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
     }
+    let dir = codeflow_core::git::GitName::from_bytes(
+        out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout),
+    )
+    .os_path()
+    .map_err(|error| unreadable(error.to_string()))?;
+    codeflow_core::hooks::git_hook::merge_head_present(&root.join(dir))
 }
 
 /// Files staged for the pending commit (`git diff --cached --name-only`), for
-/// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
-/// so an unavailable file list simply means no nudge.
-fn staged_files(root: &Path) -> Vec<String> {
-    codeflow_core::git::command()
+/// the contract-surface tripwire. Unreadable inventory refuses the hook.
+fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookError> {
+    let unreadable = |why: String| {
+        codeflow_core::error::HookError::Config(format!("cannot read staged files: {why}"))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
-        .args(["diff", "--cached", "--name-only"])
+        .args(["diff", "--cached", "--name-only", "-z"])
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+        .map_err(|error| unreadable(error.to_string()))?;
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
+    }
+    if !out.stdout.is_empty() && !out.stdout.ends_with(b"\0") {
+        return Err(unreadable("unterminated path inventory".into()));
+    }
+    Ok(out
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| codeflow_core::git::GitName::from_bytes(path).storage_key())
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_unreadable_cleanup_config_refuses_commit_message() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git/config"))
+            .unwrap();
+        config.write_all(b"[core]\ncommentString = \xff\n").unwrap();
+        let message = dir.path().join("message");
+        std::fs::write(&message, "fix: preserve names\n\nKeep identity.\n").unwrap();
+        assert!(super::commit_msg(
+            dir.path(),
+            &Policy::default(),
+            &[message.to_str().unwrap().to_string()]
+        )
+        .is_err());
+    }
+
     use super::*;
+
+    #[test]
+    fn r20_pending_registry_read_failure_blocks_push() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .arg("-C")
+            .arg(directory.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(directory.path().join(".git/config"), "[invalid\n").unwrap();
+        let refs = git_hook::parse_push_refs(&format!(
+            "refs/heads/task/example {} refs/heads/task/example {}\n",
+            "1".repeat(40),
+            "0".repeat(40)
+        ));
+        let mut report = git_hook::StageReport::default();
+        sync_pending_ids(directory.path(), Some("origin"), &refs, &mut report);
+        assert!(report.violations.iter().any(|v| v.rule == "registry.sync"));
+    }
 
     struct FailingReader;
 
@@ -408,12 +542,12 @@ mod tests {
     }
 
     #[test]
-    fn pre_push_stdin_failure_note_remains_degraded_and_nonblocking() {
+    fn r16_hook_obtaining_errors_refuse() {
         let error = read_hook_input(FailingReader).unwrap_err();
-        let note = degraded_hook_input_note("pre-push", &error);
-        assert!(note.contains("pre-push"), "{note}");
-        assert!(note.contains("ref checks degraded"), "{note}");
-        assert!(note.contains("clear it: rerun `git push`"), "{note}");
+        assert_eq!(refuse_hook("pre-push", &error), 1);
+        let directory = tempfile::tempdir().unwrap();
+        assert!(merge_in_progress(directory.path()).is_err());
+        assert!(staged_files(directory.path()).is_err());
     }
 
     #[test]
@@ -470,5 +604,107 @@ mod tests {
                 "{phase}"
             );
         }
+    }
+
+    /// Kept strict (issue 79, pinned by `remedy_clearing`): refs that are not
+    /// valid UTF-8 are not read, and the hook reports why instead of judging
+    /// a branch under a lossy name.
+    #[test]
+    fn hook_stdin_that_is_not_utf8_is_not_read() {
+        let error = read_hook_input(&b"0 1 refs/heads/caf\xe9\n"[..]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(refuse_hook("pre-push", &error), 1);
+        assert_eq!(
+            read_hook_input(&b"0 1 refs/heads/cafe\n"[..]).unwrap(),
+            "0 1 refs/heads/cafe\n"
+        );
+    }
+
+    /// Run git in `dir`, with the host's configuration out of the way.
+    #[cfg(unix)]
+    fn run_git(dir: &std::path::Path, args: &[&std::ffi::OsStr], input: &[u8]) -> String {
+        let mut command = codeflow_core::git::command();
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com");
+        let out = codeflow_core::git::output_with_input(&mut command, input).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Stage `paths` (exact bytes, no file on disk) in the index of `dir`,
+    /// which `git init` made.
+    #[cfg(unix)]
+    fn stage_paths(dir: &std::path::Path, paths: &[&[u8]]) {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        let blob = run_git(
+            dir,
+            &[
+                OsStr::new("hash-object"),
+                OsStr::new("-w"),
+                OsStr::new("--stdin"),
+            ],
+            b"x",
+        );
+        for path in paths {
+            let cacheinfo = format!("100644,{blob},");
+            let mut arg = cacheinfo.into_bytes();
+            arg.extend_from_slice(path);
+            run_git(
+                dir,
+                &[
+                    OsStr::new("update-index"),
+                    OsStr::new("--add"),
+                    OsStr::new("--cacheinfo"),
+                    OsStr::from_bytes(&arg),
+                ],
+                b"",
+            );
+        }
+    }
+
+    /// A repository with `files` committed.
+    #[cfg(unix)]
+    fn repo_with_commit(dir: &std::path::Path, files: &[&[u8]]) -> String {
+        use std::ffi::OsStr;
+        run_git(dir, &[OsStr::new("init"), OsStr::new("--quiet")], b"");
+        stage_paths(dir, files);
+        run_git(
+            dir,
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--quiet"),
+                OsStr::new("-m"),
+                OsStr::new("files"),
+            ],
+            b"",
+        );
+        run_git(dir, &[OsStr::new("rev-parse"), OsStr::new("HEAD")], b"")
+    }
+
+    /// Issue 79: a staged path that is not valid UTF-8 keeps its exact bytes
+    /// in its key, so it never reads as a lossy lookalike of another path.
+    #[cfg(unix)]
+    #[test]
+    fn staged_paths_that_differ_in_an_invalid_byte_stay_two() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), &[b"a"]);
+        stage_paths(dir.path(), &[b"caf\xe9", "caf\u{fffd}".as_bytes()]);
+        let files = staged_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.contains(&"caf\u{fffd}".to_string()));
+        assert!(files.contains(&codeflow_core::git::GitName::from_bytes(b"caf\xe9").storage_key()));
     }
 }

@@ -81,37 +81,57 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
             check_remote_transport(root, remote_transport_args(sub, rest).unwrap())
         }
         "fetch" | "pull" => fetch(root, rest, sub == "pull"),
-        "push" => {
-            let operands = operands(rest, false);
-            let destination = rest
-                .iter()
-                .enumerate()
-                .filter_map(|(i, arg)| {
-                    arg.strip_prefix("--repo=").or_else(|| {
-                        (arg == "--repo")
-                            .then(|| rest.get(i + 1).map(String::as_str))
-                            .flatten()
-                    })
-                })
-                .next_back()
-                .or_else(|| operands.first().map(String::as_str))?;
-            let repo = git2::Repository::discover(root).ok()?;
-            if repo.find_remote(destination).is_err()
-                && (destination == "."
-                    || destination == ".."
-                    || destination.starts_with('/')
-                    || destination.starts_with("./")
-                    || destination.starts_with("../")
-                    || destination.starts_with("file:")
-                    || (destination.contains('/') && !destination.contains(':'))
-                    || root.join(destination).exists())
-            {
-                Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
-            } else {
-                None
-            }
-        }
+        "push" => push(root, rest),
         _ => None,
+    }
+}
+
+fn push(root: &Path, rest: &[String]) -> Option<String> {
+    let operands = operands(rest, false);
+    let destination = rest
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arg)| {
+            arg.strip_prefix("--repo=").or_else(|| {
+                (arg == "--repo")
+                    .then(|| rest.get(i + 1).map(String::as_str))
+                    .flatten()
+            })
+        })
+        .next_back()
+        .or_else(|| operands.first().map(String::as_str))?;
+    let repo = match super::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(reason) => return Some(reason),
+    };
+    let names = match repo.remotes() {
+        Ok(names) => names,
+        Err(error) => return Some(format!("cannot enumerate configured remotes: {error}")),
+    };
+    let configured = names
+        .iter_bytes()
+        .any(|name| name == destination.as_bytes());
+    if configured {
+        if let Err(error) = repo.find_remote(destination) {
+            return Some(format!(
+                "cannot read configured remote {destination}: {error}"
+            ));
+        }
+    }
+    if !configured
+        && (destination == "."
+            || destination == ".."
+            || destination.starts_with('/')
+            || destination.starts_with("./")
+            || destination.starts_with("../")
+            || destination.starts_with("file:")
+            || (destination.contains('/') && !destination.contains(':'))
+            || !crate::absence::cannot_exist(&root.join(destination)).is_ok_and(|absent| absent))
+    {
+        Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
+    } else {
+        None
     }
 }
 
@@ -147,6 +167,41 @@ fn remote_update(root: &Path, args: &[String]) -> Option<String> {
     }
 }
 
+/// What a config value that is not valid UTF-8 reads as. It holds a NUL, so
+/// it is no remote name and no boolean.
+const UNREADABLE_VALUE: &str = "\0not-valid-utf8";
+
+/// The `key`, `value` pairs of `git config --null --list`.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): the listing holds every
+/// value in the user's effective git configuration, such as a name or an
+/// alias in another encoding, and this check reads only `remotes.*` and
+/// `remote.<name>.skip*` keys and boolean values. A value that is not valid
+/// UTF-8 reads as [`UNREADABLE_VALUE`], never as a lossy spelling: it equals
+/// no boolean, and as a `remotes.*` group member it names no remote, so a
+/// fetch of it is refused as not configured, while an unrelated key's value
+/// cannot refuse the command. A key is
+/// identity: it names a remote, so every key is retained as a lossless storage
+/// key, including one that is not valid UTF-8. No lossy spelling can replace
+/// a different remote's setting. Such an unreadable remote
+/// is refused by name in [`utf8_remote_names`].
+fn config_entries(listing: &[u8]) -> Vec<(String, String)> {
+    listing
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
+                Some(split) => (&entry[..split], &entry[split + 1..]),
+                None => (entry, b"true".as_slice()),
+            };
+            let key = crate::git::GitName::from_bytes(key).storage_key();
+            let value = std::str::from_utf8(value)
+                .map_or_else(|_| UNREADABLE_VALUE.to_string(), str::to_string);
+            (key, value)
+        })
+        .collect()
+}
+
 fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     // Read the same effective config as Git, including includes and global scope.
     let config = crate::git::command()
@@ -157,11 +212,21 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     if !config.status.success() {
         return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
     }
-    let text = String::from_utf8(config.stdout)
-        .map_err(|_| "cannot decode remote update configuration".to_string())?;
-    let entries: Vec<_> = text
-        .split_terminator('\0')
-        .map(|entry| entry.split_once('\n').unwrap_or((entry, "true")))
+    let entries = config_entries(&config.stdout);
+    for (key, value) in &entries {
+        if value == UNREADABLE_VALUE
+            && (key.starts_with("remotes.")
+                || (key.starts_with("remote.")
+                    && (key.ends_with(".skipdefaultupdate") || key.ends_with(".skipfetchall"))))
+        {
+            return Err(format!(
+                "cannot read remote update configuration value for {key} as UTF-8"
+            ));
+        }
+    }
+    let entries: Vec<_> = entries
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
     let group = |name: &str| {
         let key = format!("remotes.{name}");
@@ -195,15 +260,23 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
         let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
         let remotes = repo.remotes().map_err(|error| error.to_string())?;
         let mut names = Vec::new();
-        for name in remotes.iter().flatten().flatten() {
+        for name in utf8_remote_names(&remotes)? {
             let skip_key = format!("remote.{name}.skipdefaultupdate");
             let alias_key = format!("remote.{name}.skipfetchall");
             let skip = entries
                 .iter()
                 .rev()
                 .find(|(key, _)| *key == skip_key || *key == alias_key);
-            if !skip.is_some_and(|(_, value)| git2::Config::parse_bool(*value).unwrap_or(false)) {
-                names.push(name.to_string());
+            let skip = skip
+                .map(|(_, value)| {
+                    git2::Config::parse_bool(value).map_err(|error| {
+                        format!("cannot read remote update skip setting for {name}: {error}")
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            if !skip {
+                names.push(name.clone());
             }
         }
         return Ok(names);
@@ -219,6 +292,26 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
             }
         })
         .collect())
+}
+
+/// The configured remote names as text.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): kept strict, and
+/// refusing. A remote name picks the fetch mapping the guard proves does not
+/// write policy authority, and a name it cannot read is a remote it cannot
+/// prove, so skipping it would let `git fetch` or `git remote update` run an
+/// unchecked mapping. The operator reads the remote with `git remote -v`.
+pub(super) fn utf8_remote_names(
+    remotes: &git2::string_array::StringArray,
+) -> Result<Vec<String>, String> {
+    remotes
+        .iter_bytes()
+        .map(|name| {
+            std::str::from_utf8(name).map(str::to_owned).map_err(|_| {
+                "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; the operator inspects git remote -v".to_string()
+            })
+        })
+        .collect()
 }
 
 fn operands(args: &[String], pull: bool) -> Vec<String> {
@@ -264,10 +357,31 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     {
         return Some("fetch must use the configured remote's own mapping, without a destination ref or --refmap".into());
     }
-    let repo = git2::Repository::discover(root).ok()?;
+    let repo = match super::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(reason) => return Some(reason),
+    };
+    fetch_from_repository(root, args, pull, &repo, repo.remotes())
+}
+
+fn fetch_from_repository(
+    root: &Path,
+    args: &[String],
+    pull: bool,
+    repo: &git2::Repository,
+    remotes: Result<git2::string_array::StringArray, git2::Error>,
+) -> Option<String> {
     let operands = operands(args, pull);
-    let names = repo.remotes().ok()?;
-    let names: Vec<_> = names.iter().flatten().flatten().collect();
+    let names = match remotes {
+        Ok(names) => names,
+        Err(error) => return Some(format!("cannot enumerate configured remotes: {error}")),
+    };
+    let names = match utf8_remote_names(&names) {
+        Ok(names) => names,
+        Err(reason) => return Some(reason),
+    };
+    let names: Vec<_> = names.iter().map(String::as_str).collect();
     let requested = operands.first().map(String::as_str);
     let selected = requested.or_else(|| {
         if names.contains(&"origin") {
@@ -277,28 +391,48 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         }
     });
     let selected = selected?;
-    let Some(remote) = repo.find_remote(selected).ok().or_else(|| {
-        names.iter().find_map(|name| {
-            repo.find_remote(name)
-                .ok()
-                .filter(|r| r.url().ok() == Some(selected))
-        })
-    }) else {
-        return Some("fetch source is not a configured remote or its URL".into());
+    let remote = match fetch_remote(repo, &names, selected) {
+        Ok(Some(remote)) => remote,
+        Ok(None) => return Some("fetch source is not a configured remote or its URL".into()),
+        Err(reason) => return Some(reason),
     };
-    let name = remote.name().ok()??;
+    // OS text rule (issue 79): the remote is named in git config keys and
+    // arguments below, which need text. A name that is not valid UTF-8
+    // refuses instead of passing the fetch unchecked.
+    let Some(name_bytes) = remote.name_bytes() else {
+        return Some("cannot read the configured fetch remote's name".into());
+    };
+    let remote_name = crate::git::GitName::from_bytes(name_bytes);
+    let Ok(name) = remote_name.rule_text() else {
+        return Some(format!(
+            "the fetch remote's name is not valid UTF-8 ({}); the operator renames it",
+            remote_name.display()
+        ));
+    };
     // Remote::url already expands insteadOf. Config retains the literal URL.
     let raw = match repo.config().and_then(|config| config.get_string(&format!("remote.{name}.url"))) {
         Ok(raw) => raw,
         Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
-    let effective = crate::git::command()
+    let effective = match crate::git::command()
         .current_dir(root)
         .args(["remote", "get-url", name])
         .output()
-        .ok()?;
-    if !effective.status.success() || String::from_utf8_lossy(&effective.stdout).trim() != raw {
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return Some(format!(
+                "cannot read effective URL for {name}: git could not run: {error}"
+            ))
+        }
+    };
+    // OS text rule (issue 79): a URL that is not valid UTF-8 differs from the
+    // configured text, so it is a refusal.
+    if !effective.status.success()
+        || std::str::from_utf8(&effective.stdout)
+            .map_or(true, |text| text.strip_suffix('\n').unwrap_or(text) != raw)
+    {
         return Some(format!("effective URL for {name} differs from remote.{name}.url; the operator inspects git config --show-origin --get-regexp 'url.*|include.*'"));
     }
     if requested.is_some_and(|source| !names.contains(&source) && source != raw) {
@@ -308,6 +442,52 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         return Some("an explicit fetch destination can replace policy authority; use git fetch with its configured mapping".into());
     }
     None
+}
+
+/// Read every configured candidate needed to match a fetch URL. A failed
+/// candidate read never becomes "not this remote" and selects another one.
+fn fetch_remote<'repo>(
+    repo: &'repo git2::Repository,
+    names: &[&str],
+    selected: &str,
+) -> Result<Option<git2::Remote<'repo>>, String> {
+    let read = |name: &str| {
+        repo.find_remote(name)
+            .map_err(|error| format!("cannot read configured remote {name}: {error}"))
+    };
+    if names.contains(&selected) {
+        return read(selected).map(Some);
+    }
+    for name in names {
+        let remote = read(name)?;
+        let url = remote
+            .url()
+            .map_err(|error| format!("cannot read configured remote {name} URL: {error}"))?;
+        if url == selected {
+            return Ok(Some(remote));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether these Git arguments name a proven configured recovery fetch.
+/// Acquisition failures and missing repositories/remotes both withhold this
+/// exception; ordinary fetch checks keep proven absence separately.
+pub(super) fn recovery_args(root: &Path, args: &[String]) -> bool {
+    let Some(("fetch", rest)) = super::git_guard::git_subcommand(args) else {
+        return false;
+    };
+    if rest.len() > 1 {
+        return false;
+    }
+    let Ok(Some(repo)) = super::repo::open(root) else {
+        return false;
+    };
+    let configured = match rest.first() {
+        Some(name) => repo.find_remote(name).is_ok(),
+        None => repo.remotes().is_ok_and(|names| !names.is_empty()),
+    };
+    configured && check(root, args).is_none()
 }
 
 /// A recovery fetch must be a single plain configured-remote fetch.
@@ -321,8 +501,379 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
     words.first().is_some_and(|s| s == "git")
         && words.get(1).is_some_and(|s| s == "fetch")
         && words.len() <= 3
-        && words.get(2).is_none_or(|s| {
-            git2::Repository::discover(root).is_ok_and(|r| r.find_remote(s).is_ok())
-        })
-        && check(root, &words[1..]).is_none()
+        && recovery_args(root, &words[1..])
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn r21_unreadable_remote_candidate_is_not_skipped() {
+        let root = repository_with_config(
+            b"[remote \"broken\"]\n\turl = https://example.invalid/broken.git\n\tfetch = +refs/heads/*:refs/remotes/broken/main\n",
+        );
+        let repo = git2::Repository::open(root.path()).unwrap();
+        assert!(repo.find_remote("broken").is_err());
+        let reason = fetch(
+            root.path(),
+            &["https://example.invalid/origin.git".into()],
+            false,
+        )
+        .expect("a failed candidate cannot select another remote");
+        assert!(
+            reason.contains("cannot read configured remote broken"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_refuses_fetch() {
+        let root = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(git2::Repository::discover(root.path()).is_err());
+        let report = r20_report(root.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_withholds_recovery() {
+        let root = repository_with_config(b"");
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+        std::fs::create_dir(root.path().join(".codeflow")).unwrap();
+        std::fs::write(root.path().join(".codeflow/policy.json"), b"{").unwrap();
+        assert!(super::super::landed_policy::load(root.path()).is_err());
+        let report = r20_report(root.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r21_remote_enumeration_error_refuses_fetch() {
+        let root = repository_with_config(b"");
+        let repo = git2::Repository::open(root.path()).unwrap();
+        // Deterministic failure at libgit2's remote-list boundary. Discovery
+        // normally reads the same config first, so a filesystem race is not a fixture.
+        let reason = fetch_from_repository(
+            root.path(),
+            &["origin".into()],
+            false,
+            &repo,
+            Err(git2::Error::from_str("remote enumeration failed")),
+        );
+        assert!(reason.is_some_and(|why| why.contains("remote enumeration failed")));
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_refuses_local_push() {
+        let root = repository_with_config(b"");
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(check(root.path(), &["push".into(), ".".into()]).is_some());
+    }
+
+    #[test]
+    fn r21_unknown_fetch_target_cannot_skip_authority() {
+        let root = repository_with_config(b"");
+        let report = r21_report_command(
+            root.path(),
+            r#"git -C "$R21_UNKNOWN_REPOSITORY" fetch origin"#,
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+        let read_only =
+            r21_report_command(root.path(), r#"git -C "$R21_UNKNOWN_REPOSITORY" status"#);
+        assert!(read_only.violations.is_empty(), "{read_only:?}");
+    }
+
+    #[test]
+    fn r21_recovery_needs_an_existing_configured_remote() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+        git2::Repository::init(root.path()).unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+    }
+
+    #[test]
+    fn r21_absent_repository_and_empty_remote_controls() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(check(root.path(), &["fetch".into()]).is_none());
+        assert!(check(root.path(), &["push".into(), "origin".into()]).is_none());
+        git2::Repository::init(root.path()).unwrap();
+        assert!(check(root.path(), &["fetch".into()]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_dangling_local_push_destination_refuses() {
+        let dir = repository_with_config(b"");
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("destination"))
+            .unwrap();
+        let args = ["push", "destination"].map(str::to_string);
+        assert!(check(dir.path(), &args).is_some());
+    }
+
+    /// A push URL is not a local path because it cannot name one: Windows
+    /// refuses `https:` as a file name (os error 123), and Unix refuses a
+    /// name past its length limit. Windows may report a long name as
+    /// `ERROR_FILENAME_EXCED_RANGE`, which proves nothing, so the long form
+    /// is a Unix case. A nameable local destination is still refused (PR 84
+    /// Windows run).
+    #[test]
+    fn a_push_url_that_cannot_name_a_local_path_is_not_a_local_push() {
+        let dir = repository_with_config(b"");
+        let mut destinations = vec!["https://user@example.invalid/o/r.git".to_string()];
+        if cfg!(unix) {
+            destinations.push(format!("example.invalid:{}/r.git", "x".repeat(4096)));
+        }
+        for destination in destinations {
+            let args = ["push".to_string(), destination.clone(), "main".into()];
+            assert_eq!(check(dir.path(), &args), None, "{destination:.40}");
+        }
+        std::fs::create_dir(dir.path().join("mirror")).unwrap();
+        let args = ["push", "mirror", "main"].map(str::to_string);
+        assert!(check(dir.path(), &args).is_some());
+    }
+
+    #[test]
+    fn r15_owned_config_keys_are_not_dropped_on_decode_failure() {
+        let entries = config_entries(b"remote.caf\xff.url\nurl\0remote.ok.url\nurl2\0");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            crate::git::GitName::from_storage_key(&entries[0].0).bytes(),
+            b"remote.caf\xff.url"
+        );
+    }
+
+    use super::*;
+
+    /// A repository with the remote `origin` and `extra` lines appended to its
+    /// configuration, written as bytes so the lines can hold text that is not
+    /// valid UTF-8.
+    fn repository_with_config(extra: &[u8]) -> tempfile::TempDir {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://example.invalid/origin.git")
+            .unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config.write_all(extra).unwrap();
+        dir
+    }
+
+    // PATH is changed only on the child test process, never in this test runner.
+    fn r20_without_git(test: &str) -> bool {
+        const CHILD: &str = "CODEFLOW_R20_REF_AUTHORITY_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            return true;
+        }
+        let missing = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("hooks::ref_authority::tests::{test}"),
+                "--nocapture",
+            ])
+            .env(CHILD, test)
+            .env("PATH", missing.path().join("no-programs"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
+    fn r20_report(root: &Path) -> super::super::git_guard::Evaluation {
+        r21_report_command(root, "git fetch origin")
+    }
+
+    fn r21_report_command(root: &Path, command: &str) -> super::super::git_guard::Evaluation {
+        let policy = super::super::policy::GitPolicy::default();
+        let context = super::super::git_guard::GuardContext {
+            policy: &policy,
+            current_branch: "topic",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            discard_lookup: None,
+            branch_lookup: None,
+            root_checkout: None,
+        };
+        super::super::git_guard::evaluate_report_at(command, &context, root)
+    }
+
+    #[test]
+    fn r20_unlaunchable_git_refuses_rewritten_fetch() {
+        if !r20_without_git("r20_unlaunchable_git_refuses_rewritten_fetch") {
+            return;
+        }
+        let dir = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        let report = r20_report(dir.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r20_unlaunchable_git_withholds_recovery_exception() {
+        if !r20_without_git("r20_unlaunchable_git_withholds_recovery_exception") {
+            return;
+        }
+        let dir = repository_with_config(b"");
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/topic", oid, false, "fixture")
+            .unwrap();
+        assert!(super::super::landed_policy::load(dir.path()).is_err());
+        let report = r20_report(dir.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.message.contains("missing policy source")),
+            "{report:?}"
+        );
+        assert!(!recovery_fetch("git fetch origin", dir.path()));
+    }
+
+    #[test]
+    fn r20_fetch_mismatch_and_no_rewrite_controls() {
+        let rewritten = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        assert!(r20_report(rewritten.path())
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.policy_authority"));
+        let plain = repository_with_config(b"");
+        assert!(r20_report(plain.path()).violations.is_empty());
+        assert!(recovery_fetch("git fetch origin", plain.path()));
+    }
+
+    /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage
+    /// return gives a different URL, so the fetch is refused and not matched
+    /// to the configured one by trimming.
+    #[test]
+    fn a_rewritten_url_that_differs_by_a_carriage_return_is_refused() {
+        let dir = repository_with_config(
+            b"[url \"https://example.invalid/origin.git\r\"]\n\tinsteadOf = https://example.invalid/origin.git\n",
+        );
+        let why = fetch(dir.path(), &[], false).expect("a refusal");
+        assert!(why.contains("effective URL for origin differs"), "{why}");
+    }
+
+    /// Issue 79: one value in the user's git configuration that is not valid
+    /// UTF-8 used to refuse every `git remote update`.
+    #[test]
+    fn a_config_value_that_is_not_utf8_does_not_refuse_the_remote_update() {
+        let dir = repository_with_config(b"[user]\n\tname = caf\xe9\n");
+        assert_eq!(update_remotes(dir.path(), &[]).unwrap(), ["origin"]);
+        assert!(check_remote_transport(dir.path(), ("update", &[])).is_none());
+    }
+
+    #[test]
+    fn a_remote_group_is_still_read_beside_a_value_that_is_not_utf8() {
+        let dir =
+            repository_with_config(b"[user]\n\tname = caf\xe9\n[remotes]\n\tgroup = origin\n");
+        assert_eq!(
+            update_remotes(dir.path(), &["group".to_string()]).unwrap(),
+            ["origin"]
+        );
+    }
+
+    /// Review finding: a config key that is not valid UTF-8 must not become
+    /// the key of a different, valid remote. `remote."caf\xff"` read lossily is
+    /// `remote."caf\u{fffd}"`, so its `skipdefaultupdate` would hide that
+    /// valid remote from `git remote update`.
+    #[test]
+    fn a_config_key_that_is_not_utf8_never_sets_another_remotes_option() {
+        let dir = repository_with_config(
+            b"[remote \"caf\xef\xbf\xbd\"]\n\turl = https://example.invalid/b.git\n[remote \"caf\xff\"]\n\tskipdefaultupdate = true\n",
+        );
+        // The valid remote stays in the update, whatever the other key says.
+        assert_eq!(
+            update_remotes(dir.path(), &[]).unwrap(),
+            ["caf\u{fffd}", "origin"]
+        );
+        let parsed =
+            config_entries(b"remote.caf\xff.skipdefaultupdate\ntrue\0remote.ok.url\nu\0flag\0");
+        assert_eq!(
+            parsed,
+            [
+                (
+                    crate::git::GitName::from_bytes(b"remote.caf\xff.skipdefaultupdate")
+                        .storage_key(),
+                    "true".to_string()
+                ),
+                ("remote.ok.url".to_string(), "u".to_string()),
+                ("flag".to_string(), "true".to_string())
+            ]
+        );
+    }
+
+    /// Kept strict: a remote name the guard cannot read is a mapping it cannot
+    /// prove, so the command is refused rather than skipped.
+    #[test]
+    fn a_remote_name_that_is_not_utf8_refuses_the_command() {
+        let dir = repository_with_config(
+            b"[remote \"caf\xe9\"]\n\turl = https://example.invalid/other.git\n",
+        );
+        let reason = update_remotes(dir.path(), &[]).unwrap_err();
+        assert!(reason.contains("not valid UTF-8"), "{reason}");
+        let refusal = fetch(dir.path(), &[], false).expect("a fetch is refused");
+        assert!(refusal.contains("not valid UTF-8"), "{refusal}");
+    }
+
+    /// Issue 79: a config value that is not valid UTF-8 reads as one marker
+    /// that is no remote name and no boolean, never as its lossy spelling.
+    #[test]
+    fn a_config_value_that_is_not_utf8_names_no_remote() {
+        let entries = config_entries(b"remotes.group\ncaf\xe9\0remote.a.skipDefaultUpdate\0");
+        assert_eq!(
+            entries[0],
+            ("remotes.group".to_string(), UNREADABLE_VALUE.to_string())
+        );
+        assert_eq!(
+            entries[1],
+            ("remote.a.skipDefaultUpdate".to_string(), "true".to_string())
+        );
+        assert!(UNREADABLE_VALUE.contains('\0'));
+    }
 }

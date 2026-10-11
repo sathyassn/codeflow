@@ -34,7 +34,13 @@ enum PortalCommand {
 }
 
 pub fn run(args: &PortalArgs, assets: &dyn AssetSource) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let result = match &args.command {
         PortalCommand::Setup { path } => scaffold::portal::setup_portal(assets, &root, path),
         PortalCommand::Transfer { confirm } => scaffold::portal::transfer_portal(&root, *confirm),

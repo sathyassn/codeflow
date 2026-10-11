@@ -1,5 +1,7 @@
 # file	normalized call span	count	reason
-crates/codeflow-cli/src/cmd/ci.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/ci.rs	env(key)	2	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/mod.rs	env(CHILD,&gone)	1	A test re-runs its own binary from a removed directory; this call sets only the child marker CODEFLOW_R22_REMOVED_CWD (the directory to remove) and leaves Git configuration untouched.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"inner")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"outer")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(name,value)	2	Presentation service and canary environment controls; these children perform no Git operations.
@@ -42,22 +44,28 @@ crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_VALUE_2",value)	1	Ap
 crates/codeflow-cli/tests/workspace_mode.rs	env(name,"1")	1	Agent identity marker controls preserve inherited Git settings.
 crates/codeflow-cli/tests/workspace_mode.rs	env_remove(name)	1	Agent identity marker controls preserve inherited Git settings.
 crates/codeflow-core/src/doctor/mod.rs	env(&self,name:&str)	1	Read-only environment lookup function and its test doubles, not process mutation.
-crates/codeflow-core/src/doctor/mod.rs	env(name)	1	Read-only environment lookup function and its test doubles, not process mutation.
+crates/codeflow-core/src/doctor/mod.rs	env(name)	2	Read-only environment lookup function and its test doubles, not process mutation.
 crates/codeflow-core/src/doctor/mod.rs	env(name:&str)	2	Read-only environment lookup function and its test doubles, not process mutation.
 crates/codeflow-core/src/git/mod.rs	"GIT"	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
 crates/codeflow-core/src/git/mod.rs	env(HOOK_BINARY_ENV,binary)	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
+crates/codeflow-core/src/git/remote_query.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_SSH_QUERY_CHILD, and leaves Git configuration untouched.
+crates/codeflow-core/src/git/remote_query.rs	env(CHILD,dir.path())	1	A test re-runs its own binary with a stub git on PATH; this call sets only the child marker CODEFLOW_R20_EMPTY_REMOTE (the repository path) and leaves Git configuration untouched.
+crates/codeflow-core/src/hooks/conflict_markers.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_ATTRIBUTE_CHILD, and leaves Git configuration untouched.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=\"$X\" git config set alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin release' git ship"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin release'\" git ship"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"env GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"export GIT_CONFIG=/opt/homebrew/etc/gitconfig; git config alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"export GIT_CONFIG_COUNT=1; git x -m y"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	Some("$GIT_CONFIG".to_string())	1	Reads the GIT_CONFIG file a judged command names or inherits, to classify the write; never sets a process environment.
+crates/codeflow-core/src/hooks/git_guard.rs	Some("$GIT_CONFIG".to_string())	2	Reads the GIT_CONFIG file a judged command names or inherits, to classify the write; never sets a process environment.
 crates/codeflow-core/src/hooks/git_guard.rs	any(|(name,val)|{(name.starts_with("GIT_CONFIG_KEY_")||name=="GIT_CONFIG_PARAMETERS")&&mentions_hooks_path(val)})	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	assert_eq!(moved(&plain,true),"Some(\"$GIT_CONFIG\")|Some(\"$GIT_CONFIG\")|Some(\"$GIT_CONFIG\")")	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-core/src/hooks/git_guard.rs	env(CHILD,"1")	4	Tests re-run their own binary; each call sets only a child marker (CODEFLOW_R22_TARGET_CHILD, CODEFLOW_R22_HOME_CHILD, CODEFLOW_R22_CWD_CHILD, CODEFLOW_R20_BRANCH_CHILD) and leaves Git configuration untouched.
 crates/codeflow-core/src/hooks/git_guard.rs	evaluate("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",&ctx(&p,"feat/x"))	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	find(|(name,_)|*name=="GIT_CONFIG")	1	Reads the GIT_CONFIG file a judged command names or inherits, to classify the write; never sets a process environment.
 crates/codeflow-core/src/hooks/git_guard.rs	format!("GIT_CONFIG={repo_config} git config alias.co checkout")	1	Command text passed to guard evaluation, not an executed command or environment mutation.
@@ -68,12 +76,17 @@ crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG")	1	Guard vo
 crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG_KEY_")	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	var("GIT_CONFIG")	1	Reads the GIT_CONFIG file a judged command names or inherits, to classify the write; never sets a process environment.
 crates/codeflow-core/src/hooks/git_guard.rs	words(&["GIT_CONFIG=/x/gitconfig","git","config","a.b","c"])	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-core/src/hooks/ref_authority.rs	env(CHILD,test)	1	A test re-runs its own binary with git absent from PATH; this call sets only the child marker CODEFLOW_R20_REF_AUTHORITY_CHILD (the test name) and leaves Git configuration untouched.
+crates/codeflow-core/src/ids/git.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_SHALLOW_CHILD, and leaves Git configuration untouched.
+crates/codeflow-core/src/ids/git.rs	env(CHILD,test)	1	A test re-runs its own binary with a stub git on PATH; this call sets only the child marker CODEFLOW_R20_IDS_ANSWER_CHILD (the test name) and leaves Git configuration untouched.
 crates/codeflow-core/src/ids/git.rs	env(key,value)	1	Adds temporary index/object-directory selectors for registry plumbing while inheriting maintenance settings.
+crates/codeflow-core/src/ids/issue.rs	env(CHILD,"1")	2	Tests re-run their own binary with a stub git on PATH; each call sets only a child marker (CODEFLOW_R20_REMOTE_CHILD, CODEFLOW_R20_FETCH_CHILD) and leaves Git configuration untouched.
 crates/codeflow-core/src/integrate.rs	env(GATE_TOKEN_ENV,ulid::Ulid::new().to_string())	1	Adds the integration gate token only.
 crates/codeflow-core/src/root_checkout.rs	env(HUMAN_OVERRIDE_ENV)	1	Reads human override and agent markers through an environment lookup callback.
 crates/codeflow-core/src/root_checkout.rs	env(name)	1	Reads human override and agent markers through an environment lookup callback.
 crates/codeflow-core/src/scaffold/gitutil.rs	envs(envs.iter().copied())	1	Adds the scaffold gate-context marker only; inherits maintenance settings.
 crates/codeflow-core/src/scaffold/state.rs	env(CHILD,format!("{}\n{stop}\n{}",root.display(),intents.display()),)	1	Passes the fixture crash-child paths and stop point only.
+crates/codeflow-core/src/security/deletion.rs	env(CHILD,"1")	1	A test re-runs its own binary without HOME; this call sets only the child marker CODEFLOW_R22_DELETION_HOME_CHILD and leaves Git configuration untouched.
 crates/codeflow-core/src/security/startup.rs	"GIT_CONFIG_PARAMETERS"	1	Classifier vocabulary for git configuration variables on a judged command line; never sets a process environment.
 crates/codeflow-core/src/security/startup.rs	format!("GIT_CONFIG_KEY_{n}")	1	Classifier vocabulary for git configuration variables on a judged command line; never sets a process environment.
 crates/codeflow-core/src/security/startup.rs	format!("GIT_CONFIG_KEY_{n}=")	1	Classifier vocabulary for git configuration variables on a judged command line; never sets a process environment.

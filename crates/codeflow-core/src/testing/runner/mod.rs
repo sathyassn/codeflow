@@ -552,14 +552,13 @@ fn run_owed_target(
 /// `CI=true`; developers running locally typically leave it unset.
 #[must_use]
 pub fn is_ci_environment() -> bool {
-    is_ci_value(std::env::var("CI").ok().as_deref())
+    std::env::var_os("CI")
+        .is_some_and(|value| !value.is_empty() && value != "false" && value != "0")
 }
 
+#[cfg(test)]
 fn is_ci_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        let value = value.trim();
-        !value.is_empty() && value != "false" && value != "0"
-    })
+    value.is_some_and(|value| !value.is_empty() && value != "false" && value != "0")
 }
 
 fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, TestingError> {

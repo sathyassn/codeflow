@@ -26,6 +26,7 @@ pub struct AggregateThresholdResult {
     pub threshold: u32,
     pub pass: bool,
     pub matched_files: usize,
+    pub measured_lines: u64,
 }
 
 /// Evaluate coverage rules against file coverage data.
@@ -58,7 +59,7 @@ pub fn evaluate_file_thresholds(
                             file: cov.path.clone(),
                             coverage_percent: cov.percent,
                             threshold,
-                            pass: cov.percent >= f64::from(threshold),
+                            pass: cov.lines_found > 0 && cov.percent >= f64::from(threshold),
                             rule_scope: CoverageScope::PerFile,
                             exception_applied: exception.is_some(),
                         });
@@ -73,7 +74,7 @@ pub fn evaluate_file_thresholds(
                             file: cov.path.clone(),
                             coverage_percent: cov.percent,
                             threshold,
-                            pass: cov.percent >= f64::from(threshold),
+                            pass: cov.lines_found > 0 && cov.percent >= f64::from(threshold),
                             rule_scope: CoverageScope::ChangedFiles,
                             exception_applied: exception.is_some(),
                         });
@@ -94,6 +95,23 @@ pub fn evaluate_file_thresholds(
         }
     }
 
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.scope == CoverageScope::PerFile)
+    {
+        if !coverages.iter().any(|cov| {
+            cov.lines_found > 0 && matches_globs(&cov.path, &rule.include, &rule.exclude)
+        }) {
+            results.push(ThresholdResult {
+                file: "<per_file: no measured lines; check coverage includes>".into(),
+                coverage_percent: 0.0,
+                threshold: rule.minimum,
+                pass: false,
+                rule_scope: CoverageScope::PerFile,
+                exception_applied: false,
+            });
+        }
+    }
     results
 }
 
@@ -121,8 +139,9 @@ pub fn evaluate_aggregate_thresholds(
                     scope: CoverageScope::Global,
                     coverage_percent: percent,
                     threshold: rule.minimum,
-                    pass: percent >= f64::from(rule.minimum),
+                    pass: total_found > 0 && percent >= f64::from(rule.minimum),
                     matched_files: matching.len(),
+                    measured_lines: total_found,
                 });
             }
             CoverageScope::PerPackage | CoverageScope::PerModule => {
@@ -139,8 +158,9 @@ pub fn evaluate_aggregate_thresholds(
                     scope: rule.scope.clone(),
                     coverage_percent: percent,
                     threshold: rule.minimum,
-                    pass: percent >= f64::from(rule.minimum),
+                    pass: total_found > 0 && percent >= f64::from(rule.minimum),
                     matched_files: matching.len(),
+                    measured_lines: total_found,
                 });
             }
             CoverageScope::PerFile | CoverageScope::ChangedFiles => {
@@ -429,17 +449,64 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_coverage_set() {
+    fn test_empty_coverage_set_is_unproven() {
         let rules = vec![make_rule(CoverageScope::PerFile, 85)];
         let results = evaluate_file_thresholds(&rules, &[], &[], &[]);
-        assert!(results.is_empty());
+        assert!(!results[0].pass);
     }
 
     #[test]
-    fn test_global_empty_coverage_is_100() {
+    fn test_global_empty_coverage_is_unproven() {
         let rules = vec![make_rule(CoverageScope::Global, 85)];
         let results = evaluate_aggregate_thresholds(&rules, &[]);
-        // No files = 100% (nothing to cover)
-        assert!(results[0].pass);
+        // A threshold needs measured lines as evidence.
+        assert!(!results[0].pass);
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_per_file_include_without_measurements_is_unproven() {
+        let rule = CoverageRule {
+            scope: CoverageScope::PerFile,
+            minimum: 80,
+            include: vec!["src/*".into()],
+            exclude: vec![],
+        };
+        let cov = FileCoverage {
+            path: "elsewhere/file".into(),
+            lines_found: 1,
+            lines_hit: 1,
+            percent: 100.0,
+        };
+        let results = evaluate_file_thresholds(&[rule], &[cov], &[], &[]);
+        assert!(results.iter().any(|result| !result.pass));
+        assert!(evaluate_file_thresholds(&[], &[], &[], &[]).is_empty());
+    }
+    #[test]
+    fn r22_empty_measurement_never_proves_threshold() {
+        for scope in [
+            CoverageScope::Global,
+            CoverageScope::PerPackage,
+            CoverageScope::PerModule,
+        ] {
+            let rule = CoverageRule {
+                scope,
+                minimum: 80,
+                include: vec!["src/*".into()],
+                exclude: vec![],
+            };
+            let cov = FileCoverage {
+                path: "elsewhere/file".into(),
+                lines_found: 1,
+                lines_hit: 1,
+                percent: 100.0,
+            };
+            assert!(!evaluate_aggregate_thresholds(&[rule], &[cov])[0].pass);
+        }
+        assert!(evaluate_aggregate_thresholds(&[], &[]).is_empty());
     }
 }
