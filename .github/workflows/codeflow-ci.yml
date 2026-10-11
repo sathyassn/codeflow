@@ -42,9 +42,13 @@ jobs:
   # Every job carries a timeout, so a stalled step frees its runner instead
   # of holding one of the account's concurrent job slots for GitHub's default
   # six hours (TSK-254). Each is sized from the job's observed p95 and maximum
-  # over 2026-10-04 to 2026-10-07 with headroom: a gate part peaked at 20.6
-  # minutes outside the Playwright step and a Windows test partition at 27.2,
-  # so both get 45. A timed-out job fails, so its verdict fails, never passes.
+  # with headroom. A gate part peaked at 20.6 minutes outside the Playwright
+  # step over 2026-10-04 to 2026-10-07 and gets 45. The Windows build and each
+  # Windows partition get 30, the Windows checks 25, the release journey 15,
+  # the journeys job 10, and the reuse job and both verdicts 5 (TSK-265; the
+  # Windows jobs' comment below gives their basis). The secret scan and the
+  # security review get 30 and the gitleaks canary 10. A timed-out job fails,
+  # so its verdict fails, never passes.
   # scripts/gate-parity.py refuses a job without one.
   #
   # A push to main reuses a pull request run's verdict when it carries that
