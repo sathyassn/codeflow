@@ -97,7 +97,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration). Details: [distribution and platform details](#distribution-and-platform-details).
 
-- [ ] 3.1 The pinned cargo-dist version regenerates the committed release workflow without drift. Evidence: an empty regeneration diff.
+- [ ] 3.1 The pinned cargo-dist version regenerates the committed release workflow without drift, apart from the hand-added job timeouts. Evidence: `cargo dist generate --check` in a scratch export of the commit (`git archive`) with the `allow-dirty` line removed from `dist-workspace.toml`, whose diff holds only `timeout-minutes` lines, and `python3 -B scripts/gate-parity.py`, which requires that key and every job timeout. With `allow-dirty = ["ci"]` in the repository, `cargo dist generate --mode ci --check` exits 255 and `cargo dist plan` does not compare the file.
 - [ ] 3.2 The dispatched authority job enforces every check in the runbook's [Dispatch and authority rows](releasing.md#architecture) and fails closed. Evidence: the authority job log.
 - [ ] 3.3 Generated host dependencies reject a failed or cancelled authority or main-recheck job, so publishing cannot skip either. Evidence: the generated workflow and a run log.
 - [ ] 3.4 The post-announce verifier binds the public tag and release to the selected main source and matches every asset exactly. Evidence: the verifier log.
