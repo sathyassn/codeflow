@@ -19,33 +19,6 @@ erratum below, never an edit of the section.
 
 ## [3.1.0]
 
-> **Upgrading from 3.0.0.** Take these steps in order; the entries below give
-> the detail.
->
-> 1. Install the 3.1.0 `codeflow` on `PATH` first. The hooks run that
->    binary, and a project that sets any of the optional keys in step 5
->    needs 3.1.0 or later locally and in CI, because an older binary rejects
->    an unknown policy key and blocks every commit.
-> 2. On a new branch, run `codeflow update --pin 3.1.0`. It checks the
->    release archives against `sha256.sum` and writes only `scaffold_version`
->    and a `[scaffold_sha256]` table to `.codeflow/project.toml`. Land that
->    pull request so CI installs the pinned, digest-checked binary.
-> 3. Run `codeflow update` on a new branch and review what it proposes. A
->    policy that lacks `git.security_review` or `git.dep_audit` lands
->    those two keys before the 3.1.0 workflow, because the security review
->    job reads them from the base.
-> 4. A pull request that names several epics writes them on one `Task:`
->    line (`Task: EPC-001, EPC-002`), which only 3.1.0 reads. Before
->    completing a task, write each Reviews row as
->    `reviewer | whole unit at <40-character sha> | approved`.
-> 5. These keys are new and optional, and `codeflow update` never writes
->    them. Set one only to change its default: `git.pr_summary` (blocks by
->    default), `git.pr_body_max_words` (1000, `0` turns the warning off),
->    `git.required_checks` (the four shipped CI job names) and the
->    `[reading]` section of `.codeflow/project.toml` (`kernel_max_bytes`,
->    `chain_max_bytes`, `skill_max_lines`, `instructions_max_lines`). At the
->    full tier, `[feedback] topics` is written on first use.
-
 ### Added
 
 <!-- codeflow:release-impact minor -->
@@ -405,6 +378,46 @@ erratum below, never an edit of the section.
   the setting on yourself (ADR-0081). The git rules say a pull request is
   ready when its checks ran on the current target tip; `codeflow update`
   replaces the unmodified rules file and portal skill references.
+
+<!-- codeflow:release-impact minor -->
+- **Guidance checks what content could be taken to mean.** The managed
+  instructions now ask every agent to think about connotations and second
+  readings before anything leaves the session: copy, replies, records,
+  figures, images and code. The plain-writing rule at every tier reads
+  "simple, straightforward, clear and unambiguous" and ends "check what a
+  reader could take it to mean"; `writing.md` "Meaning the reader takes" is
+  the one home of the check.
+  - What to check: connotation, ambiguity, unintended readings (offensive,
+    alarming, blaming, misleading, overclaiming, unsafe or legally risky)
+    and the audience and context (another culture or language, a non-native
+    speaker, a reader who skims, a screen-reader user, a reader who sees one
+    line alone).
+  - How to check: read as a reader who does not know the intent, then as a
+    hostile or careless reader, then name by name and claim by claim;
+    prefer the plainer word and state the boundary where silence lets a
+    reader fear worse.
+  - In code: a name says what the code does (`delete` deletes; a `verify`
+    that checks nothing is a defect), a message names the cause and the fix
+    without alarm or blame, a new name uses the ordinary word for what the
+    thing does, and example data is invented and neutral. The copy guide
+    gains "Names and code strings" with the rules string by string, and
+    `cf-develop` applies them at build time.
+  - In visuals: a figure asserts only what its facts carry, colour and
+    icons carry the meaning the audience already gives them, no state is
+    carried by hue alone, and an image or example carries no association
+    the subject lacks. The
+    design-choice audit gains "Implied meaning the subject does not carry"
+    and a "Reading" lens; the explanation method gains a "Reading" check;
+    `cf-design`, the UI verification section and the release policy point
+    there.
+  - In review: a wrong, unsafe, alarming, offensive or false-promise reading
+    is a material finding under "Review verdicts" and in `cf-reviewer`,
+    never a wording nit; the editorial smells gain a "Meaning taken" group
+    and `cf-editorial-review` diagnoses and verifies a second reading.
+  - The evaluation kit gains requirement CF-OUT-008 with the
+    `meaning-taken` pack, one case and six faulty controls, so the change can
+    be qualified natively; `codeflow update` replaces the unmodified
+    instruction files.
 
 ### Changed
 
