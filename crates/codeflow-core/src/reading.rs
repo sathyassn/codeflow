@@ -34,10 +34,12 @@
 //! without its trigger; it is not a boundary against Markdown written to
 //! fool it.
 //!
-//! Structure is the test's failure. Size is a reported measure with a
-//! guideline number, never a failure: the one byte check that still fails is
-//! the complete generated `AGENTS.md` against Codex's instruction limit
-//! ([`crate::scaffold::rule_map::codex_overflow`]).
+//! Structure is the test's failure. Size is a reported measure, never a
+//! failure (TSK-267, ADR-0083): a tool limit warns (Codex's instruction
+//! limit on the whole `AGENTS.md`, [`crate::scaffold::rule_map::codex_overflow`];
+//! the API's limit on a description, [`DESCRIPTION_LIMIT_CHARS`]), and every
+//! advisory guideline reports as a note with its basis, in the unit its
+//! vendor publishes ([`Guidelines`]).
 //!
 //! Paths are keyed as `<skill>/<path inside the skill>`, the layout both
 //! installed trees (`.claude/skills/`, `.agents/skills/`) share and the two
@@ -45,7 +47,7 @@
 //! flatten into.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
@@ -57,86 +59,125 @@ pub type SkillFiles = BTreeMap<String, String>;
 // ---------------------------------------------------------------------------
 // Guideline numbers
 // ---------------------------------------------------------------------------
+//
+// Two numbers are limits a tool imposes: Codex's instruction limit on the
+// whole `AGENTS.md` (`crate::scaffold::rule_map::CODEX_INSTRUCTION_LIMIT_BYTES`)
+// and the API's limit on a skill or agent description. Every other number
+// is an advisory guideline in the unit its vendor publishes, reported by
+// `codeflow doctor` as a note with its basis, never a warning or a failure
+// (TSK-267, ADR-0083). A measure above its guideline is a prompt to move
+// detail behind a trigger, never to cut a duty, and a number changes only
+// with a stated basis. A project tunes the advisory numbers in the
+// `[reading]` section of `.codeflow/project.toml`
+// (`crate::scaffold::ReadingConfig`).
 
-/// Guideline for the per-task reading chain: what one full implementation
-/// task reads after the kernel. Reported, never a failure. TSK-263 raised it
-/// from 128 KiB: the scenario, consumer-check and shortcut duties reach every
-/// task, so they sit in the chain rather than behind a trigger.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 130 * KIB;
+/// The Anthropic API refuses a skill or agent `description` longer than
+/// this many characters (Agent Skills best practices, "YAML frontmatter
+/// requirements"). A real limit: doctor warns past it.
+pub const DESCRIPTION_LIMIT_CHARS: usize = 1024;
 
-/// Guideline for a skill that owns cross-lineage routing or orchestration.
-pub const ROUTING_SKILL_GUIDELINE_BYTES: usize = 29 * KIB;
+/// Where Claude Code's skill listing cuts a description, `when_to_use`
+/// included. Named beside a warning, never measured against.
+pub const DESCRIPTION_LISTING_CHARS: usize = 1536;
 
-/// Guideline for every other skill without its own number.
-pub const OTHER_SKILL_GUIDELINE_BYTES: usize = 24 * KIB;
+/// Advisory guideline for a skill or agent body. Anthropic's skill authoring
+/// guide and Cursor's rules guide both say to keep a body under 500 lines
+/// and move detail to files read on demand.
+pub const BODY_GUIDELINE_LINES: usize = 500;
 
-/// The skills measured against [`ROUTING_SKILL_GUIDELINE_BYTES`].
-pub const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
+/// Advisory guideline for the always-loaded instruction set: `CLAUDE.md`
+/// with every file it imports, or `AGENTS.md` alone where Claude Code reads
+/// that instead. Claude Code's memory guide targets under 200 lines per
+/// file and says an imported file loads at launch too.
+pub const INSTRUCTIONS_GUIDELINE_LINES: usize = 200;
 
-/// Each shipped skill's guideline for its `SKILL.md`, the numbers doctor
-/// reports against. Every shipped file sits within its number, so a fresh
-/// install reports clean; a change that moves a shipped file past its number
-/// sets the new number in the same change. A skill above its number is a
-/// prompt to move detail behind a trigger, never to cut a duty.
-pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
-    ("cf-consult", 7 * KIB),
-    ("cf-customize", 22 * KIB + 512),
-    ("cf-delegate", 20 * KIB + 512),
-    ("cf-design", 20 * KIB),
-    ("cf-develop", 5 * KIB + 512),
-    ("cf-docs-portal", 9 * KIB + 128),
-    ("cf-editorial-review", 7 * KIB),
-    ("cf-estimate", 6 * KIB),
-    ("cf-evaluate-model", 9 * KIB + 512),
-    ("cf-herdr", 9 * KIB),
-    ("cf-method", 18 * KIB),
-    ("cf-model-orchestrator", 26 * KIB),
-    ("cf-plan", 9 * KIB),
-    ("cf-present", 8 * KIB + 256),
-    ("cf-ship", 6 * KIB + 896),
-    ("cf-stack", 4 * KIB),
-];
+/// Advisory guideline for the per-task reading chain, what one full
+/// implementation task reads after the kernel. 160 KiB is about 40k tokens
+/// at four bytes per token, one fifth of a 200k context window. No vendor
+/// publishes a per-task number; this one has headroom over the shipped
+/// chain so the structure test, not the number, controls growth.
+pub const READING_CHAIN_GUIDELINE_BYTES: usize = 160 * KIB;
 
-/// Guidelines for the other shipped instruction files, keyed by their
-/// source under `assets/base/`: the former class ceilings.
-pub const ARTIFACT_GUIDELINES: &[(&str, usize)] = &[
-    ("CLAUDE.md.tmpl", 6 * KIB),
-    ("CLAUDE.minimal.md.tmpl", 3 * KIB),
-    ("claude/agents/cf-reviewer.md", 10 * KIB + 512),
-    ("claude/agents/cf-security-reviewer.md", 12 * KIB),
-];
+/// The basis a note states for the kernel guideline.
+pub const KERNEL_BASIS: &str =
+    "Codex's instruction limit less a 16 KiB project section and the header";
+/// The basis a note states for the chain guideline.
+pub const CHAIN_BASIS: &str = "about one fifth of a 200k context window at four bytes per token";
+/// The basis a note states for a skill or agent body guideline.
+pub const BODY_BASIS: &str = "the skill authoring convention of Anthropic and Cursor";
+/// The basis a note states for the always-loaded instruction guideline.
+pub const INSTRUCTIONS_BASIS: &str = "Claude Code's target for always-loaded instructions";
+/// The basis a warning states for the description limit.
+pub const DESCRIPTION_BASIS: &str = "the API limit";
 
-/// The guideline for `skill`'s `SKILL.md`: its own number, else its class.
-#[must_use]
-pub fn skill_guideline(skill: &str) -> usize {
-    SKILL_GUIDELINES
-        .iter()
-        .find(|(name, _)| *name == skill)
-        .map_or_else(
-            || {
-                if ROUTING_SKILLS.contains(&skill) {
-                    ROUTING_SKILL_GUIDELINE_BYTES
-                } else {
-                    OTHER_SKILL_GUIDELINE_BYTES
-                }
-            },
-            |(_, bytes)| *bytes,
-        )
+/// The advisory numbers one doctor run measures against: the shipped
+/// defaults, or a project's `[reading]` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Guidelines {
+    /// The managed block of `AGENTS.md`, in bytes.
+    pub kernel_bytes: usize,
+    /// The per-task reading chain, in bytes.
+    pub chain_bytes: usize,
+    /// A skill or agent body, in lines.
+    pub body_lines: usize,
+    /// The always-loaded instruction set, in lines.
+    pub instructions_lines: usize,
 }
 
-/// One reported size: a subject, its authored bytes and its guideline.
+impl Default for Guidelines {
+    fn default() -> Self {
+        Self {
+            kernel_bytes: crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
+            chain_bytes: READING_CHAIN_GUIDELINE_BYTES,
+            body_lines: BODY_GUIDELINE_LINES,
+            instructions_lines: INSTRUCTIONS_GUIDELINE_LINES,
+        }
+    }
+}
+
+/// The unit a measure is taken in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    Bytes,
+    Lines,
+    Chars,
+}
+
+impl Unit {
+    /// The unit's name after a number.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bytes => "bytes",
+            Self::Lines => "lines",
+            Self::Chars => "characters",
+        }
+    }
+}
+
+/// One reported size: a subject, its measured value, its guideline, the
+/// unit and the basis the report states for the guideline.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Measure {
     pub subject: String,
-    pub bytes: usize,
+    pub value: usize,
     pub guideline: usize,
+    pub unit: Unit,
+    pub basis: &'static str,
 }
 
 impl Measure {
     /// Whether the measure is above its guideline.
     #[must_use]
     pub fn over(&self) -> bool {
-        self.bytes > self.guideline
+        self.value > self.guideline
+    }
+
+    /// The measure with its basis after it, for a report of one above its
+    /// guideline.
+    #[must_use]
+    pub fn with_basis(&self) -> String {
+        format!("{self} ({})", self.basis)
     }
 }
 
@@ -144,8 +185,11 @@ impl std::fmt::Display for Measure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {} of {} bytes",
-            self.subject, self.bytes, self.guideline
+            "{} {} of {} {}",
+            self.subject,
+            self.value,
+            self.guideline,
+            self.unit.name()
         )
     }
 }
@@ -158,21 +202,232 @@ pub fn authored_len(bytes: &[u8]) -> usize {
     bytes.len() - bytes.windows(2).filter(|pair| pair == b"\r\n").count()
 }
 
-/// Each `<skill>/SKILL.md` in `files` measured against its guideline, in
-/// skill-name order.
+/// Authored lines, as `wc -l` counts a file that ends in a newline: the
+/// same on every host, since a line ends at LF or CRLF alike.
 #[must_use]
-pub fn skill_measures(files: &SkillFiles) -> Vec<Measure> {
+pub fn authored_lines(text: &str) -> usize {
+    text.lines().count()
+}
+
+/// A skill or agent body measured in lines against `lines`.
+#[must_use]
+pub fn body_measure(subject: &str, text: &str, lines: usize) -> Measure {
+    Measure {
+        subject: subject.to_string(),
+        value: authored_lines(text),
+        guideline: lines,
+        unit: Unit::Lines,
+        basis: BODY_BASIS,
+    }
+}
+
+/// Each `<skill>/SKILL.md` in `files` measured in lines against
+/// `guidelines.body_lines`, in skill-name order.
+#[must_use]
+pub fn skill_measures(files: &SkillFiles, guidelines: &Guidelines) -> Vec<Measure> {
     files
         .iter()
         .filter_map(|(path, text)| {
             let skill = path.strip_suffix("/SKILL.md")?;
-            (!skill.contains('/')).then(|| Measure {
-                subject: skill.to_string(),
-                bytes: authored_len(text.as_bytes()),
-                guideline: skill_guideline(skill),
-            })
+            (!skill.contains('/')).then(|| body_measure(skill, text, guidelines.body_lines))
         })
         .collect()
+}
+
+/// The `description` of a skill or agent frontmatter: a one-line value,
+/// unquoted, or a folded or literal block (`>` or `|`) joined with spaces.
+/// `None` without frontmatter or without the key.
+#[must_use]
+pub fn description(text: &str) -> Option<String> {
+    let rest = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))?;
+    let mut lines = rest.lines();
+    for line in lines.by_ref() {
+        if line.trim_end() == "---" {
+            return None;
+        }
+        let Some(value) = line.strip_prefix("description:") else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() || value.starts_with('>') || value.starts_with('|') {
+            let mut block = Vec::new();
+            for line in lines {
+                if line.trim_end() == "---" || !line.starts_with(char::is_whitespace) {
+                    break;
+                }
+                block.push(line.trim());
+            }
+            return Some(block.join(" "));
+        }
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        return Some(value.to_string());
+    }
+    None
+}
+
+/// A skill or agent description measured in characters against the API
+/// limit, or `None` when the text has no description.
+#[must_use]
+pub fn description_measure(subject: &str, text: &str) -> Option<Measure> {
+    description(text).map(|value| Measure {
+        subject: format!("{subject} description"),
+        value: value.chars().count(),
+        guideline: DESCRIPTION_LIMIT_CHARS,
+        unit: Unit::Chars,
+        basis: DESCRIPTION_BASIS,
+    })
+}
+
+/// Each `<skill>/SKILL.md` description in `files` against the API limit,
+/// in skill-name order.
+#[must_use]
+pub fn description_measures(files: &SkillFiles) -> Vec<Measure> {
+    files
+        .iter()
+        .filter_map(|(path, text)| {
+            let skill = path.strip_suffix("/SKILL.md")?;
+            if skill.contains('/') {
+                return None;
+            }
+            description_measure(skill, text)
+        })
+        .collect()
+}
+
+/// The always-loaded instruction set of a project, measured in lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlwaysLoaded {
+    /// The file Claude Code reads at launch: `CLAUDE.md`, `.claude/CLAUDE.md`
+    /// or, with neither, `AGENTS.md`.
+    pub file: String,
+    /// The files the instruction file imports with `@path`, up to four hops,
+    /// as the memory guide loads them.
+    pub imports: Vec<String>,
+    /// The lines of the file and its imports together.
+    pub lines: usize,
+}
+
+impl AlwaysLoaded {
+    /// The set as a report names it.
+    #[must_use]
+    pub fn subject(&self) -> String {
+        match self.imports.len() {
+            0 => format!("always-loaded instructions ({})", self.file),
+            1 => format!(
+                "always-loaded instructions ({} with {})",
+                self.file, self.imports[0]
+            ),
+            n => format!(
+                "always-loaded instructions ({} with {n} imports)",
+                self.file
+            ),
+        }
+    }
+
+    /// The set measured against `lines`.
+    #[must_use]
+    pub fn measure(&self, lines: usize) -> Measure {
+        Measure {
+            subject: self.subject(),
+            value: self.lines,
+            guideline: lines,
+            unit: Unit::Lines,
+            basis: INSTRUCTIONS_BASIS,
+        }
+    }
+}
+
+/// Claude Code follows an `@path` import this many hops deep.
+const IMPORT_DEPTH: usize = 4;
+
+/// The always-loaded instruction set under `root`, or `None` when it has no
+/// instruction file.
+#[must_use]
+pub fn always_loaded(root: &Path) -> Option<AlwaysLoaded> {
+    let file = ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"]
+        .into_iter()
+        .find(|candidate| root.join(candidate).is_file())?;
+    let text = std::fs::read_to_string(root.join(file)).ok()?;
+    let mut imports = Vec::new();
+    let mut lines = authored_lines(&text);
+    collect_imports(root, Path::new(file), &text, 1, &mut imports, &mut lines);
+    Some(AlwaysLoaded {
+        file: file.to_string(),
+        imports,
+        lines,
+    })
+}
+
+/// Follow the `@path` imports of `text` (the file at `from`, relative to
+/// `root`), adding each new file's path and lines, as Claude Code's memory
+/// guide describes: a path runs to the next whitespace, a quoted path or
+/// one inside a code span or fenced block is not an import, and a relative
+/// path resolves against the importing file.
+fn collect_imports(
+    root: &Path,
+    from: &Path,
+    text: &str,
+    depth: usize,
+    imports: &mut Vec<String>,
+    lines: &mut usize,
+) {
+    if depth > IMPORT_DEPTH {
+        return;
+    }
+    let dir = from.parent().unwrap_or(Path::new(""));
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let mut in_span = false;
+        let mut previous = ' ';
+        let mut chars = line.char_indices().peekable();
+        while let Some((at, c)) = chars.next() {
+            if c == '`' {
+                in_span = !in_span;
+            } else if c == '@' && !in_span && previous.is_whitespace() {
+                let rest = &line[at + 1..];
+                let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let candidate = rest[..end].trim_end_matches(['.', ',', ';', ':', ')']);
+                if !candidate.is_empty() && !candidate.starts_with('"') {
+                    let relative = dir.join(candidate);
+                    let display = relative.to_string_lossy().replace('\\', "/");
+                    let path = if candidate.starts_with('~') || candidate.starts_with('/') {
+                        PathBuf::from(candidate)
+                    } else {
+                        root.join(&relative)
+                    };
+                    if path.is_file()
+                        && !imports.contains(&display)
+                        && display != from.to_string_lossy()
+                    {
+                        if let Ok(imported) = std::fs::read_to_string(&path) {
+                            imports.push(display);
+                            *lines += authored_lines(&imported);
+                            collect_imports(root, &relative, &imported, depth + 1, imports, lines);
+                        }
+                    }
+                }
+                for _ in 0..end {
+                    chars.next();
+                }
+                previous = ' ';
+                continue;
+            }
+            previous = c;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,13 +1468,15 @@ pub struct ReadingChain {
 }
 
 impl ReadingChain {
-    /// The chain total against [`READING_CHAIN_GUIDELINE_BYTES`].
+    /// The chain total against `guidelines.chain_bytes`.
     #[must_use]
-    pub fn measure(&self) -> Measure {
+    pub fn measure(&self, guidelines: &Guidelines) -> Measure {
         Measure {
             subject: "per-task reading chain".to_string(),
-            bytes: self.total,
-            guideline: READING_CHAIN_GUIDELINE_BYTES,
+            value: self.total,
+            guideline: guidelines.chain_bytes,
+            unit: Unit::Bytes,
+            basis: CHAIN_BASIS,
         }
     }
 }
@@ -1848,26 +2105,109 @@ mod tests {
     }
 
     #[test]
-    fn skills_measure_against_their_own_or_class_guideline() {
-        assert_eq!(skill_guideline("cf-herdr"), 9 * KIB);
-        assert_eq!(
-            skill_guideline("cf-new-routing"),
-            OTHER_SKILL_GUIDELINE_BYTES
-        );
+    fn skills_measure_in_lines_against_the_body_guideline() {
+        let guidelines = Guidelines::default();
+        assert_eq!(guidelines.body_lines, 500);
         let tree = files(&[
-            ("cf-herdr/SKILL.md", "x"),
+            ("cf-herdr/SKILL.md", "one\ntwo\nthree\n"),
             ("cf-herdr/resources/SKILL.md", "not a skill"),
         ]);
-        let measures = skill_measures(&tree);
+        let measures = skill_measures(&tree, &guidelines);
         assert_eq!(measures.len(), 1);
+        assert_eq!(measures[0].value, 3);
         assert!(!measures[0].over());
-        let big = Measure {
-            subject: "cf-herdr".into(),
-            bytes: 9 * KIB + 1,
-            guideline: 9 * KIB,
-        };
+        assert_eq!(measures[0].to_string(), "cf-herdr 3 of 500 lines");
+        let big = body_measure("cf-herdr", &"x\r\n".repeat(501), 500);
         assert!(big.over());
-        assert_eq!(big.to_string(), "cf-herdr 9217 of 9216 bytes");
+        assert_eq!(
+            big.with_basis(),
+            format!("cf-herdr 501 of 500 lines ({BODY_BASIS})")
+        );
+        let tuned = skill_measures(
+            &tree,
+            &Guidelines {
+                body_lines: 2,
+                ..guidelines
+            },
+        );
+        assert!(tuned[0].over(), "{}", tuned[0]);
+    }
+
+    #[test]
+    fn descriptions_are_read_from_frontmatter_and_measured_in_characters() {
+        assert_eq!(
+            description("---\nname: x\ndescription: Plain value.\n---\nbody"),
+            Some("Plain value.".to_string())
+        );
+        assert_eq!(
+            description("---\r\ndescription: \"Quoted: value\"\r\n---\r\n"),
+            Some("Quoted: value".to_string())
+        );
+        assert_eq!(
+            description("---\ndescription: >\n  Folded over\n  two lines.\nname: y\n---\n"),
+            Some("Folded over two lines.".to_string())
+        );
+        assert_eq!(
+            description("---\nname: x\n---\ndescription: in the body"),
+            None
+        );
+        assert_eq!(description("no frontmatter"), None);
+        let measure = description_measure("cf-x", "---\ndescription: héllo\n---\n").unwrap();
+        assert_eq!(measure.value, 5, "characters, not bytes");
+        assert_eq!(measure.guideline, DESCRIPTION_LIMIT_CHARS);
+        assert_eq!(measure.to_string(), "cf-x description 5 of 1024 characters");
+        let tree = files(&[
+            ("cf-a/SKILL.md", "---\ndescription: a\n---\n"),
+            ("cf-b/SKILL.md", "no frontmatter"),
+            ("cf-a/resources/SKILL.md", "---\ndescription: nested\n---\n"),
+        ]);
+        let measures = description_measures(&tree);
+        assert_eq!(measures.len(), 1);
+        assert_eq!(measures[0].subject, "cf-a description");
+    }
+
+    #[test]
+    fn the_always_loaded_set_follows_imports_outside_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "a\nb\nc\n").unwrap();
+        std::fs::write(root.join("docs/more.md"), "m\nn\n").unwrap();
+        std::fs::write(root.join("docs/deep.md"), "d\n").unwrap();
+        std::fs::write(
+            root.join("CLAUDE.md"),
+            "@AGENTS.md\n\nSee @docs/more.md. Not `@docs/deep.md` here.\n```\n@docs/deep.md\n```\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("docs/more.md"), "m\nn\n@deep.md\n").unwrap();
+        let set = always_loaded(root).unwrap();
+        assert_eq!(set.file, "CLAUDE.md");
+        assert_eq!(
+            set.imports,
+            vec!["AGENTS.md", "docs/more.md", "docs/deep.md"]
+        );
+        // 6 own lines, 3 from AGENTS.md, 3 from more.md, 1 from deep.md.
+        assert_eq!(set.lines, 13);
+        assert_eq!(
+            set.subject(),
+            "always-loaded instructions (CLAUDE.md with 3 imports)"
+        );
+        let measure = set.measure(200);
+        assert!(!measure.over());
+        assert_eq!(measure.unit, Unit::Lines);
+
+        std::fs::remove_file(root.join("CLAUDE.md")).unwrap();
+        let agents_only = always_loaded(root).unwrap();
+        assert_eq!(agents_only.file, "AGENTS.md");
+        assert!(agents_only.imports.is_empty());
+        assert_eq!(agents_only.lines, 3);
+        assert_eq!(
+            agents_only.subject(),
+            "always-loaded instructions (AGENTS.md)"
+        );
+
+        std::fs::remove_file(root.join("AGENTS.md")).unwrap();
+        assert_eq!(always_loaded(root), None);
     }
     /// Shipped files frozen as they stood when the scanner moved to the
     /// Markdown parser, keyed as they install.

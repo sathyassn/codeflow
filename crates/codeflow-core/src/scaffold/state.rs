@@ -204,6 +204,112 @@ impl ScaffoldConfig {
     }
 }
 
+/// The `[reading]` section of `project.toml`: a project's own advisory
+/// reading guidelines, each replacing the shipped default of
+/// [`crate::reading::Guidelines`] when set (TSK-267, ADR-0083). User-owned
+/// like `[scaffold]`: [`ProjectState::store`] round-trips it as a foreign
+/// key and nothing writes it. The two tool limits, Codex's instruction limit
+/// and the API's description limit, are not here: the first is
+/// `project_doc_max_bytes` in `.codex/config.toml`, the second is fixed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadingConfig {
+    /// `kernel_max_bytes`: the managed block of `AGENTS.md`.
+    pub kernel_max_bytes: Option<usize>,
+    /// `chain_max_bytes`: the per-task reading chain.
+    pub chain_max_bytes: Option<usize>,
+    /// `skill_max_lines`: a shipped skill or agent body.
+    pub skill_max_lines: Option<usize>,
+    /// `instructions_max_lines`: the always-loaded instruction set.
+    pub instructions_max_lines: Option<usize>,
+}
+
+impl ReadingConfig {
+    /// The keys the section reads, in the order a report lists them.
+    pub const KEYS: [&'static str; 4] = [
+        "kernel_max_bytes",
+        "chain_max_bytes",
+        "skill_max_lines",
+        "instructions_max_lines",
+    ];
+
+    /// Reads `[reading]` from `project.toml`. A missing file, section or
+    /// key yields the default for that key.
+    ///
+    /// # Errors
+    ///
+    /// IO failures other than not-found, invalid TOML, a section that is
+    /// not a table, or a key that is not a positive integer, named.
+    pub fn load(root: &Path) -> Result<Self, ScaffoldError> {
+        let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
+            return Ok(Self::default());
+        };
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
+        let invalid = |detail: String| ScaffoldError::InvalidState {
+            what: PROJECT_TOML.to_string(),
+            detail,
+        };
+        let Some(section) = table.get("reading") else {
+            return Ok(Self::default());
+        };
+        let section = section
+            .as_table()
+            .ok_or_else(|| invalid("reading: expected a table".to_string()))?;
+        let number = |key: &str| -> Result<Option<usize>, ScaffoldError> {
+            section
+                .get(key)
+                .map(|value| {
+                    value
+                        .as_integer()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| {
+                            invalid(format!("reading.{key}: expected a positive integer"))
+                        })
+                })
+                .transpose()
+        };
+        Ok(Self {
+            kernel_max_bytes: number("kernel_max_bytes")?,
+            chain_max_bytes: number("chain_max_bytes")?,
+            skill_max_lines: number("skill_max_lines")?,
+            instructions_max_lines: number("instructions_max_lines")?,
+        })
+    }
+
+    /// The guidelines in force: each set key over `defaults`.
+    #[must_use]
+    pub fn guidelines(&self, defaults: crate::reading::Guidelines) -> crate::reading::Guidelines {
+        crate::reading::Guidelines {
+            kernel_bytes: self.kernel_max_bytes.unwrap_or(defaults.kernel_bytes),
+            chain_bytes: self.chain_max_bytes.unwrap_or(defaults.chain_bytes),
+            body_lines: self.skill_max_lines.unwrap_or(defaults.body_lines),
+            instructions_lines: self
+                .instructions_max_lines
+                .unwrap_or(defaults.instructions_lines),
+        }
+    }
+
+    /// The keys the section sets, for a report that says which numbers are
+    /// the project's own.
+    #[must_use]
+    pub fn set_keys(&self) -> Vec<&'static str> {
+        [
+            self.kernel_max_bytes.is_some(),
+            self.chain_max_bytes.is_some(),
+            self.skill_max_lines.is_some(),
+            self.instructions_max_lines.is_some(),
+        ]
+        .into_iter()
+        .zip(Self::KEYS)
+        .filter_map(|(set, key)| set.then_some(key))
+        .collect()
+    }
+}
+
 /// The `[feedback]` section of `project.toml`: the topics an operator
 /// feedback item may carry (`codeflow feedback`). User-owned like
 /// `[scaffold]`: [`ProjectState::store`] round-trips it as a foreign key, and
@@ -1618,6 +1724,90 @@ mod tests {
             write_file(&ProjectState::path(dir.path()), body.as_bytes()).unwrap();
             let error = ScaffoldConfig::load(dir.path()).unwrap_err().to_string();
             assert!(error.contains(location), "{error}");
+        }
+    }
+
+    /// TSK-267: `[reading]` sets a project's own advisory numbers, an
+    /// absent key keeps its default, a wrong type is refused by key, and
+    /// the section survives a store.
+    #[test]
+    fn reading_config_overrides_defaults_and_round_trips() {
+        use crate::reading::Guidelines;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(ReadingConfig::load(root).unwrap(), ReadingConfig::default());
+        assert_eq!(
+            ReadingConfig::default().guidelines(Guidelines::default()),
+            Guidelines::default()
+        );
+        assert!(ReadingConfig::default().set_keys().is_empty());
+
+        let state = ProjectState {
+            schema_version: 1,
+            tier: Tier::Standard,
+            scaffold_version: "3.1.0".to_string(),
+            stack: "rust".to_string(),
+            areas: vec!["core".to_string()],
+            policy_armed: true,
+            git_hooks: GIT_HOOKS_WIRED.to_string(),
+            permission_preset: "default".to_string(),
+            product_one_liner: "demo".to_string(),
+            release_rules: None,
+        };
+        state.store(root).unwrap();
+        let path = ProjectState::path(root);
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str("\n[reading]\nskill_max_lines = 300\nchain_max_bytes = 200000\n");
+        std::fs::write(&path, &text).unwrap();
+
+        let config = ReadingConfig::load(root).unwrap();
+        assert_eq!(config.skill_max_lines, Some(300));
+        assert_eq!(config.chain_max_bytes, Some(200_000));
+        assert_eq!(config.kernel_max_bytes, None);
+        assert_eq!(config.set_keys(), ["chain_max_bytes", "skill_max_lines"]);
+        let guidelines = config.guidelines(Guidelines::default());
+        assert_eq!(guidelines.body_lines, 300);
+        assert_eq!(guidelines.chain_bytes, 200_000);
+        assert_eq!(guidelines.kernel_bytes, Guidelines::default().kernel_bytes);
+        assert_eq!(
+            guidelines.instructions_lines,
+            Guidelines::default().instructions_lines
+        );
+
+        // A store keeps the section and its values (the encoder orders the
+        // keys), and nothing writes a key the project did not set.
+        let mut loaded = ProjectState::load(root).unwrap();
+        loaded.policy_armed = false;
+        loaded.store(root).unwrap();
+        let stored = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            stored.contains("[reading]\n")
+                && stored.contains("skill_max_lines = 300\n")
+                && stored.contains("chain_max_bytes = 200000\n")
+                && !stored.contains("kernel_max_bytes"),
+            "{stored}"
+        );
+        assert_eq!(ReadingConfig::load(root).unwrap(), config);
+
+        for (body, location) in [
+            (
+                "[reading]\nskill_max_lines = \"many\"\n",
+                "reading.skill_max_lines",
+            ),
+            (
+                "[reading]\nkernel_max_bytes = 0\n",
+                "reading.kernel_max_bytes",
+            ),
+            (
+                "[reading]\nchain_max_bytes = -5\n",
+                "reading.chain_max_bytes",
+            ),
+            ("reading = 5\n", "reading: expected a table"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            write_file(&ProjectState::path(dir.path()), body.as_bytes()).unwrap();
+            let error = ReadingConfig::load(dir.path()).unwrap_err().to_string();
+            assert!(error.contains(location), "{body}: {error}");
         }
     }
 

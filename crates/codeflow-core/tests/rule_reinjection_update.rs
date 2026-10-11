@@ -505,11 +505,10 @@ fn guidance_lists_every_installed_skill_and_agent_at_every_tier() {
         assert_eq!(skills, installed.skills, "{tier}\n{block}");
         assert_eq!(agents, installed.agents, "{tier}\n{block}");
         println!(
-            "{tier}: {} skills, {} agents, block {} bytes (guideline {})",
+            "{tier}: {} skills, {} agents, block {} bytes",
             skills.len(),
             agents.len(),
             block.len(),
-            guidance::GUIDANCE_BLOCK_GUIDELINE_BYTES
         );
     }
 }

@@ -2088,8 +2088,9 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
     assert_eq!(reading::orphans(&installed), Vec::<String>::new());
 
     // Doctor reports sizes: the fresh install is within every guideline, so
-    // the report is clean; a skill doubled past its guideline then warns and
-    // names the step that clears it, and doctor still exits 0.
+    // the report is clean; a skill grown past the 500-line body guideline
+    // then draws a note (TSK-267), never a warning, that states the basis
+    // and names the step that clears it, and doctor still exits 0.
     let fresh_report = codeflow(&root, &["doctor", "--check", "reading"]);
     let clean = output_text(&fresh_report);
     assert_eq!(fresh_report.status.code(), Some(0), "{clean}");
@@ -2097,20 +2098,22 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         clean.starts_with("ok    reading: within guidelines:"),
         "{clean}"
     );
-    assert!(!clean.contains("differ from the shipped map"), "{clean}");
+    assert!(!clean.contains("installed read edges differ"), "{clean}");
     let skill = root.join(".claude/skills/cf-herdr/SKILL.md");
     let text = std::fs::read_to_string(&skill).unwrap();
-    std::fs::write(&skill, format!("{text}\n{text}")).unwrap();
+    let copies = 500 / text.lines().count() + 1;
+    std::fs::write(&skill, text.repeat(copies)).unwrap();
     let out = codeflow(&root, &["doctor", "--check", "reading"]);
     let report = output_text(&out);
     assert_eq!(out.status.code(), Some(0), "{report}");
     assert!(
-        report.contains("warn  reading: above guideline:"),
+        report.contains("note  reading: above guideline: cf-herdr "),
         "{report}"
     );
-    assert!(report.contains("cf-herdr "), "{report}");
+    assert!(report.contains("of 500 lines ("), "{report}");
     assert!(report.contains("move detail behind a trigger"), "{report}");
     assert!(report.contains("per-task reading chain"), "{report}");
+    assert!(!report.contains("warn"), "{report}");
 }
 
 /// TSK-235 AC-4 (journey): a fresh standard project carries the guidance
