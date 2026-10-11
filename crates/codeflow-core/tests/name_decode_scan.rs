@@ -3299,6 +3299,73 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // Counts authored lines as wc -l does, at LF or CRLF; the text is measured, never rewritten or used as a name.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "authored_lines",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // Walks Claude Code's @path imports by the memory guide's grammar: a line at a time, a fence at the line start, an import after whitespace running to the next whitespace; the path text itself is kept as written.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "is_whitespace",
+        2,
+        "grammar:claude-memory-import",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "lines",
+        1,
+        "grammar:claude-memory-import",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "trim_start",
+        1,
+        "grammar:claude-memory-import",
+    ),
+    // Reads the description of YAML frontmatter a line at a time: the closing marker, the key's value, and a folded or literal block by its indentation; the value is measured in characters, never used as a name.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "is_whitespace",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "lines",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "trim",
+        2,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "trim_end",
+        2,
+        "grammar:yaml-frontmatter",
+    ),
+    // Reads the scaffold version out of the ASCII managed-block marker `codeflow:managed:begin scaffold=`, which ends at whitespace or the hash separator; the version is displayed, never used as a path.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "installed_scaffold_version",
+        "is_whitespace",
+        1,
+        "ascii-marker",
+    ),
     // Builds search documents per JSONL physical line, skipping blank lines; indexed content and path keys are retained and this index grants no authority.
     (
         "crates/codeflow-core/src/recall.rs",

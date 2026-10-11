@@ -73,23 +73,38 @@ pub enum LimitSource {
 
 /// The `project_doc_max_bytes` the project's `.codex/config.toml` sets, when
 /// it sets a positive integer; `None` without the file, the key or a usable
-/// value.
-#[must_use]
-pub fn project_doc_max_bytes(root: &std::path::Path) -> Option<usize> {
-    let text = std::fs::read_to_string(root.join(".codex/config.toml")).ok()?;
-    let value = text.parse::<toml::Value>().ok()?;
-    let bytes = value.get("project_doc_max_bytes")?.as_integer()?;
-    usize::try_from(bytes).ok().filter(|bytes| *bytes > 0)
+/// value. A file that exists but cannot be read is the error.
+///
+/// # Errors
+///
+/// The config file's absence cannot be proven, or it cannot be read.
+pub fn project_doc_max_bytes(root: &std::path::Path) -> std::io::Result<Option<usize>> {
+    let path = root.join(".codex/config.toml");
+    if crate::absence::proven_absent(&path)? {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Ok(None);
+    };
+    Ok(value
+        .get("project_doc_max_bytes")
+        .and_then(toml::Value::as_integer)
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|bytes| *bytes > 0))
 }
 
 /// The instruction limit Codex applies in the project under `root`: the
 /// value its `.codex/config.toml` sets, else the default.
-#[must_use]
-pub fn codex_instruction_limit(root: &std::path::Path) -> (usize, LimitSource) {
-    project_doc_max_bytes(root).map_or(
+///
+/// # Errors
+///
+/// The config file exists but cannot be read ([`project_doc_max_bytes`]).
+pub fn codex_instruction_limit(root: &std::path::Path) -> std::io::Result<(usize, LimitSource)> {
+    Ok(project_doc_max_bytes(root)?.map_or(
         (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default),
         |bytes| (bytes, LimitSource::ProjectConfig),
-    )
+    ))
 }
 
 /// The bytes by which a complete `AGENTS.md` (managed block and project
@@ -787,16 +802,19 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         assert_eq!(
-            codex_instruction_limit(root),
+            codex_instruction_limit(root).unwrap(),
             (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default)
         );
         std::fs::create_dir_all(root.join(".codex")).unwrap();
         let config = root.join(".codex/config.toml");
         std::fs::write(&config, "model = \"x\"\n").unwrap();
-        assert_eq!(codex_instruction_limit(root).1, LimitSource::Default);
+        assert_eq!(
+            codex_instruction_limit(root).unwrap().1,
+            LimitSource::Default
+        );
         std::fs::write(&config, "project_doc_max_bytes = 65536\n").unwrap();
         assert_eq!(
-            codex_instruction_limit(root),
+            codex_instruction_limit(root).unwrap(),
             (65536, LimitSource::ProjectConfig)
         );
         for unusable in [
@@ -807,10 +825,19 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
         ] {
             std::fs::write(&config, unusable).unwrap();
             assert_eq!(
-                codex_instruction_limit(root),
+                codex_instruction_limit(root).unwrap(),
                 (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default),
                 "{unusable}"
             );
+        }
+        // A config that exists but cannot be read is the error, never the
+        // default: a dangling link is such a file.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&config).unwrap();
+            std::os::unix::fs::symlink("missing.toml", &config).unwrap();
+            let error = codex_instruction_limit(root).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
         }
     }
 

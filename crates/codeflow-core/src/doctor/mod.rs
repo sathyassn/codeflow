@@ -3302,7 +3302,17 @@ fn check_instructions(opts: &Options) -> CheckResult {
 
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let (limit, source) = codex_instruction_limit(&root);
+    let (limit, source) = match codex_instruction_limit(&root) {
+        Ok(limit) => limit,
+        Err(error) => {
+            return CheckResult {
+                name: "instructions".into(),
+                status: Status::Fail,
+                message: format!("cannot read .codex/config.toml: {error}"),
+                duration: start.elapsed(),
+            }
+        }
+    };
     let source = match source {
         LimitSource::Default => String::new(),
         LimitSource::ProjectConfig => " (project_doc_max_bytes in .codex/config.toml)".to_string(),
@@ -3415,11 +3425,12 @@ struct ReadingSizes {
     information: Vec<String>,
 }
 
-/// Measure the kernel, the always-loaded set, the per-task chain and each
-/// shipped skill and agent under `root` against `guidelines`.
+/// Measure the kernel, the always-loaded set `always`, the per-task chain
+/// and each shipped skill and agent under `root` against `guidelines`.
 fn reading_sizes(
     root: &Path,
     agents: Option<&str>,
+    always: Option<crate::reading::AlwaysLoaded>,
     files: &crate::reading::SkillFiles,
     skill_tree: &str,
     guidelines: &crate::reading::Guidelines,
@@ -3442,7 +3453,7 @@ fn reading_sizes(
             "the managed block of AGENTS.md".to_string(),
         ));
     }
-    if let Some(set) = reading::always_loaded(root) {
+    if let Some(set) = always {
         let file = set.file.clone();
         sizes
             .advisory
@@ -3678,7 +3689,20 @@ fn check_reading(opts: &Options) -> CheckResult {
             }
         }
     };
-    let (limit, _) = rule_map::codex_instruction_limit(&root);
+    let unreadable = |what: &str, error: &dyn std::fmt::Display| CheckResult {
+        name: "reading".into(),
+        status: Status::Fail,
+        message: format!("cannot read {what}: {error}"),
+        duration: start.elapsed(),
+    };
+    let limit = match rule_map::codex_instruction_limit(&root) {
+        Ok((limit, _)) => limit,
+        Err(error) => return unreadable(".codex/config.toml", &error),
+    };
+    let always = match crate::reading::always_loaded(&root) {
+        Ok(always) => always,
+        Err(error) => return unreadable("the always-loaded instructions", &error),
+    };
     let defaults = Guidelines {
         kernel_bytes: rule_map::managed_block_guideline(limit),
         ..Guidelines::default()
@@ -3687,7 +3711,14 @@ fn check_reading(opts: &Options) -> CheckResult {
         Ok(config) => (config.guidelines(defaults), config.set_keys(), None),
         Err(error) => (defaults, Vec::new(), Some(error.to_string())),
     };
-    let sizes = reading_sizes(&root, agents.as_deref(), &files, skill_tree, &guidelines);
+    let sizes = reading_sizes(
+        &root,
+        agents.as_deref(),
+        always,
+        &files,
+        skill_tree,
+        &guidelines,
+    );
     let (status, message) = reading_verdict(&sizes, &own, config_error.as_deref());
     CheckResult {
         name: "reading".into(),

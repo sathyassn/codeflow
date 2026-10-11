@@ -347,40 +347,50 @@ impl AlwaysLoaded {
 const IMPORT_DEPTH: usize = 4;
 
 /// The always-loaded instruction set under `root`, or `None` when it has no
-/// instruction file.
-#[must_use]
-pub fn always_loaded(root: &Path) -> Option<AlwaysLoaded> {
-    let file = ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"]
-        .into_iter()
-        .find(|candidate| root.join(candidate).is_file())?;
-    let text = std::fs::read_to_string(root.join(file)).ok()?;
-    let mut imports = Vec::new();
-    let mut lines = authored_lines(&text);
-    collect_imports(root, Path::new(file), &text, 1, &mut imports, &mut lines);
-    Some(AlwaysLoaded {
-        file: file.to_string(),
-        imports,
-        lines,
-    })
+/// instruction file. An instruction file or import that exists but cannot be
+/// read is the error.
+///
+/// # Errors
+///
+/// A candidate or import whose absence cannot be proven, or that cannot be
+/// read.
+pub fn always_loaded(root: &Path) -> std::io::Result<Option<AlwaysLoaded>> {
+    for file in ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"] {
+        let path = root.join(file);
+        if crate::absence::proven_absent(&path)? {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let mut imports = Vec::new();
+        let mut lines = authored_lines(&text);
+        collect_imports(root, file, &text, 1, &mut imports, &mut lines)?;
+        return Ok(Some(AlwaysLoaded {
+            file: file.to_string(),
+            imports,
+            lines,
+        }));
+    }
+    Ok(None)
 }
 
-/// Follow the `@path` imports of `text` (the file at `from`, relative to
-/// `root`), adding each new file's path and lines, as Claude Code's memory
-/// guide describes: a path runs to the next whitespace, a quoted path or
-/// one inside a code span or fenced block is not an import, and a relative
-/// path resolves against the importing file.
+/// Follow the `@path` imports of `text` (the file at `from`, a `/`-joined
+/// path relative to `root`), adding each new file's path and lines, as
+/// Claude Code's memory guide describes: a path runs to the next whitespace,
+/// a quoted path or one inside a code span or fenced block is not an import,
+/// and a relative path resolves against the importing file. An import that
+/// is proven absent is not loaded; one that exists is read, with its error.
 fn collect_imports(
     root: &Path,
-    from: &Path,
+    from: &str,
     text: &str,
     depth: usize,
     imports: &mut Vec<String>,
     lines: &mut usize,
-) {
+) -> std::io::Result<()> {
     if depth > IMPORT_DEPTH {
-        return;
+        return Ok(());
     }
-    let dir = from.parent().unwrap_or(Path::new(""));
+    let dir = from.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut fenced = false;
     for line in text.lines() {
         if line.trim_start().starts_with("```") {
@@ -401,22 +411,25 @@ fn collect_imports(
                 let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
                 let candidate = rest[..end].trim_end_matches(['.', ',', ';', ':', ')']);
                 if !candidate.is_empty() && !candidate.starts_with('"') {
-                    let relative = dir.join(candidate);
-                    let display = relative.to_string_lossy().replace('\\', "/");
-                    let path = if candidate.starts_with('~') || candidate.starts_with('/') {
+                    let rooted = candidate.starts_with('~') || candidate.starts_with('/');
+                    let display = if rooted || dir.is_empty() {
+                        candidate.to_string()
+                    } else {
+                        format!("{dir}/{candidate}")
+                    };
+                    let path = if rooted {
                         PathBuf::from(candidate)
                     } else {
-                        root.join(&relative)
+                        root.join(&display)
                     };
-                    if path.is_file()
-                        && !imports.contains(&display)
-                        && display != from.to_string_lossy()
+                    if !imports.contains(&display)
+                        && display != from
+                        && !crate::absence::proven_absent(&path)?
                     {
-                        if let Ok(imported) = std::fs::read_to_string(&path) {
-                            imports.push(display);
-                            *lines += authored_lines(&imported);
-                            collect_imports(root, &relative, &imported, depth + 1, imports, lines);
-                        }
+                        let imported = std::fs::read_to_string(&path)?;
+                        imports.push(display.clone());
+                        *lines += authored_lines(&imported);
+                        collect_imports(root, &display, &imported, depth + 1, imports, lines)?;
                     }
                 }
                 for _ in 0..end {
@@ -428,6 +441,7 @@ fn collect_imports(
             previous = c;
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2177,7 +2191,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("docs/more.md"), "m\nn\n@deep.md\n").unwrap();
-        let set = always_loaded(root).unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
         assert_eq!(set.file, "CLAUDE.md");
         assert_eq!(
             set.imports,
@@ -2194,7 +2208,7 @@ mod tests {
         assert_eq!(measure.unit, Unit::Lines);
 
         std::fs::remove_file(root.join("CLAUDE.md")).unwrap();
-        let agents_only = always_loaded(root).unwrap();
+        let agents_only = always_loaded(root).unwrap().unwrap();
         assert_eq!(agents_only.file, "AGENTS.md");
         assert!(agents_only.imports.is_empty());
         assert_eq!(agents_only.lines, 3);
@@ -2204,7 +2218,7 @@ mod tests {
         );
 
         std::fs::remove_file(root.join("AGENTS.md")).unwrap();
-        assert_eq!(always_loaded(root), None);
+        assert_eq!(always_loaded(root).unwrap(), None);
     }
     /// Shipped files frozen as they stood when the scanner moved to the
     /// Markdown parser, keyed as they install.
