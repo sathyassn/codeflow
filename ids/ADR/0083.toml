@@ -1,0 +1,11 @@
+id = "ADR-0083"
+uid = "119bcd1e-e915-42d2-89bb-99e90888a021"
+kind = "ADR"
+title = "Reading budgets are advisory and tool limits are hard"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T06:02:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
