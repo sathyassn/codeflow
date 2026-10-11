@@ -1767,12 +1767,18 @@ fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> 
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("hook executable runs");
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
+    let written = child.stdin.as_mut().unwrap().write_all(payload.as_bytes());
+    // A hook that exits before reading its payload (an older binary refusing
+    // the contract) closes its input. Its exit status and output are the
+    // verdict, so only a broken pipe is let through; any other write error
+    // fails the test.
+    if let Err(error) = written {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "writing the hook payload: {error}"
+        );
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -1982,6 +1988,26 @@ fn main() {
         String::from_utf8_lossy(&built.stderr)
     );
     exe
+}
+
+/// TSK-265: a hook that refuses before it reads its payload closes its
+/// input, and the harness judges it by its exit status, as a host does. The
+/// older-binary stub refuses `--contract` without reading; when it exited
+/// before the payload was written, the write failed with a broken pipe
+/// (coverage runs 38110268273 and 38117913066). A payload larger than any
+/// pipe buffer makes that order certain instead of a race.
+#[test]
+fn a_hook_that_refuses_before_reading_its_payload_is_judged_by_its_exit() {
+    let stubs = tempfile::tempdir().unwrap();
+    let old = older_binary_stub(stubs.path());
+    let payload = "x".repeat(4 << 20);
+    let out = run_wired_hook_with(
+        &old,
+        stubs.path(),
+        "codeflow hook prompt-reminder --contract 3",
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
 
 /// TSK-128 F1: version skew. An updated project on a machine whose

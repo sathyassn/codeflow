@@ -164,5 +164,45 @@ class RustResultTests(unittest.TestCase):
                 self.assertIsNone(gate.run(("cargo", "codeflow-cli", "--test", "journeys", False), ["passes"], None, report))
 
 
+class PartTests(unittest.TestCase):
+    """TSK-265: the Windows Python journeys run beside the partitions and the
+    results part runs after them; together they run each journey once."""
+
+    def groups(self, on_unix):
+        groups, _, _ = gate.plan(gate.load_journeys(), on_unix=on_unix, with_benchmark=False)
+        return groups
+
+    def test_the_two_parts_run_every_group_exactly_once(self):
+        for on_unix in (True, False):
+            groups = self.groups(on_unix)
+            python, python_other = gate.part(groups, "python")
+            results, results_other = gate.part(groups, "results")
+            with self.subTest(on_unix=on_unix):
+                self.assertTrue(python and results)
+                self.assertEqual(dict(python), dict(results_other))
+                self.assertEqual(dict(results), dict(python_other))
+                self.assertFalse(set(python) & set(results))
+                self.assertEqual(set(python) | set(results), set(groups))
+                self.assertTrue(all(key[0] == "python" for key in python))
+                self.assertTrue(all(key[0] == "cargo" for key in results))
+
+    def test_no_part_runs_everything_and_an_unknown_part_is_refused(self):
+        groups = self.groups(True)
+        everything, elsewhere = gate.part(groups, None)
+        self.assertEqual(everything, groups)
+        self.assertFalse(elsewhere)
+        with self.assertRaises(ValueError):
+            gate.part(groups, "rust")
+
+    def test_the_python_part_needs_no_results(self):
+        from unittest.mock import patch
+        groups, _ = gate.part(self.groups(False), "python")
+        with patch.object(gate, "result_failure", side_effect=AssertionError("results were read")), \
+                patch.object(gate.subprocess, "run", return_value=gate.subprocess.CompletedProcess([], 0, "OK\n")), \
+                patch.object(gate, "python_failure", return_value=None), redirect_stdout(StringIO()):
+            for key, names in groups.items():
+                self.assertIsNone(gate.run(key, names, None, None))
+
+
 if __name__ == "__main__":
     unittest.main()
