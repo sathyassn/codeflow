@@ -5029,6 +5029,16 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
 
     let overlay = fixture_overlay("cli-release-strings");
     assert!(overlay["FACTS.md"].contains("Behaviour is frozen for 0.4"));
+    // The names under test have never shipped, so the depended-on-name
+    // clause of CF-OUT-008 does not excuse keeping them; the fixture says so
+    // in both files the subject reads first.
+    for file in ["README.md", "FACTS.md"] {
+        assert!(
+            overlay[file].contains("never shipped")
+                && overlay[file].contains("no user or script depends on these names yet"),
+            "{file} must state that the names are unreleased"
+        );
+    }
     for (file, fault) in [
         ("src/messages.py", "FATAL"),
         ("src/messages.py", "Nuke"),
