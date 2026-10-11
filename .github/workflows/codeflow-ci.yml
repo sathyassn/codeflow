@@ -42,13 +42,61 @@ jobs:
   # Every job carries a timeout, so a stalled step frees its runner instead
   # of holding one of the account's concurrent job slots for GitHub's default
   # six hours (TSK-254). Each is sized from the job's observed p95 and maximum
-  # over 2026-10-04 to 2026-10-07 with headroom: a gate part peaked at 20.6
-  # minutes outside the Playwright step and a Windows test partition at 27.2,
-  # so both get 45. A timed-out job fails, so its verdict fails, never passes.
+  # with headroom. A gate part peaked at 20.6 minutes outside the Playwright
+  # step over 2026-10-04 to 2026-10-07 and gets 45. The Windows build and each
+  # Windows partition get 30, the Windows checks 25, the release journey 15,
+  # the journeys job 10, and the reuse job and both verdicts 5 (TSK-265; the
+  # Windows jobs' comment below gives their basis). The secret scan and the
+  # security review get 30 and the gitleaks canary 10. A timed-out job fails,
+  # so its verdict fails, never passes.
   # scripts/gate-parity.py refuses a job without one.
+  #
+  # A push to main reuses a pull request run's verdict when it carries that
+  # run's exact tree (TSK-265; operator decision, 2026-10-11). This job
+  # decides from the pushed ref, git tree ids and GitHub's run and job
+  # records, never from a pull request's branch name or text;
+  # scripts/ci-reuse.py lists every condition. On reuse the gate and Windows jobs are skipped and the
+  # `codeflow gates` and `windows` verdicts pass and name the reused run.
+  # Any other push, or a decision that fails, runs every job; so does a push
+  # that changes a build cache input, or one for which main lacks the present
+  # part's apt cache for this runner image, so main's caches stay current.
+  # Pull request runs skip this job and are never affected. Its token reads
+  # runs, caches and pull requests and writes nothing.
+  reuse:
+    if: github.event_name == 'push'
+    name: reuse a pull request verdict
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Decide from the tree ids and the pull request run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PUSHED: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: >-
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
+          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
+          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
+          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+
   gates:
-    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
     name: codeflow gates (${{ matrix.part }})
+    needs: reuse
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -221,11 +269,12 @@ jobs:
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
 
   # The required check. It runs even when a part fails or is cancelled, so
-  # the check is never skipped, and it passes only when every part passed.
+  # the check is never skipped, and it passes only when every part passed,
+  # or when the reuse decision named a run and every part was skipped.
   gates-verdict:
     if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
     name: codeflow gates
-    needs: gates
+    needs: [reuse, gates]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -233,7 +282,13 @@ jobs:
         shell: bash
         env:
           PARTS: ${{ needs.gates.result }}
+          REUSE: ${{ needs.reuse.result }}
+          REUSED: ${{ needs.reuse.outputs.run }}
         run: |
+          if [ "$REUSE" = success ] && [ "$PARTS" = skipped ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
+            exit 0
+          fi
           if [ "$PARTS" != success ]; then
             echo "::error::the full gate's parts concluded ${PARTS}; see the codeflow gates (part) jobs"
             exit 1
@@ -241,28 +296,35 @@ jobs:
           echo "every part of the full gate passed"
 
   # Native Windows is a release target again (TSK-197). The raw referee is
-  # split in three: the nextest suite in partitions that together run every
-  # test once, the other Rust and Node checks beside them, and the journey
-  # gate over every partition's results. The `windows` verdict below is the
-  # one check branch rules and .release/config.json read.
-  windows-tests:
-    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
-    name: windows tests (${{ matrix.partition }} of 6)
+  # split up so the longest path is short (TSK-265): one job builds the test
+  # binaries once into a nextest archive; the partitions run that archive
+  # without compiling, each the tests scripts/windows-partitions.py gives it
+  # from measured durations, so together they run every test once; the
+  # other Rust and Node checks and the Python release journey run beside
+  # them; and the journey gate reads every partition's results and checks
+  # that each listed test ran in exactly its one partition. The `windows`
+  # verdict below is the one check branch rules and .release/config.json
+  # read. Timeouts: the build compiled in about 3 minutes inside the old
+  # partitions (p95 about 4) and gets room for a cold dependency build; a
+  # partition is planned at about 5.5 minutes of tests, a fifth of the old
+  # 27.2 minute peak; the release journey took 4.3 to 4.7 minutes.
+  windows-build:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    name: windows test build
+    needs: reuse
     runs-on: windows-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        partition: [1, 2, 3, 4, 5, 6]
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Saved even when tests fail, so a red run does not force the next one
-      # to rebuild the dependencies from scratch. The cache holds
-      # dependencies only, never workspace crates.
+      # Saved even when the build fails, so a red run does not force the next
+      # one to rebuild the dependencies from scratch. The cache holds
+      # dependencies only, never workspace crates. The key is the one the
+      # partitions used when each compiled the suite, so the cache carries over.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: windows-tests
           cache-on-failure: true
 
       - name: Install nextest
@@ -270,8 +332,88 @@ jobs:
         with:
           tool: cargo-nextest@0.9.129
 
-      - name: cargo nextest run (one partition)
-        run: cargo nextest run --workspace --no-fail-fast --profile codeflow --partition count:${{ matrix.partition }}/6
+      # The tests find the codeflow binary and their sources through absolute
+      # paths compiled in (CARGO_BIN_EXE_codeflow, CARGO_MANIFEST_DIR), so a
+      # partition extracts the archive into its own checkout at this same
+      # workspace path, which the list artifact records.
+      - name: cargo nextest archive
+        run: cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst
+
+      # The list reads the archive itself, so the partition check compares
+      # the partitions' results with exactly what they ran from.
+      - name: List the archived tests for the partition check
+        shell: bash
+        run: |
+          cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
+          printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
+
+      - name: Keep the archive for the partitions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-test-archive
+          path: target/windows-tests.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Keep the test list for the partition check
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-test-list
+          path: |
+            target/windows-tests.json
+            target/windows-workspace.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-tests:
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    name: windows tests (${{ matrix.partition }} of 12)
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - uses: actions/checkout@v6
+      # The tests run git, and a cargo they find on PATH resolves the pinned
+      # toolchain; nothing is compiled here.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+
+      - name: Fetch the test archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-archive
+          path: target
+
+      - name: Fetch the build's workspace path
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-list
+          path: ${{ runner.temp }}/windows-test-list
+
+      - name: The archive was built at this workspace path
+        shell: bash
+        run: |
+          built=$(tr -d '\r' < "$RUNNER_TEMP/windows-test-list/windows-workspace.txt")
+          if [ "$built" != "$GITHUB_WORKSPACE" ]; then
+            echo "::error::the archive was built at ${built}, this partition runs at ${GITHUB_WORKSPACE}; the compiled-in test paths would not resolve"
+            exit 1
+          fi
+
+      # Extracting into the checkout puts every binary at the path the build
+      # compiled in, and the report at target/nextest/codeflow/junit.xml.
+      - name: cargo nextest run (one partition, from the archive)
+        shell: bash
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"
 
       - name: Keep this partition's results for the journey gate
         if: always()
@@ -283,8 +425,9 @@ jobs:
           retention-days: 7
 
   windows:
-    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
     name: windows checks (fmt, doc, clippy, Node)
+    needs: reuse
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -328,22 +471,39 @@ jobs:
         shell: bash
         run: CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_parity.py
 
+  # The journey gate's Python journeys need no test results, so they run
+  # here from the start (TSK-265); the journeys job runs the rest. Together
+  # the two parts run every journey once.
+  windows-release-journey:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    name: windows release journey
+    needs: reuse
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: journey gate (Python journeys)
+        shell: bash
+        run: python scripts/journey-gate.py --part python --skip-benchmark
+
   # Consume this raw run's exact results from every partition. Unix-only
   # journeys and the own read-benchmark target are disclosed as skipped on
-  # Windows. It runs when a partition fails, so the journeys still report.
+  # Windows. It runs when a partition fails, so the journeys still report;
+  # it only reads results.
   windows-journeys:
-    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
     name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
       - name: Begin journey check
         shell: bash
         run: |
-          rm -rf target/nextest/partitions
+          rm -rf target/nextest/partitions target/nextest/list
           echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
 
       - name: Fetch every partition's results from this run
@@ -352,29 +512,52 @@ jobs:
           pattern: windows-junit-*
           path: target/nextest/partitions
 
+      - name: Fetch the archive's test list
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-test-list
+          path: target/nextest/list
+
       - name: journey gate
         shell: bash
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark --part results
+
+      # Fails when a listed test ran in no partition, in two, or outside the
+      # partition the plan gives it, and prints each partition's test time.
+      - name: Every test ran in exactly one partition
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
   # The required Windows check. Like `codeflow gates`, it runs even when a
   # job fails or is cancelled, so it is never skipped, and it passes only
-  # when the checks, every test partition and the journey gate passed.
+  # when the build, the checks, every test partition and both journey jobs
+  # passed, or when the reuse decision named a run and all were skipped.
   windows-verdict:
     if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
     name: windows
-    needs: [windows, windows-tests, windows-journeys]
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every Windows job passed
         shell: bash
         env:
+          REUSE: ${{ needs.reuse.result }}
+          REUSED: ${{ needs.reuse.outputs.run }}
           CHECKS: ${{ needs.windows.result }}
+          BUILD: ${{ needs.windows-build.result }}
           TESTS: ${{ needs.windows-tests.result }}
           JOURNEYS: ${{ needs.windows-journeys.result }}
+          RELEASE: ${{ needs.windows-release-journey.result }}
         run: |
-          if [ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ]; then
-            echo "::error::Windows concluded checks=${CHECKS} tests=${TESTS} journeys=${JOURNEYS}; see the windows jobs"
+          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \
+            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
+            exit 0
+          fi
+          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            echo "::error::Windows concluded checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE}; see the windows jobs"
             exit 1
           fi
           echo "every Windows job passed"
