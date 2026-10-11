@@ -71,7 +71,7 @@ class PlanTests(unittest.TestCase):
     def test_the_real_data_is_balanced_and_every_filterset_is_short_enough(self):
         plan = wp.Plan(wp.load())
         mean = sum(plan.estimates) / plan.count
-        self.assertLessEqual(max(plan.estimates), mean * 1.25)
+        self.assertLessEqual(max(plan.estimates), mean * 1.10)
         for partition in range(1, plan.count + 1):
             # Windows limits a whole command line to 32,767 characters;
             # this leaves room for the rest of the command and for growth.
