@@ -1,0 +1,11 @@
+id = "TSK-268"
+uid = "28904941-14c7-4cc8-b26f-bf49422fe18c"
+kind = "TSK"
+title = "macOS temporary paths match the OS-resolved working directory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T09:04:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
