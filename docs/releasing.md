@@ -106,7 +106,9 @@ Local-artifact authority job:
   - On a main push whose merge commit has exactly the tree of a pull request
     head whose `codeflow-ci` run passed every job, both verdicts pass by
     naming that run and the gate and Windows jobs are skipped
-    (`scripts/ci-reuse.py`, TSK-265).
+    (`scripts/ci-reuse.py`, TSK-265). A push that changes a build cache
+    input, or for which main lacks the present part's apt cache for the
+    current runner image, runs every job instead.
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or
