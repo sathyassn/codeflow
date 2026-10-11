@@ -101,8 +101,12 @@ Local-artifact authority job:
   `codeflow-ci` and `codeflow-release` (`publication_workflows`) for
   `release state`, `codeflow gates`, `windows`, secret scan and security review.
   - `codeflow gates` is the one verdict over the gate's parallel parts.
-  - `windows` is the one verdict over the Windows checks, test partitions and
-    journeys.
+  - `windows` is the one verdict over the Windows build, checks, test
+    partitions and journeys.
+  - On a main push whose merge commit has exactly the tree of a pull request
+    head whose `codeflow-ci` run passed every job, both verdicts pass by
+    naming that run and the gate and Windows jobs are skipped
+    (`scripts/ci-reuse.py`, TSK-265).
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or
