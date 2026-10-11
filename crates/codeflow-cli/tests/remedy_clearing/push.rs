@@ -687,6 +687,10 @@ fn clears_registry_root_unreadable() {
     // whether it is a project of its own cannot be established.
     let sub = root.join("sub");
     std::fs::create_dir_all(sub.join(".codeflow")).unwrap();
+    // The command names the path the OS reports for its working directory.
+    // A tempdir on macOS sits under a `/var` link, which the OS resolves to
+    // `/private/var`, so the expected path is the resolved one.
+    let sub = std::fs::canonicalize(&sub).unwrap();
     let link = sub.join(".codeflow").join("project.toml");
     std::os::unix::fs::symlink("missing.toml", &link).unwrap();
     let home = tempfile::tempdir().unwrap();
