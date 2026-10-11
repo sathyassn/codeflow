@@ -245,39 +245,58 @@ class GateBinaryControls(unittest.TestCase):
                 self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p for p in problems), problems)
 
 
+ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
+                '--extract-overwrite --no-fail-fast --profile codeflow '
+                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"')
+ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
+
+
 class WindowsRefereeControls(unittest.TestCase):
     def test_every_raw_rust_floor_is_required(self):
-        for command in ["cargo fmt --all -- --check", parity.SUITE, parity.DOCTESTS,
+        for command in ["cargo fmt --all -- --check", ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
                         "cargo clippy --workspace --all-targets -- -D warnings",
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
+                self.assertIn("run: " + command, WORKFLOW)
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
 
 
 class WindowsPartitionControls(unittest.TestCase):
-    """TSK-203 AC-2: the partitioned Windows suite stands for the whole
-    suite only when its matrix runs every partition from 1 to N once."""
+    """TSK-203 AC-2, TSK-265 AC-2 and AC-3: the archived Windows partitions
+    stand for the whole suite only when the archive holds the whole
+    workspace and the matrix runs every planned partition from 1 to N once."""
 
-    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6]"
-    RUN = "--partition count:${{ matrix.partition }}/6"
+    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]"
 
     def test_the_committed_partitions_run_the_whole_suite(self):
         self.assertIn(self.PARTITIONS, WORKFLOW)
-        self.assertIn(self.RUN, WORKFLOW)
+        self.assertIn("run: " + ARCHIVED_RUN, WORKFLOW)
+        self.assertEqual(parity.planned_partitions(), 12)
         self.assertIn(parity.SUITE, CI)
 
-    def test_a_partition_set_that_misses_or_exceeds_n_is_drift(self):
-        for changed in (("partition: [1, 2, 3, 4, 5]", self.RUN),
-                        ("partition: [1, 2, 3, 4, 5, 6, 7]", self.RUN),
-                        ("partition: [1, 1, 2, 3, 4, 5]", self.RUN),
-                        (self.PARTITIONS, "--partition count:${{ matrix.partition }}/7"),
-                        (self.PARTITIONS, "--partition hash:${{ matrix.partition }}/6")):
-            with self.subTest(changed=changed):
-                workflow = (WORKFLOW.replace(self.PARTITIONS, changed[0])
-                            .replace(self.RUN, changed[1]))
+    def test_a_partition_set_that_misses_or_exceeds_the_plan_is_drift(self):
+        for matrix in ("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]",
+                       "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]",
+                       "partition: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]"):
+            with self.subTest(matrix=matrix):
+                workflow = WORKFLOW.replace(self.PARTITIONS, matrix)
                 self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
-                self.assertNotEqual(parity.local_rust_commands(CONFIG),
-                                    parity.ci_rust_job_commands(workflow))
+        self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(WORKFLOW, planned=13))
+
+    def test_a_partial_archive_another_file_or_a_count_split_is_drift(self):
+        for old, new in ((ARCHIVE, ARCHIVE.replace("--workspace", "-p codeflow-core")),
+                         (ARCHIVE, ARCHIVE.replace("--profile codeflow ", "")),
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
+                                                             "--archive-file target/other.tar.zst")),
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
+                                                             '${{ matrix.partition }})"',
+                                                             "--partition count:${{ matrix.partition }}/12"))):
+            with self.subTest(new=new):
+                workflow = WORKFLOW.replace("run: " + old, "run: " + new)
+                self.assertNotEqual(workflow, WORKFLOW)
+                self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
+                self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(workflow))
 
 
 class GatePartControls(unittest.TestCase):
@@ -331,7 +350,8 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: gates\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: gates\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -346,7 +366,9 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: gates\n", "    needs: gates\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates]\n", "    needs: [reuse, gates]\n    continue-on-error: true\n"),
+            "a reuse that needs no skipped part": WORKFLOW.replace(
+                '[ "$REUSE" = success ] && [ "$PARTS" = skipped ]', '[ "$REUSE" = success ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -451,7 +473,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: gates\n", "    needs: gates\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: [reuse, gates]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -502,7 +524,7 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertNotIn("pull_request", jobs, "trigger keys are not jobs")
 
     def test_a_job_without_its_own_whole_minute_timeout_is_refused(self):
-        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 10\n"
         self.assertEqual(WORKFLOW.count(journeys), 1)
         self.assert_problem(WORKFLOW.replace(journeys, "    runs-on: windows-latest\n"),
                             "job 'windows-journeys'", "timeout-minutes")
@@ -510,13 +532,13 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
             with self.subTest(value=value):
                 self.assert_problem(WORKFLOW.replace(journeys, f"    runs-on: windows-latest\n    timeout-minutes: {value}\n"),
                                     "job 'windows-journeys'")
-        self.assert_problem(WORKFLOW.replace(journeys, journeys + "    timeout-minutes: 15\n"),
+        self.assert_problem(WORKFLOW.replace(journeys, journeys + "    timeout-minutes: 10\n"),
                             "job 'windows-journeys'", "exactly one")
 
     def test_a_timeout_above_the_ac1_bound_is_refused(self):
         """AC-1: a hung job frees its runner inside 45 minutes, so GitHub's
         six-hour default of 360 must not pass as a "positive whole number"."""
-        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 10\n"
         self.assertEqual(parity.MAX_TIMEOUT_MINUTES, 45)
         for value in ("360", "46", "100"):
             with self.subTest(value=value):
@@ -625,7 +647,7 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
                          "only the install step installs")
 
     def test_playwright_outside_the_gates_job_is_refused(self):
-        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        windows = "      - name: Fetch the test archive\n"
         self.assertEqual(WORKFLOW.count(windows), 1)
         self.assert_problem(WORKFLOW.replace(windows, "      - name: Install Playwright\n        run: npx playwright-core install\n" + windows),
                             "job 'windows-tests'", "Playwright step")
@@ -875,7 +897,7 @@ class JobHeaderControls(unittest.TestCase):
         self.assertEqual(parity.timeout_problems(job.replace("5\n", "5 # sized from the runs\n", 1)), [])
 
     def test_a_column_zero_comment_does_not_end_a_job(self):
-        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        windows = "      - name: Fetch the test archive\n"
         self.assertEqual(WORKFLOW.count(windows), 1)
         step = "      - name: Install Playwright\n        run: npx playwright-core install\n"
         for comment in ("# note", "#"):

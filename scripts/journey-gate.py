@@ -8,6 +8,12 @@ failure is not proof. The ignored read benchmark has its own gate target.
 
 Usage: python3 scripts/journey-gate.py --results <junit file or directory>
        python3 scripts/journey-gate.py --list
+       python3 scripts/journey-gate.py --part python|results [...]
+
+`--part` runs one half of the gate: `python` runs the Python journeys,
+which need no test results, and `results` reads the Rust journeys from the
+results. Two jobs that each run one part together run every journey once
+(TSK-265: the Windows Python journeys run beside the test partitions).
 """
 
 from __future__ import annotations
@@ -68,6 +74,22 @@ def plan(journeys: list[dict], on_unix: bool, with_benchmark: bool):
             if name not in names:
                 names.append(name)
     return groups, skipped, pending
+
+
+PARTS = ("python", "results")
+
+
+def part(groups: "OrderedDict[tuple, list[str]]", name: str | None):
+    """(the groups a part runs, the groups the other part runs). Every group
+    belongs to exactly one part, so the two parts run each journey once."""
+    if name is None:
+        return groups, OrderedDict()
+    if name not in PARTS:
+        raise ValueError(f"unknown journey gate part {name!r}")
+    mine, other = OrderedDict(), OrderedDict()
+    for key, names in groups.items():
+        ((mine if (key[0] == "python") == (name == "python") else other))[key] = names
+    return mine, other
 
 
 def command(key: tuple, names: list[str], test_threads: str | None) -> list[str]:
@@ -160,12 +182,14 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="print the commands only")
     parser.add_argument("--skip-benchmark", action="store_true")
     parser.add_argument("--test-threads", default=os.environ.get("JOURNEY_GATE_TEST_THREADS"))
+    parser.add_argument("--part", choices=PARTS, help="run only the Python journeys or only the results")
     args = parser.parse_args()
 
     journeys = load_journeys()
     groups, skipped, pending = plan(
         journeys, on_unix=os.name != "nt", with_benchmark=not args.skip_benchmark
     )
+    groups, elsewhere = part(groups, args.part)
     if args.list:
         for key, names in groups.items():
             print(" ".join(command(key, names, args.test_threads)))
@@ -180,6 +204,9 @@ def main() -> int:
         f"journey gate: {len(journeys)} journeys, {tests} tests in {len(groups)} runs; "
         f"{len(pending)} pending, {len(skipped)} skipped here"
     )
+    if args.part:
+        other = sum(len(names) for names in elsewhere.values())
+        print(f"journey gate: part {args.part}; the other part runs {other} tests in {len(elsewhere)} runs")
     for line in pending + skipped:
         print(f"  not run: {line}")
     for failure in failures:

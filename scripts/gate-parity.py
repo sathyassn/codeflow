@@ -73,10 +73,25 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
     return out
 
 
-# TSK-203: the Windows suite runs in nextest partitions. A partitioned run
-# stands for the whole suite only when its matrix runs every partition from
-# 1 to N exactly once.
-PARTITION = re.compile(r"^(.+) --partition count:\$\{\{ matrix\.partition \}\}/(\d+)$")
+# TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
+# builds the suite into a nextest archive and each partition runs that
+# archive with the filterset scripts/windows-partitions.py gives it from
+# measured durations. The archived run stands for the whole suite only when
+# the archive is built from the whole workspace with the same profile, and
+# the matrix runs every partition from 1 to the plan's count exactly once.
+# The plan itself gives every test exactly one partition, and the Windows
+# journeys job checks each run's results against the archive's test list.
+ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
+ARCHIVED_RUN = re.compile(
+    r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
+    r"--no-fail-fast --profile codeflow "
+    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\}\)"$')
+PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
+
+
+def planned_partitions(data: Path | None = None) -> int:
+    """The partition count scripts/windows-partitions.py plans for."""
+    return int(json.loads((data or PARTITION_DATA).read_text())["partitions"])
 
 
 def matrix_partitions(job: str) -> list[int]:
@@ -88,25 +103,30 @@ def matrix_partitions(job: str) -> list[int]:
     return [int(v) for v in values] if all(v.isdigit() for v in values) else []
 
 
-def ci_rust_job_commands(workflow: str) -> set[str]:
+def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
     """Rust verification `run:` commands inside the Windows raw referee jobs
-    (every job whose id starts with `windows`)."""
+    (every job whose id starts with `windows`). An archive build runs no
+    test; the archived partitions stand for the suite they cover."""
     out = set()
-    for name, text in workflow_jobs(workflow).items():
-        if not name.startswith("windows"):
-            continue
+    jobs = {name: text for name, text in workflow_jobs(workflow).items() if name.startswith("windows")}
+    archives = {match.group(1) for text in jobs.values()
+                for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M)
+                if (match := ARCHIVE.match(norm(run.group(1))))}
+    for name, text in jobs.items():
         partitions = matrix_partitions(text)
         for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M):
             cmd = norm(run.group(1))
-            if not is_rust_verification_command(cmd):
+            if not is_rust_verification_command(cmd) or ARCHIVE.match(cmd):
                 continue
-            split = PARTITION.match(cmd)
-            if split:
-                count = int(split.group(2))
-                if partitions == list(range(1, count + 1)):
-                    cmd = split.group(1)
+            archived = ARCHIVED_RUN.match(cmd)
+            if archived:
+                count = planned_partitions() if planned is None else planned
+                if archived.group(1) not in archives:
+                    cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
+                elif partitions != list(range(1, count + 1)):
+                    cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
                 else:
-                    cmd = f"{cmd} (partitions {partitions} do not cover 1 to {count})"
+                    cmd = SUITE
             out.add(cmd)
     return out
 
@@ -164,16 +184,126 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         problems.append(f"exactly one job must be named `{VERDICT}`; found {[n for n, _ in verdicts]}")
     else:
         name, text = verdicts[0]
-        condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
-        expected = verdict_job(condition.group(1) if condition else "")
+        line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+        guarded = GATES_IF.match(line.group(1)) if line else None
+        if guarded is None:
+            problems.append("the gates job's condition must be exactly `if: ${{ !cancelled() && "
+                            "needs.reuse.outputs.run == '' && (<event condition>) }}`, so it runs on "
+                            "every protected-base pull request and push the reuse decision does not "
+                            f"cover; found {line.group(1) if line else 'none'}")
+        expected = verdict_job(guarded.group(1) if guarded else "")
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always() && (<the gates job's condition>)`, need the gates job, "
-                "and fail unless needs.gates.result is success; any other form could "
-                "let a skipped, failed or cancelled part read as passed. Expected:\n"
-                + expected)
+                "`if: always() && (<the gates job's event condition>)`, need the reuse and gates jobs, "
+                "and fail unless needs.gates.result is success or the reuse decision named a run and "
+                "every part was skipped; any other form could let a skipped, failed or cancelled part "
+                "read as passed. Expected:\n" + expected)
+    if "    needs: reuse" not in [l.rstrip() for l in gate.splitlines()]:
+        problems.append("the gates job must need exactly the reuse job (`needs: reuse`), whose output its "
+                        "condition reads")
+    problems.extend(reuse_job_problems(jobs))
     return problems
+
+
+# TSK-265: a push reuses a pull request run's verdict only through this job,
+# pinned exactly like the verdict: it runs on a push only, holds read-only
+# permissions and decides through scripts/ci-reuse.py, whose unit tests
+# (scripts/test_ci_reuse.py) cover each condition.
+GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == '' && \((.+)\) \}\}$")
+REUSE_JOB = """\
+    if: github.event_name == 'push'
+    name: reuse a pull request verdict
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Decide from the tree ids and the pull request run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PUSHED: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: >-
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
+          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
+          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
+          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+"""
+
+
+# TSK-265: the `windows` verdict, pinned exactly like `codeflow gates`: a
+# substring check would let an inserted second success path through. It
+# passes only when every Windows job succeeded, or when the reuse decision
+# named a run and every Windows job was skipped. `{condition}` is the gates
+# job's event condition.
+WINDOWS_VERDICT = "windows"
+WINDOWS_VERDICT_JOB = """\
+    if: always() && ({condition})
+    name: windows
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every Windows job passed
+        shell: bash
+        env:
+          REUSE: ${{{{ needs.reuse.result }}}}
+          REUSED: ${{{{ needs.reuse.outputs.run }}}}
+          CHECKS: ${{{{ needs.windows.result }}}}
+          BUILD: ${{{{ needs.windows-build.result }}}}
+          TESTS: ${{{{ needs.windows-tests.result }}}}
+          JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
+          RELEASE: ${{{{ needs.windows-release-journey.result }}}}
+        run: |
+          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
+            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
+            exit 0
+          fi
+          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
+            exit 1
+          fi
+          echo "every Windows job passed"
+"""
+
+
+def windows_verdict_problems(workflow: str) -> list[str]:
+    """Exactly one job is named `windows`, and it is exactly the pinned verdict."""
+    jobs = workflow_jobs(workflow)
+    verdicts = [(name, text) for name, text in jobs.items()
+                if re.search(rf"^ {{4}}name:\s*{re.escape(WINDOWS_VERDICT)}\s*$", text, re.M)]
+    if len(verdicts) != 1:
+        return [f"exactly one job must be named `{WINDOWS_VERDICT}`; found {[n for n, _ in verdicts]}"]
+    line = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("gates", ""), re.M)
+    guarded = GATES_IF.match(line.group(1)) if line else None
+    expected = WINDOWS_VERDICT_JOB.format(condition=guarded.group(1) if guarded else "")
+    name, text = verdicts[0]
+    if norm_job(text) != norm_job(expected):
+        return [f"`{WINDOWS_VERDICT}` ({name}) must be exactly the Windows verdict job: it passes only when every "
+                "Windows job succeeded, or when the reuse decision named a run and every Windows job was skipped; "
+                "any other form could let a skipped, failed or cancelled job read as passed. Expected:\n" + expected]
+    return []
+
+
+def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
+    if norm_job(jobs.get("reuse", "")) != norm_job(REUSE_JOB):
+        return ["the `reuse` job must be exactly this, so only a push can reuse a verdict, its token stays "
+                "read-only and scripts/ci-reuse.py decides:\n" + REUSE_JOB]
+    return []
 
 
 # The one accepted form of the verdict job. A substring check let a false
@@ -183,7 +313,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 VERDICT_JOB = """\
     if: always() && ({condition})
     name: codeflow gates
-    needs: gates
+    needs: [reuse, gates]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -191,7 +321,13 @@ VERDICT_JOB = """\
         shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
+          REUSE: ${{{{ needs.reuse.result }}}}
+          REUSED: ${{{{ needs.reuse.outputs.run }}}}
         run: |
+          if [ "$REUSE" = success ] && [ "$PARTS" = skipped ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
+            exit 0
+          fi
           if [ "$PARTS" != success ]; then
             echo "::error::the full gate's parts concluded ${{PARTS}}; see the codeflow gates (part) jobs"
             exit 1
@@ -218,7 +354,7 @@ def norm_job(text: str) -> list[str]:
 # reviewed edit; it is not a boundary against someone who also edits this
 # script in the same change.
 TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
-GATES_KEYS = ("if", "name", "runs-on", "timeout-minutes", "strategy", "steps")
+GATES_KEYS = ("if", "name", "needs", "runs-on", "timeout-minutes", "strategy", "steps")
 STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
 PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
 ONLY_LINE = re.compile(r"^            only: [a-z0-9-]+(?:,[a-z0-9-]+)*$")
@@ -790,7 +926,8 @@ def main() -> int:
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
-            + all_timeout_problems() + dist_problems() + playwright_problems(workflow))
+            + all_timeout_problems() + dist_problems() + playwright_problems(workflow)
+            + windows_verdict_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()
