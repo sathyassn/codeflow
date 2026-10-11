@@ -113,7 +113,9 @@ is refused; a human at their own terminal is warned. See `worktrees.md`.
 **Bodies of work:** a multi-task epic lands on a non-protected
 `integration/<epic>` branch (agents merge there) in small batches of
 reviewed task heads, each batch gated once as one candidate (see
-`worktrees.md`, "Parallel work and integration"). Only the finished body
+`worktrees.md`, "Parallel work and integration"). A red candidate is
+diagnosed first, and a member and its dependents leave it only when
+evidence attributes the failure to it. Only the finished body
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 

@@ -15,9 +15,9 @@ discipline rules, "Navigate blockers". What this section adds:
   to the operator" list at this point, not from memory;
 - the departure form, for a change that newly departs from the approved
   contract, scope, authority or risk boundary (a public contract break, a
-  moved security boundary, scope growth, an irreversible action): situation
-  with evidence, the boundary crossed, options with cost and reversibility,
-  and one recommendation. An already approved departure is reused and not
+  moved security boundary, growth of the change's scope, an irreversible
+  action): situation with evidence, the boundary crossed, options with cost
+  and reversibility, and one recommendation. An already approved departure is reused and not
   asked again. Compatibility is judged by the git rules' breaking-change rule
   and the cf-ship release-policy reference (affected consumers, migration or
   deprecation, mixed-version operation, recovery).

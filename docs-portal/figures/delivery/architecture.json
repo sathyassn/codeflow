@@ -5,10 +5,10 @@
     "family": "layering",
     "binding": "authored",
     "question": "Which actor covers which stage of a task, and where does the operator's boundary sit?",
-    "idea": "The builder covers start to review, the other lineage reviews once and looks at a candidate only for a hand-resolved hunk or a shared hotspot, the primary owns the candidate, its gate and the epic close, and the operator alone merges main.",
+    "idea": "The builder covers start to review, the other lineage reviews the whole unit and reviews it again only when a hand-resolved product hunk returns it, the primary owns the candidate, its gate and the epic close, and the operator alone merges main.",
     "title": "Who acts at each stage",
     "kicker": "Delivery",
-    "caption": "Each stage has one owner, the other lineage returns to a candidate only on two conditions, and the merge into main belongs to the operator alone.",
+    "caption": "Each stage has one owner, a clean landing merge carries the unit review, and the merge into main belongs to the operator alone.",
     "states": [
       {
         "name": "layer",
@@ -23,7 +23,7 @@
       {
         "name": "conditional",
         "mark": "optional",
-        "means": "Covered only when the primary hand-resolved a product hunk or two tasks touched one hotspot"
+        "means": "Covered only when a hand-resolved product hunk returns its task to a whole-unit review"
       },
       {
         "name": "act",
@@ -48,12 +48,12 @@
         "value": true
       },
       {
-        "claim": "the other lineage reviews integration effects only for a hand-resolved product hunk or a shared hotspot",
+        "claim": "a hand-resolved product hunk returns its task to a whole-unit review",
         "source": "docs/delivery.md#architecture",
         "derive": "the primary bullet",
         "check": {
           "kind": "contains",
-          "text": "reviews the integration effects only when the primary hand-resolved a"
+          "text": "hand-resolved product hunk returns its task to a whole-unit review at its"
         },
         "value": true
       },
@@ -634,8 +634,8 @@
         ],
         [
           "candidate",
-          "the primary; the reviewer only when the primary hand-resolved a product hunk or two tasks touched one hotspot",
-          "assembles reviewed heads into a small candidate in dependency order and inspects resolved hunks and seams; the conditional review covers integration effects only, unit reviews are not repeated"
+          "the primary; the reviewer only when a hand-resolved product hunk returns its task to review",
+          "assembles reviewed heads into a small candidate in dependency order and inspects each landing merge; a clean merge does not reopen unit review, a hand-resolved product hunk returns its task to a whole-unit review at its new head"
         ],
         [
           "gate",

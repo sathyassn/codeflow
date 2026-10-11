@@ -85,12 +85,11 @@ each batch.
   its finder; a nit gets one disposition and never blocks. Review ends on
   evidence, never on a round count.
 - **The primary** assembles reviewed heads into a small batch candidate in
-  dependency order and inspects the resolved hunks and seams on product paths.
+  dependency order and inspects each landing merge.
   - It runs the full gate once on that exact candidate.
-  - The other lineage
-    reviews the integration effects only when the primary hand-resolved a
-    product hunk or two tasks touched one hotspot. Unit reviews are not
-    repeated.
+  - A clean merge does not reopen unit review; a
+    hand-resolved product hunk returns its task to a whole-unit review at its
+    new head.
   - Green moves the integration line. Red is diagnosed first, and a
     member leaves the batch only when evidence attributes the failure to it.
   - When the last batch has landed, the primary proves the epic once on the

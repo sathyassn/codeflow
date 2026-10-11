@@ -33,11 +33,25 @@ stops only at an escalation or gate named below, and only for that action.
 
 **Ground it in evidence, never assume.** Treat an unclear requirement, API,
 or fact as a stop-and-verify, not a guess. Research non-trivial decisions in
-breadth and depth: the project's own code and docs first, then the best
-current external sources (official and primary references, reputable
-discussion), and adjacent fields where a better idea may live. Reuse the
-current evidence set: before widening research, name the unresolved decision
-the new evidence would settle.
+breadth and depth: the project's own code, docs and settled decisions first,
+then the best current external sources (official and primary references,
+reputable discussion), and adjacent fields where a better idea may live.
+Review and research look the same way:
+
+- as this repository's maintainer would: would a maintainer do it this way,
+  and each departure named with its reason;
+- to break the answer or the change, not to confirm it;
+- from first principles: does a simpler shape meet the same need;
+- across development, QA, security and performance;
+- findings ordered by consequence, each with its evidence.
+
+A brief's named scope is where review or research starts, never a fence:
+when the question or the change reaches further, widen in breadth and depth
+as far as the result needs, and record what was widened and why. Widening
+what is read never needs approval; widening what is changed goes through
+the departure form ("Navigate blockers"). Reuse the current evidence set:
+the only search to skip is a second search of a decision that set already
+settles.
 
 ## Navigate blockers
 
@@ -252,12 +266,18 @@ Unknown availability or usage stays unknown.
 `cf-reviewer` in Claude Code or, elsewhere, a separate read-only qualified
 interactive pass, never headless, against criteria and evidence.
 Self-review is not review. A review is one holistic pass over the whole
-unit (its full diff against its base, criteria, acceptance evidence and blast
-radius) at one head, by a reviewer of the other lineage where a seat exists.
-Earlier findings are checks within that pass, never its whole scope, and a
-round after fixes or after merging the base reviews the whole unit again at
-the new head. A same-family fresh-context pass records the reduced
-assurance. The verdict gives each
+unit at one head, by a reviewer of the other lineage where a seat exists.
+It reads the full diff against its base, the criteria and acceptance
+evidence, the blast radius (upstream, downstream, adopters, other
+platforms, CI time, docs, records) and the fit (the neighbour it should
+match, what it reuses, each departure with its reason, and the rules and
+decisions that settled how this repository does things), in the manner
+"Ground it in evidence" sets out; that scope is a floor it widens as that
+rule says. Earlier findings are checks within the pass, never its whole
+scope; a round after fixes or after merging the base reviews the whole
+unit again at the new head, and an approval never carries forward to a
+head it did not cover. A same-family fresh-context pass records the
+reduced assurance. The verdict gives each
 criterion with file:line, the gates, the findings ordered by consequence
 with severity and confidence stated apart, the nits with a disposition, and
 what was not verified. Look harder, and at the standard and full tiers add
@@ -287,11 +307,12 @@ epic, or one entry in the harness's task tools, with the event that
 revisits it), or `drop` with the reason.
 
 The material findings of a pass are fixed in one batch in the open PR,
-never as a task per finding. The finder confirms each material fix on the
-affected scope: a small fix whose finding came with a failing probe is
-confirmed by rerunning that probe and the affected tests, with no new model
-turn; a judgment-dependent or widened fix goes back to the finder. Nits
-need no confirmation. There is no round cap: continue while repairs produce
+never as a task per finding. The finder confirms each material fix inside
+its next pass, a round over the whole unit at the new head; a small fix
+whose finding came with a failing probe is confirmed by rerunning that
+probe and the affected tests, with no model turn, and that rerun is the
+one pass that is not a round; a judgment-dependent fix goes back to the
+finder. Nits need no confirmation. There is no round cap: continue while repairs produce
 relevant evidence; diagnose a stalled mechanism, an invalid assumption or a
 materially changed scope (split, redesign or an intent question), never a
 round counter and never automatic acceptance. Review ends when every

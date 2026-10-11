@@ -22,8 +22,9 @@ report -> intake -> cause and class -> sibling sweep -> group by cause
    class: the rule the code broke, in one sentence someone can search for,
    such as "a strict decode of text the operating system supplies" or "a
    substring match over prose". They go in the same place.
-3. **Sibling sweep.** Search the tree for the class and list every site with
-   file:line, or write "none found" with what was searched. Every site goes
+3. **Sibling sweep.** Search for the class wherever the rule reaches (this
+   tree, the shipped copies adopters receive, the docs and records that
+   state the rule) and list every site with file:line, or write "none found" with what was searched. Every site goes
    in the same unit. When a split reason from the planning rules applies (size,
    a risk boundary, an operator decision), each deferred site gets its own
    issue now, naming the class, never after the fix lands.
