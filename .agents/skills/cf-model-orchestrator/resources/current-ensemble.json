@@ -93,7 +93,7 @@
             {
               "seat": "claude-primary",
               "date": "2026-09-23",
-              "record": "EPC-018 Q2 answer, 2026-09-23: fallback for orchestration, planning and review only; design only by OPERATOR_OVERRIDE; ADR-0069 roster"
+              "record": "EPC-018 Q2 answer, 2026-09-23: second line; design by project co-owner or task override; fallback otherwise; ADR-0069 roster"
             }
           ],
           "qualification": []
@@ -908,7 +908,7 @@
     "Claude-side internal routing belongs to the Claude primary.",
     "Grok-side internal routing is a CodeFlow instruction to the Grok primary, not a vendor-secret router.",
     "Claude produces design in its native interactive session regardless of host.",
-    "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat may orchestrate, plan and review with reduced assurance, and serves design only through a matching task-specific OPERATOR_OVERRIDE.",
+    "The design owner seat's first line owns design direction, real design and fidelity approval. A later line of that seat designs as a committed project co-owner or by a task-specific OPERATOR_OVERRIDE, and otherwise orchestrates, plans and reviews as a reduced-assurance fallback.",
     "Default effort is high, not a ceiling: complex architecture and technical planning use the strongest capable permitted same-family reasoning route suited to the task at high or xhigh; design follows the design owner rule.",
     "Assess triggers before work and as difficulty changes. An xhigh_trigger permits direct xhigh without a failed high attempt; routine well-specified work does not escalate automatically. Novelty is not a trigger; complexity and difficulty are.",
     "A designation is not qualification: report it as designated, full suite not run, until an exact full-suite binding record exists.",

@@ -1907,12 +1907,12 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Rejects whitespace-only model identities. Catalog comparisons retain original pinned and actual strings.
+    // Rejects whitespace-only model identities and review areas. Catalog comparisons and the standing-review area match retain the original strings.
     (
         "crates/codeflow-cli/src/cmd/models.rs",
         "resolve",
         "trim",
-        2,
+        3,
         "schema-reject-only",
     ),
     // Lenient second read displays any readable invalid values; validate_policy and Policy::source independently preserve read/parse failure and nonzero exit.

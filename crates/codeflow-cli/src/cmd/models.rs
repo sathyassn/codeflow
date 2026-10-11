@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use clap::{Args, Subcommand};
 use codeflow_core::model_catalog::{
     anchored_override, load_catalog, parse_override_route, Catalog, CatalogInputs, Exclusion,
-    ExclusionScope, ParticipantLabel, Resolution, ResolveRequest,
+    ExclusionScope, ParticipantLabel, Resolution, ResolveRequest, DESIGN_APPROVAL,
 };
 use codeflow_core::registry;
 
@@ -23,7 +23,7 @@ enum ModelsCommand {
 
 #[derive(Debug, Args)]
 struct ResolveArgs {
-    /// Catalog duty whose participants and obligations must be resolved.
+    /// Catalog duty whose participants and obligations must be resolved, or `design-approval`.
     #[arg(long)]
     duty: String,
     /// Supported host harness id, such as claude-code or codex-app.
@@ -40,7 +40,10 @@ struct ResolveArgs {
     /// Catalog trigger fact to apply to this resolution (repeatable).
     #[arg(long)]
     trigger: Vec<String>,
-    /// Canonical task id for this resolution; required with --override.
+    /// Review area for a project standing review; unit-review and body-review only.
+    #[arg(long)]
+    area: Option<String>,
+    /// Canonical task id for this resolution; required with --override and for project design authority.
     #[arg(long)]
     task: Option<String>,
     /// Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task.
@@ -91,8 +94,16 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
             "test-authoring is not resolved separately; use the unit's implementation duty".into(),
         );
     }
-    if !catalog.duties.contains_key(&args.duty) {
+    if !catalog.duties.contains_key(&args.duty) && args.duty != DESIGN_APPROVAL {
         return Err(format!("unknown duty {}", args.duty));
+    }
+    if let Some(area) = &args.area {
+        if !matches!(args.duty.as_str(), "unit-review" | "body-review") {
+            return Err("--area applies to unit-review and body-review".into());
+        }
+        if area.trim().is_empty() {
+            return Err("--area must not be empty".into());
+        }
     }
     let home = registry::codeflow_home();
     let bindings = home.as_deref().map(registry::qualified_bindings_path);
@@ -135,6 +146,11 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
     if args.task.is_some() && !codeflow_core::workgraph::is_canonical_task_format_id(task) {
         return Err("task must be a canonical TSK id".into());
     }
+    if matches!(args.duty.as_str(), "design" | DESIGN_APPROVAL) {
+        // Design authority comes only from the file committed on the task's
+        // integration target, never from the working tree.
+        inputs.anchor_design_authority(&root, args.task.as_deref())?;
+    }
     let (route, record) = if let Some(id) = &args.override_id {
         let route = parse_override_route(
             &inputs.catalog,
@@ -157,6 +173,7 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
         exclusions: &inputs.exclusions,
         observed_ids: &observed,
         trigger_facts: &args.trigger,
+        area: args.area.as_deref(),
         requested_override: route.as_ref(),
         operator_override: record.as_ref(),
     })
