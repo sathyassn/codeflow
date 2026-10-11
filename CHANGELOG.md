@@ -757,6 +757,16 @@ erratum below, never an edit of the section.
   failing check.
 
 <!-- codeflow:release-impact patch -->
+- **The security review no longer says `codeflow update` restores a missing
+  key.** When `git.security_review` or `git.dep_audit` was missing at the
+  trusted commit, the job's error told the adopter to run `codeflow update`
+  to add it. `update` keeps a key that a policy from 3.0.0 or later deleted,
+  so following that advice left the job failing. The error, the workflow
+  comment, `assets/base/ci/README.md` and `docs/adoption.md` now say to set
+  the key by hand to `block`, `warn` or `off` and land it before the 3.1.0
+  workflow. Only the text changes; the job still fails closed.
+
+<!-- codeflow:release-impact patch -->
 - **A secret scan finding on one branch no longer fails every pull
   request.** The managed secret scan read the whole history of HEAD, so a
   finding already in the base, or on any branch merged into it, failed the

@@ -37,7 +37,7 @@ jobs:
       # body differently (TSK-147 F4). It never takes a codeflow from PATH.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the codeflow that reads the body
         run: cargo build --release --locked -p codeflow-cli
       - name: Validate reviewed release intent
