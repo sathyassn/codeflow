@@ -290,7 +290,8 @@ pub fn is_feedback_path(path: &str) -> bool {
 }
 
 /// `rel` under `root`, refused when a part of it below `root` is a
-/// symbolic link or `rel` is not a plain relative path; a part that does
+/// symbolic link (on Windows any reparse point, a junction included) or
+/// `rel` is not a plain relative path; a part that does
 /// not exist yet is allowed. Feedback reads and writes go through it, so a
 /// committed link cannot point them outside the repository.
 ///
@@ -305,9 +306,9 @@ pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
             Component::CurDir => continue,
             _ => return Err(format!("{rel} is not a path inside the repository")),
         }
-        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        if crate::contained::is_link_at(&path) {
             return Err(format!(
-                "{} is a symbolic link; feedback files are never read or written through one",
+                "{} is a symbolic link or junction; feedback files are never read or written through one",
                 relative(root, &path)
             ));
         }
@@ -316,68 +317,41 @@ pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 /// Write the index generated from the items: refused when the index or a
-/// directory above it is a symbolic link, and written to a temporary file
-/// beside it that is then renamed over it, so a reader never sees half an
-/// index.
+/// directory above it is a symbolic link, and replaced whole through the
+/// contained record writer (a temporary file beside it renamed over it, no
+/// link followed at any component), so a reader never sees half an index.
 ///
 /// # Errors
 ///
 /// A refused path or an I/O error.
 pub fn write_index(root: &Path, content: &str) -> Result<(), String> {
-    let path = contained_path(root, INDEX_PATH)?;
-    replace_whole(&path, content, &path)
+    contained_path(root, INDEX_PATH)?;
+    crate::contained::Tree::open(root)
+        .and_then(|tree| tree.write(INDEX_PATH, content.as_bytes()))
         .map_err(|error| format!("cannot write {INDEX_PATH}: {error}"))
 }
 
 /// Replace an item only when its bytes still hash to `expected`, keeping
 /// its permissions, so a concurrent edit is refused and a private item stays
-/// private.
-fn replace_item_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Result<(), String> {
-    let current = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+/// private. The item is read and replaced through [`crate::contained`], so
+/// no link is followed at any component (issue 94).
+fn replace_item_if_unchanged(
+    root: &Path,
+    rel: &str,
+    expected: &[u8],
+    content: &str,
+) -> Result<(), String> {
+    let tree = crate::contained::Tree::open(root).map_err(|error| format!("{rel}: {error}"))?;
+    let current = tree
+        .read(rel, u64::MAX)
+        .map_err(|error| format!("{rel}: {error}"))?;
     if Sha256::digest(&current).as_slice() != expected {
         return Err(format!(
-            "{} changed while the status change was prepared; nothing was written, run it again",
-            path.display()
+            "{rel} changed while the status change was prepared; nothing was written, run it again"
         ));
     }
-    replace_whole(path, content, path).map_err(|error| format!("{}: {error}", path.display()))
-}
-
-/// Replace `path` with `text` whole: a new temporary file beside it, then
-/// a rename over it, so a reader or a failure never sees half a file. The
-/// result keeps the permissions of `mode_from` (the file it replaces, or
-/// the one it is renamed from); the temporary file is private until they
-/// are applied. With no `mode_from` file, the usual default applies.
-pub(crate) fn replace_whole(path: &Path, text: &str, mode_from: &Path) -> std::io::Result<()> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("file");
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
-    let permissions = std::fs::symlink_metadata(mode_from)
-        .ok()
-        .filter(std::fs::Metadata::is_file)
-        .map(|meta| meta.permissions());
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    if permissions.is_some() {
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    }
-    let written = options
-        .open(&temporary)
-        .and_then(|mut file| {
-            std::io::Write::write_all(&mut file, text.as_bytes())?;
-            if let Some(permissions) = permissions {
-                file.set_permissions(permissions)?;
-            }
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
+    tree.write(rel, content.as_bytes())
+        .map_err(|error| format!("{rel}: {error}"))
 }
 
 /// Every item the project keeps, and each file that could not be read.
@@ -599,18 +573,11 @@ pub fn create_with(
         source,
         &date,
     );
-    std::fs::create_dir_all(&dir)?;
-    // `create_new` refuses an existing name, a symbolic link included.
+    // Created exclusively through [`crate::contained`]: an existing name, a
+    // link included, is refused, no link is followed at any component, and
+    // a failed write removes the new file (issue 94).
+    crate::contained::create_new(root, &format!("{FEEDBACK_DIR}/{id}.md"), content.as_bytes())?;
     let path = dir.join(format!("{id}.md"));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    if let Err(error) = std::io::Write::write_all(&mut file, content.as_bytes()) {
-        drop(file);
-        let _ = std::fs::remove_file(&path);
-        return Err(StoreError::Io(error));
-    }
     Ok(NewRecord { id, uid, path })
 }
 
@@ -709,7 +676,7 @@ pub fn set_status(root: &Path, id: &str, change: &StatusChange) -> Result<Status
     }
     let proposed = propose(root, &parsed, &item, &content, change)?;
     let digest = Sha256::digest(content.as_bytes());
-    replace_item_if_unchanged(&path, digest.as_slice(), &proposed)?;
+    replace_item_if_unchanged(root, &rel, digest.as_slice(), &proposed)?;
     Ok(StatusOutcome {
         path,
         from,
@@ -1474,6 +1441,47 @@ mod tests {
         assert!(items[0].closure.contains("closed by PR 90"));
         assert_eq!(items[1].confirmed_by.as_deref(), Some("operator"));
         assert!(items[1].closure.contains("out of scope"));
+    }
+
+    /// The index and an item are replaced through the contained writer
+    /// (issue 94): a link planted at the name the old writer used for its
+    /// temporary file is left alone, and the write succeeds.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_old_temporary_name_is_left_alone() {
+        let dir = project();
+        let root = dir.path();
+        item(root, "001", |text| text);
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, "outside\n").unwrap();
+        let folder = root.join(FEEDBACK_DIR);
+        let planted: Vec<PathBuf> = ["INDEX.md", "FB-001.md"]
+            .iter()
+            .map(|name| folder.join(format!(".{name}.{}.tmp", std::process::id())))
+            .collect();
+        for link in &planted {
+            std::os::unix::fs::symlink(&sentinel, link).unwrap();
+        }
+        write_index(root, "# index\n").unwrap();
+        let placed = StatusChange {
+            target: "placed".to_string(),
+            placements: vec!["TSK-001".to_string()],
+            ..StatusChange::default()
+        };
+        set_status(root, "FB-001", &placed).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(INDEX_PATH)).unwrap(),
+            "# index\n"
+        );
+        assert_eq!(load(root).items[0].status, "placed");
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "outside\n");
+        for link in &planted {
+            assert!(std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
     }
 
     #[test]
