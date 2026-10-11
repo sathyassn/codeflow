@@ -87,6 +87,7 @@ const C1_HEADINGS: &[(&str, &str)] = &[
     ("rules/worktrees.md", "Cleanup"),
     ("rules/writing.md", "Replies and status"),
     ("rules/writing.md", "Figures by surface"),
+    ("rules/writing.md", "Meaning the reader takes"),
     ("rules/git-rules.md", "Enforcement"),
     ("rules/git-rules.md", "Protected branches"),
     ("rules/git-rules.md", "Bodies of work"),

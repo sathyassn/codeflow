@@ -342,7 +342,7 @@ group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
 action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick`; the full gate belongs to the landing candidate"
-see = [{ target = "cf-develop", must_open = true, reason = "the build and verify loop" }]
+see = [{ target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" }]
 
 [[moment]]
 key = "build"
@@ -613,17 +613,17 @@ see = [{ target = ".codeflow/rules/writing.md", section = "Figures by surface" }
 key = "prose"
 group = "situation"
 tiers = ["standard", "full"]
-when = "write prose: docs, records, PR bodies, replies"
-action = "bullets or a table by the shape of the data; `cf-editorial-review` for consequential prose"
-see = [".codeflow/rules/writing.md"]
+when = "write or name anything a reader sees: prose, records, PR bodies, replies, identifiers, flags, help, messages, logs, example data"
+action = "bullets or a table by the shape of the data; check what a reader could take each name and string to mean; `cf-editorial-review` for consequential prose"
+see = [{ target = ".codeflow/rules/writing.md", section = "Meaning the reader takes" }]
 
 [[moment]]
 key = "prose"
 group = "situation"
 tiers = ["minimal"]
-when = "write prose: docs, records, PR bodies, replies"
-action = "bullets or a table by the shape of the data; consequential prose gets a second read for meaning and evidence"
-see = [".codeflow/rules/writing.md"]
+when = "write or name anything a reader sees: prose, records, PR bodies, replies, identifiers, flags, help, messages, logs, example data"
+action = "bullets or a table by the shape of the data; check what a reader could take each name and string to mean; consequential prose gets a second read for meaning and evidence"
+see = [{ target = ".codeflow/rules/writing.md", section = "Meaning the reader takes" }]
 
 [[moment]]
 key = "instruction-change"
