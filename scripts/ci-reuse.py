@@ -22,14 +22,20 @@ never from a branch name or text a pull request controls:
 5. the push changes none of the build cache inputs (the toolchain, the cargo
    and npm lock files, the manifests), so a push that invalidates the caches
    still runs and saves them on main for later pull requests;
-6. the newest codeflow-ci run with event pull_request, that head commit and
+6. main already holds the present part's apt cache for this runner image
+   and the locked Playwright version, keyed exactly as the workflow keys it.
+   That key names the runner image and has no fallback, and only a run on
+   main saves the copy later pull requests restore; when it is missing (a
+   new runner image), this push runs every job so the present part saves it;
+7. the newest codeflow-ci run with event pull_request, that head commit and
    this workflow file concluded success, and every job of its latest attempt
    concluded success, apart from the jobs that only run on a push (this
    decision), which must be skipped; the named verdicts must be among them.
 
 Anything else, an API or git error included, runs every job.
 
-Usage: ci-reuse.py --repo OWNER/NAME --sha SHA --event EVENT --workflow-ref REF
+Usage: ci-reuse.py --repo OWNER/NAME --sha SHA --event EVENT --workflow-ref REF --ref REF
+                   --image-os OS --image-version VERSION
                    --push-only NAME --require NAME [--require NAME ...]
 """
 
@@ -42,7 +48,9 @@ import os
 import re
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
+from pathlib import Path
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 # Paths whose change invalidates a build cache that later pull request runs
@@ -50,6 +58,12 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 # every Cargo.lock and Cargo.toml; setup-node keys on the npm lock files).
 CACHE_INPUTS = ("rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml",
                 "*Cargo.toml", "*Cargo.lock", "*package-lock.json", "*.node-version")
+
+
+# The Playwright version the present part reads, and the lock it must equal
+# (the workflow's "Read the locked Playwright version" step).
+PRESENT_LOCK = "crates/codeflow-present/web/package-lock.json"
+PORTAL_LOCK = "docs-portal/package-lock.json"
 
 
 class Skip(Exception):
@@ -60,7 +74,28 @@ def cache_input(path: str) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in CACHE_INPUTS)
 
 
-def decide(event: str, sha: str, workflow_path: str, push_only: set[str], required: set[str], git, api) -> int:
+def playwright_version(root: Path) -> str:
+    """The locked playwright-core version, as the workflow reads it."""
+    versions = []
+    for lock in (PRESENT_LOCK, PORTAL_LOCK):
+        try:
+            packages = json.loads((root / lock).read_text(encoding="utf-8"))["packages"]
+            versions.append(packages["node_modules/playwright-core"]["version"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise Skip(f"cannot read the locked Playwright version from {lock}: {error}") from error
+    if versions[0] != versions[1]:
+        raise Skip(f"playwright-core differs: present {versions[0]}, portal {versions[1]}")
+    return versions[0]
+
+
+def apt_cache_key(image_os: str, image_version: str, version: str) -> str:
+    """The present part's apt cache key, built as codeflow-ci.yml builds it:
+    `playwright-apt-${ImageOS:-unknown}-${ImageVersion:-unknown}-<version>`."""
+    return f"playwright-apt-{image_os or 'unknown'}-{image_version or 'unknown'}-{version}"
+
+
+def decide(event: str, sha: str, workflow_path: str, push_only: set[str], required: set[str], git, api,
+           apt_key: str, ref: str) -> int:
     """The id of the pull request run whose verdict the push reuses; raises
     Skip with the reason when the push must run every job."""
     if event != "push":
@@ -89,6 +124,12 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     if changed:
         raise Skip(f"the push changes build cache inputs ({', '.join(changed)}); every job runs so main's "
                    "caches are saved for later pull requests")
+    try:
+        caches = api.caches(apt_key, ref)
+    except Exception as error:  # noqa: BLE001 - a failed lookup runs every job
+        raise Skip(f"the apt cache lookup failed ({type(error).__name__}: {error})") from error
+    if not any(cache.get("key") == apt_key and cache.get("ref") == ref for cache in caches):
+        raise Skip(f"{ref} holds no apt cache {apt_key!r}; every job runs so the present part saves it")
     runs = [run for run in api.runs(head)
             if run.get("event") == "pull_request" and run.get("head_sha") == head
             and run.get("path") == workflow_path and isinstance(run.get("id"), int)]
@@ -179,6 +220,10 @@ class Api:
     def jobs(self, run: int) -> list[dict]:
         return self.pages(f"actions/runs/{run}/jobs?filter=latest", "jobs")
 
+    def caches(self, key: str, ref: str) -> list[dict]:
+        query = urllib.parse.urlencode({"key": key, "ref": ref})
+        return self.pages(f"actions/caches?{query}", "actions_caches")
+
 
 def workflow_path(ref: str, repo: str) -> str:
     """The workflow file of `github.workflow_ref` (owner/name/path@ref)."""
@@ -194,14 +239,18 @@ def main() -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--event", required=True)
     parser.add_argument("--workflow-ref", required=True)
+    parser.add_argument("--ref", required=True, help="the pushed ref, whose caches later runs restore")
+    parser.add_argument("--image-os", default="", help="the runner's ImageOS")
+    parser.add_argument("--image-version", default="", help="the runner's ImageVersion")
     parser.add_argument("--push-only", action="append", default=[], help="a job that runs only on a push")
     parser.add_argument("--require", action="append", default=[], help="a verdict job the reused run must have")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
     args = parser.parse_args()
     try:
         path = workflow_path(args.workflow_ref, args.repo)
+        key = apt_cache_key(args.image_os, args.image_version, playwright_version(Path.cwd()))
         run = decide(args.event, args.sha, path, set(args.push_only), set(args.require), Git(),
-                     Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")))
+                     Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")), key, args.ref)
     except Skip as reason:
         print(f"ci-reuse: every job runs: {reason}")
         return 0

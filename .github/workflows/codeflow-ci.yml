@@ -53,9 +53,11 @@ jobs:
   # branch name or pull request text; scripts/ci-reuse.py lists every
   # condition. On reuse the gate and Windows jobs are skipped and the
   # `codeflow gates` and `windows` verdicts pass and name the reused run.
-  # Any other push, or a decision that fails, runs every job. Pull request
-  # runs skip this job and are never affected. Its token reads runs and pull
-  # requests and writes nothing.
+  # Any other push, or a decision that fails, runs every job; so does a push
+  # that changes a build cache input, or one for which main lacks the present
+  # part's apt cache for this runner image, so main's caches stay current.
+  # Pull request runs skip this job and are never affected. Its token reads
+  # runs, caches and pull requests and writes nothing.
   reuse:
     if: github.event_name == 'push'
     name: reuse a pull request verdict
@@ -78,12 +80,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PUSHED: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: >-
           python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --push-only "reuse a pull request verdict"
-          --require "codeflow gates" --require windows
+          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
+          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
+          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
 
   gates:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
@@ -331,10 +335,12 @@ jobs:
       - name: cargo nextest archive
         run: cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst
 
+      # The list reads the archive itself, so the partition check compares
+      # the partitions' results with exactly what they ran from.
       - name: List the archived tests for the partition check
         shell: bash
         run: |
-          cargo nextest list --workspace --profile codeflow --message-format json > target/windows-tests.json
+          cargo nextest list --archive-file target/windows-tests.tar.zst --workspace-remap . --profile codeflow --message-format json > target/windows-tests.json
           printf '%s\n' "$GITHUB_WORKSPACE" > target/windows-workspace.txt
 
       - name: Keep the archive for the partitions

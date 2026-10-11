@@ -9,6 +9,7 @@ green in every job. Each other case runs every job.
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -25,6 +26,8 @@ SPEC.loader.exec_module(reuse)
 PUSHED, HEAD, MAIN = "a" * 40, "b" * 40, "c" * 40
 WORKFLOW = ".github/workflows/codeflow-ci.yml"
 PUSH_ONLY = {"reuse a pull request verdict"}
+MAIN_REF = "refs/heads/main"
+APT_KEY = "playwright-apt-ubuntu24-20261005.1-1.56.1"
 REQUIRED = {"codeflow gates", "windows"}
 
 
@@ -64,7 +67,8 @@ def run(**changes):
 
 
 class FakeApi:
-    def __init__(self, pulls=None, runs=None, jobs=None):
+    def __init__(self, pulls=None, runs=None, jobs=None, caches=None):
+        self.cache_list = caches if caches is not None else [{"key": APT_KEY, "ref": MAIN_REF}]
         self.pull_list = pulls if pulls is not None else [
             {"number": 95, "merged_at": "2026-10-11T00:43:00Z", "merge_commit_sha": PUSHED, "head": {"sha": HEAD}}]
         self.run_list = runs if runs is not None else [run()]
@@ -79,9 +83,15 @@ class FakeApi:
     def jobs(self, run_id):
         return self.job_lists.get(run_id, [])
 
+    def caches(self, key, ref):
+        if isinstance(self.cache_list, Exception):
+            raise self.cache_list
+        return self.cache_list
+
 
 def decide(event="push", git=None, api=None):
-    return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi())
+    return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
+                        APT_KEY, MAIN_REF)
 
 
 class DecisionTests(unittest.TestCase):
@@ -141,6 +151,48 @@ class DecisionTests(unittest.TestCase):
             with self.subTest(jobs=jobs):
                 self.skipped(api=FakeApi(jobs={77: jobs}))
 
+    def test_main_holding_the_apt_cache_for_this_image_reuses(self):
+        self.assertEqual(decide(api=FakeApi(caches=[{"key": "playwright-apt-ubuntu24-20260928.2-1.56.1",
+                                                     "ref": MAIN_REF},
+                                                    {"key": APT_KEY, "ref": MAIN_REF}])), 77)
+
+    def test_a_missing_apt_cache_runs_everything(self):
+        self.assertIn("holds no apt cache", self.skipped(api=FakeApi(caches=[])))
+
+    def test_a_failed_apt_cache_lookup_runs_everything(self):
+        self.assertIn("lookup failed", self.skipped(api=FakeApi(caches=OSError("HTTP 403"))))
+
+    def test_an_apt_cache_for_another_image_or_ref_runs_everything(self):
+        for cache in ({"key": "playwright-apt-ubuntu24-20260928.2-1.56.1", "ref": MAIN_REF},
+                      {"key": APT_KEY + "0", "ref": MAIN_REF},
+                      {"key": APT_KEY, "ref": "refs/pull/135/merge"}):
+            with self.subTest(cache=cache):
+                self.assertIn("holds no apt cache", self.skipped(api=FakeApi(caches=[cache])))
+
+    def test_the_apt_key_is_built_as_the_workflow_builds_it(self):
+        self.assertEqual(reuse.apt_cache_key("ubuntu24", "20261005.1", "1.56.1"), APT_KEY)
+        self.assertEqual(reuse.apt_cache_key("", "", "1.56.1"), "playwright-apt-unknown-unknown-1.56.1")
+        version = reuse.playwright_version(ROOT)
+        self.assertRegex(version, r"^\d+\.\d+\.\d+")
+        workflow = (ROOT / ".github" / "workflows" / "codeflow-ci.yml").read_text()
+        self.assertIn('echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}",
+                      workflow)
+        self.assertIn("packages['node_modules/playwright-core'].version", workflow)
+
+    def test_differing_or_unreadable_playwright_locks_run_everything(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(reuse.Skip):
+                reuse.playwright_version(root)
+            for lock, version in ((reuse.PRESENT_LOCK, "1.0.0"), (reuse.PORTAL_LOCK, "2.0.0")):
+                (root / lock).parent.mkdir(parents=True)
+                (root / lock).write_text(json.dumps(
+                    {"packages": {"node_modules/playwright-core": {"version": version}}}))
+            with self.assertRaises(reuse.Skip) as caught:
+                reuse.playwright_version(root)
+            self.assertIn("differs", str(caught.exception))
+
     def test_cache_inputs_match_only_their_files(self):
         self.assertTrue(reuse.cache_input("Cargo.toml"))
         self.assertFalse(reuse.cache_input("docs/Cargo.toml.md"))
@@ -159,9 +211,11 @@ class MainTests(unittest.TestCase):
             output = Path(directory) / "out"
             output.write_text("")
             argv = ["ci-reuse.py", "--repo", "sathyassn/codeflow", "--sha", PUSHED, "--event", "push",
-                    "--workflow-ref", f"sathyassn/codeflow/{WORKFLOW}@refs/heads/main",
+                    "--workflow-ref", f"sathyassn/codeflow/{WORKFLOW}@refs/heads/main", "--ref", MAIN_REF,
+                    "--image-os", "ubuntu24", "--image-version", "20261005.1",
                     "--push-only", "reuse a pull request verdict", "--require", "windows"]
             with mock.patch.object(reuse, "decide", side_effect=decision), mock.patch("sys.argv", argv), \
+                    mock.patch.object(reuse, "playwright_version", return_value="1.56.1"), \
                     mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), redirect_stdout(io.StringIO()):
                 code = reuse.main()
             return code, output.read_text()

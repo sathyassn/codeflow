@@ -233,13 +233,70 @@ REUSE_JOB = """\
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PUSHED: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: >-
           python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --push-only "reuse a pull request verdict"
-          --require "codeflow gates" --require windows
+          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
+          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
+          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
 """
+
+
+# TSK-265: the `windows` verdict, pinned exactly like `codeflow gates`: a
+# substring check would let an inserted second success path through. It
+# passes only when every Windows job succeeded, or when the reuse decision
+# named a run and every Windows job was skipped. `{condition}` is the gates
+# job's event condition.
+WINDOWS_VERDICT = "windows"
+WINDOWS_VERDICT_JOB = """\
+    if: always() && ({condition})
+    name: windows
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every Windows job passed
+        shell: bash
+        env:
+          REUSE: ${{{{ needs.reuse.result }}}}
+          REUSED: ${{{{ needs.reuse.outputs.run }}}}
+          CHECKS: ${{{{ needs.windows.result }}}}
+          BUILD: ${{{{ needs.windows-build.result }}}}
+          TESTS: ${{{{ needs.windows-tests.result }}}}
+          JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
+          RELEASE: ${{{{ needs.windows-release-journey.result }}}}
+        run: |
+          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
+            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
+            exit 0
+          fi
+          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
+            exit 1
+          fi
+          echo "every Windows job passed"
+"""
+
+
+def windows_verdict_problems(workflow: str) -> list[str]:
+    """Exactly one job is named `windows`, and it is exactly the pinned verdict."""
+    jobs = workflow_jobs(workflow)
+    verdicts = [(name, text) for name, text in jobs.items()
+                if re.search(rf"^ {{4}}name:\s*{re.escape(WINDOWS_VERDICT)}\s*$", text, re.M)]
+    if len(verdicts) != 1:
+        return [f"exactly one job must be named `{WINDOWS_VERDICT}`; found {[n for n, _ in verdicts]}"]
+    line = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("gates", ""), re.M)
+    guarded = GATES_IF.match(line.group(1)) if line else None
+    expected = WINDOWS_VERDICT_JOB.format(condition=guarded.group(1) if guarded else "")
+    name, text = verdicts[0]
+    if norm_job(text) != norm_job(expected):
+        return [f"`{WINDOWS_VERDICT}` ({name}) must be exactly the Windows verdict job: it passes only when every "
+                "Windows job succeeded, or when the reuse decision named a run and every Windows job was skipped; "
+                "any other form could let a skipped, failed or cancelled job read as passed. Expected:\n" + expected]
+    return []
 
 
 def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
@@ -869,7 +926,8 @@ def main() -> int:
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
-            + all_timeout_problems() + dist_problems() + playwright_problems(workflow))
+            + all_timeout_problems() + dist_problems() + playwright_problems(workflow)
+            + windows_verdict_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()

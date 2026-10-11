@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Targeted structural checks for the candidate gate and CI trust boundaries."""
+import importlib.util
 import json
 import os
 import re
@@ -7,6 +8,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(os.environ.get('CODEFLOW_GATE_CONTRACT_ROOT', Path(__file__).resolve().parents[1]))
+_SPEC = importlib.util.spec_from_file_location('gate_parity', Path(__file__).resolve().parent / 'gate-parity.py')
+PARITY = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(PARITY)
 def read(path):
     return (ROOT / path).read_text()
 
@@ -60,20 +64,33 @@ class GateContracts(unittest.TestCase):
         self.assertNotIn('rust-cache', tests)
         self.assertNotIn('cargo build', tests)
         self.assertNotIn('--workspace --no-fail-fast', tests)
-        verdict = windows['windows-verdict']
-        self.assertTrue(verdict.startswith('    if: always() && ('), verdict)
-        self.assertIn('    name: windows\n', verdict)
-        self.assertIn('    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, '
-                      'windows-release-journey]\n', verdict)
-        self.assertNotIn('continue-on-error', verdict)
-        for result in ('needs.windows.result', 'needs.windows-build.result', 'needs.windows-tests.result',
-                       'needs.windows-journeys.result', 'needs.windows-release-journey.result'):
-            self.assertIn(result, verdict)
-        self.assertIn('[ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] '
-                      '|| [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]', verdict)
-        self.assertIn('[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
-                      '"skipped skipped skipped skipped skipped" ]', verdict)
+        # The verdict is pinned exactly in scripts/gate-parity.py, as
+        # `codeflow gates` is: one accepted body, so no edit can add another
+        # way for it to pass.
+        self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
+        self.assertEqual(windows['windows-verdict'].count('exit 0'), 1)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
+
+    def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        guard = '          if [ "$CHECKS" != success ] || [ "$BUILD" != success ]'
+        self.assertEqual(workflow.count(guard), 1)
+        controls = {
+            'an inserted exit 0': workflow.replace(guard, '          if [ "$TESTS" = failure ]; then\n'
+                                                          '            exit 0\n          fi\n' + guard),
+            'reuse without skipped jobs': workflow.replace(
+                '[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
+                '"skipped skipped skipped skipped skipped" ]', '[ "$REUSE" = success ]'),
+            'a dropped job result': workflow.replace(' || [ "$RELEASE" != success ]', ''),
+            'continue-on-error': workflow.replace('    name: windows\n', '    name: windows\n    continue-on-error: true\n'),
+        }
+        for label, changed in controls.items():
+            with self.subTest(label):
+                self.assertNotEqual(changed, workflow)
+                problems = PARITY.windows_verdict_problems(changed)
+                self.assertTrue(any('must be exactly the Windows verdict job' in p for p in problems), problems)
+        renamed = workflow.replace('    name: windows\n', '    name: windows verdict\n')
+        self.assertTrue(any('exactly one job must be named' in p for p in PARITY.windows_verdict_problems(renamed)))
 
     def test_only_a_push_reuses_a_verdict_and_the_heavy_jobs_follow_it(self):
         # TSK-265 AC-4: pull request runs never reuse; every gate and Windows
