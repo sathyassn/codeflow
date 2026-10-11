@@ -53,9 +53,9 @@ jobs:
   #
   # A push to main reuses a pull request run's verdict when it carries that
   # run's exact tree (TSK-265; operator decision, 2026-10-11). This job
-  # decides from git tree ids and GitHub's run and job records, never from a
-  # branch name or pull request text; scripts/ci-reuse.py lists every
-  # condition. On reuse the gate and Windows jobs are skipped and the
+  # decides from the pushed ref, git tree ids and GitHub's run and job
+  # records, never from a pull request's branch name or text;
+  # scripts/ci-reuse.py lists every condition. On reuse the gate and Windows jobs are skipped and the
   # `codeflow gates` and `windows` verdicts pass and name the reused run.
   # Any other push, or a decision that fails, runs every job; so does a push
   # that changes a build cache input, or one for which main lacks the present

@@ -89,9 +89,9 @@ class FakeApi:
         return self.cache_list
 
 
-def decide(event="push", git=None, api=None):
+def decide(event="push", git=None, api=None, ref=MAIN_REF):
     return reuse.decide(event, PUSHED, WORKFLOW, PUSH_ONLY, REQUIRED, git or FakeGit(), api or FakeApi(),
-                        APT_KEY, MAIN_REF)
+                        APT_KEY, ref)
 
 
 class DecisionTests(unittest.TestCase):
@@ -105,6 +105,13 @@ class DecisionTests(unittest.TestCase):
 
     def test_a_pull_request_run_never_reuses(self):
         self.assertIn("pull_request run never reuses", self.skipped(event="pull_request"))
+
+    def test_a_push_to_any_ref_but_main_runs_everything(self):
+        # Every other input matches, the cache included, so only the ref refuses.
+        for ref in ("refs/heads/integration/EPC-1", "refs/heads/master", "refs/heads/main-old", "main"):
+            with self.subTest(ref=ref):
+                api = FakeApi(caches=[{"key": APT_KEY, "ref": ref}])
+                self.assertIn("only a push to refs/heads/main", self.skipped(api=api, ref=ref))
 
     def test_a_different_tree_runs_everything(self):
         self.assertIn("differs", self.skipped(git=FakeGit(trees={PUSHED: "t1", HEAD: "t2"})))

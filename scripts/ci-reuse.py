@@ -10,9 +10,11 @@ Windows jobs, and its `codeflow gates` and `windows` verdicts pass and name
 the reused run.
 
 Reuse needs every one of these, read from git objects and GitHub's records,
-never from a branch name or text a pull request controls:
+never from a pull request's branch name or other text it controls:
 
-1. the event is a push;
+1. the event is a push to `refs/heads/main`, the ref GitHub records for the
+   push; a push to master, an integration line or any other ref runs every
+   job;
 2. exactly one merged pull request has the pushed commit as its merge commit;
 3. the pushed commit and the pull request head have the same tree id;
 4. the pushed commit's first parent (main before the merge) is an ancestor of
@@ -53,6 +55,7 @@ import urllib.request
 from pathlib import Path
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
+MAIN = "refs/heads/main"
 # Paths whose change invalidates a build cache that later pull request runs
 # restore from main (rust-cache keys on the toolchain, the cargo config and
 # every Cargo.lock and Cargo.toml; setup-node keys on the npm lock files).
@@ -100,6 +103,8 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     Skip with the reason when the push must run every job."""
     if event != "push":
         raise Skip(f"a {event} run never reuses a verdict")
+    if ref != MAIN:
+        raise Skip(f"only a push to {MAIN} reuses a verdict; {ref!r} runs every job")
     if not SHA.match(sha):
         raise Skip(f"the pushed commit {sha!r} is not a commit id")
     pulls = [pull for pull in api.pulls(sha)
