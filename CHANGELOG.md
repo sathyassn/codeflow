@@ -23,17 +23,20 @@ erratum below, never an edit of the section.
 > the detail.
 >
 > 1. Install the 3.1.0 `codeflow` on `PATH` first. The hooks run that
->    binary, and a project that sets any of the optional keys in step 5
->    needs 3.1.0 or later locally and in CI, because an older binary rejects
->    an unknown policy key and blocks every commit.
+>    binary, and a project that sets any of the new `git.*` policy keys in
+>    step 5 needs 3.1.0 or later locally and in CI, because an older binary
+>    rejects an unknown policy key and blocks every commit. A 3.0.0 binary
+>    ignores the `[reading]` section.
 > 2. On a new branch, run `codeflow update --pin 3.1.0`. It checks the
 >    release archives against `sha256.sum` and writes only `scaffold_version`
 >    and a `[scaffold_sha256]` table to `.codeflow/project.toml`. Land that
 >    pull request so CI installs the pinned, digest-checked binary.
-> 3. Run `codeflow update` on a new branch and review what it proposes. A
->    policy that lacks `git.security_review` or `git.dep_audit` lands
->    those two keys before the 3.1.0 workflow, because the security review
->    job reads them from the base.
+> 3. Run `codeflow update` on a new branch and review what it proposes.
+>    The security review job reads `git.security_review` and
+>    `git.dep_audit` from the base and fails when either is missing.
+>    `update` does not restore a key your policy deleted, so if either is
+>    missing, add it yourself (`block`, `warn` or `off`) and land it under
+>    your current workflow before the 3.1.0 workflow.
 > 4. A pull request that names several epics writes them on one `Task:`
 >    line (`Task: EPC-001, EPC-002`), which only 3.1.0 reads. Before
 >    completing a task, write each Reviews row as
@@ -743,9 +746,10 @@ erratum below, never an edit of the section.
   the gate running or fails the run. The hook still runs with the gate's
   authority, like the CI file a change can edit, so `codeflow ci` names a
   change that adds, edits or removes it for its reviewer. To adopt: if your
-  policy lacks either key, land the keys first under your current workflow
-  (`codeflow update` adds them), then the 3.1.0 workflow, since the job
-  reads the keys from the base. A first CodeFlow adoption has no policy on
+  policy lacks either key, add it yourself (`block`, `warn` or `off`) and
+  land it first under your current workflow, then the 3.1.0 workflow, since
+  the job reads the keys from the base. `codeflow update` does not restore
+  a key that a policy from 3.0.0 or later deleted. A first CodeFlow adoption has no policy on
   its base, so its security review fails until the policy lands. In
   `block` mode, a new suppression takes effect once it lands, so an
   advisory that blocks every pull request is cleared by fixing the
