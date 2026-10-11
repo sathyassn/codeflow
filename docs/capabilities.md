@@ -120,7 +120,7 @@ Its harness starters are executable policy (ADR-0025, ADR-0026).
 
 | Written file | What it holds |
 |---|---|
-| `AGENTS.md`, every tier | a moment-keyed rule map rendered from one kernel, `assets/base/rule-map.toml`: at most 12 one-line always rules, a "when you are about to" table, and pointers one hop away to the references in `.codeflow/rules/`; it leaves at least 16 KiB for the project section under Codex's 32 KiB limit |
+| `AGENTS.md`, every tier | a moment-keyed rule map rendered from one kernel, `assets/base/rule-map.toml`: always rules of one line each with a pointer, a "when you are about to" table, and pointers one hop away to the references in `.codeflow/rules/`; it leaves at least 16 KiB for the project section under Codex's 32 KiB limit |
 | Claude starter | no ask rules: the actions the operator performs are denied by rules generated from one action table, which also generates the Codex command rules (ADR-0075) |
 | Grok starter | a sandbox profile (ADR-0075) |
 
@@ -237,7 +237,7 @@ Other checks on these planes:
 | Unresolved conflict markers (TSK-170) | `git.conflict_markers`, block | The lines a change adds to a text file: in pre-commit over the staged diff, and in `codeflow ci` over the range, which also catches a marker left while resolving `git rebase --continue`. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in `.gitattributes` |
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
 | Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
-| Pull request body length (TSK-228) | `git.pr_sections`, always warn | The words of the whole body as a reader sees it, with HTML comments left out and fenced blocks and tables counted. Over 1,000 words it warns, naming the count, the limit and the three largest `##` sections, and says to rewrite the body to its final state and link records. It has no key of its own, follows `pr_sections` being active, and never blocks |
+| Pull request body length (TSK-228, TSK-267) | `git.pr_body_max_words`, always warn | The words of the whole body as a reader sees it, with HTML comments left out and fenced blocks and tables counted. Over the key's number (1,000 by default; `0` turns it off) it warns, naming the count, the limit and the three largest `##` sections, and says to rewrite the body to its final state and link records. It follows `pr_sections` being active and never blocks |
 | Pull request Summary shape (TSK-218) | `git.pr_summary`, block | The one Summary section, under its mapped heading: one prose paragraph, then a list or a table, then at most one closing paragraph, read from the visible blocks only, so an HTML comment never supplies the lead or the list. It judges shape, never a word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn while a kept PR template is diagnosed, and a trusted automation profile skips it |
 | Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form, a table line other than a plain entry, and any escaped table name or key or multi-line string in the state fail closed. With no table the install checks `sha256.sum` alone and warns |
 | Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
@@ -266,20 +266,20 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001, EPC-002, EPC-003, EPC-020]
-adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
+adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
 - `codeflow remote protect` applies the policy's `protected_branches` to the
-  provider. On GitHub it requires a PR and green CI, blocks force-push and
-  deletion, and reports anything the plan tier cannot apply.
-- `codeflow doctor` runs twenty-one health checks. They cover git hooks and CI,
-  harness wiring, policy and config, delegates and models, the repository and
-  managed files, and customization and test config.
+  provider. On GitHub it requires a PR and the required checks on an
+  up-to-date branch, blocks force-push and deletion, and reports anything
+  the plan tier cannot apply.
+- `codeflow doctor` runs twenty-two health checks on the repository and the
+  tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
-| Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit |
-| Reading sizes | the kernel, the per-task reading chain and each shipped skill against guideline numbers: information within them, a warning above them that names the detail to move behind a trigger, never a failure |
+| Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB |
+| Reading sizes (ADR-0083) | the kernel and the per-task reading chain in bytes, each shipped skill and agent body and the always-loaded instruction set in lines, against advisory guidelines with a stated basis (500 lines for a body, 200 for the always-loaded set, 160 KiB for the chain, the kernel derived from the Codex limit), or a project's own `[reading]` values in `.codeflow/project.toml`: information within them, a note above them that names the detail to move behind a trigger, never a warning or a failure; a skill or agent description over the API's 1,024 characters warns; when the installed skills' read edges differ from the map the binary ships, the chain is information naming both versions |
 | Permissions and the sandbox | a warning naming each directory a full gate writes outside the worktree (its locks and its evidence) that this process cannot write; when `SANDBOX_RUNTIME` is set it notes that, probes the network over HTTPS and checks the HTTP status, and reports a failed Codex sign-in probe as unconfirmed, quoting it, unless it says signed out |
 
 Doctor leaves live interactive account and tool canaries to the harness
@@ -408,7 +408,7 @@ advisory command, `session-orient`, is wired on `SessionStart` and
 
 | Event | What it adds |
 |---|---|
-| Compaction, resume or Claude fork (source `compact`, `resume` or `fork`) | a guidance block after the digest, about 1.5 KB: the always rules by title, the "when you are about to" moments with their first pointer, and every skill and agent the tier installs, from the rule-map kernel and the scaffold manifest |
+| Compaction, resume or Claude fork (source `compact`, `resume` or `fork`) | a short guidance block after the digest: the always rules by title, the "when you are about to" moments with their first pointer, and every skill and agent the tier installs, from the rule-map kernel and the scaffold manifest |
 | A prompt that asks for a duration, a status or a complex explanation | one rule line, about 300 bytes |
 | Any other prompt | nothing |
 
@@ -472,7 +472,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "cargo test -p codeflow-cli --test models_design_authority", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
@@ -499,8 +499,8 @@ The work records a plan produces are judged by one core (SPC-013):
 
 | Work record rule | Behaviour |
 |---|---|
-| Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer |
+| Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` at its tip, reviewed directly or followed only by changes to its own record's status and Closeout |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Claim scope | local branches, `origin`, the target's fetch remote and `git.claim_remotes` count as advisory claims; branches on other remotes remain information in `work next` and `work claim`, without making a task active or conflicting |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |

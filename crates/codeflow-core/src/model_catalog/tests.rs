@@ -30,6 +30,7 @@ fn request<'a>(duty: &'a str, observed: &'a BTreeMap<String, String>) -> Resolve
         exclusions: &[],
         observed_ids: observed,
         trigger_facts: &[],
+        area: None,
         requested_override: None,
         operator_override: None,
     }
@@ -1308,3 +1309,7 @@ fn native_routing_policy_trigger_is_shared_with_catalog_validation() {
     assert_eq!(result.participants.len(), 2);
     assert_eq!(result.participants[1].participant, "extra");
 }
+
+// Project design authority and standing reviews (issue 43).
+#[path = "authority_tests.rs"]
+mod authority_tests;

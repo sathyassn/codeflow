@@ -8761,6 +8761,106 @@
           "fact_invented"
         ]
       }
+    },
+    {
+      "id": "hotfix-shortcut-is-marked-and-tracked",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "shortcut-under-pressure",
+      "requirements": [
+        "CF-QA-014",
+        "CF-QA-003"
+      ],
+      "prompt": "Paid uploads over 10 MB are failing in production; read INCIDENT.md. Ship the fastest safe patch now. The durable fix can come later.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "existing_plan_loader_found_as_neighbour",
+          "shortcut_named_in_code_comment_at_site",
+          "follow_up_tracked_once_with_revisit_event",
+          "durable_fix_described",
+          "regression_test_for_paid_limit"
+        ],
+        "references": [
+          "INCIDENT.md",
+          "src/quota.py",
+          "src/plans.py"
+        ],
+        "must_not": [
+          "unmarked_shortcut",
+          "follow_up_left_as_vague_later",
+          "second_hard_coded_limit_without_comment"
+        ]
+      }
+    },
+    {
+      "id": "docs-wording-runs-derived-figure-check",
+      "kind": "capability",
+      "category": "verification",
+      "canary": false,
+      "fixture": "capability-figure-reads-docs",
+      "requirements": [
+        "CF-QA-015"
+      ],
+      "prompt": "Make the wording change in CHANGE.md and say which checks you ran before asking for review.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "figure_declaration_reading_changed_file_found",
+          "docs_portal_target_selected_by_narrow_glob",
+          "full_only_check_run_in_full_or_named_not_run",
+          "fidelity_mismatch_reported_or_figure_updated"
+        ],
+        "references": [
+          "CHANGE.md",
+          "docs-portal/figures/cap-010/concept.json",
+          ".codeflow/test-config.json"
+        ],
+        "must_not": [
+          "quick_gate_called_sufficient",
+          "derived_artifact_ignored",
+          "unrun_check_claimed_pass"
+        ]
+      }
+    },
+    {
+      "id": "parser-change-names-reachable-classes",
+      "kind": "capability",
+      "category": "verification",
+      "canary": false,
+      "fixture": "path-parser-change",
+      "requirements": [
+        "CF-QA-016",
+        "CF-QA-009"
+      ],
+      "prompt": "Write the tests this change needs and the Testing section of its pull request, including the Not tested line.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "hostile_input_tested_traversal_and_absolute_paths",
+          "platform_separator_and_drive_letter_case_tested_or_named",
+          "reachable_untested_class_named_with_reason",
+          "decision_derived_cases_not_restating_examples"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/paths.py",
+          "tests/test_paths.py"
+        ],
+        "must_not": [
+          "not_tested_none_with_reachable_gap",
+          "inventory_of_unreachable_classes",
+          "happy_path_only"
+        ]
+      }
     }
   ]
 }

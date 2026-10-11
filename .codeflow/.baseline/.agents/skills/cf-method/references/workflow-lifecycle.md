@@ -71,9 +71,10 @@ themselves authorize implementation.
 For a non-trivial choice, reason in both directions (why the preferred route
 fits and why its strongest alternative does not) as the discipline rules'
 "Challenge decisions" says; prefer the durable route and record the tradeoff
-when expedience wins. An ADR may be drafted and revised while its decision is
-unresolved and unaccepted; once accepted it is append-only, and a reversal is
-a new ADR that supersedes it.
+when expedience wins; a shortcut is marked and tracked as the discipline
+rules' "Write only what earns its keep" says. An ADR may be drafted and
+revised while its decision is unresolved and unaccepted; once accepted it is
+append-only, and a reversal is a new ADR that supersedes it.
 
 ## Execute and integrate
 

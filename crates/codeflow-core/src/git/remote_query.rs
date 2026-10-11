@@ -28,13 +28,19 @@ pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 pub fn ls_remote(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
-    run(root, &all, LS_REMOTE_DEADLINE).map_err(|why| match why {
-        Failure::Exit => {
-            "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
-                .to_string()
+    match run(root, &all, LS_REMOTE_DEADLINE) {
+        Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
+            Err("`git ls-remote --exit-code` returned success without a matching ref".into())
         }
-        Failure::Other(why) => why,
-    })
+        Ok(answer) => Ok(answer),
+        // With --exit-code, Git distinguishes an empty advertisement from a
+        // transport failure. No matching refs is still a complete answer.
+        Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => Ok(String::new()),
+        Err(Failure::Exit(_)) => Err(
+            "`git ls-remote` failed (unreachable, no credentials, or no such repository)".into(),
+        ),
+        Err(Failure::Other(why)) => Err(why),
+    }
 }
 
 /// Fetch `refs` from `url` into the object store only: no tracking ref,
@@ -57,14 +63,14 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
     run(root, &all, FETCH_DEADLINE)
         .map(|_| ())
         .map_err(|why| match why {
-            Failure::Exit => format!("`git fetch {url}` failed"),
+            Failure::Exit(_) => format!("`git fetch {url}` failed"),
             Failure::Other(why) => why,
         })
 }
 
 enum Failure {
     /// Git ran and exited unsuccessfully.
-    Exit,
+    Exit(Option<i32>),
     Other(String),
 }
 
@@ -78,7 +84,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root))
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -138,37 +144,85 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         }
     };
     if !status.success() {
-        return Err(Failure::Exit);
+        return Err(Failure::Exit(status.code()));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    text_answer(&bytes)
+}
+
+/// The answer as text, one line per advertised ref.
+///
+/// Every advertised ref must decode; otherwise callers cannot prove the
+/// destination's complete ref set and the query refuses.
+fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
+    String::from_utf8(bytes.to_vec())
+        .map_err(|error| Failure::Other(format!("advertised refs are not valid UTF-8: {error}")))
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
 /// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
 /// then `GIT_SSH`, then `ssh`.
-fn batch_ssh_command(root: &Path) -> String {
-    let configured = std::env::var("GIT_SSH_COMMAND")
-        .ok()
-        .filter(|command| !command.trim().is_empty())
-        .or_else(|| {
-            crate::git::command()
-                .arg("-C")
-                .arg(root)
-                .args(["config", "--get", "core.sshCommand"])
-                .output()
-                .ok()
-                .filter(|out| out.status.success())
-                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-                .filter(|command| !command.is_empty())
-        })
-        .or_else(|| {
-            std::env::var("GIT_SSH")
-                .ok()
-                .filter(|program| !program.is_empty())
-                .map(|program| format!("'{}'", program.replace('\'', "'\\''")))
-        })
-        .unwrap_or_else(|| "ssh".to_string());
-    format!("{configured} -o BatchMode=yes")
+///
+/// OS text rule (issue 79): the command is executed, so it must be exactly what
+/// git would run. A value that is not valid UTF-8 cannot be passed on as text,
+/// and a lossy spelling would run a different program, so the query refuses.
+fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
+    let not_utf8 = |name: &str| {
+        Failure::Other(format!(
+            "{name} is not valid UTF-8, so the remote is not asked"
+        ))
+    };
+    let text =
+        |name: &str, value: std::ffi::OsString| value.into_string().map_err(|_| not_utf8(name));
+    let from_env = |name: &str| -> Result<Option<String>, Failure> {
+        match std::env::var_os(name) {
+            Some(value) => Ok(Some(text(name, value)?)),
+            None => Ok(None),
+        }
+    };
+    // A value that is set is the command git would run, whatever it holds: an
+    // empty one refuses below, as git refuses it, and never falls back to
+    // another program.
+    let mut configured = from_env("GIT_SSH_COMMAND")?;
+    if configured.is_none() {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["config", "--null", "--get", "core.sshCommand"])
+            .output()
+            .map_err(|error| Failure::Other(format!("cannot read core.sshCommand: {error}")))?;
+        if out.status.success() {
+            // `--null` frames the value with a NUL, so a value that ends in a
+            // carriage return keeps it.
+            let framed = out.stdout.strip_suffix(&[0]).ok_or_else(|| {
+                Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
+            })?;
+            let value = std::str::from_utf8(framed)
+                .map_err(|_| not_utf8("core.sshCommand"))?
+                .to_string();
+            configured = Some(value);
+        } else if out.status.code() != Some(1) {
+            return Err(Failure::Other(format!(
+                "cannot read core.sshCommand: git config failed ({})",
+                out.status
+            )));
+        }
+    }
+    if configured.is_none() {
+        configured = from_env("GIT_SSH")?.map(|program| {
+            if program.is_empty() {
+                program
+            } else {
+                format!("'{}'", program.replace('\'', "'\\''"))
+            }
+        });
+    }
+    if configured.as_deref().is_some_and(str::is_empty) {
+        return Err(Failure::Other(
+            "the configured ssh command is empty, so the remote is not asked".to_string(),
+        ));
+    }
+    let configured = configured.unwrap_or_else(|| "ssh".to_string());
+    Ok(format!("{configured} -o BatchMode=yes"))
 }
 
 /// Kill a child and, on Unix, the process group it leads (an SSH or
@@ -184,4 +238,175 @@ fn kill_group(child: &mut std::process::Child) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_empty_remote_advertisement_is_not_proven_absence() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_EMPTY_REMOTE";
+        if let Some(root) = std::env::var_os(CHILD) {
+            assert!(
+                ls_remote(Path::new(&root), &["--exit-code", "origin", "refs/heads/x"]).is_err()
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let git = bin.join("git");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\nif [ \"$3\" = config ]; then exit 1; fi\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::r20_empty_remote_advertisement_is_not_proven_absence",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("PATH", bin)
+            .env_remove("GIT_SSH_COMMAND")
+            .env_remove("GIT_SSH")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
+    fn r20_failed_ssh_config_query_never_selects_default() {
+        const CHILD: &str = "CODEFLOW_R20_SSH_QUERY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "git::remote_query::tests::r20_failed_ssh_config_query_never_selects_default",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("GIT_SSH_COMMAND")
+                .env_remove("GIT_SSH")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        assert!(batch_ssh_command(dir.path()).is_ok());
+        let path = repo.path().join("config");
+        std::fs::write(path, "[broken\n").unwrap();
+        assert!(
+            batch_ssh_command(dir.path()).is_err(),
+            "failed config must not choose ssh"
+        );
+    }
+
+    #[test]
+    fn r17_remote_no_matching_ref_is_an_empty_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init_bare(dir.path()).unwrap();
+        let url = dir.path().to_str().unwrap();
+        assert_eq!(
+            ls_remote(dir.path(), &["--exit-code", url, "refs/heads/absent"]),
+            Ok(String::new())
+        );
+        assert!(ls_remote(dir.path(), &["--exit-code", "./absent-repository"]).is_err());
+        assert!(fetch_objects(dir.path(), url, &["refs/heads/absent"]).is_err());
+    }
+
+    /// Review finding on issue 79: advertised ref names were decoded lossily,
+    /// so a valid `caf` plus U+FFFD resolved to the tip of the distinct branch
+    /// whose last byte is invalid. An unreadable advertised set now refuses.
+    #[test]
+    fn an_advertised_name_that_is_not_utf8_refuses_the_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/caf\xe9", "refs/heads/caf\u{fffd}".as_bytes()],
+        );
+        let path = repo.workdir().unwrap().to_path_buf();
+        assert!(ls_remote(&path, &["--heads", path.to_str().unwrap()]).is_err());
+    }
+
+    #[test]
+    fn a_default_branch_that_is_not_utf8_refuses_the_answer() {
+        let answer = text_answer(b"ref: refs/heads/caf\xe9\tHEAD\n");
+        assert!(matches!(answer, Err(Failure::Other(ref why)) if why.contains("not valid UTF-8")));
+    }
+
+    /// The SSH command is executed, so one that is not valid UTF-8 refuses
+    /// the query instead of running a lossy lookalike.
+    #[test]
+    fn a_configured_ssh_command_that_is_not_utf8_refuses_the_query() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand = ssh \xff\n");
+        std::fs::write(&config, text).unwrap();
+        let error = batch_ssh_command(dir.path()).err().unwrap();
+        assert!(
+            matches!(error, Failure::Other(ref why) if why.contains("not valid UTF-8")),
+            "refused"
+        );
+    }
+
+    /// Round twelve on issue 79: a configured command that ends in a carriage
+    /// return runs that program, not its sibling without it.
+    #[test]
+    fn a_configured_ssh_command_keeps_a_trailing_carriage_return() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand = \"ssh-wrapper\r\"\n");
+        std::fs::write(&config, text).unwrap();
+        let command = batch_ssh_command(dir.path()).ok().unwrap();
+        assert_eq!(command, "ssh-wrapper\r -o BatchMode=yes");
+    }
+
+    /// Round thirteen on issue 79: a configured command that is empty is
+    /// refused, as git refuses it, and never replaced by `ssh`.
+    #[test]
+    fn an_empty_configured_ssh_command_refuses_and_never_falls_back() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() || std::env::var_os("GIT_SSH").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand =\n");
+        std::fs::write(&config, text).unwrap();
+        let error = batch_ssh_command(dir.path()).err().unwrap();
+        assert!(
+            matches!(error, Failure::Other(ref why) if why.contains("empty")),
+            "refused"
+        );
+    }
 }

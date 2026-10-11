@@ -31,10 +31,9 @@ records the required interactive seat unavailable and the reduced assurance.
 4. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
-      tests where they carry the risk. Before adding a helper, type, flag,
-      check, key or module, find the neighbour that already does the job and
-      extend it or say why not; the written rule wins over a precedent. Keep
-      modular boundaries and explicit failure handling; add no speculative
+      tests where they carry the risk. Apply the neighbour rule in the
+      discipline rules' "Write only what earns its keep". Keep modular
+      boundaries and explicit failure handling; add no speculative
       behavior, abstraction or dependency. Apply the quality contract's
       typed-interface and runtime trust-boundary rule and test accepted
       invalid-input behavior; never force a stricter compiler, dependency,
@@ -52,9 +51,9 @@ records the required interactive seat unavailable and the reduced assurance.
       material dependency or decision change in the task.
    b. **Review**: first merge the current integration line into the task
       branch and resolve conflicts there. Then get an *independent* review
-      against the criteria: in Claude Code, spawn the `cf-reviewer` subagent;
-      in another harness, run a separate read-only review pass (self-review
-      is not review). For lifecycle-tracked Claude runs, invoke `cf-reviewer`
+      of the whole unit at this head: in Claude Code, spawn the
+      `cf-reviewer` subagent; in another harness, run a separate read-only
+      review pass. For lifecycle-tracked Claude runs, invoke `cf-reviewer`
       in the foreground (`run_in_background: false` when offered) and collect
       its actual verdict before the primary turn ends; never defer it to a
       later callback or bypass review. Claude Code
@@ -67,7 +66,9 @@ records the required interactive seat unavailable and the reduced assurance.
       diagnose a stalled mechanism, an invalid assumption or a materially
       changed scope (split, redesign, or surface the operator-owned
       decision).
-   d. **Verify**: targeted tests (for example `cargo test -p <crate>`),
+   d. **Verify**: targeted tests, the checks that read what changed as
+      "Prove it at every surface" says (for example `cargo test -p <crate>`,
+      `codeflow test --mode essential --only <target>`),
       `codeflow test --mode quick` (the pre-push run counts for the same
       tree) and `codeflow validate --docs`, each cited with revision and
       command. The full gate runs once on the landing candidate. Run a

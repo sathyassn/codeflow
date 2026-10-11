@@ -48,9 +48,10 @@ with, and the family that answers it.
 | How-to: land a change | someone landing a change now | what do I do before the first edit, and what tells me it worked | sequence: worktree list, fetch, `codeflow work start`, first edit |
 
 Substitute your repository's verified enforcement state before drawing these
-panels. CodeFlow's own repository has remote protection unavailable (its
-`AGENTS.md`, project-specific instructions), so its page draws three planes and
-says in the captions that no remote plane is armed.
+panels. CodeFlow's own repository has remote protection on `main` (its
+`AGENTS.md`, project-specific instructions; `codeflow doctor --check
+remote-perimeter` reads the live rules), so its page draws the four planes and
+says in the captions what the live rules require.
 
 The walk shows what the method's stages decide on a portal:
 

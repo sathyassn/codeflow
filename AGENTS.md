@@ -56,7 +56,7 @@ Delivery, in the order work moves:
 | open the PR | one PR per task: code, tests, docs, criteria changes (a reason per removal), the acceptance completion last; update the truth it makes stale; checks follow effects, never labels; `Task: TSK-NNN` (the PR to main: its epic; planning PRs: epics); the PR stays draft until its required evidence exists | MUST OPEN `/cf-ship` steps 2 to 4 (truth updates and release impact); MUST OPEN `.agents/skills/cf-ship/references/pr-evidence.md` (the body `codeflow ci` reads) |
 | give a review | verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified | MUST OPEN `cf-reviewer` (the verdict format); `cf-security-reviewer` on hooks, guards, policy, CI, credentials, untrusted input or dependencies; `/cf-consult` for the other lineage |
 | receive findings | material findings are fixed in one batch in the open PR and confirmed by the finder; nits: `fix now`, `track once` (revisit event) or `drop` (reason); continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope | `.agents/skills/cf-model-orchestrator/resources/quality/findings.md` "Review rounds" |
-| land a batch on the integration line | reviewed heads go on a candidate in dependency order; review the resolved hunks; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it; green: the line moves to the gated tree | MUST OPEN `/cf-method` "Managing a body of work" (landing modes and drift control) |
+| land a batch on the integration line | reviewed heads go on a candidate in dependency order; a hand-resolved product hunk reopens that task's whole-unit review; one full gate on the exact candidate (a standalone PR is its own); red: diagnose first; drop a member only when evidence blames it; green: the line moves to the gated tree | MUST OPEN `/cf-method` "Managing a body of work" (landing modes and drift control) |
 | close an epic and open the PR to main | prove the epic's criteria and journeys once on the final candidate, from task evidence; qualify once; `codeflow epic status <id> complete`; one PR to `main` naming the epic; the operator merges, never an agent | `/cf-ship` steps 5 to 9 |
 | release or assess release impact | follow the project's release policy and its one authoritative input; a reviewed merge is not publication; agents never publish or move tags | `.agents/skills/cf-ship/references/release-policy.md` before impact, notes or publication |
 | clean up after a landing | whoever landed it cleans up in the same step; cleanup needs merge proof, an inactive owner and a clean worktree; remove the pushed branch and the build output; never force-remove a dirty one | MUST OPEN `.codeflow/rules/worktrees.md` "Cleanup" (what counts as proof and what to remove) |
@@ -114,11 +114,17 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
 - **Rust gates:** before every push, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
-  tests (`cargo test -p <crate> --test <name>`) and `codeflow test --mode
-  quick`; the pre-push hook's quick run is that evidence when it covers the
-  same tree. The full gate runs on the landing candidate (workspace lints:
-  clippy all = deny, pedantic = warn). Edition 2021, workspace-managed
-  dependency versions in the root `Cargo.toml`.
+  tests (`cargo test -p <crate> --test <name>`; for a `crates/**` change
+  `codeflow test --mode essential`, which owes every empty-`narrow` target
+  including `rust-workspace`; for a `docs/**` change `codeflow test --only
+  docs-portal` on the default full mode, whose figure fidelity check an
+  essential run also makes; that portal check refuses until the files it
+  reads, `docs/`, its figures, config and published records, match HEAD, so
+  commit those edits first) and `codeflow test --mode quick`; the pre-push
+  hook's quick run is that evidence when it covers the same tree. The full
+  gate runs on the landing candidate (workspace lints: clippy all = deny,
+  pedantic = warn). Edition 2021, workspace-managed dependency versions in
+  the root `Cargo.toml`.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside
@@ -138,8 +144,10 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   repo's daily path. Keep release state in each work PR; see
   `docs/releasing.md`. Tasks never publish or move tags.
 - **Remote protection on `main`:** pull requests are required and force
-  pushes and deletion are blocked. Whether CI is a required status check and
-  whether the rules bind administrators are repository settings that can
-  change, so read the live rules before relying on them
-  (`gh api repos/sathyassn/codeflow/branches/main/protection`). Where CI is not
-  required, the human who merges confirms that CI is green; never merge on red.
+  pushes and deletion are blocked. Whether CI is a required status check,
+  whether a branch must be up to date with `main` (ADR-0081) and whether the
+  rules bind administrators are repository settings that can change, so read
+  the live rules before relying on them (`codeflow doctor --check
+  remote-perimeter`). Where CI is not required, the human who merges confirms
+  that CI is green; where branches need not be up to date, that it ran on the
+  current `main`; never merge on red.

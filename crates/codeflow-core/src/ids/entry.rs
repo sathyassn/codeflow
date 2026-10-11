@@ -207,7 +207,7 @@ pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         .strip_prefix("---\n")
         .or_else(|| text.strip_prefix("---\r\n"))?;
     for line in rest.lines() {
-        if line.trim_end() == "---" {
+        if line.trim_end_matches([' ', '\t']) == "---" {
             return None;
         }
         let Some(value) = line
@@ -216,8 +216,18 @@ pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         else {
             continue;
         };
-        let value = value.split(" #").next().unwrap_or_default().trim();
-        let value = value.trim_matches(|c| c == '"' || c == '\'');
+        let value = value
+            .split(" #")
+            .next()
+            .unwrap_or_default()
+            .trim_matches([' ', '\t']);
+        let value = if let Some(quoted) = value.strip_prefix('"') {
+            quoted.strip_suffix('"')?
+        } else if let Some(quoted) = value.strip_prefix('\'') {
+            quoted.strip_suffix('\'')?
+        } else {
+            value
+        };
         return (!value.is_empty() && value != "null").then(|| value.to_string());
     }
     None
@@ -488,5 +498,27 @@ mod tests {
         assert_eq!(frontmatter_value(text, "id").as_deref(), Some("TSK-100"));
         assert_eq!(frontmatter_value(text, "title"), None);
         assert_eq!(frontmatter_value("no frontmatter", "id"), None);
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_frontmatter_keeps_value_unicode_space() {
+        assert_eq!(
+            super::frontmatter_value("---\nid: TSK-238\u{a0}\n---\n", "id"),
+            Some("TSK-238\u{a0}".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod r16_core_regressions {
+    #[test]
+    fn r16_scalar_quotes_are_removed_once() {
+        assert_eq!(
+            super::frontmatter_value("---\nid: \"'TSK-238'\"\n---\n", "id"),
+            Some("'TSK-238'".to_string())
+        );
     }
 }

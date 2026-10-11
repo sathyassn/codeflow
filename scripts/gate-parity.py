@@ -10,11 +10,13 @@ Linux full gate are also checked.
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".codeflow" / "test-config.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-ci.yml"
+DIST_CONFIG = ROOT / "dist-workspace.toml"
 
 
 def norm(cmd: str) -> str:
@@ -71,10 +73,25 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
     return out
 
 
-# TSK-203: the Windows suite runs in nextest partitions. A partitioned run
-# stands for the whole suite only when its matrix runs every partition from
-# 1 to N exactly once.
-PARTITION = re.compile(r"^(.+) --partition count:\$\{\{ matrix\.partition \}\}/(\d+)$")
+# TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
+# builds the suite into a nextest archive and each partition runs that
+# archive with the filterset scripts/windows-partitions.py gives it from
+# measured durations. The archived run stands for the whole suite only when
+# the archive is built from the whole workspace with the same profile, and
+# the matrix runs every partition from 1 to the plan's count exactly once.
+# The plan itself gives every test exactly one partition, and the Windows
+# journeys job checks each run's results against the archive's test list.
+ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
+ARCHIVED_RUN = re.compile(
+    r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
+    r"--no-fail-fast --profile codeflow "
+    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\}\)"$')
+PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
+
+
+def planned_partitions(data: Path | None = None) -> int:
+    """The partition count scripts/windows-partitions.py plans for."""
+    return int(json.loads((data or PARTITION_DATA).read_text())["partitions"])
 
 
 def matrix_partitions(job: str) -> list[int]:
@@ -86,25 +103,30 @@ def matrix_partitions(job: str) -> list[int]:
     return [int(v) for v in values] if all(v.isdigit() for v in values) else []
 
 
-def ci_rust_job_commands(workflow: str) -> set[str]:
+def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
     """Rust verification `run:` commands inside the Windows raw referee jobs
-    (every job whose id starts with `windows`)."""
+    (every job whose id starts with `windows`). An archive build runs no
+    test; the archived partitions stand for the suite they cover."""
     out = set()
-    for name, text in workflow_jobs(workflow).items():
-        if not name.startswith("windows"):
-            continue
+    jobs = {name: text for name, text in workflow_jobs(workflow).items() if name.startswith("windows")}
+    archives = {match.group(1) for text in jobs.values()
+                for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M)
+                if (match := ARCHIVE.match(norm(run.group(1))))}
+    for name, text in jobs.items():
         partitions = matrix_partitions(text)
         for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M):
             cmd = norm(run.group(1))
-            if not is_rust_verification_command(cmd):
+            if not is_rust_verification_command(cmd) or ARCHIVE.match(cmd):
                 continue
-            split = PARTITION.match(cmd)
-            if split:
-                count = int(split.group(2))
-                if partitions == list(range(1, count + 1)):
-                    cmd = split.group(1)
+            archived = ARCHIVED_RUN.match(cmd)
+            if archived:
+                count = planned_partitions() if planned is None else planned
+                if archived.group(1) not in archives:
+                    cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
+                elif partitions != list(range(1, count + 1)):
+                    cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
                 else:
-                    cmd = f"{cmd} (partitions {partitions} do not cover 1 to {count})"
+                    cmd = SUITE
             out.add(cmd)
     return out
 
@@ -162,16 +184,126 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         problems.append(f"exactly one job must be named `{VERDICT}`; found {[n for n, _ in verdicts]}")
     else:
         name, text = verdicts[0]
-        condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
-        expected = verdict_job(condition.group(1) if condition else "")
+        line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+        guarded = GATES_IF.match(line.group(1)) if line else None
+        if guarded is None:
+            problems.append("the gates job's condition must be exactly `if: ${{ !cancelled() && "
+                            "needs.reuse.outputs.run == '' && (<event condition>) }}`, so it runs on "
+                            "every protected-base pull request and push the reuse decision does not "
+                            f"cover; found {line.group(1) if line else 'none'}")
+        expected = verdict_job(guarded.group(1) if guarded else "")
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always() && (<the gates job's condition>)`, need the gates job, "
-                "and fail unless needs.gates.result is success; any other form could "
-                "let a skipped, failed or cancelled part read as passed. Expected:\n"
-                + expected)
+                "`if: always() && (<the gates job's event condition>)`, need the reuse and gates jobs, "
+                "and fail unless needs.gates.result is success or the reuse decision named a run and "
+                "every part was skipped; any other form could let a skipped, failed or cancelled part "
+                "read as passed. Expected:\n" + expected)
+    if "    needs: reuse" not in [l.rstrip() for l in gate.splitlines()]:
+        problems.append("the gates job must need exactly the reuse job (`needs: reuse`), whose output its "
+                        "condition reads")
+    problems.extend(reuse_job_problems(jobs))
     return problems
+
+
+# TSK-265: a push reuses a pull request run's verdict only through this job,
+# pinned exactly like the verdict: it runs on a push only, holds read-only
+# permissions and decides through scripts/ci-reuse.py, whose unit tests
+# (scripts/test_ci_reuse.py) cover each condition.
+GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == '' && \((.+)\) \}\}$")
+REUSE_JOB = """\
+    if: github.event_name == 'push'
+    name: reuse a pull request verdict
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Decide from the tree ids and the pull request run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PUSHED: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: >-
+          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
+          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
+          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
+          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+"""
+
+
+# TSK-265: the `windows` verdict, pinned exactly like `codeflow gates`: a
+# substring check would let an inserted second success path through. It
+# passes only when every Windows job succeeded, or when the reuse decision
+# named a run and every Windows job was skipped. `{condition}` is the gates
+# job's event condition.
+WINDOWS_VERDICT = "windows"
+WINDOWS_VERDICT_JOB = """\
+    if: always() && ({condition})
+    name: windows
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every Windows job passed
+        shell: bash
+        env:
+          REUSE: ${{{{ needs.reuse.result }}}}
+          REUSED: ${{{{ needs.reuse.outputs.run }}}}
+          CHECKS: ${{{{ needs.windows.result }}}}
+          BUILD: ${{{{ needs.windows-build.result }}}}
+          TESTS: ${{{{ needs.windows-tests.result }}}}
+          JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
+          RELEASE: ${{{{ needs.windows-release-journey.result }}}}
+        run: |
+          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
+            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
+            exit 0
+          fi
+          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
+            echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
+            exit 1
+          fi
+          echo "every Windows job passed"
+"""
+
+
+def windows_verdict_problems(workflow: str) -> list[str]:
+    """Exactly one job is named `windows`, and it is exactly the pinned verdict."""
+    jobs = workflow_jobs(workflow)
+    verdicts = [(name, text) for name, text in jobs.items()
+                if re.search(rf"^ {{4}}name:\s*{re.escape(WINDOWS_VERDICT)}\s*$", text, re.M)]
+    if len(verdicts) != 1:
+        return [f"exactly one job must be named `{WINDOWS_VERDICT}`; found {[n for n, _ in verdicts]}"]
+    line = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("gates", ""), re.M)
+    guarded = GATES_IF.match(line.group(1)) if line else None
+    expected = WINDOWS_VERDICT_JOB.format(condition=guarded.group(1) if guarded else "")
+    name, text = verdicts[0]
+    if norm_job(text) != norm_job(expected):
+        return [f"`{WINDOWS_VERDICT}` ({name}) must be exactly the Windows verdict job: it passes only when every "
+                "Windows job succeeded, or when the reuse decision named a run and every Windows job was skipped; "
+                "any other form could let a skipped, failed or cancelled job read as passed. Expected:\n" + expected]
+    return []
+
+
+def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
+    if norm_job(jobs.get("reuse", "")) != norm_job(REUSE_JOB):
+        return ["the `reuse` job must be exactly this, so only a push can reuse a verdict, its token stays "
+                "read-only and scripts/ci-reuse.py decides:\n" + REUSE_JOB]
+    return []
 
 
 # The one accepted form of the verdict job. A substring check let a false
@@ -181,14 +313,21 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 VERDICT_JOB = """\
     if: always() && ({condition})
     name: codeflow gates
-    needs: gates
+    needs: [reuse, gates]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Every part of the full gate passed
         shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
+          REUSE: ${{{{ needs.reuse.result }}}}
+          REUSED: ${{{{ needs.reuse.outputs.run }}}}
         run: |
+          if [ "$REUSE" = success ] && [ "$PARTS" = skipped ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+            echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
+            exit 0
+          fi
           if [ "$PARTS" != success ]; then
             echo "::error::the full gate's parts concluded ${{PARTS}}; see the codeflow gates (part) jobs"
             exit 1
@@ -215,7 +354,7 @@ def norm_job(text: str) -> list[str]:
 # reviewed edit; it is not a boundary against someone who also edits this
 # script in the same change.
 TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
-GATES_KEYS = ("if", "name", "runs-on", "strategy", "steps")
+GATES_KEYS = ("if", "name", "needs", "runs-on", "timeout-minutes", "strategy", "steps")
 STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
 PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
 ONLY_LINE = re.compile(r"^            only: [a-z0-9-]+(?:,[a-z0-9-]+)*$")
@@ -336,20 +475,118 @@ def cmd_segments(command: str) -> list[str]:
     return segments
 
 
-def workflow_jobs(workflow: str) -> dict[str, str]:
-    """Each top-level job's text, keyed by job id."""
+# A job header is a mapping key at the job indent (two spaces): a plain or
+# quoted job id, then a colon, then at most a comment. TSK-254 review: a
+# header with a trailing comment (`  nightly: # weekly`) or a quoted id is
+# still a job GitHub runs, and a reader that skipped it never checked it, so
+# every non-blank, non-comment line at the job indent must parse as a header
+# or be reported.
+JOB_ID = r"[A-Za-z0-9_-]+"
+JOB_HEADER = re.compile(rf"^ {{2}}(?:\"({JOB_ID})\"|'({JOB_ID})'|({JOB_ID})):(?:[ \t]+#.*|[ \t]*)$")
+JOB_KEY = re.compile(r"^ {4}(?:\"([A-Za-z0-9_.-]+)\"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+)):(?:[ \t]+(.*))?$")
+JOBS_KEY = re.compile(r"^jobs:[ \t]*(?:#.*)?$")
+QUOTED_STEP_KEY = re.compile(r"^(?: {6}- | {8})[\"'][A-Za-z0-9_-]+[\"']\s*:")
+
+
+def blank_or_comment(line: str) -> bool:
+    return not line.strip() or line.lstrip().startswith("#")
+
+
+def parse_jobs(workflow: str, legacy: bool = False) -> tuple[dict[str, str], list[str]]:
+    """(jobs keyed by id, problems) for the top-level `jobs:` section. A line
+    the parser cannot place is reported, never skipped. With `legacy`, a text
+    with no `jobs:` key is read from its first line (a fragment)."""
+    lines = workflow.splitlines()
+    starts = [i for i, line in enumerate(lines) if JOBS_KEY.match(line)]
+    problems = ["more than one top-level `jobs:` key"] if len(starts) > 1 else []
+    if starts:
+        offset = starts[0] + 1
+    elif legacy:
+        offset = 0
+    else:
+        return {}, problems
     jobs: dict[str, list[str]] = {}
     current = None
-    for line in workflow.splitlines():
-        job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
-        if job:
-            current = job.group(1)
-            jobs[current] = []
-        elif re.match(r"^\S", line):
+    unplaced = False
+    for number, line in enumerate(lines[offset:], offset + 1):
+        if blank_or_comment(line):
+            if current is not None:
+                jobs[current].append(line)
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if line[indent] == "\t":
+            problems.append(f"line {number} is indented with a tab ({line.strip()!r}); YAML allows spaces only")
+            current, unplaced = None, True
+        elif indent == 0:
+            if starts:
+                break
             current = None
-        elif current:
+        elif indent < 2:
+            problems.append(f"line {number} ({line.strip()!r}) sits between the top level and the job ids; "
+                            "job ids are indented two spaces")
+            current, unplaced = None, True
+        elif indent == 2:
+            header = JOB_HEADER.match(line)
+            if header is None:
+                problems.append(f"line {number} ({line.strip()!r}) is at the job indent but is not a job id "
+                                "(a plain or quoted id, a colon and at most a comment); the checks cannot read "
+                                "that job, so it is refused rather than skipped")
+                current, unplaced = None, True
+                continue
+            current, unplaced = next(g for g in header.groups() if g is not None), False
+            if current in jobs:
+                problems.append(f"job '{current}' is declared twice (line {number})")
+            jobs[current] = []
+        elif current is not None:
             jobs[current].append(line)
-    return {name: "\n".join(lines) for name, lines in jobs.items()}
+        elif not unplaced:
+            problems.append(f"line {number} ({line.strip()!r}) sits under no job id")
+            unplaced = True
+    return {name: "\n".join(body) for name, body in jobs.items()}, problems
+
+
+def workflow_jobs(workflow: str) -> dict[str, str]:
+    """Each top-level job's text, keyed by job id."""
+    return parse_jobs(workflow, legacy=True)[0]
+
+
+def job_structure_problems(name: str, text: str, where: str) -> list[str]:
+    """The job's own key lines (four spaces) and step keys, read as the
+    other checks read them. A key line they cannot parse, a repeated key (a
+    commented-out job header folds its body into the job above and repeats
+    that job's keys), a flow-style `steps:` or a quoted step key would be
+    read past, so each is reported."""
+    problems: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        if blank_or_comment(line):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 4:
+            key = JOB_KEY.match(line)
+            if key is None:
+                problems.append(f"job '{name}'{where} has a line at the job-key indent that is not a plain "
+                                f"`key: value` ({line.strip()!r}); the checks cannot read it")
+                continue
+            word = next(g for g in key.groups()[:3] if g is not None)
+            if word in seen:
+                problems.append(f"job '{name}'{where} repeats the key `{word}` at the job-key indent; a "
+                                "commented-out job header folds that job's keys into the job above it")
+            seen.add(word)
+            rest = (key.group(4) or "").strip()
+            if word == "steps" and rest and not rest.startswith("#"):
+                problems.append(f"job '{name}'{where} writes `steps:` inline ({rest!r}); write the steps as a "
+                                "block sequence so every step is checked")
+        elif indent < 4:
+            problems.append(f"job '{name}'{where} has a line indented {indent} spaces ({line.strip()!r}); "
+                            "job keys are indented four")
+        elif QUOTED_STEP_KEY.match(line):
+            problems.append(f"job '{name}'{where} has a quoted step key ({line.strip()!r}); write step keys "
+                            "plain so the checks that read `uses:` and `run:` see them")
+    return problems
+
+
+SETUP_NODE = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*[\"']?actions/setup-node@", re.M)
 
 
 def setup_node_steps(job: str) -> list[tuple[str, list[str]]]:
@@ -357,7 +594,7 @@ def setup_node_steps(job: str) -> list[tuple[str, list[str]]]:
     steps = re.split(r"\n(?= {6}- )", job)
     found = []
     for step in steps:
-        if "uses: actions/setup-node@" not in step:
+        if not SETUP_NODE.search(step):
             continue
         version = re.search(r"node-version:\s*['\"]?([^\s'\"]+)", step)
         locks = re.findall(r"[\w./-]*package-lock\.json", step)
@@ -461,11 +698,236 @@ def gate_binary_problems(cfg: dict) -> list[str]:
     return problems
 
 
+# TSK-254: a job with no timeout holds a runner for GitHub's default six
+# hours when a step stalls, and its verdict waits as long. Every job in every
+# workflow this repository runs or ships names its own `timeout-minutes`, a
+# plain whole number, so a stall frees the slot and fails the verdict. A job
+# that only calls a reusable workflow (`uses:`) cannot carry the key (GitHub
+# rejects it), so the called workflow's own jobs must carry it and are checked
+# here. Only a local workflow under `.github/workflows/` can be opened and
+# checked; a remote or out-of-tree callee cannot, so its caller is refused.
+TIMEOUT_KEY = re.compile(r"^ {4}[\"']?timeout-minutes[\"']?:")
+TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: ([1-9][0-9]*)(?:[ \t]+#.*)?$")
+# TSK-254 AC-1: a hung job frees its runner inside 45 minutes. GitHub's own
+# default is 360, the six-hour hold this task exists to stop, so a value
+# above this bound is refused even though it is a plain whole number.
+MAX_TIMEOUT_MINUTES = 45
+CALLER_LINE = re.compile(r"^ {4}[\"']?uses[\"']?:", re.M)
+CALLER_TARGET = re.compile(r"^ {4}[\"']?uses[\"']?:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
+WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
+# A shipped template cannot size a job that runs the adopter's own commands.
+# Each exemption names its reason; a stale one (the job is gone) is drift.
+UNBOUNDED_BY_DESIGN = {
+    "assets/base/ci/codeflow-ci.yml": {
+        "gates": "runs the adopter's own suite, whose length only the adopter knows",
+        "candidate": "tracked in TSK-254 follow-up notes; bound it when this job is next edited",
+    },
+}
+
+
+def jobs_section(workflow: str) -> dict[str, str]:
+    """Each job under the top-level `jobs:` key, keyed by job id."""
+    return parse_jobs(workflow)[0]
+
+
+def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> list[str]:
+    """A reusable-workflow caller is exempt only when its callee is a local
+    workflow under `.github/workflows/` that this check can open and that has
+    no timeout problem of its own."""
+    targets = [next(g for g in m.groups() if g is not None) for m in CALLER_TARGET.finditer(text)]
+    if len(targets) != 1:
+        return [f"job '{name}'{where} must have exactly one `uses:` value; found {targets}"]
+    target = targets[0]
+    relative = Path(target[2:] if target.startswith("./") else target)
+    local = (target.startswith("./") and "@" not in target and ".." not in relative.parts
+             and relative.parent == Path(".github/workflows") and relative in workflow_files())
+    if not local:
+        return [f"job '{name}'{where} calls `{target}`, which this check cannot open and bound (a caller job cannot "
+                "carry `timeout-minutes`); call a workflow under .github/workflows/ as `./.github/workflows/<file>`"]
+    if relative.as_posix() in seen:
+        return [f"job '{name}'{where} calls `{target}`, which calls itself again"]
+    callee = timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+                              seen=seen | {relative.as_posix()})
+    return [f"job '{name}'{where} calls `{target}`, whose own jobs are not all bounded: {callee}"] if callee else []
+
+
+def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None,
+                     seen: frozenset[str] = frozenset()) -> list[str]:
+    jobs, unparsed = parse_jobs(workflow)
+    where = f" in {label}" if label else ""
+    exempt = exempt or {}
+    problems = [] if jobs else [f"the workflow{where} has no `jobs:` section to check for timeouts"]
+    problems += [f"the workflow{where}: {p}" for p in unparsed]
+    for name in exempt:
+        if name not in jobs:
+            problems.append(f"{label or 'the workflow'} exempts job '{name}' from a timeout but has no such job; "
+                            "drop the stale exemption")
+    for name, text in jobs.items():
+        problems += job_structure_problems(name, text, where)
+        if name in exempt:
+            continue
+        if CALLER_LINE.search(text):
+            problems += caller_problems(name, text, where, seen)
+            continue
+        own = [line.rstrip() for line in text.splitlines() if TIMEOUT_KEY.match(line)]
+        value = TIMEOUT_LINE.match(own[0]) if len(own) == 1 else None
+        if value is None:
+            problems.append(f"job '{name}'{where} must carry exactly one `timeout-minutes: <whole minutes>` "
+                            f"of its own, so a stalled step cannot hold its runner for six hours; found {own}")
+        elif int(value.group(1)) > MAX_TIMEOUT_MINUTES:
+            problems.append(f"job '{name}'{where} has `timeout-minutes: {value.group(1)}`, above {MAX_TIMEOUT_MINUTES} "
+                            f"minutes (TSK-254 AC-1: a hung job must free its runner inside {MAX_TIMEOUT_MINUTES} "
+                            "minutes; GitHub's default is 360, six hours); size it from the observed runs")
+    return problems
+
+
+def workflow_files() -> list[Path]:
+    """Every GitHub workflow this repository runs or ships, relative to ROOT."""
+    found = []
+    for directory in WORKFLOW_DIRS:
+        for path in sorted((ROOT / directory).glob("*.y*ml")):
+            text = path.read_text()
+            # assets/base/ci also holds other CI systems' files; a workflow
+            # names its triggers and jobs at the top level.
+            if directory.parts[0] == ".github" or re.search(r"^(on|\"on\"|'on'|jobs|\"jobs\"|'jobs'):", text, re.M):
+                found.append(path.relative_to(ROOT))
+    return found
+
+
+def all_timeout_problems() -> list[str]:
+    files = workflow_files()
+    problems = [] if files else ["no workflow files were found to check for timeouts"]
+    for relative in files:
+        problems += timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+                                     UNBOUNDED_BY_DESIGN.get(relative.as_posix()))
+    return problems
+
+
+# dist 0.32 writes release.yml and cannot set a job timeout, so the timeouts
+# are added by hand. dist's integrity check fails `dist plan` on a hand edit
+# unless the config allows it, and with the key removed a `dist generate`
+# rewrites the file without the timeouts (which `all_timeout_problems` then
+# refuses).
+def dist_problems(config_path: Path | None = None, release: Path | None = None) -> list[str]:
+    config_path = config_path or DIST_CONFIG
+    release = release or ROOT / ".github" / "workflows" / "release.yml"
+    if not release.exists() or not config_path.exists():
+        return []
+    allowed = tomllib.loads(config_path.read_text()).get("dist", {}).get("allow-dirty", [])
+    # cargo-dist reads a list; `in` on a string is a substring test, so
+    # "ci" or "preci" as a string must not pass.
+    if isinstance(allowed, list) and "ci" in allowed:
+        return []
+    return ["dist-workspace.toml must set `allow-dirty = [\"ci\"]` while release.yml carries hand-added job "
+            "timeouts; otherwise `dist plan` rejects the file and `dist generate` rewrites it without them"]
+
+
+# TSK-254: only the present part launches a browser, so only it touches
+# Playwright, and its install is bounded and retried: the apt download of the
+# browsers' system libraries stalled for up to three hours with no timeout
+# (AC-2: each attempt under a 10 minute `timeout`, two attempts, a step
+# timeout, no `--with-deps`). Text checks for "a bounded install line" were
+# beaten by new spellings each review round (a line-broken command, a
+# `timeout` that wraps another command, an install through a variable), so
+# the steps are pinned instead: every step of codeflow-ci.yml whose text
+# names Playwright, in any case, must be one of these, in this order, apart
+# from comment lines, blank lines and trailing spaces. A deliberate change
+# edits the workflow and this constant together, and
+# scripts/test_gate_parity.py checks that the pin itself keeps the AC-2 bound.
+# A step that installs without naming Playwright (a script file, an `eval`)
+# is outside a text check; the 45 minute job timeout still ends it.
+PLAYWRIGHT_STEPS = (
+    r"""      - name: Read the locked Playwright version
+        if: matrix.part == 'present'
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+""",
+    r"""      - uses: actions/cache@v6
+        if: matrix.part == 'present'
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+""",
+    r"""      - uses: actions/cache@v6
+        if: matrix.part == 'present'
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+""",
+    r"""      - name: Install Playwright browsers from the lockfile
+        if: matrix.part == 'present'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit &&
+              sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
+""",
+)
+PIN_FIX = ("to change a Playwright step on purpose, make the same edit in .github/workflows/codeflow-ci.yml "
+           "and in PLAYWRIGHT_STEPS in scripts/gate-parity.py (one entry per step, in workflow order), keep "
+           "each install attempt under a `timeout` of at most 10 minutes, two attempts, the step's "
+           "`timeout-minutes` and `if: matrix.part == 'present'` (TSK-254 AC-2), then run "
+           "`python3 -B -m unittest scripts.test_gate_parity`")
+
+
+def playwright_problems(workflow: str) -> list[str]:
+    """Every step that names Playwright is in the gates job and is one of
+    PLAYWRIGHT_STEPS, each once and in order."""
+    problems = []
+    found: list[list[str]] = []
+    for name, text in jobs_section(workflow).items():
+        for step in re.split(r"\n(?= {6}- )", text):
+            lines = norm_job(step)
+            if "playwright" not in "\n".join(lines).lower():
+                continue
+            if name != "gates":
+                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); only the gates job's "
+                                "present part launches a browser")
+                continue
+            found.append(lines)
+    pinned = [norm_job(step) for step in PLAYWRIGHT_STEPS]
+    for lines in found:
+        if lines not in pinned:
+            problems.append(f"the gates step `{lines[0].strip()}` names Playwright but matches no pinned step "
+                            f"in PLAYWRIGHT_STEPS; {PIN_FIX}")
+    for step, lines in zip(PLAYWRIGHT_STEPS, pinned):
+        if lines not in found:
+            problems.append(f"the gates job lacks this pinned Playwright step, or changed it:\n{step}{PIN_FIX}")
+    if found != pinned and all(lines in pinned for lines in found) and all(lines in found for lines in pinned):
+        problems.append(f"the gates job's Playwright steps repeat or reorder the pinned steps; {PIN_FIX}")
+    return problems
+
+
 def main() -> int:
     cfg = json.loads(CONFIG.read_text())
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
-            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg))
+            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
+            + all_timeout_problems() + dist_problems() + playwright_problems(workflow)
+            + windows_verdict_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()
@@ -473,8 +935,9 @@ def main() -> int:
         return 1
     if status == 0:
         print("gate-parity OK: Node targets run on their CI pins, the "
-              "real-browser check runs the gate's binary, and the gate parts "
-              "run every full-mode target")
+              "real-browser check runs the gate's binary, the gate parts "
+              "run every full-mode target, every job of every workflow has a timeout, and only "
+              "the present part touches Playwright, through the pinned steps")
     return status
 
 

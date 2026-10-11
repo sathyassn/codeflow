@@ -7,20 +7,23 @@
 //! triggered section without losing one.
 //!
 //! Size is a reported measure, never a failure here: `codeflow doctor`
-//! reports the kernel, the reading chain and each skill against the guideline
-//! numbers in `codeflow_core::reading`, and this test prints the same report.
-//! The one byte check that still fails is the complete generated `AGENTS.md`
-//! with a realistic project section against Codex's 32 KiB instruction limit
-//! (`init_e2e`, `rule_map_contract`), because past it the host silently cuts
-//! shipped rules.
+//! reports the kernel, the reading chain, the always-loaded set and each
+//! shipped skill and agent against the advisory guidelines in
+//! `codeflow_core::reading`, each with its basis (ADR-0083), and this test
+//! prints the same report. Two tool limits fail: the complete generated
+//! `AGENTS.md` with a realistic project section against Codex's 32 KiB
+//! instruction limit (`init_e2e`, `rule_map_contract`), because past it the
+//! host silently cuts shipped rules, and a shipped description over the
+//! API's 1,024 characters, which the API refuses.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use codeflow_core::reading::{
-    self, authored_len, ConditionalRead, Inventory, Measure, SkillFiles, CONDITIONAL_READS,
+    self, authored_len, ConditionalRead, Guidelines, Inventory, Measure, SkillFiles, Unit,
+    CONDITIONAL_READS,
 };
-use codeflow_core::scaffold::rule_map::{self, managed_block, MANAGED_BLOCK_GUIDELINE_BYTES};
+use codeflow_core::scaffold::rule_map::{self, managed_block};
 use codeflow_core::scaffold::{DirSource, ScaffoldManifest, Tier};
 
 fn repo_root() -> PathBuf {
@@ -140,18 +143,6 @@ fn shipped_skills_install_to_both_trees_and_match_managed_copies() {
     let base = root.join("assets/base");
     let skills = manifest_skills(&manifest);
     assert!(!skills.is_empty(), "manifest must ship skills");
-
-    // The guideline table names exactly the shipped skills, so a new skill
-    // is measured against a reviewed number and a removed one leaves none.
-    let guided: BTreeSet<&str> = reading::SKILL_GUIDELINES
-        .iter()
-        .map(|(name, _)| *name)
-        .collect();
-    let shipped: BTreeSet<&str> = skills.keys().map(String::as_str).collect();
-    assert_eq!(
-        guided, shipped,
-        "every shipped skill needs one guideline number in codeflow_core::reading, and no stale ones"
-    );
 
     for source in skills.values() {
         let canonical = base.join(source);
@@ -354,6 +345,12 @@ fn referenced_doctrine_keeps_every_moved_duty() {
                 "mandatory lifecycle route",
                 "cf-method/references/workflow-lifecycle.md",
             ),
+            // TSK-255 put the neighbour rule in the build step; TSK-263 moved
+            // it here, where every tier reads it, and the build step points.
+            (
+                "neighbour before adding",
+                "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent",
+            ),
         ],
     );
     assert_contains_all(
@@ -385,15 +382,112 @@ fn referenced_doctrine_keeps_every_moved_duty() {
             ),
         ],
     );
-    // TSK-255: the build step, which every task reads, asks for the
-    // neighbour before adding, and the written rule over a precedent.
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[(
-            "neighbour before adding",
-            "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent",
+            "neighbour rule pointer",
+            "Apply the neighbour rule in the discipline rules' \"Write only what earns its keep\".",
         )],
     );
+}
+
+/// TSK-263: the engineering rigour wording. The every-tier rule file is the
+/// one home of each rule; the skills point at it.
+const RIGOUR_PINS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "assets/base/rules/workflow-discipline.md",
+        &[
+            (
+                "lifetime question",
+                "Ask whether the shape stays sound for the accepted lifetime: cost, security, storage and resource use, reliability, durability, robustness and maintainability;",
+            ),
+            (
+                "greenfield boundary",
+                "when nothing exists yet, choose the boundary the repository will have to live with.",
+            ),
+            (
+                "shortcut rule",
+                "is allowed only when a code comment at the site names the shortcut and its tracked follow-up, and that follow-up is tracked once with its revisit event",
+            ),
+            (
+                "shortcut never weakens a security control",
+                "A shortcut never weakens a guard, hook, gate, policy, credential path, input validation or other security control; those stay under \"Match the gate\".",
+            ),
+            (
+                "scenario classes",
+                "Scenario coverage comes first: happy paths, boundaries, malformed and hostile input, timeouts, partial failure, authorization, concurrency and idempotency, recovery, platform differences where the code meets the operating system, and regression;",
+            ),
+            (
+                "reachable class named",
+                "a class the change can reach and leaves untested is named with its reason where the PR records what was not tested.",
+            ),
+            (
+                "consumer checks",
+                "a target with no `narrow` globs is always selected, one with globs when they match, and a target is owed only in a mode it defines",
+            ),
+            (
+                "heavier-mode check",
+                "a check that exists only in a heavier mode is run in that mode or named as not run.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/coverage.md",
+        &[
+            (
+                "classes stated once",
+                "The scenario classes are stated once in the workflow discipline rules, \"Prove it at every surface\".",
+            ),
+            (
+                "derivation with probe advice",
+                "for a library, parser, state machine or CLI, one failure the contract does not state, unless a regression test already encodes it.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            (
+                "unmarked shortcut",
+                "an unmarked shortcut (the discipline rules' shortcut rule)",
+            ),
+            (
+                "fit clause",
+                "an unexplained departure from an existing mechanism is `axis: standards`.",
+            ),
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        &[(
+            "not tested clause",
+            "On a code range, `Not tested:` names the consumer checks left unrun and a reachable scenario class left untested, with the reason;",
+        )],
+    ),
+];
+
+#[test]
+fn engineering_rigour_rules_keep_one_home() {
+    let root = repo_root();
+    for (path, clauses) in RIGOUR_PINS {
+        assert_contains_all(&root.join(path), clauses);
+    }
+    // The moved sentences have no second copy in the files that point.
+    for (path, needle) in [
+        (
+            "assets/base/agents/skills/cf-develop/SKILL.md",
+            "find the neighbour that already does the job",
+        ),
+        (
+            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/coverage.md",
+            "malformed input",
+        ),
+    ] {
+        assert!(
+            !normalized(&read_text(&root.join(path))).contains(needle),
+            "{path} restates a rule the discipline rules own: {needle}"
+        );
+    }
 }
 
 #[test]
@@ -1336,6 +1430,129 @@ fn autonomy_reference_has_no_unwaited_spend_or_policy_dashes() {
     );
 }
 
+/// TSK-235 (issue 70): the guidance for working while something is
+/// uncertain, each rule in the home that loads it. The interim-state rule
+/// lives in the autonomy reference, read only on its trigger, with its
+/// summary in the every-tier discipline file; the reach claim, the encoded
+/// guidance rule, the operator feedback rule, the record home, the reviewer
+/// check and the qualified-term rule each sit in their owner.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
+    let root = repo_root();
+    assert_contains_all(
+        &root.join("assets/base/claude/skills/cf-method/references/autonomy.md"),
+        &[
+            ("section", "## While a question is open"),
+            (
+                "working default",
+                "When your recommended answer is reversible, continue the dependent work on it.",
+            ),
+            (
+                "labelled with its reversal",
+                "as a working default pending the operator's answer, and name what reverses it.",
+            ),
+            (
+                "fail closed",
+                "When the recommended answer is not reversible, or a fact you need cannot be verified yet, hold the conservative state",
+            ),
+            ("what clears it", "State what clears it and continue the work that does not depend on it."),
+            (
+                "never the operator-owned step",
+                "Neither interim state takes the operator-owned step.",
+            ),
+            (
+                "the step waits",
+                "the step the question names waits for the answer, and the question stays in the one round",
+            ),
+            (
+                "recorded where tracked",
+                "record it where that work is tracked: the task record, the epic's planning notes for a cross-task choice, or the pull request body of a standalone task.",
+            ),
+            (
+                "entry fields",
+                "The entry carries the choice, its evidence, what reverses or clears it, and its status (working default, fail closed, or settled).",
+            ),
+            (
+                "open question row",
+                "| An operator question is open and your recommended answer is reversible | 1: continue the dependent work on it as a working default",
+            ),
+            (
+                "unverifiable fact row",
+                "| A fact cannot be verified yet, or the pending answer is not reversible | 1: hold the conservative state",
+            ),
+            (
+                "relied-on state row",
+                "| A working default or interim state that another task, a reviewer or a later session relies on | 2: record it where that work is tracked",
+            ),
+        ],
+    );
+    assert_contains_all(
+        &root.join("assets/base/rules/workflow-discipline.md"),
+        &[
+            (
+                "interim state at every tier",
+                "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state: a working default when an operator answer is pending and your recommended answer is reversible, labelled where it lands with what reverses it; the conservative state when the answer is not reversible or the fact cannot be verified yet, stated with what clears it.",
+            ),
+            (
+                "never the operator-owned step",
+                "Neither takes the operator-owned step, and an interim state that others rely on is recorded where the work is tracked",
+            ),
+            (
+                "pointer to the full rule",
+                "`autonomy.md` \"While a question is open\" has the rule",
+            ),
+            (
+                "reach is a claim",
+                "How far a change reaches is a claim like any other: before stating it, list every consumer of the changed thing (each base, branch, environment or reader that loads it) and check each; a file that each branch reads from its own base has one consumer per branch, and each copy is checked.",
+            ),
+            (
+                "encoded guidance matches its source",
+                "A rule or record that encodes the operator's guidance quotes or closely paraphrases it; a restriction the operator never gave is an invented fact.",
+            ),
+            (
+                "operator feedback is a request",
+                "Operator feedback that arrives during work is a request like any other: it attaches to its unit, takes its place in the plan's order, is acted on after a read of the whole aspect it touches, and closes with evidence.",
+            ),
+            ("no reflex edit", "Do not edit on the spot in reply to a remark; take it through the plan."),
+        ],
+    );
+    assert_contains_all(
+        &root.join("assets/base/rules/writing.md"),
+        &[(
+            "qualify an overloaded term",
+            "When one word names several things in the project, such as `versioning` for an API and for a map, qualify it at every use.",
+        )],
+    );
+    assert_contains_all(
+        &root.join("assets/base/claude/skills/cf-method/references/project-organization.md"),
+        &[(
+            "record home for an interim state",
+            "a working default or fail-closed interim state that another task, a reviewer or a later session relies on, with its evidence, what reverses or clears it and its status",
+        )],
+    );
+    assert_contains_all(
+        &root.join("assets/base/claude/agents/cf-reviewer.md"),
+        &[(
+            "reviewer checks the three claims",
+            "a reach claim with no consumers checked, a working default with no label or reversal, and encoded operator guidance that departs from its source",
+        )],
+    );
+    // The interim-state rule never becomes a second list of operator-owned
+    // axes: the section and its rows name no axis beside an ask.
+    let autonomy =
+        read_text(&root.join("assets/base/claude/skills/cf-method/references/autonomy.md"));
+    let section = autonomy
+        .split("## While a question is open")
+        .nth(1)
+        .and_then(|rest| rest.split("## Trust prompts").next())
+        .expect("the section sits before Trust prompts");
+    assert_eq!(
+        second_ask_list_problems("autonomy.md While a question is open", section),
+        Vec::<String>::new()
+    );
+}
+
 #[test]
 fn typed_contracts_are_proportionate_and_runtime_aware() {
     let root = repo_root();
@@ -1604,7 +1821,7 @@ fn skill_trees() -> SkillFiles {
     let base = repo_root().join("assets/base");
     let mut files = SkillFiles::new();
     for tree in ["agents/skills", "claude/skills"] {
-        reading::load_skill_tree(&base.join(tree), &mut files);
+        reading::load_skill_tree(&base.join(tree), &mut files).unwrap();
     }
     files
 }
@@ -1627,10 +1844,26 @@ fn method_kernel(agents: &str) -> String {
     )
 }
 
-/// The size report doctor gives, printed as information. Never asserted.
+/// The shipped agent definitions, keyed by name with their source text.
+fn shipped_agents() -> BTreeMap<String, String> {
+    let root = repo_root();
+    rule_map::AGENTS
+        .iter()
+        .map(|name| {
+            let source = root
+                .join("assets/base/claude/agents")
+                .join(format!("{name}.md"));
+            ((*name).to_string(), read_text(&source))
+        })
+        .collect()
+}
+
+/// The size report doctor gives, printed as information with each
+/// measure's unit and basis (TSK-267). Never asserted.
 fn size_report(files: &SkillFiles) -> String {
     use std::fmt::Write as _;
     let root = repo_root();
+    let guidelines = Guidelines::default();
     let mut measures: Vec<Measure> = Vec::new();
     for output in rule_map::OUTPUTS
         .iter()
@@ -1640,29 +1873,74 @@ fn size_report(files: &SkillFiles) -> String {
         let block = managed_block(&text).expect("managed markers");
         measures.push(Measure {
             subject: format!("{} kernel", output.tier),
-            bytes: authored_len(block.as_bytes()),
-            guideline: MANAGED_BLOCK_GUIDELINE_BYTES,
+            value: authored_len(block.as_bytes()),
+            guideline: guidelines.kernel_bytes,
+            unit: Unit::Bytes,
+            basis: reading::KERNEL_BASIS,
         });
     }
-    measures.push(reading::reading_chain(files, &Inventory::SHIPPED).measure());
-    measures.extend(reading::skill_measures(files));
-    for (source, guideline) in reading::ARTIFACT_GUIDELINES {
+    measures.push(reading::reading_chain(files, &Inventory::SHIPPED).measure(&guidelines));
+    // The always-loaded set a scaffold installs: the CLAUDE template with
+    // the AGENTS template it imports.
+    for (claude, agents) in [
+        ("CLAUDE.md.tmpl", "AGENTS.full.md.tmpl"),
+        ("CLAUDE.md.tmpl", "AGENTS.md.tmpl"),
+        ("CLAUDE.minimal.md.tmpl", "AGENTS.minimal.md.tmpl"),
+    ] {
+        let lines = reading::authored_lines(&read_text(&root.join("assets/base").join(claude)))
+            + reading::authored_lines(&read_text(&root.join("assets/base").join(agents)));
         measures.push(Measure {
-            subject: (*source).to_string(),
-            bytes: authored_len(&read(&root.join("assets/base").join(source))),
-            guideline: *guideline,
+            subject: format!("always-loaded instructions ({claude} with {agents})"),
+            value: lines,
+            guideline: guidelines.instructions_lines,
+            unit: Unit::Lines,
+            basis: reading::INSTRUCTIONS_BASIS,
         });
+    }
+    measures.extend(reading::skill_measures(files, &guidelines));
+    for (name, text) in shipped_agents() {
+        measures.push(reading::body_measure(&name, &text, guidelines.body_lines));
+    }
+    measures.extend(reading::description_measures(files));
+    for (name, text) in shipped_agents() {
+        measures.extend(reading::description_measure(&name, &text));
     }
     let mut report = String::new();
     for measure in &measures {
         let mark = if measure.over() {
-            "above guideline"
+            format!("above guideline: {}", measure.basis)
         } else {
-            "within"
+            "within".to_string()
         };
         let _ = writeln!(report, "  {measure} ({mark})");
     }
     report
+}
+
+/// TSK-267 AC-2: the API refuses a skill or agent description over 1,024
+/// characters, so a shipped one over it fails here; the rest of the sizes
+/// are advisory and never fail.
+#[test]
+fn shipped_descriptions_fit_the_api_limit() {
+    let files = skill_trees();
+    let mut measures = reading::description_measures(&files);
+    for (name, text) in shipped_agents() {
+        measures.push(
+            reading::description_measure(&name, &text)
+                .unwrap_or_else(|| panic!("{name} has a description")),
+        );
+    }
+    assert!(!measures.is_empty());
+    let over: Vec<String> = measures
+        .iter()
+        .filter(|measure| measure.over())
+        .map(ToString::to_string)
+        .collect();
+    assert!(over.is_empty(), "over the API limit: {}", over.join("; "));
+    for measure in &measures {
+        assert_eq!(measure.guideline, reading::DESCRIPTION_LIMIT_CHARS);
+        assert!(measure.value > 0, "{measure}");
+    }
 }
 
 /// AC-1: the shipped tree holds its reading structure. The kernel names every
@@ -1777,9 +2055,12 @@ fn reading_chain_counts_a_new_every_task_pointer() {
         .get_mut(&index)
         .expect("quality index")
         .push_str("| [New section](quality/new.md) | every task |\n");
+    let shipped_total = reading::reading_chain(&files, &Inventory::SHIPPED).total;
+    let guidelines = Guidelines::default();
+    let added = guidelines.chain_bytes - shipped_total + 1;
     files.insert(
         format!("{ORCH}/resources/quality/new.md"),
-        "x".repeat(34_000),
+        "x".repeat(added),
     );
     let chain = reading::reading_chain(&files, &Inventory::SHIPPED);
     assert!(chain.errors.is_empty(), "{:?}", chain.errors);
@@ -1791,27 +2072,30 @@ fn reading_chain_counts_a_new_every_task_pointer() {
         "a new every-task section must join the chain"
     );
     assert!(
-        chain.measure().over(),
-        "a 34,000-byte every-task section is reported above the chain guideline"
+        chain.measure(&guidelines).over(),
+        "a {added}-byte every-task section is reported above the chain guideline"
     );
     assert!(reading::orphans(&files).is_empty());
 }
 
-/// AC-2 fixture: a skill doubled in size passes the structure test; its size
-/// is reported above its guideline, never failed.
+/// AC-2 fixture: a skill grown past the body guideline passes the structure
+/// test; its size is reported above the guideline in lines, never failed.
 #[test]
-fn a_doubled_skill_passes_the_structure_test() {
+fn a_grown_skill_passes_the_structure_test() {
     let mut files = skill_trees();
+    let guidelines = Guidelines::default();
     let skill = files.get_mut("cf-herdr/SKILL.md").expect("cf-herdr skill");
-    let doubled = format!("{skill}\n{skill}");
-    *skill = doubled;
+    let copies = guidelines.body_lines / reading::authored_lines(skill) + 1;
+    let grown = vec![skill.as_str(); copies].join("\n");
+    *skill = grown;
     let faults = structure_faults(&files, &Inventory::SHIPPED);
     assert!(faults.is_empty(), "{}", faults.join("\n"));
-    let herdr = reading::skill_measures(&files)
+    let herdr = reading::skill_measures(&files, &guidelines)
         .into_iter()
         .find(|measure| measure.subject == "cf-herdr")
         .expect("cf-herdr measured");
     assert!(herdr.over(), "{herdr}");
+    assert_eq!(herdr.unit, Unit::Lines);
 }
 
 /// TSK-131 AC-4: the findings section is a conditional read. Turning its
@@ -1912,7 +2196,7 @@ fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
             ("intake severity", "says which one holds, or that none does"),
             ("intake record home", "go in the PR Summary or the design note"),
             ("cause and class", "Name the mechanism with file:line and the defect class"),
-            ("sibling sweep", "Search the tree for the class and list every site"),
+            ("sibling sweep", "Search for the class wherever the rule reaches (this tree, the shipped copies adopters receive, the docs and records that state the rule) and list every site"),
             ("deferred sites tracked now", "each deferred site gets its own issue now, naming the class"),
             ("group by cause", "become one unit with one design before anyone branches"),
             (

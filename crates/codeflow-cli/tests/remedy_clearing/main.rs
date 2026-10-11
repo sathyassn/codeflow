@@ -104,11 +104,13 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_RETARGET", Runs),
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
+    ("REVIEW_ROW_BINDING", Runs),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
+    ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
     ("JOURNEY_CRITERION", Runs),
@@ -211,10 +213,14 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
+    ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
+    ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
+    ("DOCTOR_READING_CONFIG", Runs),
+    ("DOCTOR_DESCRIPTION", Runs),
     ("DOCTOR_ROOT_CHECKOUT", Runs),
     ("DOCTOR_TEST_CONFIG", Runs),
     ("DOCTOR_STARTUP_PRESETS", Runs),
@@ -230,6 +236,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
+    ("REGISTRY_ROOT_UNREADABLE", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];
 
@@ -2544,10 +2551,10 @@ fn clears_doctor_policy_decision() {
     write(&root, ".codeflow/policy.json", "{ not json");
     prove(
         "DOCTOR_POLICY_DECISION",
-        "git.pr_sections effective level",
+        "cannot read policy",
         || {
             let out = doctor(&root, "adopter-fit");
-            if out.starts_with("warn") {
+            if out.starts_with("FAIL") {
                 out
             } else {
                 String::new()
@@ -2985,14 +2992,83 @@ fn clears_doctor_reading() {
     let root = project(&dir);
     let skill = ".claude/skills/cf-stack/SKILL.md";
     let original = read(&root, skill);
-    write(&root, skill, &original.repeat(3));
-    // The finding is this skill's own: another skill over its guideline
-    // (TSK-108 owns one on this line) does not hide the clearing.
+    // Past the 500-line body guideline (TSK-267): a note, never a warning,
+    // that names this skill's directory as the place to edit.
+    let copies = 500 / original.lines().count() + 1;
+    write(&root, skill, &original.repeat(copies));
+    let before = doctor(&root, "reading");
+    assert!(
+        before.starts_with("note") && before.contains("of 500 lines"),
+        "a guideline is a note with its unit:\n{before}"
+    );
     prove(
         "DOCTOR_READING",
         ".claude/skills/cf-stack/",
         || doctor(&root, "reading"),
-        |_| write(&root, skill, &original),
+        |printed| {
+            assert!(printed.contains("confirm:"), "{printed}");
+            write(&root, skill, &original);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_reading_config() {
+    // A `[reading]` key that is not a positive integer (TSK-267): the
+    // shipped numbers apply and the warning names the key to repair.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let project_toml = read(&root, ".codeflow/project.toml");
+    write(
+        &root,
+        ".codeflow/project.toml",
+        &format!("{project_toml}\n[reading]\nskill_max_lines = \"many\"\n"),
+    );
+    prove(
+        "DOCTOR_READING_CONFIG",
+        "was not read",
+        || doctor(&root, "reading"),
+        |printed| {
+            assert!(printed.contains("reading.skill_max_lines"), "{printed}");
+            write(
+                &root,
+                ".codeflow/project.toml",
+                &format!("{project_toml}\n[reading]\nskill_max_lines = 600\n"),
+            );
+        },
+    );
+    let out = doctor(&root, "reading");
+    assert!(
+        out.contains("project values for skill_max_lines"),
+        "the repaired key is in force:\n{out}"
+    );
+}
+
+#[test]
+fn clears_doctor_description() {
+    // A description over the API's 1,024 characters (TSK-267): a warning
+    // that names the file, cleared by shortening it.
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let skill = ".claude/skills/cf-stack/SKILL.md";
+    let original = read(&root, skill);
+    let long = original.replacen(
+        "description: ",
+        &format!("description: {} ", "long ".repeat(210)),
+        1,
+    );
+    assert_ne!(long, original, "the skill has a description line");
+    write(&root, skill, &long);
+    let before = doctor(&root, "reading");
+    assert!(before.starts_with("warn"), "a tool limit warns:\n{before}");
+    prove(
+        "DOCTOR_DESCRIPTION",
+        "over the 1024-character API limit",
+        || doctor(&root, "reading"),
+        |printed| {
+            assert!(printed.contains(skill), "{printed}");
+            write(&root, skill, &original);
+        },
     );
 }
 

@@ -18,6 +18,19 @@ use super::repo::current_branch;
 use super::scan;
 use super::{standards, Violation};
 
+/// Whether the Git directory holds the merge marker.
+///
+/// # Errors
+/// An existing marker or its ancestors cannot be inspected or resolved.
+pub fn merge_head_present(git_dir: &Path) -> Result<bool, HookError> {
+    let path = git_dir.join("MERGE_HEAD");
+    let unreadable = |error| HookError::Config(format!("cannot read merge state: {error}"));
+    if crate::absence::proven_absent(&path).map_err(unreadable)? {
+        return Ok(false);
+    }
+    std::fs::metadata(&path).map(|_| true).map_err(unreadable)
+}
+
 /// Identify the binary and compare its compiled input digest with this source tree.
 /// Installed consumer repositories do not contain the compiler's source inputs.
 #[must_use]
@@ -104,7 +117,7 @@ pub fn pre_commit(
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
     let mut report = StageReport::default();
 
-    let branch = current_branch(&repo);
+    let branch = current_branch(&repo).map_err(HookError::Config)?;
     if policy.commit_to_protected.is_active()
         && policy.branch_is_protected(&branch)
         && !integrate_token
@@ -165,13 +178,24 @@ fn scan_staged(
             return;
         }
     };
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None) else {
-        report.notes.push(crate::remedy::Finding::new(
-            "secret scan skipped: could not read the staged diff",
-            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
-        ));
-        return;
+    let read_diff = || -> Result<_, git2::Error> {
+        let head_tree = match repo.head() {
+            Ok(head) => Some(head.peel_to_tree()?),
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(e) => return Err(e),
+        };
+        repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None)
+    };
+    let diff = match read_diff() {
+        Ok(diff) => diff,
+        Err(error) => {
+            report.violations.push(Violation::always_blocking(
+                "git.secret_scan",
+                format!("staged secret scan incomplete: cannot read the staged diff: {error}"),
+                &crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            return;
+        }
     };
 
     for delta in diff.deltas() {
@@ -181,10 +205,13 @@ fn scan_staged(
         if delta.status() == git2::Delta::Deleted {
             continue;
         }
-        let Some(path) = delta.new_file().path() else {
+        let Some(path) = delta.new_file().path_bytes() else {
             continue;
         };
-        let path_str = path.to_string_lossy();
+        // OS text rule (issue 79): `is_env_file` tests ASCII names on the final
+        // component only, and the escaped display form of a path ends the same
+        // way the bytes do, so it answers as the bytes would.
+        let path_str = crate::git::GitName::from_bytes(path).display().to_string();
         if scan::is_env_file(&path_str) {
             report.violations.push(Violation::new(
                 "git.secret_scan",
@@ -210,8 +237,8 @@ fn scan_staged(
                     hits.push(scan::SecretHit {
                         file: delta
                             .new_file()
-                            .path()
-                            .map(|p| p.to_string_lossy().to_string())
+                            .path_bytes()
+                            .map(|p| crate::git::GitName::from_bytes(p).display().to_string())
                             .unwrap_or_default(),
                         line: line.new_lineno().unwrap_or(0),
                         pattern,
@@ -604,7 +631,10 @@ pub fn commit_msg_with_files(
         report.violations.push(Violation::new(
             WATCHED_PATH_RULE,
             PolicyLevel::Warn,
-            format!("commit touches a declared contract surface ({path})"),
+            format!(
+                "commit touches a declared contract surface ({})",
+                crate::git::display_key(path)
+            ),
             crate::remedy::BREAKING_WATCH_PATH.remedy(),
         ));
     }
@@ -674,7 +704,7 @@ pub fn pre_merge_commit(
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
     let mut report = StageReport::default();
 
-    let branch = current_branch(&repo);
+    let branch = current_branch(&repo).map_err(HookError::Config)?;
     if policy.merge_to_protected.is_active()
         && policy.branch_is_protected(&branch)
         && !integrate_token
@@ -708,7 +738,9 @@ pub fn pre_merge_commit(
 /// `refs/remotes/…` never reaches policy evaluation.
 #[must_use]
 pub fn ref_line_touches_local_branch(line: &str) -> bool {
-    line.split_whitespace()
+    // Git's protocol separates the fields with a single space, and a ref name
+    // holds none: other whitespace (a no-break space) is part of the name.
+    line.splitn(3, ' ')
         .nth(2)
         .is_some_and(|r| r.starts_with("refs/heads/"))
 }
@@ -752,7 +784,7 @@ pub fn reference_transaction(
     // (git layer only — the git-guard never trusts the human override).
     let sanctioned = integrate_token || human_override;
 
-    for line in stdin.lines() {
+    for line in stdin.split('\n') {
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
@@ -824,23 +856,29 @@ fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -
         return false;
     };
     let common = repo.commondir();
-    if is_zero_sha(old_oid) || current != Some(old) || common.join("packed-refs.lock").exists() {
+    if is_zero_sha(old_oid)
+        || current != Some(old)
+        || !crate::absence::proven_absent(&common.join("packed-refs.lock"))
+            .is_ok_and(|absent| absent)
+    {
         return false;
     }
     let loose = std::fs::read_to_string(common.join(refname)).ok();
     let packed = std::fs::read_to_string(common.join("packed-refs")).ok();
-    loose.is_some_and(|loose| loose.trim() == old_oid)
+    loose.is_some_and(|loose| loose.strip_suffix('\n').unwrap_or(&loose) == old_oid)
         && packed.is_some_and(|packed| {
-            packed.lines().any(|line| {
+            packed.split('\n').any(|line| {
                 line.split_once(' ')
-                    .is_some_and(|(sha, name)| sha == old_oid && name.trim() == refname)
+                    .is_some_and(|(sha, name)| sha == old_oid && name == refname)
             })
         })
 }
 
 /// Parse one `<old-oid> <new-oid> <ref-name>` reference-transaction line.
 fn parse_ref_line(line: &str) -> Option<(&str, &str, &str)> {
-    let mut parts = line.split_whitespace();
+    // The fields are separated by single spaces (see
+    // `ref_line_touches_local_branch`); the ref name is the rest of the line.
+    let mut parts = line.splitn(3, ' ');
     let old = parts.next()?;
     let new = parts.next()?;
     let refname = parts.next()?;
@@ -860,19 +898,20 @@ fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bo
     let Ok(new) = git2::Oid::from_str(new_oid) else {
         return false;
     };
-    let mut candidates: Vec<String> = Vec::new();
-    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
-        if let Ok(name) = upstream.as_str() {
-            candidates.push(name.to_string());
+    let refname = match repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
+        Ok(upstream) => match upstream.as_str() {
+            Ok(name) => name.to_string(),
+            Err(_) => return false,
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            format!("refs/remotes/origin/{branch}")
         }
-    }
-    candidates.push(format!("refs/remotes/origin/{branch}"));
-    candidates.iter().any(|refname| {
-        repo.find_reference(refname)
-            .ok()
-            .and_then(|r| r.target())
-            .is_some_and(|remote_oid| new == remote_oid)
-    })
+        Err(_) => return false,
+    };
+    repo.find_reference(&refname)
+        .ok()
+        .and_then(|reference| reference.target())
+        == Some(new)
 }
 
 // ---------------------------------------------------------------------------
@@ -911,9 +950,11 @@ fn is_zero_sha(sha: &str) -> bool {
 #[must_use]
 pub fn parse_push_refs(input: &str) -> Vec<PushRef> {
     input
-        .lines()
+        .split('\n')
         .filter_map(|line| {
-            let mut parts = line.split_whitespace();
+            // pre-push's stdin separates the fields with single spaces, and a
+            // ref name holds none, so another whitespace is part of the name.
+            let mut parts = line.splitn(4, ' ');
             Some(PushRef {
                 local_ref: parts.next()?.to_string(),
                 local_sha: parts.next()?.to_string(),
@@ -979,39 +1020,32 @@ pub fn pre_push(
             ));
         }
 
-        // A protected branch moves only by a proven fast-forward: when the
-        // remote tip is not in this repository, ancestry cannot be judged,
-        // so the update is refused as a force push. Otherwise a push the
-        // integrate token or a human's override lets through could rewrite
-        // history unseen.
-        if protected && policy.force_push_protected.is_active() && ancestry_unknown(&repo, r) {
-            report.violations.push(Violation::new(
-                "git.force_push_protected",
+        let (force_level, force_rule, remedy) = if protected {
+            (
                 policy.force_push_protected,
-                format!(
-                    "push to protected branch '{branch}' cannot be proven a fast-forward: \
-                     its remote tip {} is not in this repository; fetch it first",
-                    r.remote_sha
-                ),
+                "git.force_push_protected",
                 crate::remedy::PROTECTED_BRANCH.remedy(),
-            ));
-        } else if is_force_update(&repo, r) {
-            if protected {
-                if policy.force_push_protected.is_active() {
-                    report.violations.push(Violation::new(
-                        "git.force_push_protected",
-                        policy.force_push_protected,
-                        format!("non-fast-forward (force) push to protected branch '{branch}'"),
-                        crate::remedy::PROTECTED_BRANCH.remedy(),
-                    ));
-                }
-            } else if policy.force_push_unprotected.is_active() {
-                report.violations.push(Violation::new(
-                    "git.force_push_unprotected",
-                    policy.force_push_unprotected,
-                    format!("non-fast-forward (force) push to branch '{branch}'"),
-                    crate::remedy::FORCE_PUSH.remedy(),
-                ));
+            )
+        } else {
+            (
+                policy.force_push_unprotected,
+                "git.force_push_unprotected",
+                crate::remedy::FORCE_PUSH.remedy(),
+            )
+        };
+        if force_level.is_active() {
+            match is_force_update(&repo, r) {
+                Ok(false) => {},
+                Ok(true) => report.violations.push(Violation::new(
+                    force_rule, force_level,
+                    format!("non-fast-forward (force) push to {}branch '{branch}'", if protected { "protected " } else { "" }),
+                    remedy,
+                )),
+                Err(reason) => report.violations.push(Violation::always_blocking(
+                    force_rule,
+                    format!("push to branch '{branch}' cannot be proven a fast-forward: {reason}; fetch it first"),
+                    &remedy,
+                )),
             }
         }
 
@@ -1057,8 +1091,14 @@ fn epic_line_push(
             crate::remedy::HOOK_UNEVALUATED.remedy(),
         ));
     };
-    let default_target = crate::workgraph::default_work_target(root);
-    let tracking = [Some(pushed.local_sha.as_str()), default_target.as_deref()]
+    // A default target that cannot be read is reported, never read as none.
+    let default_target = crate::workgraph::default_work_target(root)
+        .map_err(|error| format!("the default target cannot be read: {error}"));
+    let target_revision = match &default_target {
+        Ok(target) => target.as_deref(),
+        Err(_) => None,
+    };
+    let tracking = [Some(pushed.local_sha.as_str()), target_revision]
         .into_iter()
         .flatten()
         .map(|revision| crate::workgraph::durable_work_tracking_enabled_at(root, revision))
@@ -1069,12 +1109,14 @@ fn epic_line_push(
                 report,
                 &format!("durable work tracking cannot be read: {error}"),
             );
+        } else if let Err(error) = &default_target {
+            skipped(report, error);
         }
         return;
     }
     let first_push = is_zero_sha(&pushed.remote_sha) || pushed.remote_sha.is_empty();
     let judged = (|| {
-        let target = default_target.ok_or("no main or master branch to judge the line against")?;
+        let target = default_target?.ok_or("no main or master branch to judge the line against")?;
         let base = if first_push {
             let commit = |revision: &str| {
                 repo.revparse_single(revision)
@@ -1146,12 +1188,20 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
         ));
         return;
     }
-    if is_force_update(repo, r) {
-        report.violations.push(block(
-            "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)"
-                .to_string(),
-        ));
-        return;
+    match is_force_update(repo, r) {
+        Ok(false) => {}
+        Ok(true) => {
+            report.violations.push(block(
+                "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)".to_string(),
+            ));
+            return;
+        }
+        Err(reason) => {
+            report.violations.push(block(format!(
+                "cannot prove registry push is append-only: {reason}; fetch its remote tip first"
+            )));
+            return;
+        }
     }
     let git = crate::ids::Git::new(root);
     let exclude =
@@ -1174,42 +1224,21 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
     }
 }
 
-/// `true` when the remote ref exists and the local sha does not descend from
-/// it (a history rewrite). Unknown objects (e.g. shallow clones) skip the
-/// check rather than guessing.
-fn is_force_update(repo: &Repository, r: &PushRef) -> bool {
+/// Whether the update rewrites history; unreadable ancestry is an error.
+fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
     if is_zero_sha(&r.remote_sha) || r.remote_sha.is_empty() {
-        return false; // new branch on the remote
+        return Ok(false); // new branch on the remote
     }
-    let (Ok(local), Ok(remote)) = (
-        git2::Oid::from_str(&r.local_sha),
-        git2::Oid::from_str(&r.remote_sha),
-    ) else {
-        return false;
-    };
+    let local =
+        git2::Oid::from_str(&r.local_sha).map_err(|e| format!("invalid local object id: {e}"))?;
+    let remote =
+        git2::Oid::from_str(&r.remote_sha).map_err(|e| format!("invalid remote object id: {e}"))?;
     if local == remote {
-        return false;
+        return Ok(false);
     }
-    match repo.graph_descendant_of(local, remote) {
-        Ok(descends) => !descends,
-        Err(_) => false, // remote sha unknown locally — cannot judge
-    }
-}
-
-/// `true` when an update of an existing remote branch cannot be classified:
-/// a sha does not parse, or the remote tip is not in this repository, so
-/// [`is_force_update`] could not judge it.
-fn ancestry_unknown(repo: &Repository, r: &PushRef) -> bool {
-    if is_zero_sha(&r.remote_sha) || r.remote_sha.is_empty() || r.local_sha == r.remote_sha {
-        return false;
-    }
-    let (Ok(local), Ok(remote)) = (
-        git2::Oid::from_str(&r.local_sha),
-        git2::Oid::from_str(&r.remote_sha),
-    ) else {
-        return true;
-    };
-    repo.graph_descendant_of(local, remote).is_err()
+    repo.graph_descendant_of(local, remote)
+        .map(|descends| !descends)
+        .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
 
 /// Time budget for the whole pre-push set. A push set that takes longer still
@@ -1238,14 +1267,18 @@ pub fn run_push_targets(
     report: &mut StageReport,
 ) -> Vec<PushStep> {
     let cfg_path = root.join(".codeflow").join("test-config.json");
-    if !cfg_path.exists() {
-        report.notes.push(crate::remedy::Finding::new(
-            "quick targets skipped: no .codeflow/test-config.json",
-            crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
-        ));
-        return Vec::new();
-    }
-    match run_gate_exact(root, "quick") {
+    let outcome = match crate::absence::proven_absent(&cfg_path) {
+        Ok(true) => {
+            report.notes.push(crate::remedy::Finding::new(
+                "quick targets skipped: no .codeflow/test-config.json",
+                crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
+            ));
+            return Vec::new();
+        }
+        Ok(false) => run_gate_exact(root, "quick"),
+        Err(error) => Err(crate::testing::error::TestingError::Io(error)),
+    };
+    match outcome {
         Ok(GateOutcome::NoTargets { reason }) => {
             report.notes.push(crate::remedy::Finding::new(
                 format!(
@@ -1340,6 +1373,147 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r19_missing_test_config_keeps_all_absence_results() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            crate::testing::config::load_test_config(
+                &dir.path().join(".codeflow/test-config.json")
+            ),
+            Err(crate::testing::error::TestingError::ConfigNotFound(_))
+        ));
+        assert!(matches!(
+            run_gate_exact(dir.path(), "quick"),
+            Ok(GateOutcome::NoTargets { .. })
+        ));
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(steps.is_empty() && report.violations.is_empty());
+        assert!(report
+            .notes
+            .iter()
+            .any(|n| n.text.contains("no .codeflow/test-config.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_dangling_packed_ref_lock_withholds_prune_exemption() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let repo = Repository::open(dir.path()).unwrap();
+        let oid = repo.head().unwrap().target().unwrap();
+        let name = "refs/heads/feat/x";
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\n")).unwrap();
+        assert!(keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+        std::os::unix::fs::symlink(
+            dir.path().join("missing"),
+            repo.path().join("packed-refs.lock"),
+        )
+        .unwrap();
+        assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_leaf_refuses_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+        std::fs::create_dir(&config).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        let mut report = StageReport::default();
+        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
+        assert!(steps.is_empty());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
+            "{:?}",
+            report.violations
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_ancestor_refuses_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
+        let mut report = StageReport::default();
+        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
+        assert!(steps.is_empty());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_merge_marker_absence_requires_resolved_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!super::merge_head_present(dir.path()).unwrap());
+        let marker = dir.path().join("MERGE_HEAD");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &marker).unwrap();
+        assert!(super::merge_head_present(dir.path()).is_err());
+        let ancestor = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &ancestor).unwrap();
+        assert!(super::merge_head_present(&ancestor).is_err());
+        std::fs::remove_file(marker).unwrap();
+        std::fs::write(dir.path().join("MERGE_HEAD"), "abc\n").unwrap();
+        assert!(super::merge_head_present(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn r15_extra_packed_ref_framing_does_not_erase_cr() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        let name = "refs/heads/release";
+        repo.reference(name, oid, false, "fixture").unwrap();
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\r\n")).unwrap();
+        assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+    }
+
+    #[test]
+    fn r15_owned_push_protocol_keeps_carriage_return() {
+        let parsed = parse_push_refs("refs/heads/x abc refs/heads/y def\r\n");
+        assert_eq!(parsed[0].remote_sha, "def\r");
+    }
+
+    #[test]
+    fn packed_refs_keep_unicode_whitespace_in_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        let name = "refs/heads/release\u{a0}";
+        repo.reference(name, oid, false, "fixture").unwrap();
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\n")).unwrap();
+        assert!(keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+        // A lookalike packed name must not authorize pruning a different ref.
+        repo.reference("refs/heads/release", oid, false, "fixture")
+            .unwrap();
+        assert!(!keeps_value(
+            &repo,
+            "refs/heads/release",
+            &oid.to_string(),
+            &"0".repeat(40)
+        ));
+    }
     use std::path::Path;
 
     use super::super::policy::PolicyLevel;
@@ -2399,6 +2573,23 @@ mod tests {
         assert!(!ref_line_touches_local_branch("garbage line"));
     }
 
+    /// Round fourteen on issue 79: git separates the protocol fields with a
+    /// single space, so a no-break space in a ref name is part of the name and
+    /// the protected `release` plus that space is not read as `release`.
+    #[test]
+    fn a_ref_name_keeps_whitespace_that_is_part_of_it() {
+        let name = "refs/heads/release\u{a0}";
+        assert_eq!(
+            parse_ref_line(&format!("aaa bbb {name}")),
+            Some(("aaa", "bbb", name))
+        );
+        assert!(ref_line_touches_local_branch(&format!("aaa bbb {name}")));
+        let pushed = parse_push_refs(&format!("(delete) {} {name} bbb\n", "0".repeat(40)));
+        assert_eq!(pushed.len(), 1);
+        assert_eq!(pushed[0].remote_ref, name);
+        assert_eq!(pushed[0].remote_sha, "bbb");
+    }
+
     /// Point `refs/remotes/origin/<branch>` at `oid` (a simulated fetched head).
     fn set_origin_ref(dir: &Path, branch: &str, oid: &str) {
         git(
@@ -3183,5 +3374,104 @@ mod tests {
         assert!(!fake.violations.is_empty(), "fake merge must be checked");
         let real = commit_msg(&GitPolicy::default(), "Merge branch 'main'\n", true);
         assert!(real.violations.is_empty(), "real merge stays exempt");
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    #[test]
+    fn r22_unknown_force_update_refuses_unprotected_and_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"a")]);
+        let policy = GitPolicy {
+            force_push_unprotected: super::super::PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        for branch in ["feat/example", "codeflow/registry"] {
+            for remote in ["1111111111111111111111111111111111111111", "invalid"] {
+                let r = PushRef {
+                    local_ref: format!("refs/heads/{branch}"),
+                    remote_ref: format!("refs/heads/{branch}"),
+                    local_sha: oid.to_string(),
+                    remote_sha: remote.into(),
+                };
+                let report = pre_push(dir.path(), &policy, &[r], false, false).unwrap();
+                assert!(
+                    report
+                        .violations
+                        .iter()
+                        .any(|v| v.message.contains("cannot")
+                            && v.level == super::super::PolicyLevel::Block),
+                    "{report:?}"
+                );
+            }
+        }
+        let r = PushRef {
+            local_ref: "refs/heads/feat/example".into(),
+            remote_ref: "refs/heads/feat/example".into(),
+            local_sha: oid.to_string(),
+            remote_sha: "0".repeat(40),
+        };
+        assert!(pre_push(dir.path(), &policy, &[r], false, false)
+            .unwrap()
+            .violations
+            .is_empty());
+        drop(repo);
+    }
+    #[test]
+    fn r22_force_update_does_not_report_unknown_as_fast_forward() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut r = PushRef {
+            local_ref: "refs/heads/codeflow/registry".into(),
+            remote_ref: "refs/heads/codeflow/registry".into(),
+            local_sha: "2".repeat(40),
+            remote_sha: "0".repeat(40),
+        };
+        assert!(format!("{:?}", is_force_update(&repo, &r)).contains("false"));
+        for unknown in ["1".repeat(40), "malformed".into()] {
+            r.remote_sha = unknown;
+            assert!(format!("{:?}", is_force_update(&repo, &r)).starts_with("Err("));
+        }
+    }
+    #[test]
+    fn r22_secret_scan_refuses_unreadable_head_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.index().unwrap().write().unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.is_empty(), "unborn HEAD: {report:?}");
+        let blob = repo.blob(b"not a tree").unwrap();
+        std::fs::write(repo.path().join("HEAD"), format!("{blob}\n")).unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.iter().any(|v| v.rule == "git.secret_scan" && v.level == super::super::PolicyLevel::Block), "{report:?}");
+    }
+    #[test]
+    fn r22_secret_scan_refuses_unreadable_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"nested/a", b"a")]);
+        repo.reference("HEAD", oid, true, "test").unwrap();
+        let tree = repo.find_commit(oid).unwrap().tree().unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&tree).unwrap();
+        index.write().unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.is_empty(), "readable diff: {report:?}");
+        let subtree = tree.get_name("nested").unwrap().id().to_string();
+        std::fs::remove_file(
+            repo.path()
+                .join("objects")
+                .join(&subtree[..2])
+                .join(&subtree[2..]),
+        )
+        .unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.iter().any(|v| v.rule == "git.secret_scan" && v.level == super::super::PolicyLevel::Block), "{report:?}");
     }
 }

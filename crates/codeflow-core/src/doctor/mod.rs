@@ -24,6 +24,7 @@ use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
 mod grok_hooks;
+mod remote_perimeter;
 mod startup_files;
 
 /// Outcome of a health check.
@@ -35,7 +36,8 @@ pub enum Status {
     /// A warning, with the step that clears it (SPC-013 R-80).
     Warn(Remedy),
     /// A state doctor cannot read, with the manual step that confirms it
-    /// (TSK-147 AC-1). Never fails and never warns.
+    /// (TSK-147 AC-1), or an advisory guideline above its number with the
+    /// step that clears it (TSK-267). Never fails and never warns.
     Note(Remedy),
 }
 
@@ -78,7 +80,7 @@ fn user_home() -> PathBuf {
 type LookPathFn = fn(&str) -> Result<String, String>;
 
 /// Callback to read an environment variable.
-type EnvVarFn = fn(&str) -> Option<String>;
+type EnvVarFn = fn(&str) -> Option<std::ffi::OsString>;
 
 /// Callback to execute a command with arguments.
 type ExecCommandFn = fn(&str, &[&str]) -> Result<String, String>;
@@ -94,7 +96,11 @@ type GuardCanaryFn = fn(&str) -> CapturedRun;
 /// Callback that says what `codeflow update` would do with a file (relative
 /// to the project root), by update's own steps; `None` when update does not
 /// manage it.
-type UpdatePlanFn = fn(&Path, &str) -> Option<crate::scaffold::update::Decision>;
+type UpdatePlanFn =
+    fn(
+        &Path,
+        &str,
+    ) -> Result<Option<crate::scaffold::update::Decision>, crate::scaffold::ScaffoldError>;
 
 /// How a run ended: its exit code (`None` when a signal ended it) and what
 /// it printed.
@@ -154,9 +160,9 @@ pub struct Options {
 }
 
 impl Options {
-    fn env(&self, name: &str) -> Option<String> {
+    fn env(&self, name: &str) -> Option<std::ffi::OsString> {
         self.env_var
-            .map_or_else(|| std::env::var(name).ok(), |read| read(name))
+            .map_or_else(|| std::env::var_os(name), |read| read(name))
     }
 
     /// Where Codex keeps its state: `CODEX_HOME`, else `~/.codex`.
@@ -186,9 +192,11 @@ impl Options {
         if let Some(f) = self.look_path {
             f(name)
         } else {
-            which::which(name)
-                .map(|p| p.to_string_lossy().to_string())
-                .map_err(|e| e.to_string())
+            which::which(name).map_err(|e| e.to_string()).and_then(|p| {
+                p.to_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "the program's path is not valid UTF-8".to_string())
+            })
         }
     }
 
@@ -290,6 +298,7 @@ const CHECK_NAMES: &[&str] = &[
     "delegate-roundtrip",
     "repo-integrity",
     "ci-perimeter",
+    "remote-perimeter",
     "managed-drift",
     "customization",
     "instructions",
@@ -325,6 +334,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("delegate-roundtrip", check_delegate_roundtrip);
     m.insert("repo-integrity", check_repo_integrity);
     m.insert("ci-perimeter", check_ci_perimeter);
+    m.insert("remote-perimeter", remote_perimeter::check);
     m.insert("managed-drift", check_managed_drift);
     m.insert("customization", check_customization);
     m.insert("instructions", check_instructions);
@@ -398,7 +408,7 @@ fn check_hooks(opts: &Options) -> CheckResult {
 
     if opts
         .do_exec(&codeflow_bin, &["git-hook", "capabilities"])
-        .map_or(true, |s| s.trim() != "hooks 3")
+        .map_or(true, |s| s.strip_suffix('\n').unwrap_or(&s) != "hooks 3")
     {
         return CheckResult {
             name: "hooks".into(),
@@ -450,6 +460,14 @@ fn check_hooks(opts: &Options) -> CheckResult {
                 };
             }
         }
+        Wiring::Unreadable(message) => {
+            return CheckResult {
+                name: "hooks".into(),
+                status: Status::Fail,
+                message,
+                duration: start.elapsed(),
+            };
+        }
         Wiring::Broken(warning) => {
             return CheckResult {
                 name: "hooks".into(),
@@ -482,7 +500,14 @@ fn check_hooks(opts: &Options) -> CheckResult {
 /// keeps the choice visible until the adopter makes it.
 fn git_dir_hooks_finding(root: &Path) -> Option<Finding> {
     use crate::scaffold::detect::{self, CODEFLOW_HOOKS_PATH};
-    if detect::configured_hooks_path(root).as_deref() != Some(CODEFLOW_HOOKS_PATH) {
+    // This optional note only names hooks displaced by a known setting.
+    // The authoritative wiring check below reports configuration read errors.
+    if detect::configured_hooks_path(root)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some(CODEFLOW_HOOKS_PATH)
+    {
         return None;
     }
     let found = detect::git_dir_hooks(root)?;
@@ -504,6 +529,8 @@ enum Wiring {
     /// A hook git runs cannot call its shim: missing, not executable, or no
     /// shim named outside a comment. Reading proves this negative.
     Broken(Finding),
+    /// Hook inventory or content could not be obtained.
+    Unreadable(String),
     /// Another manager's hooks are executable and name every shim. Reading
     /// cannot prove they run it (TSK-147 round 4 F6), so this is a note
     /// that names the git event which confirms it.
@@ -520,17 +547,36 @@ fn hooks_wiring(root: &Path) -> Wiring {
     use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
 
     let shims = root.join(CODEFLOW_HOOKS_PATH);
-    if !shims.join("pre-commit").exists() {
-        return Wiring::Read; // no scaffolded shims — nothing to wire
+    match crate::absence::proven_absent(&shims.join("pre-commit")) {
+        Ok(true) => return Wiring::Read,
+        Ok(false) => {
+            if let Err(error) = std::fs::metadata(shims.join("pre-commit")) {
+                return Wiring::Unreadable(format!(
+                    "cannot inspect hook shim: {error}; repair .codeflow/git-hooks/pre-commit"
+                ));
+            }
+        }
+        Err(error) => {
+            return Wiring::Unreadable(format!(
+                "cannot inspect hook shim: {error}; repair .codeflow/git-hooks/pre-commit"
+            ))
+        }
     }
     // Prefer the configured string: relative `.codeflow/git-hooks` is the
     // contract so each worktree uses its own shims. An absolute path (often
     // the main checkout) is a Warn even if the files happen to exist.
-    if let Some(configured) = crate::scaffold::detect::configured_hooks_path(root) {
+    let configured = match crate::scaffold::detect::configured_hooks_path(root) {
+        Ok(configured) => configured,
+        Err(error) => {
+            return Wiring::Unreadable(format!("cannot read Git hook configuration: {error}"))
+        }
+    };
+    if let Some(configured) = configured {
         if configured == CODEFLOW_HOOKS_PATH {
             return Wiring::Read;
         }
         if std::path::Path::new(&configured).is_absolute() {
+            let configured = crate::git::display_key(&configured);
             return Wiring::Broken(Finding::new(
                 format!(
                     "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"
@@ -539,8 +585,12 @@ fn hooks_wiring(root: &Path) -> Wiring {
             ));
         }
     }
-    let Some(active) = crate::hooks::orient::git_hooks_dir(root) else {
-        return Wiring::Read;
+    let active = match crate::hooks::orient::git_hooks_dir(root) {
+        Ok(Some(active)) => active,
+        Ok(None) => return Wiring::Read,
+        Err(error) => {
+            return Wiring::Unreadable(format!("cannot read Git hook directory: {error}"))
+        }
     };
     let wired = match (active.canonicalize(), shims.canonicalize()) {
         (Ok(a), Ok(s)) => a == s,
@@ -554,7 +604,10 @@ fn hooks_wiring(root: &Path) -> Wiring {
         .unwrap_or(&active)
         .display()
         .to_string();
-    let uncalled = shims_not_called(&active, &shims);
+    let uncalled = match shims_not_called(&active, &shims) {
+        Ok(names) => names,
+        Err(error) => return Wiring::Unreadable(format!("cannot read hook wiring: {error}")),
+    };
     if uncalled.is_empty() {
         return Wiring::Unverified(Finding::new(
             format!(
@@ -591,41 +644,57 @@ fn hooks_wiring(root: &Path) -> Wiring {
 /// ignored), and a live line of it, not a comment, names
 /// `.codeflow/git-hooks/<name>`. An empty result proves nothing more: a
 /// named shim may still never run, which only a git event shows.
-fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
+fn shims_not_called(active: &Path, shims: &Path) -> Result<Vec<String>, String> {
     use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
-    let mut names: Vec<String> = std::fs::read_dir(shims)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(shims).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_file()
+        {
+            names.push(
+                entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| "shim name is not valid UTF-8")?,
+            );
+        }
+    }
     names.sort();
-    names
-        .into_iter()
-        .filter_map(|name| {
-            let hook = active.join(&name);
-            let why = match std::fs::read_to_string(&hook) {
-                Err(_) => "no hook",
-                Ok(_) if !crate::scaffold::detect::is_executable(&hook) => "not executable",
-                Ok(text) => {
-                    let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
-                    if text.lines().any(|line| shell_code(line).contains(&call)) {
-                        return None;
-                    }
-                    "no live call"
-                }
-            };
-            Some(format!("{name} ({why})"))
-        })
-        .collect()
+    let mut uncalled = Vec::new();
+    for name in names {
+        let hook = active.join(&name);
+        let text = match crate::bounded_file::read_regular_to_string(&hook) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                uncalled.push(format!("{name} (no hook)"));
+                continue;
+            }
+            Err(error) => return Err(format!("{}: {error}", hook.display())),
+        };
+        let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
+        let why = if !crate::scaffold::detect::is_executable(&hook) {
+            "not executable"
+        } else if text
+            .split('\n')
+            .any(|line| shell_code(line).contains(&call))
+        {
+            continue;
+        } else {
+            "no live call"
+        };
+        uncalled.push(format!("{name} ({why})"));
+    }
+    Ok(uncalled)
 }
 
 /// A shell line without its comment: from a `#` that starts a word.
 fn shell_code(line: &str) -> &str {
     let mut previous = ' ';
     for (at, c) in line.char_indices() {
-        if c == '#' && previous.is_whitespace() {
+        if c == '#' && matches!(previous, ' ' | '\t' | '\n') {
             return &line[..at];
         }
         previous = c;
@@ -657,6 +726,28 @@ fn check_claude(opts: &Options) -> CheckResult {
     }
 }
 
+fn input_absent(path: &Path) -> std::io::Result<bool> {
+    if crate::absence::proven_absent(path)? {
+        return Ok(true);
+    }
+    std::fs::metadata(path)?;
+    Ok(false)
+}
+
+fn input_failure(
+    name: &str,
+    start: Instant,
+    path: &Path,
+    error: impl std::fmt::Display,
+) -> CheckResult {
+    CheckResult {
+        name: name.into(),
+        status: Status::Fail,
+        message: format!("cannot read {}: {error}; repair the file or its parent directories, then rerun `codeflow doctor --check {name}`", path.display()),
+        duration: start.elapsed(),
+    }
+}
+
 /// Codex harness wiring (ADR-0008). `.codex/hooks.json` binds the same
 /// `codeflow hook` guards to an interactive codex session that
 /// `.claude/settings.json` binds to Claude Code, but only after a one-time
@@ -676,7 +767,11 @@ fn check_codex(opts: &Options) -> CheckResult {
         .join(".codex")
         .join("hooks.json");
 
-    if !hooks_json.exists() {
+    let absent = match input_absent(&hooks_json) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("codex", start, &hooks_json, error),
+    };
+    if absent {
         return CheckResult {
             name: "codex".into(),
             status: Status::Pass,
@@ -694,7 +789,18 @@ fn check_codex(opts: &Options) -> CheckResult {
         "run `/hooks` inside interactive codex once and approve and enable the CodeFlow hooks";
     let observe = "start codex in this project and confirm a real hook event ran, such as the CodeFlow session-orient context at session start";
     let root = Path::new(&opts.project_dir);
-    let trust = if crate::hooks::RepoInfo::discover(root).is_some_and(|info| info.is_worktree) {
+    let repo = match crate::hooks::RepoInfo::discover(root) {
+        Ok(repo) => repo,
+        Err(error) => {
+            return CheckResult {
+                name: "codex".into(),
+                status: Status::Fail,
+                message: format!("cannot read repository context: {error}"),
+                duration: start.elapsed(),
+            }
+        }
+    };
+    let trust = if repo.is_some_and(|info| info.is_worktree) {
         Err("a linked worktree, whose project hooks codex takes from the main checkout".to_string())
     } else {
         codex_hook_trust(&hooks_json, &opts.codex_home())
@@ -820,10 +926,12 @@ struct CodexHookState {
 /// it). `Err` when the hooks file does not read as Codex reads it, wires no
 /// hook, or holds a hook shape that hash does not cover.
 fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usize), String> {
-    let text = std::fs::read_to_string(hooks_json).map_err(|e| format!("hooks.json: {e}"))?;
+    let text = crate::bounded_file::read_regular_to_string(hooks_json)
+        .map_err(|e| format!("hooks.json: {e}"))?;
     let file: CodexHooksFile =
         serde_json::from_str(&text).map_err(|e| format!("hooks.json as codex reads it: {e}"))?;
-    let config = match std::fs::read_to_string(codex_home.join("config.toml")) {
+    let config = match crate::bounded_file::read_regular_to_string(&codex_home.join("config.toml"))
+    {
         Ok(text) => text
             .parse::<toml::Table>()
             .map_err(|e| format!("codex config.toml: {e}"))?,
@@ -995,15 +1103,29 @@ fn check_grok(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = Path::new(&opts.project_dir);
     let hooks_dir = root.join(".grok").join("hooks");
-    let has_project_hooks = hooks_dir.is_dir()
-        && std::fs::read_dir(&hooks_dir).is_ok_and(|entries| {
-            entries.flatten().any(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-            })
-        });
+    let has_project_hooks = (|| -> std::io::Result<bool> {
+        if input_absent(&hooks_dir)? {
+            return Ok(false);
+        }
+        let mut found = false;
+        for entry in std::fs::read_dir(&hooks_dir)? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                // An existing hook entry must be obtainable even when another entry matched.
+                std::fs::metadata(entry.path())?;
+                found = true;
+            }
+        }
+        Ok(found)
+    })();
+    let has_project_hooks = match has_project_hooks {
+        Ok(found) => found,
+        Err(error) => return input_failure("grok", start, &hooks_dir, error),
+    };
 
     if !has_project_hooks {
         return CheckResult {
@@ -1023,7 +1145,15 @@ fn check_grok(opts: &Options) -> CheckResult {
         "run `/hooks-trust` in grok inside this project once (or start grok with `--trust`)";
     let observe = "start grok in this project and confirm a real hook event ran, such as the CodeFlow guard answering a shell command";
     let env = opts.env("GROK_FOLDER_TRUST");
-    let (status, message) = match grok_folder_trust(root, &opts.grok_home(), env.as_deref()) {
+    if env.as_ref().is_some_and(|value| value.to_str().is_none()) {
+        return CheckResult {
+            name: "grok".into(),
+            status: Status::Fail,
+            message: "cannot read GROK_FOLDER_TRUST as text".into(),
+            duration: start.elapsed(),
+        };
+    }
+    let (status, message) = match grok_folder_trust(root, &opts.grok_home(), env.as_deref().and_then(std::ffi::OsStr::to_str)) {
         GrokTrust::Trusted => (
             Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", observe)])),
             format!(".grok/hooks present, {presence}: grok trusts this folder, so project hooks should load (configured; runtime not verified)"),
@@ -1055,7 +1185,17 @@ fn check_grok(opts: &Options) -> CheckResult {
     // Trust decides whether grok loads the hooks; these decide whether a
     // loaded hook can run and refuse. A hook problem outranks trust: it
     // stays after the folder is trusted.
-    let templated = grok_hooks::templated(root);
+    let templated = match grok_hooks::templated(root) {
+        Ok(templated) => templated,
+        Err(error) => {
+            return CheckResult {
+                name: "grok".into(),
+                status: Status::Fail,
+                message: error,
+                duration: start.elapsed(),
+            }
+        }
+    };
     let (status, message) = if templated.is_empty() {
         let note = grok_path_note(opts, root);
         match grok_canary(opts, root) {
@@ -1090,7 +1230,12 @@ fn check_grok(opts: &Options) -> CheckResult {
         let mut left = String::new();
         for path in &templated {
             use crate::scaffold::update::Decision;
-            let decision = opts.update_plan.and_then(|plan| plan(root, path));
+            let decision = opts.update_plan.and_then(|plan| match plan(root, path) {
+                Ok(decision) => decision,
+                Err(error) => Some(crate::scaffold::update::Decision::Unproven(
+                    error.to_string(),
+                )),
+            });
             let repairs = match &decision {
                 Some(Decision::Rewrite(text)) => !grok_hooks::keeps_templates(text),
                 Some(Decision::ConflictProposal(_)) => true,
@@ -1154,6 +1299,9 @@ fn update_leaves(
 ) -> String {
     use crate::scaffold::update::Decision;
     match decision {
+        Some(Decision::Unproven(error)) => {
+            format!("; cannot read update inputs for {path}: {error}; no repair is proven")
+        }
         Some(Decision::KeptUserModification) => {
             let baseline = format!(".codeflow/.baseline/{path}");
             let shipped = if root.join(&baseline).is_file() {
@@ -1186,7 +1334,12 @@ fn missing_guard_repair(opts: &Options, root: &Path) -> (remedy::Remedy, String)
     use crate::scaffold::update::Decision;
     let mut why = String::new();
     for path in grok_hooks::GUARD_FILES {
-        let decision = opts.update_plan.and_then(|plan| plan(root, path));
+        let decision = opts.update_plan.and_then(|plan| match plan(root, path) {
+            Ok(decision) => decision,
+            Err(error) => Some(crate::scaffold::update::Decision::Unproven(
+                error.to_string(),
+            )),
+        });
         let restores = match &decision {
             Some(Decision::Rewrite(text)) => grok_hooks::binds_shipped_guard(text),
             Some(Decision::ConflictProposal(text)) => grok_hooks::proposes_shipped_guard(text),
@@ -1241,6 +1394,7 @@ enum GrokCanary {
 /// stderr and a JSON deny answer on stdout. It does not start grok.
 fn grok_canary(opts: &Options, root: &Path) -> GrokCanary {
     match grok_hooks::shell_guard(root) {
+        grok_hooks::ShellGuard::Unproven(error) => return GrokCanary::NotRun(error),
         grok_hooks::ShellGuard::Missing => return GrokCanary::NoGuard,
         grok_hooks::ShellGuard::Customised(files) => {
             return GrokCanary::Customised(files.join(", "))
@@ -1356,12 +1510,18 @@ fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> Result<bool, String
         return Ok(value);
     }
     for name in ["config.toml", "managed_config.toml"] {
-        let Some(table) = std::fs::read_to_string(grok_home.join(name))
-            .ok()
-            .and_then(|text| text.parse::<toml::Table>().ok())
-        else {
+        let path = grok_home.join(name);
+        if !path
+            .try_exists()
+            .map_err(|error| format!("cannot inspect {name}: {error}"))?
+        {
             continue;
-        };
+        }
+        let text = crate::bounded_file::read_regular_to_string(&path)
+            .map_err(|error| format!("cannot read {name}: {error}"))?;
+        let table = text
+            .parse::<toml::Table>()
+            .map_err(|error| format!("cannot parse {name}: {error}"))?;
         if table.contains_key("version_overrides") {
             return Err(format!(
                 "{name} has version_overrides, which grok applies for its own version"
@@ -1439,6 +1599,8 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
         Ok(true) => {}
     }
     let path = grok_home.join("trusted_folders.toml");
+    // Read as Grok reads it: the launch-path canary test in codex_hooks
+    // holds a fifo here to pause doctor after start-up, so a fifo is opened.
     let document = match std::fs::read_to_string(&path) {
         Ok(text) => match toml::from_str::<GrokTrustDocument>(&text) {
             Ok(document) => document,
@@ -1488,7 +1650,11 @@ fn check_config(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let config_dir = Path::new(&opts.project_dir).join(".codeflow");
 
-    if !config_dir.is_dir() {
+    let absent = match input_absent(&config_dir) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("config", start, &config_dir, error),
+    };
+    if absent {
         return CheckResult {
             name: "config".into(),
             status: Status::Warn(remedy::DOCTOR_INIT.remedy()),
@@ -1677,8 +1843,10 @@ fn observe_binding_drift(
                 Ok(command) => {
                     match opts.do_exec_bounded(&command, probe.args, VERSION_PROBE_TIMEOUT) {
                         Ok(observed)
-                            if probe_version(probe_id, observed.trim())
-                                == Some(record.requested.harness_version.as_str()) => {}
+                            if probe_version(
+                                probe_id,
+                                observed.strip_suffix('\n').unwrap_or(&observed),
+                            ) == Some(record.requested.harness_version.as_str()) => {}
                         Ok(observed) => drift.push((
                             record.binding_id.clone(),
                             format!(
@@ -1741,6 +1909,13 @@ fn observe_binding_drift(
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    // Opening a fifo blocks, so a non-regular file is refused first.
+    if !std::fs::metadata(path)
+        .map_err(|error| format!("open: {error}"))?
+        .is_file()
+    {
+        return Err("open: not a regular file".to_string());
+    }
     let file = std::fs::File::open(path).map_err(|error| format!("open: {error}"))?;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
@@ -1952,14 +2127,14 @@ fn walk_json_files_inner(
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        if std::fs::metadata(&path)?.is_dir() {
             walk_json_files_inner(root, &path, invalid)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
-            let rel = path.strip_prefix(root).map_or_else(
-                |_| path.to_string_lossy().to_string(),
-                |p| p.to_string_lossy().to_string(),
-            );
-            match std::fs::read(&path) {
+            // Shown to a person (OS text rule, issue 79).
+            let rel = crate::git::display_key(&crate::portable_path::slashed(
+                path.strip_prefix(root).unwrap_or(&path),
+            ));
+            match crate::bounded_file::read_regular(&path) {
                 Ok(data) => {
                     if serde_json::from_slice::<serde_json::Value>(&data).is_err() {
                         invalid.push(rel);
@@ -1981,7 +2156,20 @@ fn check_permissions(opts: &Options) -> CheckResult {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&config_dir) {
+        // Only a proven missing .codeflow skips the check; a dangling link
+        // or an unreadable path reaches the metadata read and fails.
+        if !matches!(crate::absence::proven_absent(&config_dir), Ok(true)) {
+            let meta = match std::fs::metadata(&config_dir) {
+                Ok(meta) => meta,
+                Err(error) => {
+                    return CheckResult {
+                        name: "permissions".into(),
+                        status: Status::Fail,
+                        message: format!("cannot read .codeflow metadata: {error}"),
+                        duration: start.elapsed(),
+                    }
+                }
+            };
             if meta.permissions().mode() & 0o200 == 0 {
                 return CheckResult {
                     name: "permissions".into(),
@@ -2062,12 +2250,7 @@ fn first_line(output: &str) -> &str {
 /// The HTTP status code `curl -w '%{http_code}'` printed, when it printed
 /// one (`000` means no response).
 fn http_status(output: &str) -> Option<u16> {
-    output
-        .trim()
-        .trim_matches('\'')
-        .parse()
-        .ok()
-        .filter(|code| *code != 0)
+    output.parse().ok().filter(|code| *code != 0)
 }
 
 fn check_network(opts: &Options) -> CheckResult {
@@ -2211,11 +2394,15 @@ fn check_delegates(opts: &Options) -> CheckResult {
                 gaps.push("Claude MCP inventory unavailable (run `claude mcp list`)".to_string());
             }
 
-            if opts
+            match opts
                 .do_exec(&claude_bin, &["plugin", "list", "--json"])
-                .is_ok_and(|json| codex_plugin_enabled(&json))
+                .and_then(|json| codex_plugin_enabled(&json))
             {
-                plugin_note = "; the optional Codex plugin fallback is enabled";
+                Ok(true) => plugin_note = "; the optional Codex plugin fallback is enabled",
+                Ok(false) => {}
+                Err(error) => {
+                    gaps.push(format!("cannot read optional Codex plugin state: {error}"));
+                }
             }
         }
         Err(_) => gaps.push("claude missing from PATH".to_string()),
@@ -2279,27 +2466,16 @@ fn check_delegates(opts: &Options) -> CheckResult {
     }
 }
 
-fn codex_plugin_enabled(json: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(json)
-        .ok()
-        .and_then(|value| {
-            value.as_array().map(|plugins| {
-                plugins.iter().any(|plugin| {
-                    plugin.get("id").and_then(serde_json::Value::as_str)
-                        == Some("codex@openai-codex")
-                        && plugin
-                            .get("enabled")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false)
-                })
-            })
-        })
-        .unwrap_or(false)
+fn codex_plugin_enabled(json: &str) -> Result<bool, String> {
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|error| format!("cannot parse plugin inventory: {error}"))?;
+    let plugins = value.as_array().ok_or("plugin inventory is not an array")?;
+    Ok(plugins.iter().any(|plugin| {
+        plugin.get("id").and_then(serde_json::Value::as_str) == Some("codex@openai-codex")
+            && plugin.get("enabled").and_then(serde_json::Value::as_bool) == Some(true)
+    }))
 }
 
-/// Synthetic schema-v2 lifecycle through the installed binary. Unlike the
-/// optional harness prerequisite check, this is a deterministic product
-/// capability and therefore fails doctor when any transition is broken.
 fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let fail = |message: String| CheckResult {
@@ -2321,11 +2497,17 @@ fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
         let _ = std::fs::remove_dir_all(&root);
         return fail(format!("cannot create round-trip prompt: {error}"));
     }
+    // OS text rule (issue 79): the paths are handed to a command as text, so
+    // a temporary folder that is not valid UTF-8 fails the check, not lossily.
+    let (Some(state), Some(prompt)) = (state.to_str(), prompt.to_str()) else {
+        let _ = std::fs::remove_dir_all(&root);
+        return fail("the temporary folder is not valid UTF-8".to_string());
+    };
     let context = DelegateDoctorContext {
         opts,
         binary: &codeflow_bin,
-        state: state.to_string_lossy().into_owned(),
-        prompt: prompt.to_string_lossy().into_owned(),
+        state: state.to_string(),
+        prompt: prompt.to_string(),
     };
     let result = context.run();
     let _ = std::fs::remove_dir_all(&root);
@@ -2499,8 +2681,7 @@ fn exec_doctor_step(
 /// 2. A protected branch checked out in a non-root (linked) worktree —
 ///    remedy: switch that worktree to its feature branch.
 ///
-/// Passes otherwise, and stays quiet where it cannot determine repo state
-/// (not a git repo, git unavailable): this check flags, it never guesses.
+/// Passes when every input is proven; unreadable repository evidence fails.
 fn check_repo_integrity(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -2519,27 +2700,36 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
 
     // Signal 1: core.bare on a repo that still holds a working tree. A working
     // checkout keeps its git dir under `.git`; a genuinely bare repo has none.
-    let is_bare = opts
-        .do_exec(
-            "git",
-            &[
-                "-C",
-                opts.project_dir.as_str(),
-                "rev-parse",
-                "--is-bare-repository",
-            ],
-        )
-        .map(|s| s.trim() == "true")
-        .unwrap_or(false);
-    if is_bare && root.join(".git").exists() {
+    let is_bare = match opts.do_exec(
+        "git",
+        &[
+            "-C",
+            opts.project_dir.as_str(),
+            "rev-parse",
+            "--is-bare-repository",
+        ],
+    ) {
+        Ok(value) => value.strip_suffix('\n').unwrap_or(&value) == "true",
+        Err(error) => return fail(format!("cannot read repository bare state: {error}")),
+    };
+    let git_entry = root.join(".git");
+    let has_working_tree = is_bare
+        && match crate::absence::proven_absent(&git_entry) {
+            Ok(absent) => !absent,
+            Err(error) => return fail(format!("cannot inspect {}: {error}", git_entry.display())),
+        };
+    if has_working_tree {
         return fail(
             "core.bare=true on a repo with a working tree — a merge/worktree mishap flipped it; run `git config core.bare false`".into(),
         );
     }
 
     // Signal 2: a protected branch checked out in a non-root worktree.
-    let policy = crate::hooks::policy::Policy::load(&root).git;
-    if let Ok(list) = opts.do_exec(
+    let policy = match crate::hooks::policy::Policy::load(&root) {
+        Ok(policy) => policy.git,
+        Err(error) => return fail(format!("cannot read policy: {error}")),
+    };
+    let list = match opts.do_exec(
         "git",
         &[
             "-C",
@@ -2549,6 +2739,10 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
             "--porcelain",
         ],
     ) {
+        Ok(list) => list,
+        Err(error) => return fail(format!("cannot read linked worktree inventory: {error}")),
+    };
+    {
         let worktrees = parse_worktree_list(&list);
         // The main (root) worktree is listed first and may hold a protected
         // branch; only linked worktrees (the rest) must not.
@@ -2605,7 +2799,7 @@ struct WorktreeEntry {
 fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
     let mut out = Vec::new();
     let mut cur: Option<WorktreeEntry> = None;
-    for line in porcelain.lines() {
+    for line in porcelain.split('\n') {
         if let Some(path) = line.strip_prefix("worktree ") {
             if let Some(w) = cur.take() {
                 out.push(w);
@@ -2635,13 +2829,30 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 /// and its origin, a kept PR template's pending decision, and the release
 /// backend with any release tool that owns versions. WARN while a decision
 /// is pending, while policy provenance is unreadable, or while the release
-/// backend and a detected tool disagree; FAIL on an invalid backend.
+/// backend and a detected tool disagree; FAIL on unreadable policy or an
+/// invalid backend.
 fn check_adopter_fit(opts: &Options) -> CheckResult {
     use crate::hooks::adoption;
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
     let raw = adoption::raw_policy(&root);
-    let policy = crate::hooks::Policy::load(&root);
+    let policy = match crate::hooks::Policy::load(&root) {
+        Ok(policy) => policy,
+        Err(error) => {
+            return CheckResult {
+                name: "adopter-fit".into(),
+                status: Status::Fail,
+                message: format!(
+                    "cannot read policy: {error}\n      clear it: {}",
+                    remedy::DOCTOR_POLICY_DECISION.with(&[(
+                        "decision",
+                        "repair its syntax and values so the policy can be read",
+                    )])
+                ),
+                duration: start.elapsed(),
+            }
+        }
+    };
     let level = adoption::pr_sections_effective(&raw, &policy.git);
     let mut parts = vec![format!(
         "git.pr_sections effective level {} ({})",
@@ -2709,16 +2920,51 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let github = ci_workflow_dest(&root);
+    let github = match ci_workflow_dest(&root) {
+        Ok(dest) => dest,
+        Err(error) => {
+            return input_failure(
+                "ci-perimeter",
+                start,
+                &InstalledManifest::path(&root),
+                error,
+            )
+        }
+    };
     // The GitHub workflow `init` scaffolds, then the copy-in platform files
     // at the paths their platforms read.
-    let found = [github.as_str(), ".gitlab-ci.yml", "bitbucket-pipelines.yml"]
-        .into_iter()
-        .find_map(|dest| {
-            std::fs::read_to_string(root.join(dest))
-                .ok()
-                .map(|content| (dest.to_string(), content))
-        });
+    let mut found = None;
+    for dest in [github.as_str(), ".gitlab-ci.yml", "bitbucket-pipelines.yml"] {
+        let path = root.join(dest);
+        // Only a proven missing file is skipped; a dangling link is read and
+        // fails.
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => continue,
+            Err(error) => {
+                return CheckResult {
+                    name: "ci-perimeter".into(),
+                    status: Status::Fail,
+                    message: format!("cannot inspect {dest}: {error}"),
+                    duration: start.elapsed(),
+                }
+            }
+            Ok(false) => {}
+        }
+        match crate::bounded_file::read_regular_to_string(&path) {
+            Ok(content) => {
+                found = Some((dest.to_string(), content));
+                break;
+            }
+            Err(error) => {
+                return CheckResult {
+                    name: "ci-perimeter".into(),
+                    status: Status::Fail,
+                    message: format!("cannot read {dest}: {error}"),
+                    duration: start.elapsed(),
+                }
+            }
+        }
+    }
     let Some((dest, content)) = found else {
         return CheckResult {
             name: "ci-perimeter".into(),
@@ -2786,13 +3032,15 @@ fn check_id_registry(opts: &Options) -> CheckResult {
                 "durable work tracking is off; no registry applies".into(),
             )
         }
-        // Whether a registry applies is unknown, so it is not applicable
-        // here; the enforcing surfaces (pre-commit, CI) refuse until the
-        // state is repaired, and the warning keeps the cause visible.
+        // Whether a registry applies is unknown, so this check refuses to
+        // certify it until its state is readable.
         Err(error) => {
             return result(
-                Status::Warn(remedy::DOCTOR_TRACKING_UNKNOWN.remedy()),
-                format!("not applicable: durable-work tracking cannot be determined ({error})"),
+                Status::Fail,
+                format!(
+                    "durable-work tracking cannot be determined: {error}\n      clear it: {}",
+                    remedy::DOCTOR_TRACKING_UNKNOWN.remedy()
+                ),
             )
         }
     }
@@ -2811,8 +3059,22 @@ fn check_id_registry(opts: &Options) -> CheckResult {
     } else {
         Status::Warn(remedy::DOCTOR_ID_REGISTRY.remedy())
     };
-    if git.has_remote(crate::ids::AUTHORITY) {
-        let state = crate::ids::state::load(&git).unwrap_or_default();
+    let has_authority = match git.has_remote(crate::ids::AUTHORITY) {
+        Ok(present) => present,
+        Err(error) => {
+            return result(
+                Status::Fail,
+                format!("cannot read registry authority: {error}"),
+            )
+        }
+    };
+    if has_authority {
+        let state = match crate::ids::state::load(&git) {
+            Ok(state) => state,
+            Err(error) => {
+                return result(Status::Fail, format!("cannot read registry state: {error}"))
+            }
+        };
         let last = state
             .last_verified
             .get(crate::ids::AUTHORITY)
@@ -2837,16 +3099,22 @@ fn check_id_registry(opts: &Options) -> CheckResult {
 
 /// Where init placed the CI workflow: the installed-file record for the shipped
 /// CI asset (robust to a relocated workflow), else the canonical dest.
-fn ci_workflow_dest(root: &Path) -> String {
-    InstalledManifest::load_or_default(root, "0")
-        .ok()
-        .and_then(|m| {
-            m.files
-                .iter()
-                .find(|(_, f)| f.src == CI_ASSET_SRC)
-                .map(|(dest, _)| dest.clone())
-        })
-        .unwrap_or_else(|| CI_DEFAULT_DEST.to_string())
+fn read_installed_manifest(root: &Path) -> Result<InstalledManifest, String> {
+    let path = InstalledManifest::path(root);
+    if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
+        return Ok(InstalledManifest::new("0"));
+    }
+    let bytes = crate::bounded_file::read_regular(&path).map_err(|error| error.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+}
+
+fn ci_workflow_dest(root: &Path) -> Result<String, String> {
+    let installed = read_installed_manifest(root)?;
+    Ok(installed
+        .files
+        .iter()
+        .find(|(_, file)| file.src == CI_ASSET_SRC)
+        .map_or_else(|| CI_DEFAULT_DEST.to_string(), |(dest, _)| dest.clone()))
 }
 
 /// Managed-region drift (charter §4.3.2): WARN when a marker-delimited managed
@@ -2858,8 +3126,8 @@ fn ci_workflow_dest(root: &Path) -> String {
 /// the current block's hash and flags any that no longer match. Content OUTSIDE
 /// the markers is project-owned and never compared, and JSON settings merges
 /// (no text markers; the record holds the shipped preset's hash, not the
-/// on-disk block) are skipped. WARN only; stays quiet where it cannot read the
-/// record or a file — it flags, it never guesses.
+/// on-disk block) are skipped. Unreadable records and managed files fail with
+/// a repair remedy; a genuinely absent record keeps the check optional.
 fn check_managed_drift(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -2870,8 +3138,16 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         duration: start.elapsed(),
     };
 
-    let Ok(installed) = InstalledManifest::load_or_default(&root, "0") else {
-        return pass("no readable installed manifest; drift check skipped".into());
+    let installed = match read_installed_manifest(&root) {
+        Ok(installed) => installed,
+        Err(error) => {
+            return input_failure(
+                "managed-drift",
+                start,
+                &InstalledManifest::path(&root),
+                error,
+            )
+        }
     };
 
     let mut drifted: Vec<String> = Vec::new();
@@ -2879,8 +3155,15 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         if file.ownership != Ownership::ManagedRegion {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(root.join(dest)) else {
-            continue; // file absent: presence is another check's concern
+        let path = root.join(dest);
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => continue, // genuine absence belongs to the presence check
+            Ok(false) => {}
+            Err(error) => return input_failure("managed-drift", start, &path, error),
+        }
+        let content = match crate::bounded_file::read_regular_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => return input_failure("managed-drift", start, &path, error),
         };
         // Marker-delimited regions only (markdown/hash). A JSON settings merge
         // has no text markers, so extraction returns None and it is skipped —
@@ -2921,7 +3204,25 @@ fn check_customization(opts: &Options) -> CheckResult {
     let product = root.join("docs/product.md");
     let architecture = root.join("docs/architecture.md");
 
-    if !product.exists() && !architecture.exists() {
+    let refused = |error: String| CheckResult {
+        name: "customization".into(),
+        status: Status::Fail,
+        message: format!("cannot read customization inputs: {error}"),
+        duration: start.elapsed(),
+    };
+    // Present unless proven missing: a dangling link is read and refused.
+    let exists = |path: &Path| {
+        crate::absence::proven_absent(path)
+            .map(|absent| !absent)
+            .map_err(|error| error.to_string())
+    };
+    let presence = exists(&product)
+        .and_then(|product| exists(&architecture).map(|architecture| (product, architecture)));
+    let (product_exists, architecture_exists) = match presence {
+        Ok(presence) => presence,
+        Err(error) => return refused(error),
+    };
+    if !product_exists && !architecture_exists {
         return CheckResult {
             name: "customization".into(),
             status: Status::Pass,
@@ -2947,21 +3248,32 @@ fn check_customization(opts: &Options) -> CheckResult {
             &["{{ARCHITECTURE_OVERVIEW}}", "{{ARCHITECTURE_AREAS}}"][..],
         ),
     ] {
-        match std::fs::read_to_string(root.join(path)) {
+        match crate::bounded_file::read_regular_to_string(&root.join(path)) {
             Ok(content) if sentinels.iter().any(|sentinel| content.contains(sentinel)) => {
                 incomplete.push(path.to_string());
             }
             Ok(_) => {}
-            Err(_) => incomplete.push(format!("{path} (missing/unreadable)")),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(crate::absence::proven_absent(&root.join(path)), Ok(true)) =>
+            {
+                incomplete.push(format!("{path} (missing)"));
+            }
+            Err(error) => return refused(format!("{path}: {error}")),
         }
     }
 
     let agents = root.join("AGENTS.md");
-    if agents.exists()
-        && std::fs::read_to_string(&agents)
-            .is_ok_and(|content| content.contains("<!-- Add project-specific notes here. -->"))
-    {
-        incomplete.push("AGENTS.md".to_string());
+    match exists(&agents) {
+        Ok(true) => match crate::bounded_file::read_regular_to_string(&agents) {
+            Ok(content) if content.contains("<!-- Add project-specific notes here. -->") => {
+                incomplete.push("AGENTS.md".to_string());
+            }
+            Ok(_) => {}
+            Err(error) => return refused(format!("AGENTS.md: {error}")),
+        },
+        Ok(false) => {}
+        Err(error) => return refused(error),
     }
 
     if incomplete.is_empty() {
@@ -2989,17 +3301,42 @@ fn check_customization(opts: &Options) -> CheckResult {
 
 /// Always-loaded instruction size (TSK-127). Codex concatenates the
 /// instruction file of each directory from the project root down to its
-/// working directory, reads at most 32 KiB of that chain and silently cuts
-/// the rest. The project section sits last in each `AGENTS.md`, so an
-/// oversized chain loses the adopter's own rules first. Every directory that
-/// holds an instruction file is a possible working directory, so each one's
-/// chain is measured. Warns, never fails: the fix is the project's call.
+/// working directory, reads at most `project_doc_max_bytes` of that chain
+/// (32 KiB by default; the project's `.codex/config.toml` may raise it,
+/// TSK-267) and silently cuts the rest. The project section sits last in
+/// each `AGENTS.md`, so an oversized chain loses the adopter's own rules
+/// first. Every directory that holds an instruction file is a possible
+/// working directory, so each one's chain is measured. Warns, never fails:
+/// the fix is the project's call.
 fn check_instructions(opts: &Options) -> CheckResult {
+    use crate::scaffold::rule_map::{codex_instruction_limit, LimitSource};
+
     let start = Instant::now();
-    let limit = crate::scaffold::rule_map::CODEX_INSTRUCTION_LIMIT_BYTES;
     let root = PathBuf::from(&opts.project_dir);
+    let (limit, source) = match codex_instruction_limit(&root) {
+        Ok(limit) => limit,
+        Err(error) => {
+            return CheckResult {
+                name: "instructions".into(),
+                status: Status::Fail,
+                message: format!("cannot read .codex/config.toml: {error}"),
+                duration: start.elapsed(),
+            }
+        }
+    };
+    let source = match source {
+        LimitSource::Default => String::new(),
+        LimitSource::ProjectConfig => " (project_doc_max_bytes in .codex/config.toml)".to_string(),
+    };
     let mut chains = Vec::new();
-    instruction_chains(&root, Path::new(""), 0, 0, &mut chains);
+    if let Err(error) = instruction_chains(&root, Path::new(""), 0, 0, &mut chains) {
+        return CheckResult {
+            name: "instruction-budget".into(),
+            status: Status::Fail,
+            message: format!("cannot read instruction chain: {error}"),
+            duration: start.elapsed(),
+        };
+    }
     let over: Vec<&(String, usize)> = chains.iter().filter(|(_, bytes)| *bytes > limit).collect();
     let (status, message) = if chains.is_empty() {
         (
@@ -3014,7 +3351,7 @@ fn check_instructions(opts: &Options) -> CheckResult {
         (
             Status::Pass,
             format!(
-                "{} is {bytes} bytes, {} under Codex's {limit}-byte instruction limit",
+                "{} is {bytes} bytes, {} under Codex's {limit}-byte instruction limit{source}",
                 chain_label(file),
                 limit - bytes
             ),
@@ -3027,7 +3364,7 @@ fn check_instructions(opts: &Options) -> CheckResult {
         (
             Status::Warn(remedy::DOCTOR_INSTRUCTIONS.remedy()),
             format!(
-                "{}, over Codex's {limit}-byte instruction limit: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
+                "{}, over Codex's {limit}-byte instruction limit{source}: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
                 listed.join("; ")
             ),
         )
@@ -3040,114 +3377,361 @@ fn check_instructions(opts: &Options) -> CheckResult {
     }
 }
 
-/// Reading sizes (TSK-150): the always-read kernel (the managed block of
-/// `AGENTS.md`), the per-task reading chain of the installed skills, and each
-/// shipped skill, each against its guideline number in [`crate::reading`].
-/// Sizes are reported, never failed: within every guideline is a pass that
-/// states the numbers; above one is a warning that names moving detail
-/// behind a trigger as the step that clears it. The Codex limit on the whole
-/// `AGENTS.md` is the `instructions` check.
-/// Where to edit to bring a reading measure within its guideline: a
-/// skill's directory, the kernel's file, or the files the chain lists.
-fn reading_location(subject: &str, skill_tree: &str) -> String {
-    if subject.starts_with("kernel") {
-        "the managed block of AGENTS.md".to_string()
-    } else if crate::reading::SKILL_GUIDELINES
-        .iter()
-        .any(|(name, _)| *name == subject)
-    {
-        format!("{skill_tree}/{subject}/")
-    } else {
-        format!("the files of the {subject}")
-    }
+/// The scaffold version the installed tree carries, for a reading report
+/// whose chain differs from the map this binary ships: `scaffold_version`
+/// in `project.toml`, else the managed block's marker, else unknown.
+fn installed_scaffold_version(root: &Path, agents: Option<&str>) -> String {
+    crate::hooks::policy::read_project_toml(root)
+        .ok()
+        .flatten()
+        .and_then(|table| {
+            table
+                .get("scaffold_version")
+                .and_then(toml::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            agents.and_then(|text| {
+                let at = text.find("codeflow:managed:begin scaffold=")?;
+                let rest = &text[at + "codeflow:managed:begin scaffold=".len()..];
+                let end = rest.find(|c: char| c.is_whitespace() || c == '-')?;
+                Some(rest[..end].to_string())
+            })
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn check_reading(opts: &Options) -> CheckResult {
-    use crate::reading::{self, Inventory, Measure, SkillFiles};
-    use crate::scaffold::rule_map;
+fn reading_kernel(root: &Path) -> std::io::Result<Option<String>> {
+    crate::reading::regular_text(&root.join("AGENTS.md"))
+}
 
-    let start = Instant::now();
-    let root = PathBuf::from(&opts.project_dir);
-    let mut measures: Vec<Measure> = Vec::new();
-    if let Some(block) = std::fs::read_to_string(root.join("AGENTS.md"))
-        .ok()
-        .as_deref()
-        .and_then(rule_map::managed_block)
-    {
-        measures.push(Measure {
-            subject: "kernel (AGENTS.md managed block)".to_string(),
-            bytes: reading::authored_len(block.as_bytes()),
-            guideline: rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
-        });
-    }
-    let mut files = SkillFiles::new();
-    let mut skill_tree = ".claude/skills";
+fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static str), String> {
+    let mut files = crate::reading::SkillFiles::new();
     for tree in [".claude/skills", ".agents/skills"] {
-        reading::load_skill_tree(&root.join(tree), &mut files);
+        crate::reading::load_skill_tree(&root.join(tree), &mut files)
+            .map_err(|error| format!("cannot read skill tree {tree}: {error}"))?;
         if !files.is_empty() {
-            skill_tree = tree;
-            break;
+            return Ok((files, tree));
         }
     }
-    let mut partial = None;
+    Ok((files, ".claude/skills"))
+}
+
+/// One reading measure with the path its note or warning names.
+type Measured = (crate::reading::Measure, String);
+
+/// What one reading run measured.
+#[derive(Debug, Default)]
+struct ReadingSizes {
+    /// Advisory measures: a note above the guideline, never a warning.
+    advisory: Vec<Measured>,
+    /// Description measures against the API limit: a warning above it.
+    descriptions: Vec<Measured>,
+    /// Lines reported as information, such as a chain whose installed read
+    /// edges differ from the shipped map.
+    information: Vec<String>,
+}
+
+/// Measure the kernel, the always-loaded set `always`, the per-task chain
+/// and each shipped skill and agent under `root` against `guidelines`.
+/// A shipped agent file that is missing or not a regular file is skipped;
+/// one that exists but cannot be read is the error, naming its path.
+fn reading_sizes(
+    root: &Path,
+    agents: Option<&str>,
+    always: Option<crate::reading::AlwaysLoaded>,
+    files: &crate::reading::SkillFiles,
+    skill_tree: &str,
+    guidelines: &crate::reading::Guidelines,
+) -> std::io::Result<ReadingSizes> {
+    use crate::hooks::guidance::{installed_inventory, SCAFFOLD_MANIFEST};
+    use crate::reading::{self, Inventory, Measure, Unit};
+    use crate::scaffold::rule_map;
+    use crate::scaffold::Tier;
+
+    let mut sizes = ReadingSizes::default();
+    if let Some(block) = agents.and_then(rule_map::managed_block) {
+        sizes.advisory.push((
+            Measure {
+                subject: "kernel (AGENTS.md managed block)".to_string(),
+                value: reading::authored_len(block.as_bytes()),
+                guideline: guidelines.kernel_bytes,
+                unit: Unit::Bytes,
+                basis: reading::KERNEL_BASIS,
+            },
+            "the managed block of AGENTS.md".to_string(),
+        ));
+    }
+    if let Some(set) = always {
+        let file = set.file.clone();
+        sizes
+            .advisory
+            .push((set.measure(guidelines.instructions_lines), file));
+    }
+
+    let mut shipped_skills = BTreeSet::new();
+    let mut shipped_agents = BTreeSet::new();
+    for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
+        let inventory = installed_inventory(SCAFFOLD_MANIFEST, tier);
+        shipped_skills.extend(inventory.skills);
+        shipped_agents.extend(inventory.agents);
+    }
     if !files.is_empty() {
-        let chain = reading::reading_chain(&files, &Inventory::SHIPPED);
+        let chain = reading::reading_chain(files, &Inventory::SHIPPED);
         if !chain.files.is_empty() {
-            if !chain.errors.is_empty() {
-                partial = Some(chain.errors.len());
+            if chain.errors.is_empty() {
+                sizes.advisory.push((
+                    chain.measure(guidelines),
+                    "the files of the per-task reading chain".to_string(),
+                ));
+            } else {
+                sizes.information.push(format!(
+                    "per-task reading chain {} bytes (information only: {} installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold {}; `codeflow update` aligns them)",
+                    chain.total,
+                    chain.errors.len(),
+                    env!("CARGO_PKG_VERSION"),
+                    installed_scaffold_version(root, agents)
+                ));
             }
-            measures.push(chain.measure());
         }
-        measures.extend(
-            reading::skill_measures(&files)
-                .into_iter()
-                .filter(|measure| {
-                    reading::SKILL_GUIDELINES
-                        .iter()
-                        .any(|(name, _)| *name == measure.subject)
-                }),
+        for measure in reading::skill_measures(files, guidelines) {
+            if shipped_skills.contains(&measure.subject) {
+                let path = format!("{skill_tree}/{}/", measure.subject);
+                sizes.advisory.push((measure, path));
+            }
+        }
+        for measure in reading::description_measures(files) {
+            let name = measure
+                .subject
+                .strip_suffix(" description")
+                .unwrap_or(&measure.subject)
+                .to_string();
+            if shipped_skills.contains(&name) {
+                sizes
+                    .descriptions
+                    .push((measure, format!("{skill_tree}/{name}/SKILL.md")));
+            }
+        }
+    }
+    for name in &shipped_agents {
+        let path = format!(".claude/agents/{name}.md");
+        let Some(text) = reading::regular_text(&root.join(&path))? else {
+            continue;
+        };
+        sizes.advisory.push((
+            reading::body_measure(name, &text, guidelines.body_lines),
+            path.clone(),
+        ));
+        if let Some(measure) = reading::description_measure(name, &text) {
+            sizes.descriptions.push((measure, path));
+        }
+    }
+    Ok(sizes)
+}
+
+/// The measures joined for a report.
+fn listed_measures(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The measures above their guidelines, each with its basis.
+fn listed_with_basis(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.with_basis())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The reading verdict: a description over the API limit or an unreadable
+/// `[reading]` section warns, an advisory measure above its guideline
+/// notes, and within every number the check passes and states them.
+/// `own` names the `[reading]` keys the project set.
+fn reading_verdict(
+    sizes: &ReadingSizes,
+    own: &[&str],
+    config_error: Option<&str>,
+) -> (Status, String) {
+    use std::fmt::Write as _;
+
+    use crate::reading;
+
+    let (over, within): (Vec<&Measured>, Vec<&Measured>) = sizes
+        .advisory
+        .iter()
+        .partition(|(measure, _)| measure.over());
+    let long: Vec<&Measured> = sizes
+        .descriptions
+        .iter()
+        .filter(|(measure, _)| measure.over())
+        .collect();
+    let mut tail = String::new();
+    if let Some(longest) = sizes
+        .descriptions
+        .iter()
+        .map(|(measure, _)| measure.value)
+        .max()
+    {
+        let _ = write!(
+            tail,
+            "; descriptions at most {longest} of {} characters",
+            reading::DESCRIPTION_LIMIT_CHARS
         );
     }
-    let listed = |items: Vec<&Measure>| {
-        items
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ")
-    };
-    let note = partial.map_or_else(String::new, |edges| {
-        format!(
-            " ({edges} installed read edges differ from the shipped map, so the chain total may be partial)"
-        )
-    });
-    let (over, within): (Vec<&Measure>, Vec<&Measure>) =
-        measures.iter().partition(|measure| measure.over());
-    let (status, message) = if measures.is_empty() {
-        (
+    if !own.is_empty() {
+        let _ = write!(
+            tail,
+            " (project values for {} in the [reading] section of project.toml)",
+            own.join(", ")
+        );
+    }
+    for item in &sizes.information {
+        let _ = write!(tail, "; {item}");
+    }
+
+    if sizes.advisory.is_empty() && sizes.descriptions.is_empty() {
+        return (
             Status::Pass,
             "no AGENTS.md managed block or installed skills (reading sizes not applicable)"
                 .to_string(),
-        )
-    } else if over.is_empty() {
-        (
-            Status::Pass,
-            format!("within guidelines: {}{note}", listed(within)),
-        )
-    } else {
-        let subjects = over
-            .iter()
-            .map(|measure| reading_location(&measure.subject, skill_tree))
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            Status::Warn(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
+        );
+    }
+    if let Some(error) = config_error {
+        return (
+            Status::Warn(remedy::DOCTOR_READING_CONFIG.remedy()),
             format!(
-                "above guideline: {}. Sizes are guidelines, not failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{note}",
-                listed(over),
-                listed(within)
+                "the [reading] section of project.toml was not read ({error}), so the shipped guidelines apply: {}{tail}",
+                listed_measures(&sizes.advisory.iter().collect::<Vec<_>>())
             ),
-        )
+        );
+    }
+    if !long.is_empty() {
+        let named: Vec<String> = long
+            .iter()
+            .map(|(measure, path)| {
+                format!(
+                    "{} ({path}) is {} characters, over the {}-character API limit (Claude Code cuts the listing at {})",
+                    measure.subject,
+                    measure.value,
+                    measure.guideline,
+                    reading::DESCRIPTION_LISTING_CHARS
+                )
+            })
+            .collect();
+        let paths: Vec<&str> = long.iter().map(|(_, path)| path.as_str()).collect();
+        let above = if over.is_empty() {
+            String::new()
+        } else {
+            format!("; above guideline: {}", listed_with_basis(&over))
+        };
+        return (
+            Status::Warn(remedy::DOCTOR_DESCRIPTION.with(&[("path", &paths.join(", "))])),
+            format!(
+                "{}{above}. Within: {}{tail}",
+                named.join("; "),
+                listed_measures(&within)
+            ),
+        );
+    }
+    if over.is_empty() {
+        return (
+            Status::Pass,
+            format!("within guidelines: {}{tail}", listed_measures(&within)),
+        );
+    }
+    let subjects = over
+        .iter()
+        .map(|(_, path)| path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        Status::Note(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
+        format!(
+            "above guideline: {}. Guidelines are notes, never failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{tail}",
+            listed_with_basis(&over),
+            listed_measures(&within)
+        ),
+    )
+}
+
+/// Reading sizes (TSK-150, TSK-267): the always-read kernel (the managed
+/// block of `AGENTS.md`), the always-loaded instruction set, the per-task
+/// reading chain of the installed shipped skills, and each shipped skill
+/// and agent body, each against an advisory guideline from
+/// [`crate::reading`] or the project's `[reading]` section. Within every
+/// guideline is a pass that states the numbers; above one is a note that
+/// states the measure with its basis and names moving detail behind a
+/// trigger as the step that clears it, never a warning. Two real limits
+/// warn: a skill or agent description over the API limit here, and the
+/// Codex limit on the whole `AGENTS.md` in the `instructions` check. An
+/// `AGENTS.md` or skill tree that cannot be read fails (TSK-238).
+fn check_reading(opts: &Options) -> CheckResult {
+    use crate::reading::Guidelines;
+    use crate::scaffold::rule_map;
+    use crate::scaffold::state::ReadingConfig;
+
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let agents = match reading_kernel(&root) {
+        Ok(agents) => agents,
+        Err(error) => {
+            return CheckResult {
+                name: "reading".into(),
+                status: Status::Fail,
+                message: format!("cannot read AGENTS.md: {error}"),
+                duration: start.elapsed(),
+            }
+        }
     };
+    let (files, skill_tree) = match reading_skills(&root) {
+        Ok(skills) => skills,
+        Err(error) => {
+            return CheckResult {
+                name: "reading".into(),
+                status: Status::Fail,
+                message: error,
+                duration: start.elapsed(),
+            }
+        }
+    };
+    let unreadable = |what: &str, error: &dyn std::fmt::Display| CheckResult {
+        name: "reading".into(),
+        status: Status::Fail,
+        message: format!("cannot read {what}: {error}"),
+        duration: start.elapsed(),
+    };
+    let limit = match rule_map::codex_instruction_limit(&root) {
+        Ok((limit, _)) => limit,
+        Err(error) => return unreadable(".codex/config.toml", &error),
+    };
+    let always = match crate::reading::always_loaded(&root) {
+        Ok(always) => always,
+        Err(error) => return unreadable("the always-loaded instructions", &error),
+    };
+    let defaults = Guidelines {
+        kernel_bytes: rule_map::managed_block_guideline(limit),
+        ..Guidelines::default()
+    };
+    let (guidelines, own, config_error) = match ReadingConfig::load(&root) {
+        Ok(config) => (config.guidelines(defaults), config.set_keys(), None),
+        Err(error) => (defaults, Vec::new(), Some(error.to_string())),
+    };
+    let sizes = match reading_sizes(
+        &root,
+        agents.as_deref(),
+        always,
+        &files,
+        skill_tree,
+        &guidelines,
+    ) {
+        Ok(sizes) => sizes,
+        Err(error) => return unreadable("a shipped agent", &error),
+    };
+    let (status, message) = reading_verdict(&sizes, &own, config_error.as_deref());
     CheckResult {
         name: "reading".into(),
         status,
@@ -3171,57 +3755,63 @@ fn instruction_chains(
     depth: usize,
     inherited: usize,
     chains: &mut Vec<(String, usize)>,
-) {
+) -> std::io::Result<()> {
     let dir = root.join(relative);
     let mut total = inherited;
-    if let Some((name, bytes)) = instruction_file(&dir) {
+    if let Some((name, bytes)) = instruction_file(&dir)? {
         total += bytes;
         chains.push((crate::portable_path::slashed(&relative.join(name)), total));
     }
     if depth >= INSTRUCTION_WALK_DEPTH {
-        return;
+        return Err(std::io::Error::other(
+            "instruction walk depth limit reached",
+        ));
     }
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return;
-    };
-    let mut children: Vec<_> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.file_name())
-        .filter(|name| {
-            let name = name.to_string_lossy();
-            !name.starts_with('.') && !matches!(name.as_ref(), "target" | "node_modules")
-        })
-        .collect();
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let name = entry.file_name();
+            let bytes = name.as_encoded_bytes();
+            if !bytes.starts_with(b".") && !matches!(bytes, b"target" | b"node_modules") {
+                children.push(name);
+            }
+        }
+    }
     children.sort();
     for child in children {
-        let child_relative = relative.join(&child);
-        if root.join(&child_relative).join(".git").exists() {
+        let relative = relative.join(child);
+        if root.join(&relative).join(".git").try_exists()? {
             continue;
         }
-        instruction_chains(root, &child_relative, depth + 1, total, chains);
+        instruction_chains(root, &relative, depth + 1, total, chains)?;
     }
+    Ok(())
 }
-
-/// The instruction file Codex reads in `dir`: a non-empty
-/// `AGENTS.override.md` wins over `AGENTS.md`; empty files are skipped.
-fn instruction_file(dir: &Path) -> Option<(&'static str, usize)> {
-    ["AGENTS.override.md", "AGENTS.md"]
-        .into_iter()
-        .find_map(|name| {
-            let bytes = std::fs::metadata(dir.join(name)).ok()?.len();
-            (bytes > 0).then(|| (name, usize::try_from(bytes).unwrap_or(usize::MAX)))
-        })
+fn instruction_file(dir: &Path) -> std::io::Result<Option<(&'static str, usize)>> {
+    for name in ["AGENTS.override.md", "AGENTS.md"] {
+        let path = dir.join(name);
+        if crate::absence::proven_absent(&path)? {
+            continue;
+        }
+        let bytes = std::fs::metadata(path)?.len();
+        if bytes > 0 {
+            return Ok(Some((name, usize::try_from(bytes).unwrap_or(usize::MAX))));
+        }
+    }
+    Ok(None)
 }
 
 fn chain_label(file: &str) -> String {
+    // The file is a storage key; a person sees its display form.
+    let shown = crate::git::display_key(file);
     if Path::new(file)
         .parent()
         .is_some_and(|parent| parent.as_os_str().is_empty())
     {
-        file.to_string()
+        shown
     } else {
-        format!("{file} with its parent instructions")
+        format!("{shown} with its parent instructions")
     }
 }
 
@@ -3236,7 +3826,11 @@ fn check_test_config(opts: &Options) -> CheckResult {
     let root = PathBuf::from(&opts.project_dir);
     let config_path = root.join(".codeflow").join("test-config.json");
 
-    if !config_path.exists() {
+    let absent = match input_absent(&config_path) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("test-config", start, &config_path, error),
+    };
+    if absent {
         return CheckResult {
             name: "test-config".into(),
             status: Status::Pass,
@@ -3245,6 +3839,9 @@ fn check_test_config(opts: &Options) -> CheckResult {
         };
     }
 
+    if let Err(error) = crate::testing::config::load_test_config(&config_path) {
+        return input_failure("test-config", start, &config_path, error);
+    }
     let checks = crate::testing::doctor::run_all_checks(&root);
     let failures: Vec<String> = checks
         .iter()
@@ -3330,7 +3927,7 @@ mod tests {
     }
 
     #[test]
-    fn id_registry_is_not_applicable_when_project_state_is_unreadable() {
+    fn id_registry_refuses_when_project_state_is_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
@@ -3341,12 +3938,17 @@ mod tests {
             ..test_opts()
         };
         let result = check_id_registry(&opts);
-        assert!(result.status.is_warn(), "{}", result.message);
+        assert!(matches!(result.status, Status::Fail), "{}", result.message);
         assert!(
-            result.message.starts_with("not applicable:"),
+            result
+                .message
+                .starts_with("durable-work tracking cannot be determined:"),
             "{}",
             result.message
         );
+        assert!(result
+            .message
+            .contains("clear it: repair .codeflow/project.toml"));
     }
 
     #[test]
@@ -3362,7 +3964,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 21);
+        assert_eq!(check_names().len(), 22);
     }
 
     #[test]
@@ -3980,8 +4582,9 @@ mod tests {
         // unless a test says otherwise.
         opts.guard_canary = Some(|_| canary_refused());
         opts.update_plan = Some(|_, path| {
-            (path == ".grok/hooks/codeflow.json")
-                .then(|| crate::scaffold::update::Decision::Rewrite(SHIPPED_GROK_HOOKS.to_string()))
+            Ok((path == ".grok/hooks/codeflow.json").then(|| {
+                crate::scaffold::update::Decision::Rewrite(SHIPPED_GROK_HOOKS.to_string())
+            }))
         });
         (dir, opts, home)
     }
@@ -4275,12 +4878,12 @@ mod tests {
         assert!(is_configured(&r), "{:?} {}", r.status, r.message);
     }
 
-    fn grok_env_on(name: &str) -> Option<String> {
-        (name == "GROK_FOLDER_TRUST").then(|| "1".to_string())
+    fn grok_env_on(name: &str) -> Option<std::ffi::OsString> {
+        (name == "GROK_FOLDER_TRUST").then(|| "1".into())
     }
 
-    fn grok_env_off(name: &str) -> Option<String> {
-        (name == "GROK_FOLDER_TRUST").then(|| "false".to_string())
+    fn grok_env_off(name: &str) -> Option<std::ffi::OsString> {
+        (name == "GROK_FOLDER_TRUST").then(|| "false".into())
     }
 
     #[test]
@@ -4349,8 +4952,8 @@ mod tests {
 
     #[test]
     fn grok_home_honours_its_environment_variable() {
-        fn env(name: &str) -> Option<String> {
-            (name == "GROK_HOME").then(|| "/elsewhere/grok".to_string())
+        fn env(name: &str) -> Option<std::ffi::OsString> {
+            (name == "GROK_HOME").then(|| "/elsewhere/grok".into())
         }
         let opts = Options {
             harness_home: None,
@@ -4419,8 +5022,8 @@ mod tests {
     fn a_relative_grok_home_is_unverified() {
         // Grok refuses a relative trust-store home and reads its config
         // against its own working directory (trust.rs default_path_in).
-        fn env(name: &str) -> Option<String> {
-            (name == "GROK_HOME").then(|| "relative-grok".to_string())
+        fn env(name: &str) -> Option<std::ffi::OsString> {
+            (name == "GROK_HOME").then(|| "relative-grok".into())
         }
         let (_dir, mut opts, _) = grok_project(None);
         opts.harness_home = None;
@@ -4716,18 +5319,29 @@ mod tests {
         assert_eq!(result.status, Status::Pass);
     }
 
+    /// Write `skill` under `.claude/skills` with a four-line frontmatter
+    /// carrying `description` and a body that brings it to `lines` lines.
+    fn write_skill(root: &Path, skill: &str, lines: usize, description: &str) {
+        let skill_dir = root.join(".claude/skills").join(skill);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let body = "x\n".repeat(lines.saturating_sub(4));
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: {description}\n---\n{body}"),
+        )
+        .unwrap();
+    }
+
     /// A project with a small managed `AGENTS.md` and one installed skill
-    /// whose `SKILL.md` is `skill_bytes` long.
-    fn reading_project(skill: &str, skill_bytes: usize) -> (tempfile::TempDir, Options) {
+    /// whose `SKILL.md` is `lines` lines long.
+    fn reading_project(skill: &str, lines: usize) -> (tempfile::TempDir, Options) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("AGENTS.md"),
             "# p\n\n<!-- codeflow:managed:begin scaffold=3.0.0 -->\nrules\n<!-- codeflow:managed:end -->\n",
         )
         .unwrap();
-        let skill_dir = dir.path().join(".claude/skills").join(skill);
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "x".repeat(skill_bytes)).unwrap();
+        write_skill(dir.path(), skill, lines, "Does one thing. Use when asked.");
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().to_string();
         (dir, opts)
@@ -4749,68 +5363,229 @@ mod tests {
 
     #[test]
     fn test_reading_reports_a_skill_at_its_guideline_as_information() {
-        let guideline = crate::reading::skill_guideline("cf-herdr");
-        let (_dir, opts) = reading_project("cf-herdr", guideline);
+        let lines = crate::reading::BODY_GUIDELINE_LINES;
+        let (_dir, opts) = reading_project("cf-herdr", lines);
         let result = check_reading(&opts);
         assert_eq!(result.status, Status::Pass, "{}", result.message);
         assert!(
             result
                 .message
-                .contains(&format!("cf-herdr {guideline} of {guideline} bytes")),
+                .contains(&format!("cf-herdr {lines} of {lines} lines")),
             "{}",
             result.message
         );
-        assert!(result.message.contains("kernel (AGENTS.md managed block)"));
+        assert!(result.message.contains(&format!(
+            "kernel (AGENTS.md managed block) {} of {} bytes",
+            crate::reading::authored_len(b"<!-- codeflow:managed:begin scaffold=3.0.0 -->\nrules\n<!-- codeflow:managed:end -->"),
+            crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES
+        )), "{}", result.message);
+        assert!(
+            result
+                .message
+                .contains("always-loaded instructions (AGENTS.md) 5 of 200 lines"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("descriptions at most 31 of 1024 characters"),
+            "{}",
+            result.message
+        );
     }
 
+    /// TSK-267: an advisory guideline above its number is a note with its
+    /// basis and the step that clears it, never a warning.
     #[test]
-    fn test_reading_warns_above_a_guideline_and_names_the_step_that_clears_it() {
-        let guideline = crate::reading::skill_guideline("cf-herdr");
-        let (dir, opts) = reading_project("cf-herdr", 2 * guideline);
+    fn test_reading_notes_above_a_guideline_and_names_the_step_that_clears_it() {
+        let lines = crate::reading::BODY_GUIDELINE_LINES + 1;
+        let (dir, opts) = reading_project("cf-herdr", lines);
         let result = check_reading(&opts);
-        assert!(result.status.is_warn(), "{}", result.message);
-        assert!(result.message.starts_with(&format!(
-            "above guideline: cf-herdr {} of {guideline} bytes",
-            2 * guideline
-        )));
         assert!(
-            result.message.contains("move detail behind a trigger"),
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(!result.status.is_warn());
+        assert!(
+            result.message.starts_with(&format!(
+                "above guideline: cf-herdr {lines} of {} lines ({})",
+                lines - 1,
+                crate::reading::BODY_BASIS
+            )),
             "{}",
             result.message
         );
+        assert!(
+            result
+                .message
+                .contains("Guidelines are notes, never failures: move detail behind a trigger"),
+            "{}",
+            result.message
+        );
+        if let Status::Note(remedy) = &result.status {
+            assert!(
+                remedy.to_string().contains(".claude/skills/cf-herdr/"),
+                "{remedy}"
+            );
+        }
 
-        // A kernel past its guideline warns the same way.
+        // A kernel past its guideline notes the same way, with its basis.
         let big = format!(
             "<!-- codeflow:managed:begin -->\n{}\n<!-- codeflow:managed:end -->\n",
             "r".repeat(crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES)
         );
         std::fs::write(dir.path().join("AGENTS.md"), big).unwrap();
-        std::fs::write(dir.path().join(".claude/skills/cf-herdr/SKILL.md"), "x").unwrap();
+        write_skill(dir.path(), "cf-herdr", 10, "Short.");
         let result = check_reading(&opts);
-        assert!(result.status.is_warn(), "{}", result.message);
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{}",
+            result.message
+        );
         assert!(
             result
                 .message
-                .starts_with("above guideline: kernel (AGENTS.md managed block)"),
+                .starts_with("above guideline: kernel (AGENTS.md managed block) ")
+                && result.message.contains(&format!(
+                    " of {} bytes ({})",
+                    crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
+                    crate::reading::KERNEL_BASIS
+                )),
             "{}",
             result.message
         );
     }
 
+    /// TSK-267: the API limit on a description is a real limit, so it warns
+    /// with the file to edit.
     #[test]
-    fn test_reading_measures_the_installed_chain_and_ignores_adopter_skills() {
-        let (dir, opts) = reading_project("team-release-notes", 100_000);
+    fn test_reading_warns_on_a_description_over_the_api_limit() {
+        let limit = crate::reading::DESCRIPTION_LIMIT_CHARS;
+        let (dir, opts) = reading_project("cf-herdr", 10);
+        write_skill(dir.path(), "cf-herdr", 10, &"d".repeat(limit));
+        let at = check_reading(&opts);
+        assert_eq!(at.status, Status::Pass, "{}", at.message);
+        assert!(
+            at.message.contains(&format!(
+                "descriptions at most {limit} of {limit} characters"
+            )),
+            "{}",
+            at.message
+        );
+
+        write_skill(dir.path(), "cf-herdr", 10, &"d".repeat(limit + 1));
+        let over = check_reading(&opts);
+        assert!(over.status.is_warn(), "{}", over.message);
+        assert!(
+            over.message.starts_with(&format!(
+                "cf-herdr description (.claude/skills/cf-herdr/SKILL.md) is {} characters, over the {limit}-character API limit (Claude Code cuts the listing at {})",
+                limit + 1,
+                crate::reading::DESCRIPTION_LISTING_CHARS
+            )),
+            "{}",
+            over.message
+        );
+        if let Status::Warn(remedy) = &over.status {
+            assert!(
+                remedy
+                    .to_string()
+                    .contains(".claude/skills/cf-herdr/SKILL.md"),
+                "{remedy}"
+            );
+        }
+    }
+
+    /// TSK-267: a project's `[reading]` values replace the defaults, a
+    /// raised Codex limit moves the derived kernel number, and a section
+    /// that does not read warns with the shipped numbers applied.
+    #[test]
+    fn test_reading_uses_the_project_values_and_the_codex_limit() {
+        let (dir, opts) = reading_project("cf-herdr", 150);
+        let project = dir.path().join(".codeflow/project.toml");
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::write(
+            &project,
+            "schema_version = 1\n\n[reading]\nskill_max_lines = 100\n",
+        )
+        .unwrap();
+        let result = check_reading(&opts);
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .starts_with("above guideline: cf-herdr 150 of 100 lines"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("project values for skill_max_lines in the [reading] section"),
+            "{}",
+            result.message
+        );
+
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "project_doc_max_bytes = 65536\n",
+        )
+        .unwrap();
+        let raised = check_reading(&opts);
+        assert!(
+            raised.message.contains(&format!(
+                "kernel (AGENTS.md managed block) 82 of {} bytes",
+                crate::scaffold::rule_map::managed_block_guideline(65536)
+            )),
+            "{}",
+            raised.message
+        );
+
+        std::fs::write(
+            &project,
+            "schema_version = 1\n\n[reading]\nskill_max_lines = \"many\"\n",
+        )
+        .unwrap();
+        let unread = check_reading(&opts);
+        assert!(unread.status.is_warn(), "{}", unread.message);
+        assert!(
+            unread
+                .message
+                .contains("the [reading] section of project.toml was not read")
+                && unread.message.contains("reading.skill_max_lines")
+                && unread.message.contains("cf-herdr 150 of 500 lines"),
+            "{}",
+            unread.message
+        );
+    }
+
+    /// Copy the shipped skill trees into `root/.claude/skills`.
+    fn install_shipped_skills(root: &Path) {
         let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
         let mut shipped = crate::reading::SkillFiles::new();
         for tree in ["agents/skills", "claude/skills"] {
-            crate::reading::load_skill_tree(&assets.join(tree), &mut shipped);
+            crate::reading::load_skill_tree(&assets.join(tree), &mut shipped).unwrap();
         }
         for (path, text) in &shipped {
-            let dest = dir.path().join(".claude/skills").join(path);
+            let dest = root.join(".claude/skills").join(path);
             std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
             std::fs::write(dest, text).unwrap();
         }
+    }
+
+    #[test]
+    fn test_reading_measures_the_installed_chain_and_ignores_adopter_skills() {
+        let (dir, opts) = reading_project("team-release-notes", 1000);
+        install_shipped_skills(dir.path());
         let result = check_reading(&opts);
+        assert!(!result.status.is_warn(), "{}", result.message);
         assert!(
             result.message.contains("per-task reading chain"),
             "{}",
@@ -4826,9 +5601,76 @@ mod tests {
             "an adopter's own skill is not measured: {}",
             result.message
         );
-        for (skill, _) in crate::reading::SKILL_GUIDELINES {
-            assert!(result.message.contains(&format!("{skill} ")), "{skill}");
+        for skill in ["cf-stack", "cf-model-orchestrator"] {
+            assert!(
+                result.message.contains(&format!("{skill} ")),
+                "a shipped skill is measured: {}",
+                result.message
+            );
         }
+    }
+
+    /// TSK-267 AC-9: when the installed tree's read edges differ from the
+    /// map this binary ships, the chain is information that names both
+    /// versions, not a note or a warning.
+    #[test]
+    fn test_reading_reports_a_skewed_chain_as_information() {
+        let (dir, opts) = reading_project("cf-herdr", 10);
+        install_shipped_skills(dir.path());
+        std::fs::remove_file(dir.path().join(".claude/skills/cf-develop/SKILL.md")).unwrap();
+        let result = check_reading(&opts);
+        assert!(!result.status.is_warn(), "{}", result.message);
+        assert!(
+            result.message.contains(&format!(
+                "installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold 3.0.0",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("per-task reading chain")
+                && result.message.contains("(information only:")
+                && !result.message.contains("per-task reading chain 0 of"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// TSK-267: the project's `.codex/config.toml` sets the Codex limit the
+    /// instructions check measures against.
+    #[test]
+    fn test_instructions_reads_the_project_codex_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(40 * 1024)).unwrap();
+        assert!(check_instructions(&opts).status.is_warn());
+
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "project_doc_max_bytes = 65536\n",
+        )
+        .unwrap();
+        let raised = check_instructions(&opts);
+        assert_eq!(raised.status, Status::Pass, "{}", raised.message);
+        assert!(
+            raised.message.contains(
+                "under Codex's 65536-byte instruction limit (project_doc_max_bytes in .codex/config.toml)"
+            ),
+            "{}",
+            raised.message
+        );
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(65536 + 1)).unwrap();
+        let over = check_instructions(&opts);
+        assert!(over.status.is_warn(), "{}", over.message);
+        assert!(
+            over.message.contains("over Codex's 65536-byte instruction limit (project_doc_max_bytes in .codex/config.toml)"),
+            "{}",
+            over.message
+        );
     }
 
     #[test]
@@ -4967,7 +5809,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_hooks_warns_when_shims_not_active() {
+    fn r17_check_hooks_warns_on_absent_active_hook() {
         // The fresh-clone signature: shims committed in the tree, but the
         // local core.hooksPath wiring is gone — subcommands respond, git
         // calls nothing.
@@ -4975,12 +5817,31 @@ mod tests {
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert!(r.status.is_warn(), "got: {}", r.message);
-        assert!(
-            warn_remedy(&r).contains("git config core.hooksPath .codeflow/git-hooks"),
-            "remedy: {}",
-            r.message
-        );
+        assert!(matches!(r.status, Status::Warn(_)), "{}", r.message);
+        assert!(r.message.contains("pre-commit (no hook)"), "{}", r.message);
+    }
+
+    #[test]
+    fn r17_check_hooks_refuses_unreadable_existing_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        std::fs::write(dir.path().join(".git/hooks/pre-commit"), b"\xff").unwrap();
+        let result = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("cannot read hook wiring"));
+    }
+
+    #[test]
+    fn r17_customization_missing_document_warns_but_unreadable_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/product.md"), "Product context\n").unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_str().unwrap().to_owned();
+        assert!(matches!(check_customization(&opts).status, Status::Warn(_)));
+        std::fs::write(dir.path().join("docs/architecture.md"), b"\xff").unwrap();
+        assert_eq!(check_customization(&opts).status, Status::Fail);
     }
 
     #[test]
@@ -5032,6 +5893,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
+        for name in ["pre-commit", "commit-msg", "pre-push"] {
+            std::fs::write(
+                dir.path().join(".git/hooks").join(name),
+                "#!/bin/sh\nexit 0\n",
+            )
+            .unwrap();
+        }
         crate::scaffold::state::ProjectState {
             schema_version: 1,
             tier: crate::scaffold::manifest::Tier::Standard,
@@ -5273,8 +6141,8 @@ mod tests {
         assert!(result.message.contains("not writable"));
     }
 
-    fn in_sandbox(name: &str) -> Option<String> {
-        (name == "SANDBOX_RUNTIME").then(|| "1".to_string())
+    fn in_sandbox(name: &str) -> Option<std::ffi::OsString> {
+        (name == "SANDBOX_RUNTIME").then(|| "1".into())
     }
 
     /// TSK-216 AC-3: the permissions check names each full-gate directory
@@ -5626,14 +6494,10 @@ mod tests {
 
     #[test]
     fn test_codex_plugin_enabled_requires_exact_enabled_plugin() {
-        assert!(codex_plugin_enabled(
-            r#"[{"id":"codex@openai-codex","enabled":true}]"#
-        ));
-        assert!(!codex_plugin_enabled(
-            r#"[{"id":"codex@openai-codex","enabled":false}]"#
-        ));
-        assert!(!codex_plugin_enabled(r#"[{"id":"other","enabled":true}]"#));
-        assert!(!codex_plugin_enabled("not-json"));
+        assert!(codex_plugin_enabled(r#"[{"id":"codex@openai-codex","enabled":true}]"#).unwrap());
+        assert!(!codex_plugin_enabled(r#"[{"id":"codex@openai-codex","enabled":false}]"#).unwrap());
+        assert!(!codex_plugin_enabled(r#"[{"id":"other","enabled":true}]"#).unwrap());
+        assert!(codex_plugin_enabled("not-json").is_err());
     }
 
     #[test]
@@ -5773,13 +6637,133 @@ mod tests {
     }
 
     #[test]
-    fn test_repo_integrity_non_repo_passes_quietly() {
-        // git unavailable / not a repo → no signal → pass, never guess.
+    fn test_repo_integrity_unreadable_state_refuses() {
+        // Unavailable Git evidence cannot certify repository integrity.
         let dir = tempfile::tempdir().unwrap();
         let mut opts = test_opts(); // exec_command returns Err
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_repo_integrity(&opts);
-        assert_eq!(r.status, Status::Pass);
+        assert_eq!(r.status, Status::Fail);
+        assert!(r.message.contains("cannot read repository bare state"));
+    }
+
+    /// A link to nothing at `path`, with its parent created.
+    #[cfg(unix)]
+    fn dangling(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("gone", path).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn opts_at(dir: &Path) -> Options {
+        Options {
+            project_dir: dir.to_string_lossy().into_owned(),
+            ..test_opts()
+        }
+    }
+
+    /// A dangling link where doctor reads an input is an input that cannot
+    /// be read, never a missing one: each check fails instead of passing
+    /// as not applicable. Missing inputs keep their passing results.
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_customization_docs_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_customization(&opts_at(dir.path())).status,
+            Status::Pass
+        );
+        dangling(&dir.path().join("docs").join("product.md"));
+        let result = check_customization(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_codeflow_dir_fails_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_permissions(&opts_at(dir.path())).status, Status::Pass);
+        dangling(&dir.path().join(".codeflow"));
+        let result = check_permissions(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_git_entry_is_not_a_missing_working_tree() {
+        let bare = |dir: &Path| {
+            let mut opts = opts_at(dir);
+            opts.exec_command = Some(|_, args| {
+                if args.contains(&"--is-bare-repository") {
+                    Ok("true\n".into())
+                } else {
+                    Ok(String::new())
+                }
+            });
+            check_repo_integrity(&opts)
+        };
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(bare(dir.path()).status, Status::Pass);
+        dangling(&dir.path().join(".git"));
+        let result = bare(dir.path());
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_ci_file_fails_the_perimeter() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let before = check_ci_perimeter(&opts_at(dir.path()));
+        assert_ne!(before.status, Status::Fail, "{}", before.message);
+        dangling(&dir.path().join(".gitlab-ci.yml"));
+        let result = check_ci_perimeter(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+        assert!(
+            result.message.contains(".gitlab-ci.yml"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_instruction_file_fails_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_instructions(&opts_at(dir.path())).status,
+            Status::Pass
+        );
+        dangling(&dir.path().join("AGENTS.md"));
+        let result = check_instructions(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_kernel_or_skill_tree_fails_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = check_reading(&opts_at(dir.path()));
+        assert_ne!(control.status, Status::Fail, "{}", control.message);
+        dangling(&dir.path().join("AGENTS.md"));
+        let result = check_reading(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+
+        let dir = tempfile::tempdir().unwrap();
+        dangling(&dir.path().join(".claude").join("skills"));
+        let result = check_reading(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_pin_input_fails_the_ci_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = ci_pin::report(dir.path());
+        assert_ne!(control.status, Status::Fail, "{}", control.message);
+        dangling(&dir.path().join(".codeflow").join("project.toml"));
+        let result = ci_pin::report(dir.path());
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
     }
 
     // --- ci-perimeter -------------------------------------------------------
@@ -5802,6 +6786,7 @@ mod tests {
     /// A project pinning `1.2.3` whose CI file at `dest` holds `body`.
     fn perimeter(dest: &str, body: &str) -> CheckResult {
         let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
         let path = dir.path().join(dest);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, body).unwrap();
@@ -6348,5 +7333,146 @@ mod tests {
         );
         fail.with(|flag| flag.set(false));
         assert!(run.unwrap_err().contains("injected"));
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_shell_comment_requires_shell_blank() {
+        assert_eq!(
+            super::shell_code("echo x\u{a0}#codeflow"),
+            "echo x\u{a0}#codeflow"
+        );
+        assert_eq!(super::shell_code("echo x #codeflow"), "echo x ");
+    }
+}
+
+#[cfg(test)]
+mod r16_core_regressions {
+    #[cfg(unix)]
+    #[test]
+    fn r16_doctor_environment_preserves_non_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+        let name = "CODEFLOW_R16_DOCTOR_UNREADABLE_UNIQUE";
+        std::env::set_var(name, std::ffi::OsString::from_vec(vec![0xff]));
+        let actual = super::Options::default().env(name);
+        std::env::remove_var(name);
+        assert!(actual.is_some());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    fn opts(root: &Path) -> Options {
+        Options {
+            project_dir: root.to_str().unwrap().into(),
+            harness_home: Some(root.into()),
+            ..Options::default()
+        }
+    }
+    fn optional_input(relative: &str, check: fn(&Options) -> CheckResult) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let absent = check(&opts(dir.path()));
+        assert_ne!(
+            absent.status,
+            Status::Fail,
+            "absence: {relative}: {}",
+            absent.message
+        );
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        let result = check(&opts(dir.path()));
+        assert_eq!(
+            result.status,
+            Status::Fail,
+            "{relative}: {}",
+            result.message
+        );
+        assert!(result.message.contains("repair"), "{}", result.message);
+    }
+    #[test]
+    fn r22_codex_input() {
+        optional_input(".codex/hooks.json", check_codex);
+    }
+    #[test]
+    fn r22_grok_input() {
+        optional_input(".grok/hooks", check_grok);
+    }
+    #[test]
+    fn r22_config_input() {
+        optional_input(".codeflow", check_config);
+    }
+    #[test]
+    fn r22_test_config_input() {
+        optional_input(".codeflow/test-config.json", check_test_config);
+    }
+    #[test]
+    fn r22_drift_manifest_input() {
+        optional_input(".codeflow/manifest.json", check_managed_drift);
+    }
+    #[test]
+    fn r22_ci_manifest_input() {
+        optional_input(".codeflow/manifest.json", check_ci_perimeter);
+    }
+    #[test]
+    fn r22_hook_wiring_requires_readable_shim() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(hooks_wiring(dir.path()), Wiring::Read));
+        std::fs::create_dir_all(dir.path().join(".codeflow/git-hooks")).unwrap();
+        let path = dir.path().join(".codeflow/git-hooks/pre-commit");
+        std::os::unix::fs::symlink(dir.path().join("missing"), path).unwrap();
+        assert!(matches!(hooks_wiring(dir.path()), Wiring::Unreadable(_)));
+    }
+    #[test]
+    fn r22_grok_empty_listing_and_broken_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = dir.path().join(".grok/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        assert_eq!(check_grok(&opts(dir.path())).status, Status::Pass);
+        std::os::unix::fs::symlink(dir.path().join("gone"), hooks.join("guard.json")).unwrap();
+        assert_eq!(check_grok(&opts(dir.path())).status, Status::Fail);
+    }
+    #[test]
+    fn r22_json_walk_refuses_unresolved_directory_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(walk_json_files(dir.path(), &mut Vec::new()).is_ok());
+        std::os::unix::fs::symlink("missing", dir.path().join("subdir")).unwrap();
+        assert!(walk_json_files(dir.path(), &mut Vec::new()).is_err());
+    }
+    #[test]
+    fn r22_corrupt_manifest_fails_ci_and_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(InstalledManifest::path(dir.path()), "{").unwrap();
+        for check in [check_managed_drift, check_ci_perimeter] {
+            assert_eq!(check(&opts(dir.path())).status, Status::Fail);
+        }
+    }
+    #[test]
+    fn r22_managed_file_read_failure_is_not_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = InstalledManifest::new("0");
+        manifest.files.insert(
+            "AGENTS.md".into(),
+            crate::scaffold::state::InstalledFile {
+                src: "AGENTS.md.tmpl".into(),
+                ownership: Ownership::ManagedRegion,
+                sha256: String::new(),
+                exec: false,
+            },
+        );
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            InstalledManifest::path(dir.path()),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(check_managed_drift(&opts(dir.path())).status, Status::Pass);
+        std::os::unix::fs::symlink("gone", dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(check_managed_drift(&opts(dir.path())).status, Status::Fail);
     }
 }

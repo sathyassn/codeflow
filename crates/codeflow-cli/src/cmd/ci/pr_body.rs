@@ -205,7 +205,7 @@ impl HtmlContainers {
             let tag = &token[..end];
             let name = tag
                 .trim_start_matches('/')
-                .split_whitespace()
+                .split([' ', '\t', '\r', '\n', '\u{c}'])
                 .next()
                 .unwrap_or_default()
                 .trim_end_matches('/')
@@ -217,7 +217,11 @@ impl HtmlContainers {
                         self.closed[id] = true;
                     }
                 }
-            } else if !tag.trim_end().ends_with('/') && html_container(&name) {
+            } else if !tag
+                .trim_end_matches([' ', '\t', '\r', '\n', '\u{c}'])
+                .ends_with('/')
+                && html_container(&name)
+            {
                 self.open.push((name, self.closed.len()));
                 self.closed.push(false);
             }
@@ -234,7 +238,10 @@ impl Section<'_> {
 
     fn matches(&self, name: &str) -> bool {
         matches!(self.depth, HeadingLevel::H2 | HeadingLevel::H3)
-            && self.name.trim().eq_ignore_ascii_case(name)
+            && self
+                .name
+                .trim_matches([' ', '\t', '\r', '\n'])
+                .eq_ignore_ascii_case(name)
     }
 }
 
@@ -368,7 +375,7 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         .any(|line| {
             let cells: Vec<_> = line
                 .split('|')
-                .map(str::trim)
+                .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
                 .filter(|cell| !cell.is_empty())
                 .collect();
             cells.len() >= 3
@@ -386,7 +393,122 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         })
 }
 
-/// A body over this many words draws the length warning (TSK-228).
+/// Revisions named by approving rows in the visible Reviews section.
+/// Fences, quotes, examples and HTML comments cannot supply the evidence.
+/// A verdict may be `approved` or prose beginning `approve at ...`, as in
+/// the two-column reviewer/verdict table used by completed tasks.
+pub(crate) fn reviewed_revisions(body: &str, heading: &str) -> Vec<String> {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return Vec::new();
+    };
+    let mut revisions = Vec::new();
+    for line in rendered_text(section.content(), false, false).lines() {
+        // The row grammar `review_names_revision` reads (issue 79): ASCII
+        // space, tab, CR and LF pad a cell, and the verdict's first word
+        // ends at a space or tab.
+        let cells: Vec<_> = line
+            .split('|')
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
+            .filter(|cell| !cell.is_empty())
+            .collect();
+        if cells.len() < 2
+            || !cells.last().is_some_and(|verdict| {
+                verdict.split([' ', '\t']).next().is_some_and(|word| {
+                    matches!(word.to_ascii_lowercase().as_str(), "approved" | "approve")
+                })
+            })
+        {
+            continue;
+        }
+        for cell in &cells[1..] {
+            for token in cell.split(|c: char| !c.is_ascii_hexdigit()) {
+                if (7..=40).contains(&token.len()) && !revisions.iter().any(|r| r == token) {
+                    revisions.push(token.to_string());
+                }
+            }
+        }
+    }
+    revisions
+}
+
+#[cfg(test)]
+mod review_revision_tests {
+    use super::reviewed_revisions;
+
+    #[test]
+    fn approving_tables_accept_exact_scopes_and_prose_verdicts() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let three = format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | `{sha}` | approved |\n");
+        assert_eq!(reviewed_revisions(&three, "Reviews"), [sha]);
+        let two = "## Reviews\n| Reviewer | Verdict |\n| --- | --- |\n| peer | approve at 316c7e8f7; nit fixed and confirmed |\n";
+        assert_eq!(reviewed_revisions(two, "Reviews"), ["316c7e8f7"]);
+        assert_eq!(
+            reviewed_revisions(&two.replace("Reviews", "Peer review"), "Peer review"),
+            ["316c7e8f7"]
+        );
+    }
+
+    #[test]
+    fn hidden_duplicate_and_non_approving_rows_supply_no_revision() {
+        let row = "| peer | 316c7e8f7 | approved |";
+        for body in [
+            format!("## Testing\n{row}\n"),
+            format!("## Reviews\n```text\n{row}\n```\n"),
+            format!("## Reviews\n> {row}\n"),
+            format!("## Reviews\n<!-- {row} -->\n"),
+            format!("## Reviews\n{row}\n## Reviews\n{row}\n"),
+            "## Reviews\n| peer | 316c7e8f7 | changes_requested |\n".into(),
+            "## Reviews\n| peer | changes_requested; previously approved 316c7e8f7 |\n".into(),
+            "## Reviews\n| 316c7e8f7 | approved |\n".into(),
+        ] {
+            assert!(reviewed_revisions(&body, "Reviews").is_empty(), "{body}");
+        }
+    }
+
+    /// Issue 79: a cell is padded only by ASCII space, tab, CR and LF, as
+    /// `review_names_revision` reads it, so a verdict padded with another
+    /// whitespace character is not an approval.
+    #[test]
+    fn a_verdict_padded_with_other_whitespace_is_no_approval() {
+        let body = "## Reviews\n| peer | 316c7e8f7 | \u{a0}approved |\n";
+        assert!(reviewed_revisions(body, "Reviews").is_empty(), "{body}");
+    }
+}
+
+/// The Reviews section records no review: it names no commit and has no
+/// approving row, as `None: <reason>` does. Absent counts too.
+pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return matching.is_empty();
+    };
+    let text = rendered_text(section.content(), false, false);
+    let names_commit = text
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .any(|token| token.len() >= 7 && token.bytes().any(|b| b.is_ascii_digit()));
+    let approves = text.lines().any(|line| {
+        // The row grammar `review_names_revision` reads (issue 79).
+        line.split('|')
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
+            .rfind(|cell| !cell.is_empty())
+            .is_some_and(|verdict| {
+                matches!(
+                    verdict.to_ascii_lowercase().as_str(),
+                    "approved" | "approve"
+                )
+            })
+    });
+    !names_commit && !approves
+}
+
+/// The shipped default of `git.pr_body_max_words`, the policy key whose
+/// value `presentation` reads: a body over this many words draws the
+/// length warning (TSK-228). A project sets its own number in
+/// `policy.json`, or `0` to turn the warning off (TSK-267).
+#[cfg(test)]
 const BODY_WORD_LIMIT: usize = 1000;
 
 /// The HTML elements GitHub keeps that start a new line of text. It strips
@@ -524,7 +646,9 @@ impl HtmlScan {
                     {
                         let name = rest[1..]
                             .trim_start_matches('/')
-                            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                            .split(|c: char| {
+                                matches!(c, ' ' | '\t' | '\r' | '\n' | '\u{c}' | '/' | '>')
+                            })
                             .next()
                             .unwrap_or_default()
                             .to_ascii_lowercase();
@@ -727,8 +851,11 @@ fn word_count(source: &str) -> usize {
 
 /// The length warning's message for an over-long body: the count, the limit
 /// and the three largest `##` sections with their word counts. `None` at or
-/// under the limit.
-fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
+/// under `limit`, or when `limit` is `0` (the warning turned off).
+fn length_message(limit: usize, body: &str, sections: &[Section<'_>]) -> Option<String> {
+    if limit == 0 {
+        return None;
+    }
     // Each section's heading and its content are chunks of their own.
     let cuts: Vec<usize> = sections
         .iter()
@@ -736,7 +863,7 @@ fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
         .collect();
     let reader = ReaderText::of(body, &cuts);
     let total = reader.words();
-    if total <= BODY_WORD_LIMIT {
+    if total <= limit {
         return None;
     }
     let mut largest: Vec<(&str, usize)> = sections
@@ -764,7 +891,7 @@ fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
         format!("; largest sections: {named}")
     };
     Some(format!(
-        "PR body is {total} words, over the {BODY_WORD_LIMIT}-word limit (HTML comments not counted){sections}"
+        "PR body is {total} words, over the {limit}-word limit (HTML comments not counted){sections}"
     ))
 }
 
@@ -782,9 +909,11 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         ));
     };
     let outline = outline(body);
-    // TSK-228: a body over the word limit warns and never blocks; this check
-    // raises every finding at warn, whatever `git.pr_sections` says.
-    let length = length_message(body, &outline.sections);
+    // TSK-228: a body over `git.pr_body_max_words` warns and never blocks;
+    // this check raises every finding at warn, whatever `git.pr_sections`
+    // says. `0` turns the length warning off (TSK-267).
+    let limit = usize::try_from(git.pr_body_max_words).unwrap_or(usize::MAX);
+    let length = length_message(limit, body, &outline.sections);
     for tag in &outline.unclosed {
         warn(format!(
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
@@ -795,9 +924,11 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     // checked mechanically under `git.pr_summary` (the note of 2026-10-03).
     for section in outline.sections {
         if section.matches("Testing")
-            && !visible_text(section.content(), false)
-                .lines()
-                .any(|line| line.trim().to_ascii_lowercase().starts_with("not tested:"))
+            && !visible_text(section.content(), false).lines().any(|line| {
+                line.trim_matches([' ', '\t', '\r', '\n'])
+                    .to_ascii_lowercase()
+                    .starts_with("not tested:")
+            })
         {
             warn("PR Testing has no Not tested: line".into());
         }
@@ -1155,8 +1286,14 @@ fn release_fields_under(body: &str, heading: &str) -> Option<Vec<(String, String
     Some(
         field_text(&content[..end])
             .lines()
-            .filter_map(|line| line.trim().split_once(':'))
-            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .filter_map(|line| line.trim_matches([' ', '\t', '\r', '\n']).split_once(':'))
+            .map(|(key, value)| {
+                (
+                    key.trim_matches([' ', '\t', '\r', '\n'])
+                        .to_ascii_lowercase(),
+                    value.trim_matches([' ', '\t', '\r', '\n']).to_string(),
+                )
+            })
             .collect(),
     )
 }
@@ -1373,7 +1510,8 @@ fn migration_guidance(parsed: &[Section<'_>], migration: &str) -> bool {
 fn guidance(value: &str) -> String {
     value
         .replace(['`', '"', '\''], "")
-        .split_whitespace()
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
@@ -2083,9 +2221,51 @@ mod tests {
         );
         let long = "<p>word</p>".repeat(BODY_WORD_LIMIT + 100);
         assert!(
-            length_message(&long, &sections(&long)).is_some(),
+            length_message(BODY_WORD_LIMIT, &long, &sections(&long)).is_some(),
             "adjacent HTML elements are separate words and pass the limit"
         );
+    }
+
+    /// TSK-267: the limit is `git.pr_body_max_words`; a project's own
+    /// number moves the warning, and `0` turns it off.
+    #[test]
+    fn the_word_limit_follows_the_policy_key() {
+        assert_eq!(
+            usize::try_from(GitPolicy::default().pr_body_max_words).unwrap(),
+            BODY_WORD_LIMIT,
+            "the shipped default is the number these tests measure against"
+        );
+        let body = format!("## Summary\n{}", words(150));
+        assert!(length_message(BODY_WORD_LIMIT, &body, &sections(&body)).is_none());
+        let project = length_message(100, &body, &sections(&body)).unwrap();
+        assert!(
+            project.contains("151 words, over the 100-word limit"),
+            "{project}"
+        );
+        assert!(
+            length_message(0, &body, &sections(&body)).is_none(),
+            "0 is off"
+        );
+
+        let long = format!("## Summary\n{}", words(BODY_WORD_LIMIT + 5));
+        let default = GitPolicy::default();
+        assert!(presentation(&default, &long, false)
+            .iter()
+            .any(|finding| finding.message.contains("-word limit")));
+        let off = GitPolicy {
+            pr_body_max_words: 0,
+            ..GitPolicy::default()
+        };
+        assert!(!presentation(&off, &long, false)
+            .iter()
+            .any(|finding| finding.message.contains("-word limit")));
+        let tight = GitPolicy {
+            pr_body_max_words: 100,
+            ..GitPolicy::default()
+        };
+        assert!(presentation(&tight, &body, false)
+            .iter()
+            .any(|finding| finding.message.contains("over the 100-word limit")));
     }
 
     /// Review round 2: a `>` inside a quoted attribute does not end the
@@ -2109,12 +2289,12 @@ mod tests {
             "{}<div><img src=\"x.png\" alt=\"a > hidden image alternative words here\"></div>",
             words(BODY_WORD_LIMIT - 2)
         );
-        assert!(length_message(&at, &sections(&at)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none());
         let over = format!(
             "{}<div>one&ensp;two&emsp;three&Tab;four&NewLine;five</div>",
             words(BODY_WORD_LIMIT - 2)
         );
-        assert!(length_message(&over, &sections(&over)).is_some());
+        assert!(length_message(BODY_WORD_LIMIT, &over, &sections(&over)).is_some());
     }
 
     /// Review round 3: every space the HTML specification names, however it
@@ -2152,7 +2332,10 @@ mod tests {
                 words(BODY_WORD_LIMIT - 2)
             );
             assert_eq!(word_count(&body), BODY_WORD_LIMIT + 1, "{space}");
-            assert!(length_message(&body, &sections(&body)).is_some(), "{space}");
+            assert!(
+                length_message(BODY_WORD_LIMIT, &body, &sections(&body)).is_some(),
+                "{space}"
+            );
         }
         assert_eq!(word_count("<div>one&nbsptwo</div>"), 2, "legacy form");
         for space in ["&#32", "&#x20", "&#X20", "&#9", "&#160", "&#xA0", "&#00032"] {
@@ -2251,7 +2434,8 @@ mod tests {
             words(400),
             words(700)
         );
-        let message = length_message(&sections, &super::sections(&sections)).unwrap();
+        let message =
+            length_message(BODY_WORD_LIMIT, &sections, &super::sections(&sections)).unwrap();
         assert!(
             message.ends_with("## Second (700 words), ## First (400 words)"),
             "{message}"
@@ -2267,7 +2451,7 @@ mod tests {
             words(BODY_WORD_LIMIT - 2)
         );
         assert!(
-            length_message(&at, &sections(&at)).is_none(),
+            length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none(),
             "an unused definition does not push a body over the limit"
         );
     }
@@ -2280,7 +2464,7 @@ mod tests {
             "## Images\n![alt text of an image][img] and [a link here][lnk]\n\n## Big\n{}\n## Links\n[img]: x.png\n[lnk]: https://example.com\n",
             words(BODY_WORD_LIMIT + 100),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         let named = message.split("largest sections: ").nth(1).unwrap();
         assert!(
             named.starts_with("## Big (1100 words), ## Images (4 words)"),
@@ -2300,7 +2484,7 @@ mod tests {
             words(400),
             words(400),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         assert!(
             message.ends_with("## First (400 words), ## Second (400 words), ## Third (400 words)"),
             "{message}"
@@ -2311,15 +2495,15 @@ mod tests {
     fn length_message_fires_only_over_the_limit() {
         let at = format!("## Summary\n{}", words(BODY_WORD_LIMIT - 1));
         assert_eq!(word_count(&at), BODY_WORD_LIMIT);
-        assert!(length_message(&at, &sections(&at)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none());
         let over = format!("{at}word");
-        let message = length_message(&over, &sections(&over)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &over, &sections(&over)).unwrap();
         assert!(
             message.starts_with("PR body is 1001 words, over the 1000-word limit"),
             "{message}"
         );
         let commented = format!("{at}\n<!-- {} -->", words(500));
-        assert!(length_message(&commented, &sections(&commented)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &commented, &sections(&commented)).is_none());
     }
 
     /// TSK-228: the three largest `##` sections are named with their words;
@@ -2336,7 +2520,7 @@ mod tests {
             words(400),
             words(450),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         let named = message.split("largest sections: ").nth(1).unwrap();
         assert_eq!(
             named, "## Testing (501 words), ## Reviews (450 words), ## Changes (300 words)",
@@ -2349,7 +2533,7 @@ mod tests {
     #[test]
     fn length_message_without_sections_names_none() {
         let body = words(1200);
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         assert!(message.contains("1200 words"), "{message}");
         assert!(!message.contains("largest sections"), "{message}");
     }

@@ -12,7 +12,8 @@ authorship alone governs review; do not add a blanket third-family ceremony.
 
 Classify findings by severity, order them by [materiality](materiality.md),
 and support each with a concrete trigger or reproduction plus its priority
-rationale. Security approval requires checking untrusted inputs through
+rationale. Security approval, on the trigger the workflow discipline rules'
+"Review verdicts" name, requires checking untrusted inputs through
 their sinks, authentication/authorization, secrets and privacy, dependency
 risk, injection, path/process boundaries, and the agent-facing
 prompt/instruction surface where present.

@@ -39,7 +39,12 @@
       "dist-workspace.toml",
       ".claude/settings.json",
       "scripts/proofs/**",
-      "scripts/test_gate_contracts.py"
+      "scripts/test_gate_contracts.py",
+      "scripts/windows-partitions.py",
+      "scripts/windows-test-times.json",
+      "scripts/test_windows_partitions.py",
+      "scripts/ci-reuse.py",
+      "scripts/test_ci_reuse.py"
     ]
   },
   "defaults": {
@@ -132,6 +137,7 @@
           "command": "cargo test --workspace --quiet"
         }
       },
+      "timeout_seconds": 3600,
       "requires": [
         "rust-build"
       ]
@@ -143,6 +149,17 @@
       "modes": {
         "quick": {
           "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
+        }
+      },
+      "requires": []
+    },
+    {
+      "name": "contract-scans",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "quick": {
+          "command": "cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet"
         }
       },
       "requires": []
@@ -242,13 +259,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
         }
       }
     },
@@ -279,6 +296,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
         }
@@ -396,6 +416,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"(cd docs-portal && node scripts/workflow.mjs verify)\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
@@ -426,7 +449,7 @@
       ],
       "outputs": [],
       "exclusive": true,
-      "timeout_seconds": 2400
+      "timeout_seconds": 900
     },
     {
       "name": "prose-exhaustive",

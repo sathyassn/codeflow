@@ -117,7 +117,10 @@ fn pull_request(root: &Path, branch: &str, target: &str, task_line: &str) -> (i3
             "--branch",
             branch,
             "--pr-body",
-            &body(task_line),
+            &body(task_line).replace(
+                "| journey | this range | approve |",
+                &review_rows(root, "HEAD", "| journey | this range | approve |"),
+            ),
         ],
     );
     (
@@ -833,4 +836,33 @@ fn work_start_reports_an_unconfigured_claim_remote() {
         refused.contains("git.claim_remotes names 'archive'"),
         "{refused}"
     );
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
 }

@@ -640,7 +640,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)), &root).unwrap();
+        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
@@ -1767,12 +1767,18 @@ fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> 
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("hook executable runs");
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
+    let written = child.stdin.as_mut().unwrap().write_all(payload.as_bytes());
+    // A hook that exits before reading its payload (an older binary refusing
+    // the contract) closes its input. Its exit status and output are the
+    // verdict, so only a broken pipe is let through; any other write error
+    // fails the test.
+    if let Err(error) = written {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "writing the hook payload: {error}"
+        );
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -1893,7 +1899,7 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
                 assert_eq!(head, digest, "{flag} {harness} {source}");
                 let heading = "## Rules after compaction or resume";
                 println!(
-                    "{flag} {harness} {source}: block {} bytes (guideline 1536)",
+                    "{flag} {harness} {source}: block {} bytes",
                     heading.len() + block.len()
                 );
             }
@@ -1982,6 +1988,26 @@ fn main() {
         String::from_utf8_lossy(&built.stderr)
     );
     exe
+}
+
+/// TSK-265: a hook that refuses before it reads its payload closes its
+/// input, and the harness judges it by its exit status, as a host does. The
+/// older-binary stub refuses `--contract` without reading; when it exited
+/// before the payload was written, the write failed with a broken pipe
+/// (coverage runs 38110268273 and 38117913066). A payload larger than any
+/// pipe buffer makes that order certain instead of a race.
+#[test]
+fn a_hook_that_refuses_before_reading_its_payload_is_judged_by_its_exit() {
+    let stubs = tempfile::tempdir().unwrap();
+    let old = older_binary_stub(stubs.path());
+    let payload = "x".repeat(4 << 20);
+    let out = run_wired_hook_with(
+        &old,
+        stubs.path(),
+        "codeflow hook prompt-reminder --contract 3",
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
 
 /// TSK-128 F1: version skew. An updated project on a machine whose
@@ -2078,7 +2104,7 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         .join(".claude/skills/cf-model-orchestrator/resources/quality/findings.md")
         .is_file());
     let mut installed = SkillFiles::new();
-    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed);
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed).unwrap();
     let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
     assert!(chain.errors.is_empty(), "{:?}", chain.errors);
     assert!(!chain
@@ -2088,8 +2114,9 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
     assert_eq!(reading::orphans(&installed), Vec::<String>::new());
 
     // Doctor reports sizes: the fresh install is within every guideline, so
-    // the report is clean; a skill doubled past its guideline then warns and
-    // names the step that clears it, and doctor still exits 0.
+    // the report is clean; a skill grown past the 500-line body guideline
+    // then draws a note (TSK-267), never a warning, that states the basis
+    // and names the step that clears it, and doctor still exits 0.
     let fresh_report = codeflow(&root, &["doctor", "--check", "reading"]);
     let clean = output_text(&fresh_report);
     assert_eq!(fresh_report.status.code(), Some(0), "{clean}");
@@ -2097,20 +2124,107 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         clean.starts_with("ok    reading: within guidelines:"),
         "{clean}"
     );
-    assert!(!clean.contains("differ from the shipped map"), "{clean}");
+    assert!(!clean.contains("installed read edges differ"), "{clean}");
     let skill = root.join(".claude/skills/cf-herdr/SKILL.md");
     let text = std::fs::read_to_string(&skill).unwrap();
-    std::fs::write(&skill, format!("{text}\n{text}")).unwrap();
+    let copies = 500 / text.lines().count() + 1;
+    std::fs::write(&skill, text.repeat(copies)).unwrap();
     let out = codeflow(&root, &["doctor", "--check", "reading"]);
     let report = output_text(&out);
     assert_eq!(out.status.code(), Some(0), "{report}");
     assert!(
-        report.contains("warn  reading: above guideline:"),
+        report.contains("note  reading: above guideline: cf-herdr "),
         "{report}"
     );
-    assert!(report.contains("cf-herdr "), "{report}");
+    assert!(report.contains("of 500 lines ("), "{report}");
     assert!(report.contains("move detail behind a trigger"), "{report}");
     assert!(report.contains("per-task reading chain"), "{report}");
+    assert!(!report.contains("warn"), "{report}");
+}
+
+/// TSK-235 AC-4 (journey): a fresh standard project carries the guidance
+/// for working while something is uncertain where an agent reads it on the
+/// trigger. The every-tier discipline file states the interim-state rule and
+/// points at the autonomy reference's section; the installed orchestrator
+/// names that reference on the moment a step may need the operator; both
+/// skill trees install the section byte for byte; the reference stays
+/// outside the per-task chain; and the reading report stays clean. At the
+/// minimal tier the discipline file carries the rule with no reference.
+#[test]
+fn a_fresh_standard_project_carries_the_uncertainty_guidance_on_its_trigger() {
+    use codeflow_core::reading::{self, Inventory, SkillFiles};
+
+    const INTERIM_RULE: &str = "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state";
+    const POINTER: &str = "`autonomy.md` \"While a question is open\" has the rule";
+    const TRIGGER: &str = "Before deciding whether to ask the operator, escalate or stop";
+    const SECTION: &str = "## While a question is open";
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let (_tmp, root) = fresh("--standard");
+
+    let discipline = words(&read(&root, ".codeflow/rules/workflow-discipline.md"));
+    assert!(discipline.contains(INTERIM_RULE), "{discipline}");
+    assert!(discipline.contains(POINTER), "{discipline}");
+
+    let orchestrator = words(&read(
+        &root,
+        ".claude/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let trigger_sentence = orchestrator
+        .split(". ")
+        .find(|sentence| sentence.contains(TRIGGER))
+        .expect("the orchestrator carries the autonomy trigger");
+    assert!(
+        trigger_sentence.contains("cf-method/references/autonomy.md"),
+        "{trigger_sentence}"
+    );
+
+    let claude = read(&root, ".claude/skills/cf-method/references/autonomy.md");
+    let agents = read(&root, ".agents/skills/cf-method/references/autonomy.md");
+    assert_eq!(claude, agents, "the two skill trees differ");
+    assert!(claude.contains(SECTION), "{claude}");
+    assert!(words(&claude).contains(
+        "| An operator question is open and your recommended answer is reversible | 1: continue the dependent work on it as a working default"
+    ));
+    assert!(words(&claude).contains("Neither interim state takes the operator-owned step."));
+    assert_eq!(
+        claude,
+        read(
+            &repo_root(),
+            "assets/base/claude/skills/cf-method/references/autonomy.md"
+        ),
+        "the installed reference is not the shipped source"
+    );
+
+    let mut installed = SkillFiles::new();
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed)
+        .expect("the installed skill tree reads");
+    let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
+    assert!(chain.errors.is_empty(), "{:?}", chain.errors);
+    assert!(
+        !chain
+            .files
+            .iter()
+            .any(|file| file.path.ends_with("references/autonomy.md")),
+        "the autonomy reference joined the per-task chain"
+    );
+    let report = codeflow(&root, &["doctor", "--check", "reading"]);
+    let text = output_text(&report);
+    assert_eq!(report.status.code(), Some(0), "{text}");
+    assert!(
+        text.starts_with("ok    reading: within guidelines:"),
+        "{text}"
+    );
+
+    let (_tmp, minimal) = fresh("--minimal");
+    let discipline = words(&read(&minimal, ".codeflow/rules/workflow-discipline.md"));
+    assert!(discipline.contains(INTERIM_RULE), "{discipline}");
+    assert!(
+        !minimal
+            .join(".claude/skills/cf-method/references/autonomy.md")
+            .exists(),
+        "the minimal tier installs no autonomy reference"
+    );
 }
 
 /// The `codeflow` commands a text names in code spans, each as its command
@@ -2812,6 +2926,176 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
     assert!(!cleared.contains("git does not run"), "{cleared}");
 }
 
+/// The installed catalog's design owner seat: its id, first and second
+/// line, and the version ids of the first line.
+fn design_owner_lines(root: &Path) -> (String, String, String, Vec<String>) {
+    let catalog: serde_json::Value = serde_json::from_str(&read(
+        root,
+        ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .unwrap();
+    let owner = catalog["design_owner"].as_str().unwrap().to_string();
+    let seat = catalog["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|seat| seat["id"] == owner.as_str())
+        .unwrap();
+    let first = seat["lines"][0].as_str().unwrap().to_string();
+    let second = seat["lines"][1].as_str().unwrap().to_string();
+    let versions = catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["id"] == first.as_str())
+        .unwrap()["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|version| version["id"].as_str().unwrap().to_string())
+        .collect();
+    (owner, first, second, versions)
+}
+
+/// Commit, through the scaffolded hooks, a schema 2 selection naming
+/// `second` co-owner and a task record targeting `integration/design`.
+fn commit_design_authority(root: &Path, owner: &str, first: &str, second: &str) -> String {
+    let selection = serde_json::json!({
+        "schema_version": 2,
+        "bindings": [],
+        "design_authority": {
+            "seat": owner,
+            "designated": {"date": "2026-10-04", "record": "owner instruction, journey"},
+            "lines": {
+                first: {"role": "owner"},
+                second: {"role": "co-owner", "approves": ["phase-exit"]}
+            }
+        }
+    });
+    let selection = format!("{}\n", serde_json::to_string_pretty(&selection).unwrap());
+    git_with_binary(root, &["switch", "-q", "-c", "integration/design"]);
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    // The journey commits at its root checkout on a non-root branch; the
+    // root-checkout rule (TSK-165) has its own journey, so it is off here.
+    policy["git"]["root_checkout_commits"] = "off".into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    std::fs::write(root.join(".codeflow/model-selection.json"), &selection).unwrap();
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"journey\"\ntitle: \"Journey\"\n\
+         status: todo\nwork_type: feat\nspecs: []\ndepends_on: []\n\
+         integration_target: \"integration/design\"\ncreated: 2026-10-04\n---\n\n# TSK-001: Journey\n",
+    )
+    .unwrap();
+    git_with_binary(root, &["add", "-A"]);
+    git_with_binary(
+        root,
+        &["commit", "-q", "-m", "chore: designate a design co-owner"],
+    );
+    // Design authority is read on the task's own branch, as work start is.
+    git_with_binary(root, &["switch", "-q", "-c", "task/TSK-001-journey"]);
+    selection
+}
+
+/// `models resolve --json` for `duty` on task TSK-001, with `extra` flags.
+fn resolve_json(root: &Path, duty: &str, extra: &[String]) -> serde_json::Value {
+    let mut args = vec![
+        "models",
+        "resolve",
+        "--duty",
+        duty,
+        "--task",
+        "TSK-001",
+        "--host",
+        "claude-code",
+        "--json",
+    ];
+    args.extend(extra.iter().map(String::as_str));
+    let out = codeflow(root, &args);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        stderr_text(&out)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// TSK-236 AC-1 (journey): in a freshly scaffolded standard project driven
+/// by the binary under test, a schema 2 design-authority block committed on
+/// the task's integration target makes the design owner seat's second line
+/// a co-owner: with the first line excluded, `models resolve --duty design`
+/// returns it with no override and no reduced assurance, `design-approval`
+/// returns it as the same-family approver, doctor prints the block, and
+/// `codeflow update` leaves the user-owned file byte-identical.
+#[test]
+fn a_fresh_project_resolves_design_to_its_committed_co_owner() {
+    let (_tmp, root) = fresh("--standard");
+    let (owner, first, second, first_versions) = design_owner_lines(&root);
+    let selection = commit_design_authority(&root, &owner, &first, &second);
+
+    let exclusions: Vec<String> = first_versions
+        .iter()
+        .flat_map(|id| ["--exclude".to_string(), format!("selector:{id}")])
+        .collect();
+    let result = resolve_json(&root, "design", &exclusions);
+    let chosen = &result["participants"][0];
+    assert_eq!(chosen["line"], second.as_str(), "{result}");
+    assert_eq!(chosen["seat"], owner.as_str());
+    assert_eq!(chosen["operator_override"], serde_json::Value::Null);
+    assert_eq!(chosen["reduced_assurance"], false);
+    assert!(
+        chosen["limitations"].to_string().contains(
+            "design co-owner by project designation (.codeflow/model-selection.json, owner \
+             instruction, journey; committed on integration/design at "
+        ),
+        "{result}"
+    );
+
+    let approval = resolve_json(&root, "design-approval", &[]);
+    assert_eq!(
+        approval["participants"][0]["participant"],
+        format!("approver:{second}").as_str()
+    );
+    assert!(approval["participants"][0]["limitations"]
+        .to_string()
+        .contains("same-family design approval; not the independent review"));
+
+    let doctor = codeflow(&root, &["doctor", "--check", "model-bindings"]);
+    let report = String::from_utf8_lossy(&doctor.stdout).to_string();
+    let mut roles = [
+        format!("{first} owner"),
+        format!("{second} co-owner, approves at phase-exit"),
+    ];
+    roles.sort();
+    assert!(
+        report.contains(&format!(
+            "project design authority: seat {owner}: {}",
+            roles.join("; ")
+        )),
+        "{report}"
+    );
+    for attempt in 1..=2 {
+        let out = codeflow(&root, &["update"]);
+        assert!(
+            out.status.success(),
+            "update {attempt}: {}",
+            stderr_text(&out)
+        );
+        assert_eq!(
+            read(&root, ".codeflow/model-selection.json"),
+            selection,
+            "update {attempt} changed the user-owned selection"
+        );
+    }
+}
+
 /// Issue 71 (journey): `codeflow init --standard --yes` finishes in a
 /// repository with enough folders that `git check-ignore -v -n --stdin -z`
 /// answers more than a pipe holds. A writer that sent all of its input before
@@ -2861,4 +3145,60 @@ fn init_standard_completes_in_a_repository_with_many_folders() {
     let err = std::fs::read_to_string(tmp.path().join("init.err")).unwrap_or_default();
     assert!(status.success(), "init failed: {err}");
     assert!(root.join(".codeflow/policy.json").is_file());
+}
+
+fn r20_init_broken_include(unreadable: bool) {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    git_stdout(dir.path(), &["init", "-q"]);
+    let include = dir.path().join("included-config");
+    std::fs::write(
+        &include,
+        if unreadable {
+            "[core]\n hooksPath = own-hooks\n"
+        } else {
+            "[broken\n"
+        },
+    )
+    .unwrap();
+    #[cfg(unix)]
+    if unreadable {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&include, std::fs::Permissions::from_mode(0o0)).unwrap();
+    }
+    let config = dir.path().join(".git/config");
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config)
+        .unwrap();
+    writeln!(file, "[include]\n path = {}", include.display()).unwrap();
+    let before = std::fs::read(&config).unwrap();
+    let output = codeflow(dir.path(), &["init", "--minimal", "--yes"]);
+    #[cfg(unix)]
+    if unreadable {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&include, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(!output.status.success(), "init must refuse");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    assert!(
+        !dir.path().join(".codeflow/git-hooks").exists(),
+        "init must refuse before wiring hooks: {}",
+        output_text(&output)
+    );
+    assert!(
+        !dir.path().join(".codeflow/project.toml").exists(),
+        "failed query must not select an adoption default"
+    );
+}
+
+#[test]
+fn r20_init_refuses_malformed_included_config() {
+    r20_init_broken_include(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_init_refuses_unreadable_included_config() {
+    r20_init_broken_include(true);
 }

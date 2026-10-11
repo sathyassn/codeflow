@@ -63,7 +63,7 @@ Core modules grouped by responsibility.
 | Scaffold | `scaffold/` | `init`, `update`, the manifest, 3-way merge, and the ownership classes below, sourced from the rust-embed asset provider |
 | Enforcement | `hooks/`, `security/`, `git/`, `delegate.rs`, `integrate.rs`, `remote.rs`, `root_checkout.rs` | the `git-guard`, `exec-guard` and `edit-guard` PreToolUse handlers and the git-client hook stages, the dual-mode `delegate-turn` adapter (the legacy `--result` record-and-signal mode plus the transport-neutral delegate lifecycle state machine in `delegate.rs`, architecture decision record ADR-0036), the secret scanner, git conflict detection and CI wait, the flock-guarded `integrate` primitive with its gate-context token, the GitHub remote-protect adapter, and the root checkout's root branch, the actor read from harness markers, and workspace mode (ADR-0074) |
 | Records and knowledge | `models/`, `ledger/`, `workgraph/`, `validate/`, `capability.rs`, `recall.rs`, `registry.rs` | frontmatter models, the JSONL ledger, the work graph, `validate` and its `--docs` referential-integrity lint, including structural task dependency identity, reference and cycle checks, the capability registry parser, full-text search (FTS5) recall, and the cross-repo registry |
-| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (21 checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the size guideline numbers, shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, Claude MCP, and Herdr with tmux as the last fallback, the Codex plugin reported only as an optional fallback (ADR-0077); live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
+| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (22 checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the advisory size guidelines with their bases (ADR-0083), shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, Claude MCP, and Herdr with tmux as the last fallback, the Codex plugin reported only as an optional fallback (ADR-0077); live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
 
 The shell plane reads a composed deletion as scoped shell.
 
@@ -106,7 +106,7 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 | candidate tree | named only after the producers ran; the run fails when generation changed tracked bytes |
 | change-aware selection | skips a target only when its declared inputs are unchanged against a base that has a recorded green run for the same config digest; a path no set matches, a change to the run-everything set (Rust, assets, build, config, workflows, gate scripts), a rename or deletion, an unknown base, and an epic close (`--all`) run every target; the run prints what it selected and skipped and why |
 | result artifact | bound to its revision, tree hash and config digest; a full run copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, where PR bodies cite it |
-| CodeFlow's own full gate | runs the Rust suite once, instrumented (`cargo llvm-cov nextest` with a 90% aggregate line floor), and its journey check reads that run's results by exact test name; the doctest target still runs, and on GitHub the Windows jobs' raw steps re-run the suite independently of the runner, in six nextest partitions whose results one journey job reads together; one `windows` verdict passes only when the other Windows checks, every partition and the journey job passed. On GitHub the Linux full gate runs as four parallel `codeflow test --only` parts behind one `codeflow gates` verdict (TSK-203) |
+| CodeFlow's own full gate | runs the Rust suite once, instrumented (`cargo llvm-cov nextest` with a 90% aggregate line floor), and its journey check reads that run's results by exact test name; the doctest target still runs, and on GitHub the Windows jobs' raw steps re-run the suite independently of the runner: one job builds it once into a nextest archive, twelve partitions split by measured duration run that archive, and one journey job reads their results together and checks that each test ran in exactly one partition, while the Python release journey runs beside them; one `windows` verdict passes only when the build, the other Windows checks, every partition and both journey jobs passed (TSK-265). A push to main whose tree a green pull request run already tested skips the gate and Windows jobs, and both verdicts pass by naming that run, unless the push changes a build cache input or main lacks the present part's apt cache for the current runner image; then every job runs, so main's caches stay current (`scripts/ci-reuse.py`). On GitHub the Linux full gate runs as five parallel `codeflow test --only` parts behind one `codeflow gates` verdict (TSK-203) |
 
 Delegation has two engine surfaces: the legacy `delegate-turn --result`
 adapter, and the transport-neutral delegate lifecycle in `delegate.rs`, surfaced
@@ -133,6 +133,7 @@ Records follow the Markdown-truth design.
 | store | core reads through a `RecordStore` trait with a `MarkdownStore` implementation |
 | layout | the flat, independently allocated stable-ID layout `project-management/{epics/EPC-NNN.md,specs/SPC-NNN.md,tasks/TSK-NNN.md}` |
 | layout reader | one shared layout enumerator keeps the store, docs validator, and recall index on that contract; specs are indexed as project-management recall sources |
+| writes | every record write, delete and folder creation the record commands make under `project-management/` and `docs/` goes through one helper (`crates/codeflow-core/src/contained.rs`), which opens each component from the repository root without following a symbolic link, junction or other reparse point and refuses the operation, naming the component, when it finds one. The feedback commands use it too. The creating verbs (`epic new`, `task new`, `spec new`, `adr new`, `feedback new`, follow-ups, `ids retarget`) create a record exclusively; `MarkdownStore`'s create replaces a file, as it always has. A replaced record keeps its Unix permission bits. The docs portal's transaction I/O uses the same helper; scaffold writes keep their own guard (`guard_beneath_root`), and an output path the operator names, such as `update --diff-out`, is not a record write. The module comment states the limits: held handles stop an ancestor swap after the walk, a moved held folder stays the anchor, and hard links and Unix mounts are not isolated |
 | relationships | frontmatter owns them: tasks point to an epic or carry a standalone rationale, tasks name direct predecessors, and consuming epics or tasks link specs. Task records carry an `integration_target` and `depends_on` metadata |
 | recall | walks source trees without following directory symlinks and applies depth and count budgets; encoded path bytes are index identity while lossy paths are display-only |
 | id registry | ids come from a shared registry (ADR-0072, SPC-013): the data branch `codeflow/registry` on the authority remote holds one file per issued id, `ids/<KIND>/<N>.toml`, binding the number to the record's hidden `uid`. `epic new`, `spec new` and `task new` fetch the branch without force, take one more than the highest id ever added in its history or present on any ref, push the new file without force (the host's tip check is the compare-and-swap; a moved tip is retried at most five times), then create the record with that `uid`. Offline, the reservation is a pending local commit that `ids sync` publishes |
@@ -140,7 +141,7 @@ Records follow the Markdown-truth design.
 | id registry enforcement | pre-push and git-guard refuse deletion, force and non-additive ranges on the registry; the enforcing CI job runs on `pull_request_target` (the registry step of the `codeflow-policy` workflow, from the default branch) and checks out the pull request's base commit; `remote protect` applies the branch's data profile; `doctor` reports damage, unplaced ids and host assurance. Claims stay advisory (ADR-0072) |
 | ledger compaction | syncs the directory after installing the merged base and again after deleting fragments, so crash ordering preserves the base |
 | documentation validation | checks the non-executable structural graph for well-formed IDs, filenames, references, duplicates, parent/standalone exclusivity, spec readiness, self-edges, and cycles |
-| `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, or at HEAD for a standalone task whose record arrives in its own PR (ADR-0076); a code predecessor that is reviewed but not complete is accepted only through a reviewed pin (`--on TSK-NNN@<sha>`), and CI still requires it complete at the merge-base when the task lands. The CLI and detached CI share the structural core of that check; only `work start` applies the start gate (status, Blocker, awaiting selection), so CI admits a standalone record that arrives complete with a valid acceptance block |
+| `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, or at HEAD for a standalone task whose record arrives in its own PR (ADR-0076); a code predecessor that is reviewed but not complete is accepted only through a tip pin (`--on TSK-NNN@<sha>`), reviewed directly or followed only by changes to its own record's status and Closeout, and CI still requires it complete at the merge-base when the task lands. The CLI and detached CI share the structural core of that check; only `work start` applies the start gate (status, Blocker, awaiting selection), so CI admits a standalone record that arrives complete with a valid acceptance block |
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
 Three areas outgrew this file and are graduated, with the pointer left behind:
@@ -155,6 +156,90 @@ Three areas outgrew this file and are graduated, with the pointer left behind:
 The runtime posture each harness receives, including the Codex permission
 profile and Claude's credential mask, is in
 [harness posture](harness-posture.md).
+
+#### Text from the operating system and git
+
+Names, paths and process text that the operating system or git supplies are
+bytes, and valid UTF-8 is not promised (issue 79). One layer and one rule
+cover the engine.
+
+The layer is `codeflow_core::git::GitName` (`git/name.rs`): the exact bytes of
+a ref, branch, remote, worktree, path or tree entry, read once where the name
+enters (git2 `*_bytes` accessors, NUL-separated git output, `OsStr` bytes).
+
+| View | Use | On a name that is not UTF-8 |
+|---|---|---|
+| `bytes()`, `starts_with`, `joined`, a map keyed by `GitName` | comparing, keying, prefix tests, building a path | exact, never lossy |
+| `rule_text()` | a rule that needs text (a glob, a task prefix, a config key, a record path) | returns an error that carries the display form, so the read refuses |
+| `display()` | output to a person: messages, logs, advice | escapes each invalid byte as `\xNN`; not a comparable value |
+| `os_path()` | a file system path | exact on Unix; refuses where the name cannot be one |
+| `storage_key()` | a key that is persisted or put in a map of text | valid text as is, else a lossy form, a NUL and hex: no two names share a key |
+
+The rule:
+
+- **A value that is compared or used in a decision is never decoded lossily.**
+  A lossy spelling can equal a different valid name (an invalid byte and a real
+  U+FFFD both read as U+FFFD). Decisions use the bytes, or `rule_text()`, or
+  refuse. Lossy decoding is for display only, and goes through `display()`.
+- **Refuse where a wrong value would change a security or identity decision**,
+  and say why in a comment at that site, starting "OS text rule" or "Kept
+  strict". Refuse and do not skip: a name the check cannot read is work or
+  authority it cannot prove (a policy source ref, a remote name, a worktree
+  name, a state directory written into a hook command). Where leaving a name
+  out only keeps it (cleanup advice, a waiver offered for a branch), it is
+  left out and not guessed.
+- **A name that only matches a name this tool generates is skipped.** A
+  directory entry tested against a UUID or a nonce-suffixed temporary name is
+  not one of ours when it is not valid UTF-8, because every generated name is
+  ASCII, so the scan moves on.
+- **A glob on a name read from disk matches bytes.** In the C locale `?` and
+  `[..]` consume one byte, but the lossy spelling holds one character for a
+  run of bytes, so it cannot rule such a name out. The deletion guard treats a
+  glob with `?`, `[` or `\` that meets a name that is not UTF-8 as unproven,
+  and `find -name` keeps such a name as a candidate. A pattern of literals and
+  `*` is answered by the lossy spelling as the bytes would answer it. These are
+  the two listed matcher exceptions in the scan.
+- **Plumbing answers keep names exact.** The id registry's git runner reads text
+  answers strictly and name lists as bytes: a name that is not UTF-8 becomes its
+  storage key, which no record or registry path equals. A renumber refuses,
+  before any write, when a tracked file it reads for links (under `docs/` or a
+  record root) has a name that is not UTF-8, because the contained walk
+  addresses names as text. Where a platform cannot hold a name (native
+  Windows), the key alone stands for the entry.
+- **Tree walks read names as bytes.** git2's `Tree::walk` stops with an error
+  at a directory whose name is not UTF-8; `git::walk_tree` reads the entries
+  as bytes. A record path is valid text, so a path that is not UTF-8 is not a
+  record, and a tree under it is never read as one.
+- **The hook plane keeps branch text.** A branch that is not valid UTF-8 reads
+  as one sentinel name that is always protected, so a guard fails closed, and
+  the exact name is kept for display.
+- **Decision inputs must be obtained successfully.** File, environment, Git,
+  metadata and parse errors refuse, or produce a named unproven result that
+  the caller consumes as refusal. They cannot become absent, empty, default,
+  skipped or fallback values. The same rule applies when a size or capability
+  limit prevents reading an input. Genuine optional absence remains distinct
+  from a failed read. JSON, TOML, Markdown and blobs retain their format
+  contracts; a read or parse failure names the input and refuses its decision.
+- **The grammar's reader removes framing once.** Downstream consumers retain
+  already-decoded quote, backslash, LF and NUL content. Idempotent separator
+  rules remain separate from delimiter removal. Native environment bytes
+  remain `OsString` until a consumer requires text or constructs a path.
+
+A source scan (`crates/codeflow-core/tests/name_decode_scan.rs`) parses every
+production source with `syn` and fails on a new `from_utf8_lossy`,
+`to_string_lossy` or git2 text accessor (`shorthand`, `symbolic_target`,
+`name()` in a file that uses git2) outside the layer, unless it is listed with
+the reason it never feeds a decision. The list is keyed by file, enclosing
+item and call, with a count, and a stale entry fails. Its decision-input pass
+also covers obtaining-to-absent chains, discarded errors, Unicode whitespace
+and framing removal. Closed reason tags distinguish separator grammars from
+framing readers; `FRAMING_OWNERS` names the latter. An `unproven` row names the
+caller that refuses its result. The scan does not resolve types or prove data
+flow, so wrapper return types and errors carried through local variables need
+a caller audit and site regressions (a collision, refusal or whole-path fixture).
+
+The pre-push and reference-transaction stdin reads are strict by an earlier
+decision that the `remedy_clearing` tests pin.
 
 ### scaffold: `assets/`
 
@@ -179,7 +264,7 @@ capability registry carry the operating detail.
 | Critical-path stewardship | ADR-0038, ADR-0017 | The current critical path never licenses weaker quality, testing, security, review, documentation or recovery; escalation is reserved for a true external dependency or an intent-level choice; a gate is the check, not the CI job name, and a completed same-check in a sibling job or local run satisfies it |
 | Runtime autonomy and settings | ADR-0025, ADR-0026, ADR-0028, ADR-0039, ADR-0060 | Claude's project settings are a fail-closed sandbox with file secret denies and exact raw model/cloud environment denies; a failed sandboxed command may request an auto-classified unsandboxed retry only for a trusted installed tool that needs host state, and arbitrary bypass stays outside the contract. The plan records the responsible primary separately from the actual executor. Detail: [harness posture](harness-posture.md) |
 | Model and harness qualification (`cf-evaluate-model`) | ADR-0027 | A new model, harness, permission profile or material instruction revision is qualified over fresh one-commit disposable repositories in supervised native interactive sessions; no engine model router, headless peer runner, CI model call or general cleanup command is added. Detail: [model and harness upgrades](model-upgrades.md) |
-| Binding facts versus durable doctrine | ADR-0039, ADR-0041, ADR-0054, ADR-0069 | `current-ensemble.json` is the schema 5 model catalog: families, product lines with ordered versions and pinned ids, seats with their designations, duties with their participants, effort floors and triggers. `codeflow models resolve` is the one read-only command that turns it into a duty's participants, pinned ids, efforts and obligations, or names the open participant; it launches nothing. `routing-policy.json` and `harnesses.json` own the fast-changing triggers and capability catalog while the orchestrator keeps stable role duties; a consuming project maps a stable role to an approved binding ID in `.codeflow/model-selection.json`, an absent or empty file keeps the managed catalog, and doctor fails closed on a malformed, missing, ineligible, unsupported, drifted or lineage-collapsing override. Interactive Grok Build is a first-class host; Hermes (an outer coordinator, not a native CodeFlow host) normally delegates the whole repository task |
+| Binding facts versus durable doctrine | ADR-0039, ADR-0041, ADR-0054, ADR-0069 | `current-ensemble.json` is the schema 5 model catalog: families, product lines with ordered versions and pinned ids, seats with their designations, duties with their participants, effort floors and triggers. `codeflow models resolve` is the one read-only command that turns it into a duty's participants, pinned ids, efforts and obligations, or names the open participant; it launches nothing. `routing-policy.json` and `harnesses.json` own the fast-changing triggers and capability catalog while the orchestrator keeps stable role duties; a consuming project maps a stable role to an approved binding ID in `.codeflow/model-selection.json`, an absent or empty file keeps the managed catalog, and doctor fails closed on a malformed, missing, ineligible, unsupported, drifted or lineage-collapsing override. Schema 2 of that file may also name a later line of the design owner seat as a design co-owner or consultant, which counts only as committed on the task's integration target and gives the engine-owned `design-approval` duty, and standing extra-family reviews by area (ADR-0069 note of 2026-10-04). Interactive Grok Build is a first-class host; Hermes (an outer coordinator, not a native CodeFlow host) normally delegates the whole repository task |
 | Layered code verification | ADR-0042 | Project-owned deterministic lanes cover the applicable syntax/style, software composition analysis (SCA), source and data flow, taint, secret and architecture rules while the two primary lineages review intent and semantics; a deterministic red result blocks regardless of model agreement, and consuming projects choose their own analyzer or record the residual risk |
 | Whole-flow and UI isolation | ADR-0044 | Each material changed journey records one faithful vertical run across its applicable changed boundaries; concurrent UI tasks receive isolated browser state, non-overlapping endpoints, namespaced data, run-scoped artifacts and verified teardown; `codeflow status` reports removable, dirty and unproven resources and never deletes |
 | Session review CLI (`codeflow present`) | ADR-0049, ADR-0050, ADR-0052 | Agents author this session's catalog document and the runtime owns chrome and the Comment tool; it is neither a documentation portal nor a clone of the design-exploration board |

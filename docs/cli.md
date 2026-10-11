@@ -217,7 +217,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
@@ -270,13 +270,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--turn-id <ID>` | Turn identifier; required for accepted and terminal waits. |
 | | `--timeout-seconds <N>` | Bounded wait duration in seconds. Required. |
 | `codeflow models resolve` | | Resolve every participant and obligation without launching or writing |
-| | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved. Required. |
+| | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved, or `design-approval`. Required. |
 | | `--host <HOST>` | Supported host harness id, such as claude-code or codex-app. Required. |
 | | `--author <AUTHOR>` | One of `claude`, `codex`, `grok`, `none`. Default `none`. |
 | | `--exclude <EXCLUDE>...` | Fresh native exclusion: `selector:<id>` excludes the whole version across harnesses; `bucket:<id>` excludes its usage bucket (repeatable). |
 | | `--observed <OBSERVED>...` | Fresh identity canary observation: `<pinned-id>=<observed-id>`. |
 | | `--trigger <TRIGGER>...` | Catalog trigger fact to apply to this resolution (repeatable). |
-| | `--task <TASK>` | Canonical task id for this resolution; required with --override. |
+| | `--area <AREA>` | Review area for a project standing review; unit-review and body-review only. |
+| | `--task <TASK>` | Canonical task id for this resolution; required with --override and for project design authority. |
 | | `--override <OVERRIDE_ID>` | Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task. |
 | | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
 | | `--effort <EFFORT>` | Exact override invocation effort. |
@@ -382,9 +383,22 @@ Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,
 EPC-002`, only for a planning amendment; `codeflow ci` then prints one
 `work.planning_amendment` note per change, grouped by epic, and refuses a
-change to a record of an epic the line does not name (ADR-0078).
+change to a record of an epic the line does not name (ADR-0078). A
+pull request of planning records only whose `Task:` line names a completed
+standalone task, or a follow-up of it, may correct the wording of that
+task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
+note and still refuses an added, removed, renumbered or reordered
+criterion, a changed tag or checkbox form, or an added list item that is
+no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
-another provider prints the manual checklist.
+another provider prints the manual checklist. It requires the checks in
+`git.required_checks` (by default the shipped CI job names) on a branch that
+is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
+the live rules first: every active repository ruleset that already targets the
+branch is updated in place, never duplicated, and a classic protection update keeps the
+settings it does not own, such as conversation resolution. A live read that
+fails or does not parse writes nothing for that branch. `codeflow doctor
+--check remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes
 
@@ -432,6 +446,14 @@ passes.
   blocked.
 - After landing, clean linked worktrees that have the target checked out are
   reset to the tested tip, and a dirty one is reported.
+
+A `work start --on` pin names the predecessor branch tip. Its Reviews section
+must approve that tip or an ancestor whose later commits touch only the
+predecessor's own task record, and in it only its status and Closeout.
+Every intervening commit is checked, so a
+change followed by a revert still requires review, and a merge after the
+review is refused. The repository owner,
+name and branch must match; cross-repository pull requests are refused.
 
 ### Remember notes
 

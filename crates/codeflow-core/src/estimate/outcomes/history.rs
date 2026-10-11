@@ -90,46 +90,76 @@ pub(super) struct History<'r> {
 const TASKS: &str = "project-management/tasks";
 const EPICS: &str = "project-management/epics";
 
+fn message(error: &git2::Error) -> String {
+    error.message().to_string()
+}
+
+/// The tree at `path` under `tree`: `None` when nothing is there or the
+/// entry is not a directory; an error when the read fails (issue 79).
+fn subtree_id(tree: &git2::Tree<'_>, path: &str) -> Result<Option<Oid>, String> {
+    match tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => Ok((entry.kind() == Some(git2::ObjectType::Tree)).then(|| entry.id())),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {path}: {}", error.message())),
+    }
+}
+
 /// The complete and cancelled task records at `HEAD`.
+///
+/// # Errors
+///
+/// A tree, record or name the history needs that cannot be read: the
+/// report then says so instead of leaving tasks out (issue 79).
 pub(super) fn records(repo: &Repository) -> Result<Vec<Record>, String> {
     // An unborn HEAD has no history and so no outcome yet.
-    let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) else {
-        return Ok(Vec::new());
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot read HEAD: {}", error.message())),
     };
-    let tree = head.tree().map_err(|error| error.message().to_string())?;
+    let head = head.peel_to_commit().map_err(|error| message(&error))?;
+    let tree = head.tree().map_err(|error| message(&error))?;
     let mut paths = Vec::new();
-    if let Ok(entry) = tree.get_path(std::path::Path::new(TASKS)) {
-        paths.extend(markdown_names(repo, entry.id()).map(|name| format!("{TASKS}/{name}")));
+    if let Some(tasks) = subtree_id(&tree, TASKS)? {
+        paths.extend(
+            markdown_names(repo, tasks)?
+                .into_iter()
+                .map(|name| format!("{TASKS}/{name}")),
+        );
     }
-    if let Ok(entry) = tree.get_path(std::path::Path::new(EPICS)) {
-        if let Ok(epics) = repo.find_tree(entry.id()) {
-            for epic in &epics {
-                let (Some(name), Some(git2::ObjectType::Tree)) = (epic.name().ok(), epic.kind())
-                else {
-                    continue;
-                };
-                let Ok(nested) = repo
-                    .find_tree(epic.id())
-                    .and_then(|nested| nested.get_path(std::path::Path::new("tasks")))
-                else {
-                    continue;
-                };
-                paths.extend(
-                    markdown_names(repo, nested.id())
-                        .map(|file| format!("{EPICS}/{name}/tasks/{file}")),
-                );
+    if let Some(epics) = subtree_id(&tree, EPICS)? {
+        let epics = repo.find_tree(epics).map_err(|error| message(&error))?;
+        for epic in &epics {
+            if epic.kind() != Some(git2::ObjectType::Tree) {
+                continue;
             }
+            let nested = repo.find_tree(epic.id()).map_err(|error| message(&error))?;
+            let Some(tasks) = subtree_id(&nested, "tasks")? else {
+                continue;
+            };
+            // An epic directory that holds task records must be named in
+            // text, or its records would drop out of the report.
+            let epic_name = crate::git::GitName::from_bytes(epic.name_bytes());
+            let name = epic_name.rule_text().map_err(|_| {
+                format!(
+                    "the epic directory {} has a name that is not UTF-8, so its task records cannot be read",
+                    epic_name.display()
+                )
+            })?;
+            paths.extend(
+                markdown_names(repo, tasks)?
+                    .into_iter()
+                    .map(|file| format!("{EPICS}/{name}/tasks/{file}")),
+            );
         }
     }
     let mut out = Vec::new();
     for path in paths {
-        let Ok(blob) = tree
+        let blob = tree
             .get_path(std::path::Path::new(&path))
             .and_then(|entry| repo.find_blob(entry.id()))
-        else {
-            continue;
-        };
-        if let Some(record) = parse_record(&path, blob.content()) {
+            .map_err(|error| format!("cannot read {path}: {}", error.message()))?;
+        if let Some(record) = parse_record(&path, blob.content())? {
             if matches!(record.status.as_str(), "complete" | "cancelled") {
                 out.push(record);
             }
@@ -139,35 +169,55 @@ pub(super) fn records(repo: &Repository) -> Result<Vec<Record>, String> {
     Ok(out)
 }
 
-fn markdown_names(repo: &Repository, tree: Oid) -> impl Iterator<Item = String> {
-    let names: Vec<String> = repo
-        .find_tree(tree)
-        .map(|tree| {
-            tree.iter()
-                .filter(|entry| entry.kind() == Some(git2::ObjectType::Blob))
-                .filter_map(|entry| entry.name().ok().map(str::to_string))
-                .filter(|name: &String| {
-                    name.strip_suffix(".md")
-                        .is_some_and(crate::workgraph::is_valid_task_format_id)
-                })
-                .collect()
+/// The task record file names in `tree`.
+///
+/// # Errors
+///
+/// The tree cannot be read.
+fn markdown_names(repo: &Repository, tree: Oid) -> Result<Vec<String>, String> {
+    let tree = repo.find_tree(tree).map_err(|error| message(&error))?;
+    Ok(tree
+        .iter()
+        .filter(|entry| entry.kind() == Some(git2::ObjectType::Blob))
+        // A task record's file name is its id (`TSK-NNN.md`), which is
+        // ASCII, so a name that is not UTF-8 is no record.
+        .filter_map(|entry| {
+            crate::git::GitName::from_bytes(entry.name_bytes())
+                .rule_text()
+                .ok()
+                .map(str::to_string)
         })
-        .unwrap_or_default();
-    names.into_iter()
+        .filter(|name: &String| {
+            name.strip_suffix(".md")
+                .is_some_and(crate::workgraph::is_valid_task_format_id)
+        })
+        .collect())
 }
 
-fn parse_record(path: &str, bytes: &[u8]) -> Option<Record> {
-    let (data, body) = crate::validate::parse_frontmatter(bytes).ok()?;
+/// The record at `path`, or `None` when its frontmatter names no task.
+///
+/// # Errors
+///
+/// A body that is not UTF-8, whose acceptance block cannot be read.
+fn parse_record(path: &str, bytes: &[u8]) -> Result<Option<Record>, String> {
+    let Ok((data, body)) = crate::validate::parse_frontmatter(bytes) else {
+        return Ok(None);
+    };
     let field = |key: &str| {
+        // A value is trimmed of YAML's own blanks only, so an id, status
+        // or target padded with another space character stays itself.
         let value = crate::validate::get_string_field(&data, key);
-        let value = value.trim();
+        let value = value.trim_matches([' ', '\t']);
         (!value.is_empty()).then(|| value.to_string())
     };
-    let id = field("id")
+    let Some(id) = field("id")
         .or_else(|| field("format_id"))
-        .filter(|id| crate::workgraph::is_valid_task_format_id(id))?;
-    let body = String::from_utf8_lossy(&body);
-    let mut active = acceptance_blocks(&body)
+        .filter(|id| crate::workgraph::is_valid_task_format_id(id))
+    else {
+        return Ok(None);
+    };
+    let body = std::str::from_utf8(&body).map_err(|_| format!("{path} is not UTF-8"))?;
+    let mut active = acceptance_blocks(body)
         .into_iter()
         .filter(|block| !block.is_superseded())
         .filter_map(|block| block.parsed.ok());
@@ -175,7 +225,7 @@ fn parse_record(path: &str, bytes: &[u8]) -> Option<Record> {
         (Some(block), None) => Some(block.reviewed),
         _ => None,
     };
-    Some(Record {
+    Ok(Some(Record {
         id,
         path: path.to_string(),
         title: field("title").unwrap_or_default(),
@@ -184,7 +234,7 @@ fn parse_record(path: &str, bytes: &[u8]) -> Option<Record> {
         status: field("status").unwrap_or_default(),
         target: field("integration_target").unwrap_or_else(|| "main".to_string()),
         reviewed,
-    })
+    }))
 }
 
 /// A record blob's task id and status, when its frontmatter names a task.
@@ -192,7 +242,7 @@ fn id_and_status(bytes: &[u8]) -> Option<(String, String)> {
     let (data, _) = crate::validate::parse_frontmatter(bytes).ok()?;
     let field = |key: &str| {
         crate::validate::get_string_field(&data, key)
-            .trim()
+            .trim_matches([' ', '\t'])
             .to_string()
     };
     let id = Some(field("id"))
@@ -209,9 +259,9 @@ impl<'r> History<'r> {
     pub(super) fn read(repo: &'r Repository, records: &[Record]) -> Result<Self, String> {
         let mut lines = HashMap::new();
         for record in records {
-            lines
-                .entry(record.target.clone())
-                .or_insert_with(|| line(repo, &record.target));
+            if !lines.contains_key(&record.target) {
+                lines.insert(record.target.clone(), line(repo, &record.target)?);
+            }
         }
         let ids: BTreeSet<&str> = records.iter().map(|record| record.id.as_str()).collect();
         // Only HEAD's history: the records were read at HEAD, so their
@@ -237,19 +287,20 @@ impl<'r> History<'r> {
             if commit.parent_count() > 1 {
                 continue;
             }
-            let now = homes.subtrees(&commit);
-            let before = commit
-                .parent(0)
-                .ok()
-                .map(|parent| homes.subtrees(&parent))
-                .unwrap_or_default();
+            let now = homes.subtrees(&commit)?;
+            let before = if commit.parent_count() == 0 {
+                (None, None)
+            } else {
+                let parent = commit.parent(0).map_err(|error| message(&error))?;
+                homes.subtrees(&parent)?
+            };
             if now == before {
                 continue;
             }
             // Statuses by task id, so a record moved between the flat and
             // nested layouts keeps its history.
-            let now = homes.statuses(repo, now);
-            let before = homes.statuses(repo, before);
+            let now = homes.statuses(repo, now)?;
+            let before = homes.statuses(repo, before)?;
             for id in &ids {
                 let empty = String::new();
                 let to = now.get(*id).unwrap_or(&empty);
@@ -273,7 +324,11 @@ impl<'r> History<'r> {
     }
 
     /// Derive one record's timings.
-    pub(super) fn timings(&self, record: &Record) -> Timings {
+    ///
+    /// # Errors
+    ///
+    /// A commit the history walked that can no longer be read.
+    pub(super) fn timings(&self, record: &Record) -> Result<Timings, String> {
         let mut timings = Timings::default();
         let empty = Vec::new();
         let changes = self.changes.get(&record.id).unwrap_or(&empty);
@@ -292,7 +347,7 @@ impl<'r> History<'r> {
             if added.is_none() && from.is_empty() && !to.is_empty() {
                 added = Some(*commit);
             }
-            let point = self.point(*commit);
+            let point = Some(self.point(*commit)?);
             if from == "blocked" {
                 if let Some(from) = open_block.take() {
                     timings.blocked.push(BlockedSpan {
@@ -318,12 +373,21 @@ impl<'r> History<'r> {
             .min()
             .map(|(_, oid)| oid)
             .or_else(|| completions.last().copied());
-        timings.completed = completion.and_then(|oid| self.point(oid));
-        let reviewed = record.reviewed.as_deref().and_then(|value| {
-            crate::workgraph::work_start::commit_by_object_id(self.repo, value.trim())
-                .ok()
-                .map(|commit| commit.id())
-        });
+        timings.completed = completion.map(|oid| self.point(oid)).transpose()?;
+        // A reviewed commit this clone does not have is no landing evidence;
+        // one it has but cannot read refuses the report (issue 79).
+        let reviewed = match record.reviewed.as_deref().map(|value| {
+            crate::workgraph::work_start::lookup_commit_by_object_id(
+                self.repo,
+                value.trim_matches([' ', '\t']),
+            )
+        }) {
+            None | Some(Err(crate::workgraph::work_start::CommitLookup::Unresolved(_))) => None,
+            Some(Ok(commit)) => Some(commit.id()),
+            Some(Err(crate::workgraph::work_start::CommitLookup::Unreadable(reason))) => {
+                return Err(format!("{}: {reason}", record.path));
+            }
+        };
         // Where on the target's first-parent line the reviewed commit and the
         // completion first arrive, by ancestry. The code lands with the
         // reviewed commit; a completion that arrives later was written by a
@@ -349,18 +413,20 @@ impl<'r> History<'r> {
             && completion.is_some()
             && landing_at.is_some()
             && completion_at.is_none_or(|done| Some(done) > landing_at);
-        timings.landed = landing.and_then(|oid| self.point(oid));
-        timings.planned = added.and_then(|added| {
-            let on_target = line.and_then(|line| Self::first_containing(line, added));
-            match on_target {
-                Some(merge) if Some(merge) != landing => self.point(merge),
-                _ => self.point(added),
-            }
-        });
+        timings.landed = landing.map(|oid| self.point(oid)).transpose()?;
+        timings.planned = added
+            .map(|added| {
+                let on_target = line.and_then(|line| Self::first_containing(line, added));
+                match on_target {
+                    Some(merge) if Some(merge) != landing => self.point(merge),
+                    _ => self.point(added),
+                }
+            })
+            .transpose()?;
         if record.status == "complete" {
             timings.started = Some(self.started(record, line, landing, reviewed, squashed));
         }
-        timings
+        Ok(timings)
     }
 
     fn started(
@@ -416,7 +482,11 @@ impl<'r> History<'r> {
         if walk.push(reviewed).is_err() || walk.hide(base).is_err() {
             return unknown("the task branch history cannot be read");
         }
-        let commits: BTreeSet<Oid> = walk.filter_map(Result::ok).collect();
+        // A commit the walk cannot read leaves the start unknown, never a
+        // shorter branch (issue 79).
+        let Ok(commits) = walk.collect::<Result<BTreeSet<Oid>, _>>() else {
+            return unknown("the task branch history cannot be read");
+        };
         if commits.is_empty() {
             return unknown("the reviewed commit was on the target before the task branch began");
         }
@@ -426,23 +496,33 @@ impl<'r> History<'r> {
         // The branch begins at a commit with no parent inside the range; by
         // ancestry, not by clock. Several roots (a branch built on others)
         // take the earliest.
-        let roots = commits.iter().filter(|oid| {
-            self.repo
-                .find_commit(**oid)
-                .is_ok_and(|commit| commit.parent_ids().all(|parent| !commits.contains(&parent)))
-        });
-        let Some(first) = roots
-            .filter_map(|oid| self.point(*oid))
-            .min_by_key(|point| point.epoch_seconds)
-        else {
+        let mut first: Option<Point> = None;
+        for oid in &commits {
+            let Ok(commit) = self.repo.find_commit(*oid) else {
+                return unknown("the task branch history cannot be read");
+            };
+            if commit.parent_ids().any(|parent| commits.contains(&parent)) {
+                continue;
+            }
+            let Ok(point) = self.point(*oid) else {
+                return unknown("the task branch history cannot be read");
+            };
+            if first
+                .as_ref()
+                .is_none_or(|known| point.epoch_seconds < known.epoch_seconds)
+            {
+                first = Some(point);
+            }
+        }
+        let Some(first) = first else {
             return unknown("the task branch history cannot be read");
         };
         match self.point(reviewed) {
-            Some(end) if first.epoch_seconds <= end.epoch_seconds => Started::Known(first),
-            Some(_) => unknown(
+            Ok(end) if first.epoch_seconds <= end.epoch_seconds => Started::Known(first),
+            Ok(_) => unknown(
                 "author times on the task branch run backwards, so its first commit gives no reliable start",
             ),
-            None => unknown("the task branch history cannot be read"),
+            Err(_) => unknown("the task branch history cannot be read"),
         }
     }
 
@@ -453,10 +533,13 @@ impl<'r> History<'r> {
             .map(|index| line.first_parents[*index])
     }
 
-    fn point(&self, oid: Oid) -> Option<Point> {
-        let commit = self.repo.find_commit(oid).ok()?;
+    fn point(&self, oid: Oid) -> Result<Point, String> {
+        let commit = self
+            .repo
+            .find_commit(oid)
+            .map_err(|error| format!("cannot read commit {oid}: {}", error.message()))?;
         let seconds = commit.author().when().seconds();
-        Some(Point {
+        Ok(Point {
             commit: oid.to_string(),
             epoch_seconds: seconds,
             at: rfc3339(seconds),
@@ -471,19 +554,40 @@ pub(super) fn rfc3339(seconds: i64) -> String {
 }
 
 /// Resolve an integration target: the local branch and the remote-tracking
-/// branch of that name, preferring whichever contains the other.
-fn line(repo: &Repository, target: &str) -> Option<Line> {
-    let names = crate::workgraph::work_start::target_reference_names(target)?;
-    let tips: Vec<Oid> = names
-        .iter()
-        .filter_map(|name| repo.find_reference(name).ok()?.peel_to_commit().ok())
-        .map(|commit| commit.id())
-        .collect();
+/// branch of that name, preferring whichever contains the other; `None`
+/// when neither resolves.
+///
+/// # Errors
+///
+/// A ref, commit or ancestry that cannot be read (issue 79): the landing
+/// places then cannot be told.
+fn line(repo: &Repository, target: &str) -> Result<Option<Line>, String> {
+    let Some(names) = crate::workgraph::work_start::target_reference_names(target) else {
+        return Ok(None);
+    };
+    let unreadable = |error: git2::Error| {
+        format!(
+            "cannot read the integration target `{target}`: {}",
+            error.message()
+        )
+    };
+    let mut tips: Vec<Oid> = Vec::new();
+    for name in &names {
+        let reference = match repo.find_reference(name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            Err(error) => return Err(unreadable(error)),
+        };
+        tips.push(reference.peel_to_commit().map_err(unreadable)?.id());
+    }
     let tip = match tips.as_slice() {
-        [] => return None,
+        [] => return Ok(None),
         [one] => *one,
         [first, second, ..] => {
-            if repo.graph_descendant_of(*second, *first).unwrap_or(false) {
+            if repo
+                .graph_descendant_of(*second, *first)
+                .map_err(unreadable)?
+            {
                 *second
             } else {
                 *first
@@ -491,32 +595,31 @@ fn line(repo: &Repository, target: &str) -> Option<Line> {
         }
     };
     let mut first_parents = Vec::new();
-    let mut current = repo.find_commit(tip).ok();
-    while let Some(commit) = current {
-        first_parents.push(commit.id());
-        current = commit.parent(0).ok();
+    let mut current = repo.find_commit(tip).map_err(unreadable)?;
+    loop {
+        first_parents.push(current.id());
+        if current.parent_count() == 0 {
+            break;
+        }
+        current = current.parent(0).map_err(unreadable)?;
     }
     first_parents.reverse();
     let mut entered = HashMap::new();
     for (index, commit) in first_parents.iter().enumerate() {
-        let Ok(mut walk) = repo.revwalk() else {
-            return None;
-        };
-        if walk.push(*commit).is_err() {
-            return None;
+        let mut walk = repo.revwalk().map_err(unreadable)?;
+        walk.push(*commit).map_err(unreadable)?;
+        if index > 0 {
+            walk.hide(first_parents[index - 1]).map_err(unreadable)?;
         }
-        if index > 0 && walk.hide(first_parents[index - 1]).is_err() {
-            return None;
-        }
-        for oid in walk.filter_map(Result::ok) {
-            entered.entry(oid).or_insert(index);
+        for oid in walk {
+            entered.entry(oid.map_err(unreadable)?).or_insert(index);
         }
     }
-    Some(Line {
+    Ok(Some(Line {
         tip,
         first_parents,
         entered,
-    })
+    }))
 }
 
 /// The record homes of one commit: the `tasks` and `epics` subtree ids.
@@ -533,88 +636,98 @@ struct Homes {
 }
 
 impl Homes {
-    fn subtrees(&mut self, commit: &Commit<'_>) -> Subtrees {
-        *self.by_commit.entry(commit.id()).or_insert_with(|| {
-            let Ok(tree) = commit.tree() else {
-                return (None, None);
-            };
-            let id = |path: &str| {
-                tree.get_path(std::path::Path::new(path))
-                    .ok()
-                    .map(|entry| entry.id())
-            };
-            (id(TASKS), id(EPICS))
-        })
+    fn subtrees(&mut self, commit: &Commit<'_>) -> Result<Subtrees, String> {
+        if let Some(found) = self.by_commit.get(&commit.id()) {
+            return Ok(*found);
+        }
+        let tree = commit.tree().map_err(|error| {
+            format!(
+                "cannot read the tree of {}: {}",
+                commit.id(),
+                error.message()
+            )
+        })?;
+        let found = (subtree_id(&tree, TASKS)?, subtree_id(&tree, EPICS)?);
+        self.by_commit.insert(commit.id(), found);
+        Ok(found)
     }
 
     /// Each task id in these homes with its status; the first path in
     /// layout order wins when two records claim one id.
+    ///
+    /// # Errors
+    ///
+    /// A tree or record blob that cannot be read (issue 79), which would
+    /// otherwise read as a record removed and invent a transition.
     fn statuses(
         &mut self,
         repo: &Repository,
         homes: Subtrees,
-    ) -> std::rc::Rc<BTreeMap<String, String>> {
+    ) -> Result<std::rc::Rc<BTreeMap<String, String>>, String> {
         if let Some(map) = self.statuses.get(&homes) {
-            return map.clone();
+            return Ok(map.clone());
         }
         let mut map = BTreeMap::new();
-        for blob in record_blobs(repo, homes) {
-            let parsed = self
-                .blobs
-                .entry(blob)
-                .or_insert_with(|| {
-                    let blob = repo.find_blob(blob).ok()?;
-                    id_and_status(blob.content())
-                })
-                .clone();
+        for blob in record_blobs(repo, homes)? {
+            let parsed = if let Some(parsed) = self.blobs.get(&blob) {
+                parsed.clone()
+            } else {
+                let content = repo.find_blob(blob).map_err(|error| {
+                    format!("cannot read record blob {blob}: {}", error.message())
+                })?;
+                let parsed = id_and_status(content.content());
+                self.blobs.insert(blob, parsed.clone());
+                parsed
+            };
             if let Some((id, status)) = parsed {
                 map.entry(id).or_insert(status);
             }
         }
         let map = std::rc::Rc::new(map);
         self.statuses.insert(homes, map.clone());
-        map
+        Ok(map)
     }
 }
 
 /// The blob of every task record in these homes, flat layout first.
-fn record_blobs(repo: &Repository, homes: Subtrees) -> Vec<Oid> {
+///
+/// # Errors
+///
+/// A directory that cannot be read.
+fn record_blobs(repo: &Repository, homes: Subtrees) -> Result<Vec<Oid>, String> {
+    let read = |tree: Oid| {
+        repo.find_tree(tree)
+            .map_err(|error| format!("cannot read records tree {tree}: {}", error.message()))
+    };
     let mut out = Vec::new();
-    let mut entries = |tree: Oid| {
-        if let Ok(tree) = repo.find_tree(tree) {
-            for entry in &tree {
-                let is_record = entry.kind() == Some(git2::ObjectType::Blob)
-                    && entry.name().ok().is_some_and(|name| {
+    let mut entries = |tree: &git2::Tree<'_>| {
+        for entry in tree {
+            // A task record's file name is its id (`TSK-NNN.md`), which is
+            // ASCII, so a name that is not UTF-8 is no record.
+            let is_record = entry.kind() == Some(git2::ObjectType::Blob)
+                && crate::git::GitName::from_bytes(entry.name_bytes())
+                    .rule_text()
+                    .is_ok_and(|name| {
                         name.strip_suffix(".md")
                             .is_some_and(crate::workgraph::is_valid_task_format_id)
                     });
-                if is_record {
-                    out.push(entry.id());
-                }
+            if is_record {
+                out.push(entry.id());
             }
         }
     };
     if let Some(tasks) = homes.0 {
-        entries(tasks);
+        entries(&read(tasks)?);
     }
-    let nested: Vec<Oid> = homes
-        .1
-        .and_then(|epics| repo.find_tree(epics).ok())
-        .map(|epics| {
-            epics
-                .iter()
-                .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-                .map(|entry| entry.id())
-                .collect()
-        })
-        .unwrap_or_default();
-    for tree in nested {
-        if let Ok(tasks) = repo
-            .find_tree(tree)
-            .and_then(|tree| tree.get_path(std::path::Path::new("tasks")))
-        {
-            entries(tasks.id());
+    if let Some(epics) = homes.1 {
+        for epic in &read(epics)? {
+            if epic.kind() != Some(git2::ObjectType::Tree) {
+                continue;
+            }
+            if let Some(tasks) = subtree_id(&read(epic.id())?, "tasks")? {
+                entries(&read(tasks)?);
+            }
         }
     }
-    out
+    Ok(out)
 }

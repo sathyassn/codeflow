@@ -48,7 +48,10 @@ impl<'i> QualifiedRuleParser<'i> for ScopedRules<'_> {
             }
             selector.reset(&state);
             consume_tokens(selector, 0)?;
-            Ok(selector.slice_from(state.position()).trim().to_owned())
+            Ok(selector
+                .slice_from(state.position())
+                .trim_matches([' ', '\t', '\r', '\n', '\u{c}'])
+                .to_owned())
         })
     }
 
@@ -100,6 +103,12 @@ fn consume_tokens<'i>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r15_css_unicode_whitespace_stays_in_selector() {
+        let css = scope_stylesheet("\u{a0}.label { color: red }", "#host").unwrap();
+        assert!(css.contains("\u{a0}.label"), "{css}");
+    }
 
     #[test]
     fn scopes_entire_selector_list_and_preserves_strings() {

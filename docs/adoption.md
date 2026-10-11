@@ -10,6 +10,13 @@ much working method comes with it.
 - Minimal suits any repository, standard suits code projects, and full suits
   programs whose work outlives sessions.
 - No tier changes how strictly the floor is enforced, and no tier installs remote branch protection.
+  Remote rules need the host's permissions and are your decision; `codeflow
+  remote protect` applies them when you choose to. It requires the checks in
+  `git.required_checks` on a branch that is up to date with its base,
+  because a check tests the merge with the base as it was when the run
+  started: two pull requests each green on an older base can merge and leave
+  the branch red. `codeflow doctor --check remote-perimeter` reads the live
+  rules back and warns when they do not require that.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 
@@ -310,7 +317,7 @@ the table below gives the commands.
 | Spec (SPC) | `codeflow spec new --for <epic-or-task>`, when a contract consumers rely on must be pinned; approved once it has no open questions |
 | Task (TSK) in an epic | `codeflow task new` on the epic's `plan/` branch; the record is anchored in that planning change |
 | Standalone task | `codeflow task new --standalone-reason <why>` on the task's own branch; the record and the code land in the same reviewed PR |
-| Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor's reviewed head before it lands |
+| Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor before it lands; pin its tip, reviewed directly or followed only by changes to its own record's status and Closeout |
 | A later change of scope | One batched epic amendment on a `plan/` branch, reviewed once; a task changes only its own criteria, in its own PR, and CI prints the change for the reviewer |
 | A team tracker already owns the portfolio | Link its ids in `external_refs`; do not mirror its status, specs or task trees |
 | Operator feedback (FB) | `codeflow feedback new --topic <topic> --source chat "<summary>"` for feedback that sets a standing rule, declines or reorders planned work, or spans several units; `codeflow feedback status` places, closes, declines or supersedes it, and `codeflow feedback list` shows it by topic. Topics are `[feedback] topics` in `.codeflow/project.toml` |

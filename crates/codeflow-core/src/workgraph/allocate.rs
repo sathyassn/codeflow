@@ -13,7 +13,6 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::scaffold::template::TemplateContext;
@@ -35,24 +34,31 @@ pub struct NewRecord {
 pub type Allocator<'a> = dyn FnMut(&str) -> Result<(String, String), StoreError> + 'a;
 
 fn checkout_allocator(
-    next: impl Fn() -> String,
+    next: impl Fn() -> Result<String, StoreError>,
 ) -> impl FnMut(&str) -> Result<(String, String), StoreError> {
-    move |_| Ok((next(), crate::ids::new_uid()))
+    move |_| Ok((next()?, crate::ids::new_uid()))
 }
 
-pub(crate) fn planning_target(pm_root: &Path) -> String {
-    crate::workgraph::default_work_target(repository_root(pm_root)).map_or_else(
-        || "none".to_string(),
-        |target| {
-            target
-                .strip_prefix("origin/")
-                .unwrap_or(&target)
-                .to_string()
-        },
+pub(crate) fn planning_target(pm_root: &Path) -> Result<String, StoreError> {
+    Ok(
+        crate::workgraph::default_work_target(repository_root(pm_root))
+            .map_err(|error| StoreError::Invalid(error.to_string()))?
+            .map_or_else(
+                || "none".to_string(),
+                |target| {
+                    target
+                        .strip_prefix("origin/")
+                        .unwrap_or(&target)
+                        .to_string()
+                },
+            ),
     )
 }
 
-fn repository_root(pm_root: &Path) -> &Path {
+/// The repository root a records folder belongs to: the parent of a folder
+/// named `project-management`, else the folder itself. Record writes are
+/// contained beneath it (issue 94).
+pub(crate) fn repository_root(pm_root: &Path) -> &Path {
     if pm_root
         .file_name()
         .is_some_and(|name| name == "project-management")
@@ -81,90 +87,110 @@ fn record_stem(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn direct_record_stems(dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
+fn direct_record_stems(dir: &Path) -> Result<Vec<String>, StoreError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
     };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "md") {
-                record_stem(&path)
-            } else if path.is_dir() {
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .map(str::to_owned)
-            } else {
-                None
-            }
-        })
-        .collect()
+    let mut stems = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let stem = if path.extension().is_some_and(|extension| extension == "md") {
+            record_stem(&path)
+        } else if entry.file_type()?.is_dir() {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        if let Some(stem) = stem {
+            stems.push(stem);
+        }
+    }
+    Ok(stems)
 }
 
-fn task_record_stems(pm_root: &Path) -> Vec<String> {
-    crate::workgraph::layout::task_record_files(pm_root)
+fn task_record_stems(pm_root: &Path) -> Result<Vec<String>, StoreError> {
+    Ok(crate::workgraph::layout::task_record_files(pm_root)?
         .iter()
         .filter_map(|path| record_stem(path))
-        .collect()
+        .collect())
 }
 
 /// Next free epic id (`EPC-NNN`, max visible sequence + 1).
-#[must_use]
-pub fn next_epic_id(pm_root: &Path) -> String {
-    let next = direct_record_stems(&pm_root.join("epics"))
+///
+/// # Errors
+///
+/// Returns an error if the epic directory or one of its entries cannot be read.
+pub fn next_epic_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = direct_record_stems(&pm_root.join("epics"))?
         .iter()
         .filter_map(|id| sequence(id, "EPC-"))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("EPC-{next:03}")
+    Ok(format!("EPC-{next:03}"))
 }
 
 /// Next free spec id (`SPC-NNN`, max visible sequence + 1).
-#[must_use]
-pub fn next_spec_id(pm_root: &Path) -> String {
-    let next = direct_record_stems(&pm_root.join("specs"))
+///
+/// # Errors
+///
+/// Returns an error if the spec directory or one of its entries cannot be read.
+pub fn next_spec_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = direct_record_stems(&pm_root.join("specs"))?
         .iter()
         .filter_map(|id| sequence(id, "SPC-"))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("SPC-{next:03}")
+    Ok(format!("SPC-{next:03}"))
 }
 
 /// Next free independent task id (`TSK-NNN`, max canonical or legacy
 /// reservation sequence + 1).
-#[must_use]
-pub fn next_task_id(pm_root: &Path) -> String {
-    let next = task_record_stems(pm_root)
+///
+/// # Errors
+///
+/// Returns an error if a task inventory directory or entry cannot be read.
+pub fn next_task_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = task_record_stems(pm_root)?
         .iter()
         .filter_map(|id| task_reservation_sequence(id))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("TSK-{next:03}")
+    Ok(format!("TSK-{next:03}"))
 }
 
 /// Whether a stable work-item id exists in the visible checkout.
-#[must_use]
-pub fn work_item_exists(pm_root: &Path, id: &str) -> bool {
+///
+/// # Errors
+///
+/// Returns an error if the work-item inventory cannot be read.
+pub fn work_item_exists(pm_root: &Path, id: &str) -> Result<bool, StoreError> {
     let paths = if crate::workgraph::is_valid_epic_format_id(id) {
-        crate::workgraph::layout::epic_record_files(pm_root)
+        crate::workgraph::layout::epic_record_files(pm_root)?
     } else if crate::workgraph::is_valid_task_format_id(id) {
-        crate::workgraph::layout::task_record_files(pm_root)
+        crate::workgraph::layout::task_record_files(pm_root)?
     } else {
-        return false;
+        return Ok(false);
     };
-    paths
+    Ok(paths
         .iter()
-        .any(|path| record_stem(path).as_deref() == Some(id))
+        .any(|path| record_stem(path).as_deref() == Some(id)))
 }
 
 /// Whether an epic exists in the visible checkout.
-#[must_use]
-pub fn epic_exists(pm_root: &Path, id: &str) -> bool {
-    crate::workgraph::is_valid_epic_format_id(id) && work_item_exists(pm_root, id)
+///
+/// # Errors
+///
+/// Returns an error if the epic inventory cannot be read.
+pub fn epic_exists(pm_root: &Path, id: &str) -> Result<bool, StoreError> {
+    Ok(crate::workgraph::is_valid_epic_format_id(id) && work_item_exists(pm_root, id)?)
 }
 
 fn today() -> String {
@@ -198,16 +224,12 @@ fn record_title(title: &str) -> Result<&str, StoreError> {
     Ok(title)
 }
 
-fn write_new(path: &Path, content: &str) -> Result<(), StoreError> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    if let Err(error) = file.write_all(content.as_bytes()) {
-        drop(file);
-        let _ = fs::remove_file(path);
-        return Err(StoreError::Io(error));
-    }
+/// Create a new record exclusively, with its folders, refusing a link at
+/// any component beneath the repository root (issue 94).
+fn write_new(pm_root: &Path, path: &Path, content: &str) -> Result<(), StoreError> {
+    let root = repository_root(pm_root);
+    let relative = crate::contained::relative_to(root, path)?;
+    crate::contained::create_new(root, &relative, content.as_bytes())?;
     Ok(())
 }
 
@@ -238,7 +260,7 @@ pub fn create_epic_with(
     allocate: &mut Allocator<'_>,
 ) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
-    let (id, uid) = allocate(&planning_target(pm_root))?;
+    let (id, uid) = allocate(&planning_target(pm_root)?)?;
     let nnn = id.strip_prefix("EPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -252,10 +274,8 @@ pub fn create_epic_with(
             ("DATE", date.as_str()),
         ],
     );
-    let dir = pm_root.join("epics");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{id}.md"));
-    write_new(&path, &content)?;
+    let path = pm_root.join("epics").join(format!("{id}.md"));
+    write_new(pm_root, &path, &content)?;
     Ok(NewRecord { id, uid, path })
 }
 
@@ -305,7 +325,7 @@ pub fn create_task_with(
 ) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
     match (epic_id, standalone_reason.map(str::trim)) {
-        (Some(epic), None | Some("")) if epic_exists(pm_root, epic) => {}
+        (Some(epic), None | Some("")) if epic_exists(pm_root, epic)? => {}
         (Some(epic), None | Some("")) => {
             return Err(StoreError::NotFound(format!("epic:{epic}")));
         }
@@ -325,7 +345,7 @@ pub fn create_task_with(
     let date = today();
     let epic_value = epic_id.unwrap_or("null");
     let repository_root = repository_root(pm_root);
-    if integration_target.is_some_and(|target| target.trim().is_empty()) {
+    if integration_target.is_some_and(str::is_empty) {
         return Err(StoreError::Invalid(
             "integration target cannot be empty".to_string(),
         ));
@@ -335,15 +355,16 @@ pub fn create_task_with(
             "integration target must be a stable non-task branch name".to_string(),
         ));
     }
-    let resolved_target = integration_target
-        .map(str::trim)
-        .map(str::to_owned)
-        .or_else(|| crate::workgraph::default_work_target(repository_root))
-        .ok_or_else(|| {
-            StoreError::Invalid(
-                "integration target must resolve to a local or remote-tracking branch".to_string(),
-            )
-        })?;
+    let resolved_target = match integration_target {
+        Some(target) => Some(target.to_owned()),
+        None => crate::workgraph::default_work_target(repository_root)
+            .map_err(|error| StoreError::Invalid(error.to_string()))?,
+    }
+    .ok_or_else(|| {
+        StoreError::Invalid(
+            "integration target must resolve to a local or remote-tracking branch".to_string(),
+        )
+    })?;
     if !super::work_target_resolves(repository_root, &resolved_target) {
         return Err(StoreError::Invalid(format!(
             "integration target '{resolved_target}' does not resolve to a local or remote-tracking branch"
@@ -373,10 +394,8 @@ pub fn create_task_with(
             ("TARGET_BRANCH", target_value.as_str()),
         ],
     );
-    let dir = pm_root.join("tasks");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{id}.md"));
-    write_new(&path, &content)?;
+    let path = pm_root.join("tasks").join(format!("{id}.md"));
+    write_new(pm_root, &path, &content)?;
     Ok(NewRecord { id, uid, path })
 }
 
@@ -438,14 +457,17 @@ pub fn create_spec_with(
             "a spec needs at least one consuming epic or task".to_string(),
         ));
     }
-    let targets = work_item_ids
-        .iter()
-        .map(|id| {
-            find_work_item_path(pm_root, id)
-                .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let (id, uid) = allocate(&planning_target(pm_root))?;
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for id in work_item_ids {
+        let target = find_work_item_path(pm_root, id)?
+            .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))?;
+        // A consumer named twice is linked once, so its first snapshot is
+        // the one a rollback restores.
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    let (id, uid) = allocate(&planning_target(pm_root)?)?;
     let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -459,46 +481,67 @@ pub fn create_spec_with(
             ("DATE", date.as_str()),
         ],
     );
-    let dir = pm_root.join("specs");
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{id}.md"));
-    write_new(&path, &content)?;
-    let mut written: Vec<(&PathBuf, String)> = Vec::new();
+    let path = pm_root.join("specs").join(format!("{id}.md"));
+    let root = repository_root(pm_root);
+    let tree = crate::contained::Tree::open(root)?;
+    let spec = crate::contained::relative_to(root, &path)?;
+    tree.create_new(&spec, content.as_bytes())?;
+    // Each consumer's bytes are kept before its write is tried, so a write
+    // that fails after its rename is restored too.
+    let mut touched: Vec<(String, Vec<u8>)> = Vec::new();
     for target in &targets {
-        let original = match fs::read_to_string(target) {
-            Ok(original) => original,
-            Err(error) => {
-                restore(&path, &written);
-                return Err(error.into());
-            }
-        };
-        if let Err(error) = append_spec_reference(target, &id) {
-            restore(&path, &written);
-            return Err(error);
+        let linked = crate::contained::relative_to(root, target)
+            .map_err(StoreError::from)
+            .and_then(|relative| {
+                let original = tree.read(&relative, u64::MAX)?;
+                touched.push((relative.clone(), original));
+                append_spec_reference(&tree, &relative, &id)
+            });
+        if let Err(error) = linked {
+            return Err(restore(&tree, &spec, &touched, error));
         }
-        written.push((target, original));
     }
     Ok(NewRecord { id, uid, path })
 }
 
-fn restore(spec: &Path, written: &[(&PathBuf, String)]) {
-    for (target, original) in written {
-        let _ = crate::file_lock::atomic_write(target, original.as_bytes());
+/// Put back every consumer touched and remove the new spec; a restore that
+/// fails is added to the error, never dropped.
+fn restore(
+    tree: &crate::contained::Tree,
+    spec: &str,
+    touched: &[(String, Vec<u8>)],
+    error: StoreError,
+) -> StoreError {
+    let mut failed = Vec::new();
+    for (relative, original) in touched {
+        if let Err(restore) = tree.write(relative, original) {
+            failed.push(format!("{relative} ({restore})"));
+        }
     }
-    let _ = fs::remove_file(spec);
+    if let Err(remove) = tree.remove(spec) {
+        failed.push(format!("{spec} ({remove})"));
+    }
+    if failed.is_empty() {
+        error
+    } else {
+        StoreError::Invalid(format!(
+            "{error}; restoring after it also failed for {}",
+            failed.join(", ")
+        ))
+    }
 }
 
-fn find_work_item_path(pm_root: &Path, id: &str) -> Option<PathBuf> {
+fn find_work_item_path(pm_root: &Path, id: &str) -> Result<Option<PathBuf>, StoreError> {
     let paths = if crate::workgraph::is_valid_epic_format_id(id) {
-        crate::workgraph::layout::epic_record_files(pm_root)
+        crate::workgraph::layout::epic_record_files(pm_root)?
     } else if crate::workgraph::is_valid_task_format_id(id) {
-        crate::workgraph::layout::task_record_files(pm_root)
+        crate::workgraph::layout::task_record_files(pm_root)?
     } else {
-        return None;
+        return Ok(None);
     };
-    paths
+    Ok(paths
         .into_iter()
-        .find(|path| record_stem(path).as_deref() == Some(id))
+        .find(|path| record_stem(path).as_deref() == Some(id)))
 }
 
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
@@ -507,7 +550,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
         .or_else(|| content.strip_prefix("---\n"))?;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == "---" {
+        if super::record_text::without_line_ending(line) == "---" {
             return Some((&rest[..offset], &rest[offset + line.len()..]));
         }
         offset += line.len();
@@ -515,15 +558,20 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn append_spec_reference(path: &Path, spec_id: &str) -> Result<(), StoreError> {
-    let content = fs::read_to_string(path)?;
+fn append_spec_reference(
+    tree: &crate::contained::Tree,
+    path: &str,
+    spec_id: &str,
+) -> Result<(), StoreError> {
+    let content = String::from_utf8(tree.read(path, u64::MAX)?)
+        .map_err(|error| StoreError::Invalid(format!("{path}: {error}")))?;
     let (yaml, body) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
-        path: path.display().to_string(),
+        path: path.to_string(),
         message: "missing frontmatter delimiters".to_string(),
     })?;
     let data =
         serde_yaml::from_str::<serde_yaml::Mapping>(yaml).map_err(|error| StoreError::Yaml {
-            path: path.display().to_string(),
+            path: path.to_string(),
             message: error.to_string(),
         })?;
     let key = serde_yaml::Value::String("specs".to_string());
@@ -536,8 +584,7 @@ fn append_spec_reference(path: &Path, spec_id: &str) -> Result<(), StoreError> {
         Some(serde_yaml::Value::Sequence(_)) | None => {}
         Some(_) => {
             return Err(StoreError::Invalid(format!(
-                "{}: specs must be a YAML list",
-                path.display()
+                "{path}: specs must be a YAML list"
             )));
         }
     }
@@ -546,14 +593,14 @@ fn append_spec_reference(path: &Path, spec_id: &str) -> Result<(), StoreError> {
     // `specs` value. Round-tripping a hand-authored mapping through serde_yaml
     // discards comments and ordering, including the scaffold's guidance.
     let updated_yaml = insert_yaml_sequence_value(yaml, "specs", spec_id)?;
-    crate::file_lock::atomic_write(path, format!("---\n{updated_yaml}---\n{body}").as_bytes())?;
+    tree.write(path, format!("---\n{updated_yaml}---\n{body}").as_bytes())?;
     Ok(())
 }
 
 fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<String, StoreError> {
     let mut offset = 0;
     for line_with_ending in yaml.split_inclusive('\n') {
-        let line = line_with_ending.trim_end_matches(['\r', '\n']);
+        let line = super::record_text::without_line_ending(line_with_ending);
         let Some(after_key) = line
             .strip_prefix(key)
             .and_then(|rest| rest.strip_prefix(':'))
@@ -574,7 +621,7 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             let open = value_start + open;
             let close = value_start + open.saturating_sub(value_start) + 1 + close;
             let existing = &yaml[open + 1..close];
-            let replacement = if existing.trim().is_empty() {
+            let replacement = if existing.trim_matches([' ', '\t']).is_empty() {
                 value.to_string()
             } else {
                 format!("{existing}, {value}")
@@ -584,7 +631,9 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             return Ok(updated);
         }
 
-        if after_key.trim().is_empty() || after_key.trim_start().starts_with('#') {
+        if after_key.trim_matches([' ', '\t']).is_empty()
+            || after_key.trim_start_matches([' ', '\t']).starts_with('#')
+        {
             let newline = if line_with_ending.ends_with("\r\n") {
                 "\r\n"
             } else {
@@ -664,9 +713,9 @@ mod tests {
     #[test]
     fn independent_allocators_start_at_one() {
         let dir = project();
-        assert_eq!(next_epic_id(dir.path()), "EPC-001");
-        assert_eq!(next_spec_id(dir.path()), "SPC-001");
-        assert_eq!(next_task_id(dir.path()), "TSK-001");
+        assert_eq!(next_epic_id(dir.path()).unwrap(), "EPC-001");
+        assert_eq!(next_spec_id(dir.path()).unwrap(), "SPC-001");
+        assert_eq!(next_task_id(dir.path()).unwrap(), "TSK-001");
     }
 
     #[test]
@@ -674,7 +723,7 @@ mod tests {
         let dir = project();
         seed(dir.path(), "tasks", "TSK-041-008");
         seed(dir.path(), "tasks", "TSK-009");
-        assert_eq!(next_task_id(dir.path()), "TSK-042");
+        assert_eq!(next_task_id(dir.path()).unwrap(), "TSK-042");
     }
 
     #[test]
@@ -853,18 +902,18 @@ mod tests {
         let dir = project();
         seed(dir.path(), "epics", "EPC-001");
         seed(dir.path(), "tasks", "TSK-001");
-        assert!(work_item_exists(dir.path(), "EPC-001"));
-        assert!(work_item_exists(dir.path(), "TSK-001"));
-        assert!(!work_item_exists(dir.path(), "SPC-001"));
-        assert!(!work_item_exists(dir.path(), "not-an-id"));
+        assert!(work_item_exists(dir.path(), "EPC-001").unwrap());
+        assert!(work_item_exists(dir.path(), "TSK-001").unwrap());
+        assert!(!work_item_exists(dir.path(), "SPC-001").unwrap());
+        assert!(!work_item_exists(dir.path(), "not-an-id").unwrap());
     }
 
     #[test]
     fn exclusive_creation_never_overwrites() {
         let dir = project();
         let path = dir.path().join("tasks/TSK-001.md");
-        write_new(&path, "first").unwrap();
-        assert!(write_new(&path, "second").is_err());
+        write_new(dir.path(), &path, "first").unwrap();
+        assert!(write_new(dir.path(), &path, "second").is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "first");
     }
 
@@ -884,6 +933,182 @@ mod tests {
             create_epic(dir.path(), EPIC_TEMPLATE, "line one\nline two"),
             Err(StoreError::Invalid(_))
         ));
+    }
+
+    /// Every file beneath `dir`, by relative path, read without following.
+    #[cfg(unix)]
+    fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in fs::read_dir(&current).unwrap().flatten() {
+                let path = entry.path();
+                let kind = entry.file_type().unwrap();
+                if kind.is_dir() {
+                    stack.push(path.clone());
+                }
+                let bytes = if kind.is_file() {
+                    fs::read(&path).unwrap()
+                } else {
+                    Vec::new()
+                };
+                out.insert(path.strip_prefix(dir).unwrap().to_path_buf(), bytes);
+            }
+        }
+        out
+    }
+
+    /// A project whose `project-management` holds the three kind folders,
+    /// with `linked` (relative to the project) replaced by a link to
+    /// `outside`. Issue 94: a branch can commit such a link.
+    #[cfg(unix)]
+    fn planted(linked: &str, outside: &Path) -> (tempfile::TempDir, PathBuf) {
+        let dir = project();
+        let pm = dir.path().join("project-management");
+        for child in ["epics", "specs", "tasks"] {
+            fs::create_dir_all(pm.join(child)).unwrap();
+        }
+        let at = dir.path().join(linked);
+        fs::remove_dir_all(&at).unwrap();
+        std::os::unix::fs::symlink(outside, &at).unwrap();
+        (dir, pm)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn record_creation_refuses_a_link_above_the_record() {
+        for linked in [
+            "project-management",
+            "project-management/epics",
+            "project-management/tasks",
+            "project-management/specs",
+        ] {
+            let outside = tempfile::tempdir().unwrap();
+            for child in ["epics", "specs", "tasks"] {
+                fs::create_dir_all(outside.path().join(child)).unwrap();
+            }
+            fs::write(
+                outside.path().join("epics/EPC-001.md"),
+                "---\nid: EPC-001\nspecs: []\n---\n",
+            )
+            .unwrap();
+            let (dir, pm) = planted(linked, outside.path());
+            if !linked.ends_with("epics") && linked != "project-management" {
+                fs::write(
+                    pm.join("epics/EPC-001.md"),
+                    "---\nid: EPC-001\nspecs: []\n---\n",
+                )
+                .unwrap();
+            }
+            let before = snapshot(outside.path());
+            let epic = create_epic(&pm, EPIC_TEMPLATE, "Outcome");
+            let task = create_task(&pm, TASK_TEMPLATE, None, Some("fix"), Some("main"), "Fix");
+            let spec = create_spec(&pm, SPEC_TEMPLATE, "EPC-001", "Contract");
+            assert_eq!(
+                snapshot(outside.path()),
+                before,
+                "{linked}: nothing outside"
+            );
+            let refused = |result: &Result<NewRecord, StoreError>| {
+                result.as_ref().is_err_and(|error| {
+                    error.to_string().contains("symbolic link")
+                        || matches!(error, StoreError::NotFound(_))
+                })
+            };
+            match linked {
+                "project-management" => {
+                    assert!(
+                        refused(&epic) && refused(&task) && refused(&spec),
+                        "{linked}"
+                    );
+                }
+                "project-management/epics" => {
+                    assert!(refused(&epic), "{epic:?}");
+                    assert!(task.is_ok(), "{task:?}");
+                }
+                "project-management/tasks" => {
+                    assert!(refused(&task), "{task:?}");
+                    assert!(epic.is_ok() && spec.is_ok(), "{epic:?} {spec:?}");
+                }
+                _ => {
+                    assert!(refused(&spec), "{spec:?}");
+                    let epic_text = fs::read_to_string(pm.join("epics/EPC-001.md")).unwrap();
+                    assert!(!epic_text.contains("SPC-"), "{epic_text}");
+                }
+            }
+            drop(dir);
+        }
+    }
+
+    /// The old temporary name beside a consumer (`<record>.tmp`) is not
+    /// written through: a link planted there is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn spec_linking_never_writes_through_a_planted_temporary_name() {
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("sentinel"), "outside").unwrap();
+        let dir = project();
+        let pm = dir.path().join("project-management");
+        let epic = create_epic(&pm, EPIC_TEMPLATE, "Outcome").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("sentinel"),
+            pm.join("epics/EPC-001.tmp"),
+        )
+        .unwrap();
+        create_spec(&pm, SPEC_TEMPLATE, "EPC-001", "Contract").unwrap();
+        assert_eq!(
+            fs::read_to_string(outside.path().join("sentinel")).unwrap(),
+            "outside"
+        );
+        let meta = fs::symlink_metadata(&epic.path).unwrap();
+        assert!(meta.file_type().is_file(), "the epic stays a regular file");
+        assert!(fs::read_to_string(&epic.path)
+            .unwrap()
+            .contains("specs: [SPC-001]"));
+    }
+
+    /// A consumer write that fails part way restores every consumer already
+    /// linked, the failing one included even when its rename had landed,
+    /// and removes the new spec; a consumer named twice is linked once.
+    #[test]
+    fn spec_linking_failure_restores_every_consumer() {
+        let dir = project();
+        let pm = dir.path().join("project-management");
+        let epic = create_epic(&pm, EPIC_TEMPLATE, "Outcome").unwrap();
+        let task = create_task(&pm, TASK_TEMPLATE, None, Some("fix"), Some("main"), "Fix").unwrap();
+        let epic_before = fs::read(&epic.path).unwrap();
+        let task_before = fs::read(&task.path).unwrap();
+        // The task's write fails after its rename landed: its bytes already
+        // name the spec when the error returns.
+        crate::contained::fault::arm(
+            crate::contained::fault::Point::AfterRename,
+            &format!("project-management/tasks/{}.md", task.id),
+        );
+        let consumers = [
+            "EPC-001".to_string(),
+            "EPC-001".to_string(),
+            task.id.clone(),
+        ];
+        let result = create_spec_for(&pm, SPEC_TEMPLATE, &consumers, "Contract");
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(
+            fs::read(&epic.path).unwrap(),
+            epic_before,
+            "the epic is restored"
+        );
+        assert_eq!(
+            fs::read(&task.path).unwrap(),
+            task_before,
+            "the task is restored"
+        );
+        assert_eq!(
+            fs::read_dir(pm.join("specs")).unwrap().count(),
+            0,
+            "the spec is removed"
+        );
+        let spec = create_spec_for(&pm, SPEC_TEMPLATE, &consumers, "Contract").unwrap();
+        let linked = fs::read_to_string(&epic.path).unwrap();
+        assert_eq!(linked.matches(spec.id.as_str()).count(), 1, "{linked}");
     }
 
     #[test]

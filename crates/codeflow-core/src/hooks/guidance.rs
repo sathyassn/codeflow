@@ -17,8 +17,9 @@
 //! digest) instead of refusing the prompt with a parse error. Both texts are
 //! advisory. Neither can fail a session or a prompt: a missing or unreadable
 //! kernel, project state or policy file yields no text, or the default
-//! level, never an error. Their sizes are guidelines, not caps
-//! ([`GUIDANCE_BLOCK_GUIDELINE_BYTES`], [`REMINDER_LINE_GUIDELINE_BYTES`]).
+//! level, never an error. Their sizes are printed by the tests as
+//! information; one reminder line aims for [`REMINDER_LINE_GUIDELINE_BYTES`]
+//! because it recurs on every prompt, and the block has no number (TSK-267).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -28,12 +29,8 @@ use crate::scaffold::{ScaffoldManifest, Tier};
 
 use super::policy::{read_project_toml, Policy};
 
-/// The size the compaction guidance block aims for. A guideline, not a
-/// cap: no skill or rule is dropped to meet it, and the tests print the
-/// measured size against it.
-pub const GUIDANCE_BLOCK_GUIDELINE_BYTES: usize = 1536;
-
-/// The size one prompt reminder line aims for; a guideline, not a cap.
+/// The size one prompt reminder line aims for, since it recurs on every
+/// prompt; a guideline the tests print against, not a cap.
 pub const REMINDER_LINE_GUIDELINE_BYTES: usize = 300;
 
 /// The scaffold manifest, the inventory of what each tier installs.
@@ -338,9 +335,20 @@ pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> Str
 
 /// The project's tier from `.codeflow/project.toml`, or `None` when the file
 /// or the key is missing or unreadable.
-#[must_use]
-pub fn project_tier(root: &Path) -> Option<Tier> {
-    read_project_toml(root)?.get("tier")?.as_str()?.parse().ok()
+///
+/// # Errors
+/// The project settings cannot be read or their tier is invalid.
+pub fn project_tier(root: &Path) -> Result<Option<Tier>, String> {
+    let project = read_project_toml(root)?;
+    let Some(value) = project.as_ref().and_then(|p| p.get("tier")) else {
+        return Ok(None);
+    };
+    let text = value
+        .as_str()
+        .ok_or("cannot read project tier: expected text")?;
+    text.parse()
+        .map(Some)
+        .map_err(|error| format!("cannot read project tier: {error}"))
 }
 
 /// Whether a session-start source is one after which the rules are gone
@@ -398,7 +406,11 @@ pub fn session_guidance_with(root: &Path, source: &str, kernel: &str) -> Option<
     if !source_needs_guidance(source) {
         return None;
     }
-    let tier = project_tier(root)?;
+    let tier = match project_tier(root) {
+        Ok(Some(tier)) => tier,
+        Ok(None) => return None,
+        Err(error) => return Some(error),
+    };
     let kernel = Kernel::parse(kernel).ok()?;
     Some(guidance_block(
         &kernel,
@@ -427,11 +439,19 @@ pub fn payload_prompt(payload: &str) -> Option<String> {
 /// means no reminder.
 #[must_use]
 pub fn prompt_reminder_with(root: &Path, payload: &str, kernel: &str) -> Option<String> {
-    if !Policy::load(root).guidance.prompt_reminders.is_active() {
+    let policy = match Policy::load(root) {
+        Ok(policy) => policy,
+        Err(error) => return Some(format!("cannot read reminder policy: {error}")),
+    };
+    if !policy.guidance.prompt_reminders.is_active() {
         return None;
     }
     let trigger = classify(&payload_prompt(payload)?)?;
-    let tier = project_tier(root)?;
+    let tier = match project_tier(root) {
+        Ok(Some(tier)) => tier,
+        Ok(None) => return None,
+        Err(error) => return Some(error),
+    };
     let kernel = Kernel::parse(kernel).ok()?;
     reminder_line(&kernel, tier, trigger)
 }
@@ -519,7 +539,7 @@ mod tests {
     }
 
     /// The block holds every always rule, every moment and the tier's whole
-    /// inventory; its size is printed against the guideline.
+    /// inventory; its size is printed as information.
     #[test]
     fn guidance_holds_the_kernel_and_the_whole_inventory_at_every_tier() {
         let kernel = Kernel::shipped();
@@ -539,10 +559,7 @@ mod tests {
             for name in inventory.skills.iter().chain(&inventory.agents) {
                 assert!(block.contains(name.as_str()), "{tier}: {name}");
             }
-            println!(
-                "guidance {tier}: {} bytes (guideline {GUIDANCE_BLOCK_GUIDELINE_BYTES})",
-                block.len()
-            );
+            println!("guidance {tier}: {} bytes", block.len());
         }
     }
 

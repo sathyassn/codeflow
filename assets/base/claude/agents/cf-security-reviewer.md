@@ -35,10 +35,9 @@ backstop for judgment the machine cannot adjudicate (CodeFlow ADR-0007).
 
 ## Inputs
 
-Locate the work context: the whole unit at one head, as the review brief
-contract in `cf-model-orchestrator/resources/quality/findings.md` sets out
-(the full diff `git diff <base>...HEAD`, every touched file and the change's
-blast radius, with earlier findings as checks within the pass), the
+Locate the work context: the whole unit at one head (`git diff
+<base>...HEAD`, every touched file), with the scope and manner
+`.codeflow/rules/workflow-discipline.md` "Review verdicts" defines, the
 acceptance criteria, any linked capability or ADR IDs,
 and — this is the layer you build on — the deterministic-scanner output for this
 change:

@@ -28,7 +28,9 @@ fn init_repo(root: &Path, name: &str) {
     .unwrap();
     fs::write(
         root.join(".codeflow/project.toml"),
-        format!("name = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\n"),
+        format!(
+            "schema_version = 1\nname = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
+        ),
     )
     .unwrap();
     fs::create_dir_all(root.join(".git")).unwrap();
@@ -152,7 +154,235 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
         text.contains("require a pull request before merging"),
         "{text}"
     );
+    // Without git.required_checks the shipped CI job names are required, on
+    // a branch that is up to date with its base.
+    assert!(
+        text.contains(
+            "require status checks to pass on a branch that is up to date with its base: \
+             codeflow gates, secret scan, security review, commit standards"
+        ),
+        "{text}"
+    );
     assert!(text.contains("status: dry-run"), "{text}");
+
+    fs::write(
+        repo.path().join(".codeflow/policy.json"),
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "required_checks": ["build", "windows"] } }"#,
+    )
+    .unwrap();
+    let text = stdout(&run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    ));
+    assert!(
+        text.contains("up to date with its base: build, windows"),
+        "{text}"
+    );
+}
+
+/// A policy the schema refuses stops `remote protect` before it sends
+/// anything: a blank `git.required_checks` entry would otherwise be dropped
+/// and the default checks applied in its place (TSK-261).
+#[cfg(unix)]
+#[test]
+fn remote_protect_refuses_an_invalid_policy_and_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "bad-policy");
+    fs::write(
+        repo.path().join(".codeflow/policy.json"),
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "required_checks": [" "] } }"#,
+    )
+    .unwrap();
+
+    // gh shim: records every write call and answers reads like a host with
+    // no rules, so an applied plan would be visible in `writes`.
+    let shims = tempfile::tempdir().unwrap();
+    let writes = shims.path().join("writes");
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+               \"repo view\"*) printf '%s' '{{\"nameWithOwner\":\"o/r\",\"isPrivate\":false,\"defaultBranchRef\":{{\"name\":\"main\"}}}}' ;;\n\
+               \"api -X \"*) echo \"$*\" >> '{}'; cat >/dev/null; printf '{{}}' ;;\n\
+               \"api repos/o/r/rulesets?\"*) printf '[]' ;;\n\
+               *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+             esac\n",
+            writes.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for args in [
+        &["remote", "protect"][..],
+        &["remote", "protect", "--dry-run"][..],
+    ] {
+        let out = codeflow()
+            .args(args)
+            .current_dir(repo.path())
+            .env("CODEFLOW_HOME", home.path())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "{args:?} must refuse: {}",
+            stdout(&out)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("required_checks"), "{args:?}: {err}");
+        assert!(
+            err.contains("no rules were planned or applied"),
+            "{args:?}: {err}"
+        );
+        assert!(
+            !writes.exists(),
+            "{args:?} sent a write: {}",
+            fs::read_to_string(&writes).unwrap_or_default()
+        );
+    }
+}
+
+/// The doctor reads the default branch's live rules through `gh` and warns
+/// when they do not require an up-to-date branch (TSK-261).
+#[cfg(unix)]
+#[test]
+fn doctor_warns_when_the_default_branch_does_not_require_up_to_date_checks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "racy");
+    // A git directory libgit2 opens, with a GitHub origin; no git binary.
+    let git = repo.path().join(".git");
+    fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::create_dir_all(git.join("objects")).unwrap();
+    fs::create_dir_all(git.join("refs/heads")).unwrap();
+    fs::write(
+        git.join("config"),
+        "[core]\n\trepositoryformatversion = 0\n\tbare = false\n[remote \"origin\"]\n\turl = https://github.com/o/r.git\n",
+    )
+    .unwrap();
+
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+case "$*" in
+  "api repos/o/r") printf '%s' '{"default_branch":"main"}' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]},"ruleset_id":7}]' ;;
+  "api repos/o/r/rulesets/7") printf '%s' '{"id":7,"bypass_actors":[]}' ;;
+  *) echo 'gh: Branch not protected (HTTP 404)' >&2; exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let out = codeflow()
+        .args(["doctor", "--check", "remote-perimeter"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(out.status.success(), "a warning never fails doctor: {text}");
+    assert!(
+        text.contains(
+            "warn  remote-perimeter: o/r: main requires status checks but not that a branch be up to date (ruleset 7)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Require branches to be up to date before merging"),
+        "{text}"
+    );
+}
+
+/// Round 23: `remote protect` finds its project as main does, the nearest
+/// directory initialized for `CodeFlow`, never the git work tree root, so a
+/// project nested inside another repository protects its own branches.
+#[test]
+fn r23_remote_protect_reads_the_nearest_initialized_project() {
+    let home = tempfile::tempdir().unwrap();
+    let outer = tempfile::tempdir().unwrap();
+    // The outer repository's work tree root, with no CodeFlow state.
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(outer.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap()
+        .success());
+    let project = outer.path().join("nested");
+    init_repo(&project, "nested");
+    let deeper = project.join("src/module");
+    fs::create_dir_all(&deeper).unwrap();
+    let out = run_in(&deeper, home.path(), &["remote", "protect", "--dry-run"]);
+    let text = stdout(&out);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("release/* [ruleset (glob pattern)]:"),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("not found"));
+}
+
+/// The defaults note is printed only for a policy proven missing; a policy
+/// behind a dangling link refuses without claiming it was not found.
+#[cfg(unix)]
+#[test]
+fn r23_remote_protect_names_defaults_only_for_a_missing_policy() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "notes");
+    let policy = repo.path().join(".codeflow").join("policy.json");
+    fs::remove_file(&policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{errors}");
+    assert!(errors.contains("not found"), "{errors}");
+
+    std::os::unix::fs::symlink("gone.json", &policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "{errors}");
+    assert!(errors.contains("cannot read policy"), "{errors}");
+    assert!(!errors.contains("not found"), "{errors}");
 }
 
 #[cfg(unix)]
@@ -231,6 +461,49 @@ fn any_command_touches_registry() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn r21_remote_protect_refuses_undecodable_identity_before_api() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "invalid-identity");
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+if [ "$1" = "repo" ]; then
+  printf '{"nameWithOwner":"owner/caf'
+  printf '\377'
+  printf '","isPrivate":false}'
+  exit 0
+fi
+: > api-called
+printf '{}'
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths = vec![shims.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let out = codeflow()
+        .args(["remote", "protect"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.contains("status: degraded"), "{text}");
+    assert!(text.contains("UTF-8"), "{text}");
+    assert!(!text.contains("status: applied"), "{text}");
+    assert!(!repo.path().join("api-called").exists());
+}
+
 /// TSK-137 AC-4: hook, ci and read-only commands leave the registry alone,
 /// other commands still record the repo, and a home the process may not
 /// write (a sandbox, a read-only directory) is silent.
@@ -277,4 +550,58 @@ fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("registry touch failed"), "{stderr}");
     assert_eq!(fs::read_to_string(&registry).unwrap(), before);
+}
+
+#[test]
+fn r22_remote_protect_refuses_unreadable_tracking_state() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "tracking-error");
+    fs::write(repo.path().join(".codeflow/project.toml"), b"\xff").unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read existing CodeFlow state"));
+}
+
+#[test]
+fn r22_remote_protect_absent_tracking_state_keeps_dry_run() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout(&out).contains("status: dry-run"));
+}
+
+#[cfg(unix)]
+#[test]
+fn r22_startup_refuses_missing_current_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let gone = repo.path().join("gone");
+    fs::create_dir(&gone).unwrap();
+    let out = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "rmdir \"$1\"; exec \"$2\" policy show",
+            "codeflow-test",
+        ])
+        .arg(&gone)
+        .arg(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(&gone)
+        .env("CODEFLOW_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", stdout(&out));
 }

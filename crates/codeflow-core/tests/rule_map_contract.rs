@@ -15,8 +15,7 @@ use std::path::{Path, PathBuf};
 
 use codeflow_core::scaffold::rule_map::{
     self, codex_overflow, is_agent_pointer, is_skill_pointer, managed_block, File, Group, Kernel,
-    CODEX_INSTRUCTION_LIMIT_BYTES, MANAGED_BLOCK_GUIDELINE_BYTES, OUTPUTS, RULES_GUIDELINE,
-    RULE_LINE_GUIDELINE_BYTES,
+    CODEX_INSTRUCTION_LIMIT_BYTES, MANAGED_BLOCK_GUIDELINE_BYTES, OUTPUTS,
 };
 use codeflow_core::scaffold::{
     self, AssetSource, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions,
@@ -206,9 +205,10 @@ fn every_root_template_is_rendered_from_the_one_kernel() {
     );
 }
 
-/// AC-1: one-line rules with pointers and every moment. The block size, the
-/// rule count and each rule's length are reported against their guideline
-/// numbers, never failed (TSK-150).
+/// AC-1: one-line rules with pointers and every moment. The block size is
+/// reported against its guideline, never failed (TSK-150); the rule count
+/// and each rule's length are printed as information, with no number
+/// (TSK-267).
 #[test]
 fn each_tier_map_has_one_line_rules_and_every_moment() {
     let kernel = Kernel::shipped();
@@ -216,7 +216,7 @@ fn each_tier_map_has_one_line_rules_and_every_moment() {
         let rendered = kernel.render(agents_output(tier));
         let block = managed_block(&rendered).expect("managed markers");
         println!(
-            "{tier}: kernel {} of {MANAGED_BLOCK_GUIDELINE_BYTES} bytes, {} of {RULES_GUIDELINE} always rules",
+            "{tier}: kernel {} of {MANAGED_BLOCK_GUIDELINE_BYTES} bytes, {} always rules",
             block.len(),
             kernel.rules_for(tier).len()
         );
@@ -237,13 +237,7 @@ fn each_tier_map_has_one_line_rules_and_every_moment() {
             );
             let line = kernel.render_rule_at(tier, rule);
             assert!(!line.contains('\n'), "{tier}: rule {} spans lines", rule.id);
-            if line.len() > RULE_LINE_GUIDELINE_BYTES {
-                println!(
-                    "{tier}: rule {} is {} bytes, above its {RULE_LINE_GUIDELINE_BYTES}-byte guideline",
-                    rule.id,
-                    line.len()
-                );
-            }
+            println!("{tier}: rule {} is {} bytes", rule.id, line.len());
             assert!(
                 block.contains(&line),
                 "{tier}: rule {} is not in the map",
@@ -410,7 +404,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "CodeFlow ADR-0076",
         "the full gate belongs to the landing candidate",
         "continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope",
-        "red: diagnose first; drop a member and its dependents only when evidence attributes the failure to it",
+        "red: diagnose first; drop a member only when evidence blames it",
         "the PR stays draft until its required evidence exists",
         "work-start check first (identity, intent-match, currency)",
         "cleanup needs merge proof",
@@ -478,6 +472,12 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
     assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+    // Issue 121: the kernel's land row names the hand-resolved hunk, and the
+    // dependents rule lives in the file the minimal tier's land row opens.
+    let git_rules = normalized(&read(&repo_root().join("assets/base/rules/git-rules.md")));
+    assert!(git_rules.contains(
+        "a member and its dependents leave it only when evidence attributes the failure to it"
+    ));
 }
 
 /// TSK-184 routing gate: the route rule is the first always rule at the
@@ -759,9 +759,9 @@ struct Legacy {
 }
 
 impl AssetSource for Legacy {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
         match self.overrides.get(path) {
-            Some(value) => value.clone(),
+            Some(value) => Ok(value.clone()),
             None => self.current.read(path),
         }
     }
@@ -771,7 +771,13 @@ fn legacy_source() -> Legacy {
     let fixtures =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy-root-contracts");
     let current = assets();
-    let manifest = String::from_utf8(current.read("base/scaffold-manifest.toml").unwrap()).unwrap();
+    let manifest = String::from_utf8(
+        current
+            .read("base/scaffold-manifest.toml")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     // The previous manifest: one AGENTS entry for standard and full, and no
     // references.
     let full_entry = "[[entry]]\nsrc = \"AGENTS.full.md.tmpl\"\ndest = \"AGENTS.md\"\nownership = \"managed-region\"\nregion = \"markdown\"\ntiers = [\"full\"]\ntemplate = true\n\n";

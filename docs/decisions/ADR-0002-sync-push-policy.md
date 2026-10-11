@@ -43,3 +43,13 @@ on push.
 ## Architecture impact
 
 None — this is a policy value in config, not code.
+
+## Note of 2026-10-08: the repository is public and protected
+
+The Context sentence that this repository is private on GitHub Free, where
+remote branch protection is unavailable, described the repository at the
+time and is no longer the case. The repository is public, and `main` requires
+a pull request, the CI checks and an up-to-date branch (ADR-0081). ADR-0006
+superseded this decision, and this repo's `git.push_to_protected` is `block`
+again. (Append-only note; the Context, Decision and Consequences above are
+unchanged.)

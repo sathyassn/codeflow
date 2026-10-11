@@ -179,9 +179,10 @@ consuming repository whose remote protection has been verified active.
   is the only boundary (the supported architecture in `AGENTS.md`, "Git
   rules").
 - **Substitute:** draw your own repository's verified enforcement state.
-  CodeFlow's own repository has remote protection unavailable (its
-  `AGENTS.md`, project-specific instructions), so a page about it draws the
-  planes it has and says in the caption that no remote plane is armed.
+  CodeFlow's own repository has remote protection on `main` (its
+  `AGENTS.md`, project-specific instructions; `codeflow doctor --check
+  remote-perimeter` reads the live rules), so a page about it draws the
+  planes the live rules arm and says in the caption what they require.
 - **Family:** layering; a structure figure would draw four boxes and lose
   the shared axis.
 

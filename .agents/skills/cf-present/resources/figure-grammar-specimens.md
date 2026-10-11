@@ -13,8 +13,9 @@ states the narrow recomposition. Labels are 14 units, so at the 646 px break
 they render at 12.5 px. Facts are this repository's own, except in the
 layering and coverage specimens, which draw the supported architecture of a
 consuming repository whose remote protection has been verified active.
-CodeFlow's own repository has remote protection unavailable (its
-`AGENTS.md`, project-specific instructions); substitute your repository's
+CodeFlow's own repository has remote protection on `main` (its
+`AGENTS.md`, project-specific instructions; `codeflow doctor --check
+remote-perimeter` reads the live rules). Substitute your repository's
 verified enforcement state before drawing either.
 
 Each specimen ends with its chat form: the same facts drawn as a fenced
