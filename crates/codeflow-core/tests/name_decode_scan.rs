@@ -3299,6 +3299,73 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // Counts authored lines as wc -l does, at LF or CRLF; the text is measured, never rewritten or used as a name.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "authored_lines",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // Walks Claude Code's @path imports by the memory guide's grammar: a line at a time, a fence at the line start, an import after whitespace running to the next whitespace; the path text itself is kept as written.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "is_whitespace",
+        2,
+        "grammar:claude-memory-import",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "lines",
+        1,
+        "grammar:claude-memory-import",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "collect_imports",
+        "trim_start",
+        1,
+        "grammar:claude-memory-import",
+    ),
+    // Reads the description of YAML frontmatter a line at a time: the closing marker, the key's value, and a folded or literal block by its indentation; the value is measured in characters, never used as a name.
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "is_whitespace",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "lines",
+        1,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "trim",
+        2,
+        "grammar:yaml-frontmatter",
+    ),
+    (
+        "crates/codeflow-core/src/reading.rs",
+        "description",
+        "trim_end",
+        2,
+        "grammar:yaml-frontmatter",
+    ),
+    // Reads the scaffold version out of the ASCII managed-block marker `codeflow:managed:begin scaffold=`, which ends at whitespace or the `-` that opens the comment closer; the version is displayed, never used as a path.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "installed_scaffold_version",
+        "is_whitespace",
+        1,
+        "ascii-marker",
+    ),
     // Builds search documents per JSONL physical line, skipping blank lines; indexed content and path keys are retained and this index grants no authority.
     (
         "crates/codeflow-core/src/recall.rs",
@@ -6050,6 +6117,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_dir", 1, "Type check on entry.file_type(), whose error propagates out of load_skill_tree to its callers."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_file", 1, "Type check on entry.file_type(), whose error propagates; a regular file is then read with its error propagated."),
+    ("crates/codeflow-core/src/bounded_file.rs", "read_regular", "is_file", 1, "Type check on std::fs::metadata with its error propagated, so a missing path or dangling link keeps NotFound for the caller; a non-regular file is refused with InvalidInput before it is opened, so a fifo never blocks."),
+    ("crates/codeflow-core/src/doctor/mod.rs", "read_bounded", "is_file", 1, "Type check on std::fs::metadata with its error returned as an open failure; a non-regular file is refused before File::open, so a fifo never blocks the probe read."),
+    ("crates/codeflow-core/src/reading.rs", "regular_text", "is_file", 1, "Type check on std::fs::metadata taken after proven_absent, with its error propagated, so a dangling link fails; only a regular file is read, with its error propagated, and a directory, fifo or device is never read."),
     ("crates/codeflow-core/src/recall.rs", "collect_sources", "try_exists", 2, "Only decides whether capabilities.md and product.md enter the rebuildable search cache; recall output goes to a person and a missing kind is disclosed as a note."),
     ("crates/codeflow-core/src/recall.rs", "files_in", "is_file", 1, "Type check on entry.file_type(), whose error propagates as RecallError::Io."),
     ("crates/codeflow-core/src/recall.rs", "files_in", "try_exists", 1, "Only decides which ledger and doc files enter the search cache; results reach a person and an empty kind is disclosed as a coverage note."),

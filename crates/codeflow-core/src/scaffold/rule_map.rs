@@ -23,39 +23,90 @@ use super::Tier;
 /// tree.
 pub const KERNEL: &str = include_str!("../../../../assets/base/rule-map.toml");
 
-/// Guideline for the number of always rules one tier's map carries. A
-/// reported measure, never a failure (TSK-150): a rule past it is a prompt
-/// to move detail behind a moment row, not a reason to cut a duty.
-pub const RULES_GUIDELINE: usize = 13;
-
 /// How many always rules must share one sole pointer before the map states
 /// that home once under the list instead of on each line.
 pub const SHARED_HOME_RULES: usize = 3;
-
-/// Guideline for the bytes of one rendered always rule. Reported, never a
-/// failure; one line per rule is the structural rule.
-pub const RULE_LINE_GUIDELINE_BYTES: usize = 480;
 
 /// The project section a complete `AGENTS.md` must leave room for: a
 /// realistic adopter section of this size still fits Codex's instruction
 /// limit at every tier (`rule_map_contract`, TSK-150).
 pub const PROJECT_SECTION_ROOM_BYTES: usize = 16 * 1024;
 
-/// Guideline for the managed block of one tier's `AGENTS.md`, markers
-/// included: the always-read kernel. 12 KiB is 3 KiB under what Codex's
-/// instruction limit leaves after [`PROJECT_SECTION_ROOM_BYTES`] and 1 KiB
-/// for the header, so a block within it keeps the adopter's section whole
-/// with room to grow. `codeflow doctor` reports the kernel against it, apart
-/// from the size of the complete installed `AGENTS.md` (its `instructions`
-/// check); a fresh scaffold is within it, and it is never a failure
-/// (TSK-150, TSK-184).
-pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize = 12 * 1024;
+/// The room the header above the managed block takes: the title, the
+/// one-line product description and the stack, areas and tier lines.
+pub const HEADER_ROOM_BYTES: usize = 1024;
 
-/// Codex reads at most this many bytes of project instructions
+/// Codex reads at most this many bytes of project instructions by default
 /// (`project_doc_max_bytes`) and silently cuts the rest of an `AGENTS.md`.
 /// This is a host truncation point, not a reading budget: it is the one byte
-/// check that stays a failure for the generated document (TSK-150).
+/// check that stays a failure for the generated document (TSK-150). A
+/// project that raises the setting in its `.codex/config.toml` is measured
+/// against its own value by `codeflow doctor` ([`codex_instruction_limit`]).
 pub const CODEX_INSTRUCTION_LIMIT_BYTES: usize = 32 * 1024;
+
+/// Advisory guideline for the managed block of one tier's `AGENTS.md`,
+/// markers included: the always-read kernel. Derived, not chosen: what
+/// Codex's default instruction limit leaves after
+/// [`PROJECT_SECTION_ROOM_BYTES`] and [`HEADER_ROOM_BYTES`], 15 KiB, so a
+/// block within it keeps a realistic adopter section whole. `codeflow
+/// doctor` reports the kernel against it as a note (TSK-267), apart from
+/// the size of the complete installed `AGENTS.md` (its `instructions`
+/// check); a fresh scaffold is within it, and it is never a failure.
+pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize =
+    managed_block_guideline(CODEX_INSTRUCTION_LIMIT_BYTES);
+
+/// The managed-block guideline derived from a Codex instruction limit of
+/// `limit` bytes: the limit less the project section room and the header.
+#[must_use]
+pub const fn managed_block_guideline(limit: usize) -> usize {
+    limit.saturating_sub(PROJECT_SECTION_ROOM_BYTES + HEADER_ROOM_BYTES)
+}
+
+/// Where a Codex instruction limit came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitSource {
+    /// Codex's default, [`CODEX_INSTRUCTION_LIMIT_BYTES`].
+    Default,
+    /// `project_doc_max_bytes` in the project's `.codex/config.toml`.
+    ProjectConfig,
+}
+
+/// The `project_doc_max_bytes` the project's `.codex/config.toml` sets, when
+/// it sets a positive integer; `None` without the file, the key or a usable
+/// value, or when the path is not a regular file (a directory, fifo or
+/// device is never read). A file that exists but cannot be read is the
+/// error.
+///
+/// # Errors
+///
+/// The config file's absence cannot be proven, its metadata cannot be taken
+/// (a dangling link), or it cannot be read.
+pub fn project_doc_max_bytes(root: &std::path::Path) -> std::io::Result<Option<usize>> {
+    let Some(text) = crate::reading::regular_text(&root.join(".codex/config.toml"))? else {
+        return Ok(None);
+    };
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Ok(None);
+    };
+    Ok(value
+        .get("project_doc_max_bytes")
+        .and_then(toml::Value::as_integer)
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|bytes| *bytes > 0))
+}
+
+/// The instruction limit Codex applies in the project under `root`: the
+/// value its `.codex/config.toml` sets, else the default.
+///
+/// # Errors
+///
+/// The config file exists but cannot be read ([`project_doc_max_bytes`]).
+pub fn codex_instruction_limit(root: &std::path::Path) -> std::io::Result<(usize, LimitSource)> {
+    Ok(project_doc_max_bytes(root)?.map_or(
+        (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default),
+        |bytes| (bytes, LimitSource::ProjectConfig),
+    ))
+}
 
 /// The bytes by which a complete `AGENTS.md` (managed block and project
 /// section together) passes Codex's instruction limit, or `None` when the
@@ -731,13 +782,83 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
         assert!(!is_agent_pointer("cf-plan"));
     }
 
-    /// The managed-block guideline, 12 KiB, sits under what Codex's limit
-    /// leaves after a 16 KiB project section and the header (15 KiB).
+    /// The managed-block guideline is what Codex's default limit leaves
+    /// after a 16 KiB project section and the header, 15 KiB, and moves
+    /// with a raised limit.
     #[test]
-    fn the_block_guideline_leaves_room_for_the_project_section() {
-        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 12 * 1024);
-        let room = CODEX_INSTRUCTION_LIMIT_BYTES - PROJECT_SECTION_ROOM_BYTES - 1024;
-        assert!(MANAGED_BLOCK_GUIDELINE_BYTES <= room, "{room}");
+    fn the_block_guideline_is_derived_from_the_codex_limit() {
+        assert_eq!(MANAGED_BLOCK_GUIDELINE_BYTES, 15 * 1024);
+        assert_eq!(
+            MANAGED_BLOCK_GUIDELINE_BYTES,
+            CODEX_INSTRUCTION_LIMIT_BYTES - PROJECT_SECTION_ROOM_BYTES - HEADER_ROOM_BYTES
+        );
+        assert_eq!(managed_block_guideline(64 * 1024), 47 * 1024);
+        assert_eq!(managed_block_guideline(1024), 0, "never underflows");
+    }
+
+    /// The Codex limit is the project's `project_doc_max_bytes` when its
+    /// `.codex/config.toml` sets one, else the default.
+    #[test]
+    fn the_codex_limit_reads_the_project_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(
+            codex_instruction_limit(root).unwrap(),
+            (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default)
+        );
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        let config = root.join(".codex/config.toml");
+        std::fs::write(&config, "model = \"x\"\n").unwrap();
+        assert_eq!(
+            codex_instruction_limit(root).unwrap().1,
+            LimitSource::Default
+        );
+        std::fs::write(&config, "project_doc_max_bytes = 65536\n").unwrap();
+        assert_eq!(
+            codex_instruction_limit(root).unwrap(),
+            (65536, LimitSource::ProjectConfig)
+        );
+        for unusable in [
+            "project_doc_max_bytes = 0\n",
+            "project_doc_max_bytes = -1\n",
+            "project_doc_max_bytes = \"big\"\n",
+            "not = [toml\n",
+        ] {
+            std::fs::write(&config, unusable).unwrap();
+            assert_eq!(
+                codex_instruction_limit(root).unwrap(),
+                (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default),
+                "{unusable}"
+            );
+        }
+        // A config that exists but cannot be read is the error, never the
+        // default: a dangling link is such a file.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&config).unwrap();
+            std::os::unix::fs::symlink("missing.toml", &config).unwrap();
+            let error = codex_instruction_limit(root).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+        }
+    }
+
+    /// A fifo at the config path is not read: a read would block with no
+    /// writer, so returning at all shows it was skipped.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_config_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".codex")).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(root.join(".codex/config.toml"))
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            codex_instruction_limit(root).unwrap(),
+            (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default)
+        );
     }
 
     #[test]

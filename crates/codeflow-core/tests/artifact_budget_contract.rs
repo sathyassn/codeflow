@@ -7,20 +7,23 @@
 //! triggered section without losing one.
 //!
 //! Size is a reported measure, never a failure here: `codeflow doctor`
-//! reports the kernel, the reading chain and each skill against the guideline
-//! numbers in `codeflow_core::reading`, and this test prints the same report.
-//! The one byte check that still fails is the complete generated `AGENTS.md`
-//! with a realistic project section against Codex's 32 KiB instruction limit
-//! (`init_e2e`, `rule_map_contract`), because past it the host silently cuts
-//! shipped rules.
+//! reports the kernel, the reading chain, the always-loaded set and each
+//! shipped skill and agent against the advisory guidelines in
+//! `codeflow_core::reading`, each with its basis (ADR-0083), and this test
+//! prints the same report. Two tool limits fail: the complete generated
+//! `AGENTS.md` with a realistic project section against Codex's 32 KiB
+//! instruction limit (`init_e2e`, `rule_map_contract`), because past it the
+//! host silently cuts shipped rules, and a shipped description over the
+//! API's 1,024 characters, which the API refuses.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use codeflow_core::reading::{
-    self, authored_len, ConditionalRead, Inventory, Measure, SkillFiles, CONDITIONAL_READS,
+    self, authored_len, ConditionalRead, Guidelines, Inventory, Measure, SkillFiles, Unit,
+    CONDITIONAL_READS,
 };
-use codeflow_core::scaffold::rule_map::{self, managed_block, MANAGED_BLOCK_GUIDELINE_BYTES};
+use codeflow_core::scaffold::rule_map::{self, managed_block};
 use codeflow_core::scaffold::{DirSource, ScaffoldManifest, Tier};
 
 fn repo_root() -> PathBuf {
@@ -140,18 +143,6 @@ fn shipped_skills_install_to_both_trees_and_match_managed_copies() {
     let base = root.join("assets/base");
     let skills = manifest_skills(&manifest);
     assert!(!skills.is_empty(), "manifest must ship skills");
-
-    // The guideline table names exactly the shipped skills, so a new skill
-    // is measured against a reviewed number and a removed one leaves none.
-    let guided: BTreeSet<&str> = reading::SKILL_GUIDELINES
-        .iter()
-        .map(|(name, _)| *name)
-        .collect();
-    let shipped: BTreeSet<&str> = skills.keys().map(String::as_str).collect();
-    assert_eq!(
-        guided, shipped,
-        "every shipped skill needs one guideline number in codeflow_core::reading, and no stale ones"
-    );
 
     for source in skills.values() {
         let canonical = base.join(source);
@@ -1853,10 +1844,26 @@ fn method_kernel(agents: &str) -> String {
     )
 }
 
-/// The size report doctor gives, printed as information. Never asserted.
+/// The shipped agent definitions, keyed by name with their source text.
+fn shipped_agents() -> BTreeMap<String, String> {
+    let root = repo_root();
+    rule_map::AGENTS
+        .iter()
+        .map(|name| {
+            let source = root
+                .join("assets/base/claude/agents")
+                .join(format!("{name}.md"));
+            ((*name).to_string(), read_text(&source))
+        })
+        .collect()
+}
+
+/// The size report doctor gives, printed as information with each
+/// measure's unit and basis (TSK-267). Never asserted.
 fn size_report(files: &SkillFiles) -> String {
     use std::fmt::Write as _;
     let root = repo_root();
+    let guidelines = Guidelines::default();
     let mut measures: Vec<Measure> = Vec::new();
     for output in rule_map::OUTPUTS
         .iter()
@@ -1866,29 +1873,74 @@ fn size_report(files: &SkillFiles) -> String {
         let block = managed_block(&text).expect("managed markers");
         measures.push(Measure {
             subject: format!("{} kernel", output.tier),
-            bytes: authored_len(block.as_bytes()),
-            guideline: MANAGED_BLOCK_GUIDELINE_BYTES,
+            value: authored_len(block.as_bytes()),
+            guideline: guidelines.kernel_bytes,
+            unit: Unit::Bytes,
+            basis: reading::KERNEL_BASIS,
         });
     }
-    measures.push(reading::reading_chain(files, &Inventory::SHIPPED).measure());
-    measures.extend(reading::skill_measures(files));
-    for (source, guideline) in reading::ARTIFACT_GUIDELINES {
+    measures.push(reading::reading_chain(files, &Inventory::SHIPPED).measure(&guidelines));
+    // The always-loaded set a scaffold installs: the CLAUDE template with
+    // the AGENTS template it imports.
+    for (claude, agents) in [
+        ("CLAUDE.md.tmpl", "AGENTS.full.md.tmpl"),
+        ("CLAUDE.md.tmpl", "AGENTS.md.tmpl"),
+        ("CLAUDE.minimal.md.tmpl", "AGENTS.minimal.md.tmpl"),
+    ] {
+        let lines = reading::authored_lines(&read_text(&root.join("assets/base").join(claude)))
+            + reading::authored_lines(&read_text(&root.join("assets/base").join(agents)));
         measures.push(Measure {
-            subject: (*source).to_string(),
-            bytes: authored_len(&read(&root.join("assets/base").join(source))),
-            guideline: *guideline,
+            subject: format!("always-loaded instructions ({claude} with {agents})"),
+            value: lines,
+            guideline: guidelines.instructions_lines,
+            unit: Unit::Lines,
+            basis: reading::INSTRUCTIONS_BASIS,
         });
+    }
+    measures.extend(reading::skill_measures(files, &guidelines));
+    for (name, text) in shipped_agents() {
+        measures.push(reading::body_measure(&name, &text, guidelines.body_lines));
+    }
+    measures.extend(reading::description_measures(files));
+    for (name, text) in shipped_agents() {
+        measures.extend(reading::description_measure(&name, &text));
     }
     let mut report = String::new();
     for measure in &measures {
         let mark = if measure.over() {
-            "above guideline"
+            format!("above guideline: {}", measure.basis)
         } else {
-            "within"
+            "within".to_string()
         };
         let _ = writeln!(report, "  {measure} ({mark})");
     }
     report
+}
+
+/// TSK-267 AC-2: the API refuses a skill or agent description over 1,024
+/// characters, so a shipped one over it fails here; the rest of the sizes
+/// are advisory and never fail.
+#[test]
+fn shipped_descriptions_fit_the_api_limit() {
+    let files = skill_trees();
+    let mut measures = reading::description_measures(&files);
+    for (name, text) in shipped_agents() {
+        measures.push(
+            reading::description_measure(&name, &text)
+                .unwrap_or_else(|| panic!("{name} has a description")),
+        );
+    }
+    assert!(!measures.is_empty());
+    let over: Vec<String> = measures
+        .iter()
+        .filter(|measure| measure.over())
+        .map(ToString::to_string)
+        .collect();
+    assert!(over.is_empty(), "over the API limit: {}", over.join("; "));
+    for measure in &measures {
+        assert_eq!(measure.guideline, reading::DESCRIPTION_LIMIT_CHARS);
+        assert!(measure.value > 0, "{measure}");
+    }
 }
 
 /// AC-1: the shipped tree holds its reading structure. The kernel names every
@@ -2003,9 +2055,12 @@ fn reading_chain_counts_a_new_every_task_pointer() {
         .get_mut(&index)
         .expect("quality index")
         .push_str("| [New section](quality/new.md) | every task |\n");
+    let shipped_total = reading::reading_chain(&files, &Inventory::SHIPPED).total;
+    let guidelines = Guidelines::default();
+    let added = guidelines.chain_bytes - shipped_total + 1;
     files.insert(
         format!("{ORCH}/resources/quality/new.md"),
-        "x".repeat(34_000),
+        "x".repeat(added),
     );
     let chain = reading::reading_chain(&files, &Inventory::SHIPPED);
     assert!(chain.errors.is_empty(), "{:?}", chain.errors);
@@ -2017,27 +2072,30 @@ fn reading_chain_counts_a_new_every_task_pointer() {
         "a new every-task section must join the chain"
     );
     assert!(
-        chain.measure().over(),
-        "a 34,000-byte every-task section is reported above the chain guideline"
+        chain.measure(&guidelines).over(),
+        "a {added}-byte every-task section is reported above the chain guideline"
     );
     assert!(reading::orphans(&files).is_empty());
 }
 
-/// AC-2 fixture: a skill doubled in size passes the structure test; its size
-/// is reported above its guideline, never failed.
+/// AC-2 fixture: a skill grown past the body guideline passes the structure
+/// test; its size is reported above the guideline in lines, never failed.
 #[test]
-fn a_doubled_skill_passes_the_structure_test() {
+fn a_grown_skill_passes_the_structure_test() {
     let mut files = skill_trees();
+    let guidelines = Guidelines::default();
     let skill = files.get_mut("cf-herdr/SKILL.md").expect("cf-herdr skill");
-    let doubled = format!("{skill}\n{skill}");
-    *skill = doubled;
+    let copies = guidelines.body_lines / reading::authored_lines(skill) + 1;
+    let grown = vec![skill.as_str(); copies].join("\n");
+    *skill = grown;
     let faults = structure_faults(&files, &Inventory::SHIPPED);
     assert!(faults.is_empty(), "{}", faults.join("\n"));
-    let herdr = reading::skill_measures(&files)
+    let herdr = reading::skill_measures(&files, &guidelines)
         .into_iter()
         .find(|measure| measure.subject == "cf-herdr")
         .expect("cf-herdr measured");
     assert!(herdr.over(), "{herdr}");
+    assert_eq!(herdr.unit, Unit::Lines);
 }
 
 /// TSK-131 AC-4: the findings section is a conditional read. Turning its

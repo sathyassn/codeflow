@@ -92,7 +92,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 67] = [
+pub const SCHEMA: [KeySpec; 68] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -441,6 +441,16 @@ pub const SCHEMA: [KeySpec; 67] = [
                 docs/**, or a .github template; anything else, or a range \
                 whose files could not be resolved, counts as code. Enforced \
                 under pr_sections.",
+    },
+    KeySpec {
+        path: "git.pr_body_max_words",
+        kind: KeyKind::UInt,
+        valid: "a non-negative integer (a word count); 0 turns the warning off",
+        purpose: "The words a PR body may hold before `codeflow ci` warns (TSK-228, TSK-267), counted as a reader sees them with HTML comments left out.",
+        notes: "Advisory at every level under pr_sections being active; never \
+                a blocking finding. The warning names the count, the limit and \
+                the three largest `##` sections. The shipped policy file does \
+                not list it, so an older binary never meets the key.",
     },
     // ---- git: work records -------------------------------------------------
     KeySpec {

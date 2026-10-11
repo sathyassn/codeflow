@@ -356,6 +356,13 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// The words a PR body may hold before `codeflow ci` warns (TSK-228,
+    /// TSK-267): counted as a reader sees them, HTML comments left out.
+    /// Default 1000; `0` turns the warning off. Advisory at every level,
+    /// under `pr_sections` being active; never a blocking finding. The
+    /// shipped policy file does not list it, so an older binary never meets
+    /// the key.
+    pub pr_body_max_words: u32,
     /// The level of the adjustable work-record rules of SPC-013 R-80: the
     /// acceptance block bound to the reviewed commit and the journey
     /// criterion for adopter-facing ranges. Accepts `block` or `warn` only;
@@ -476,6 +483,7 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
+            pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
             product_paths: None,
@@ -1038,6 +1046,16 @@ mod tests {
         assert_eq!(g.work_records, PolicyLevel::Block);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
+        // The PR body length warning's default (TSK-228); a project tunes or
+        // turns it off with this key (TSK-267).
+        assert_eq!(g.pr_body_max_words, 1000);
+        let older: Policy = serde_json::from_str(r#"{"git": {"pr_sections": "warn"}}"#).unwrap();
+        assert_eq!(
+            older.git.pr_body_max_words, 1000,
+            "an older file keeps the default"
+        );
+        let off: Policy = serde_json::from_str(r#"{"git": {"pr_body_max_words": 0}}"#).unwrap();
+        assert_eq!(off.git.pr_body_max_words, 0);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
         assert_eq!(g.branch_prefixes.len(), 13);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
