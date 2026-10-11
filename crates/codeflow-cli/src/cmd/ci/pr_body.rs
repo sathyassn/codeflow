@@ -484,7 +484,11 @@ pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
     !names_commit && !approves
 }
 
-/// A body over this many words draws the length warning (TSK-228).
+/// The shipped default of `git.pr_body_max_words`, the policy key whose
+/// value `presentation` reads: a body over this many words draws the
+/// length warning (TSK-228). A project sets its own number in
+/// `policy.json`, or `0` to turn the warning off (TSK-267).
+#[cfg(test)]
 const BODY_WORD_LIMIT: usize = 1000;
 
 /// The HTML elements GitHub keeps that start a new line of text. It strips
@@ -825,8 +829,11 @@ fn word_count(source: &str) -> usize {
 
 /// The length warning's message for an over-long body: the count, the limit
 /// and the three largest `##` sections with their word counts. `None` at or
-/// under the limit.
-fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
+/// under `limit`, or when `limit` is `0` (the warning turned off).
+fn length_message(limit: usize, body: &str, sections: &[Section<'_>]) -> Option<String> {
+    if limit == 0 {
+        return None;
+    }
     // Each section's heading and its content are chunks of their own.
     let cuts: Vec<usize> = sections
         .iter()
@@ -834,7 +841,7 @@ fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
         .collect();
     let reader = ReaderText::of(body, &cuts);
     let total = reader.words();
-    if total <= BODY_WORD_LIMIT {
+    if total <= limit {
         return None;
     }
     let mut largest: Vec<(&str, usize)> = sections
@@ -862,7 +869,7 @@ fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
         format!("; largest sections: {named}")
     };
     Some(format!(
-        "PR body is {total} words, over the {BODY_WORD_LIMIT}-word limit (HTML comments not counted){sections}"
+        "PR body is {total} words, over the {limit}-word limit (HTML comments not counted){sections}"
     ))
 }
 
@@ -880,9 +887,11 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         ));
     };
     let outline = outline(body);
-    // TSK-228: a body over the word limit warns and never blocks; this check
-    // raises every finding at warn, whatever `git.pr_sections` says.
-    let length = length_message(body, &outline.sections);
+    // TSK-228: a body over `git.pr_body_max_words` warns and never blocks;
+    // this check raises every finding at warn, whatever `git.pr_sections`
+    // says. `0` turns the length warning off (TSK-267).
+    let limit = usize::try_from(git.pr_body_max_words).unwrap_or(usize::MAX);
+    let length = length_message(limit, body, &outline.sections);
     for tag in &outline.unclosed {
         warn(format!(
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
@@ -2181,9 +2190,51 @@ mod tests {
         );
         let long = "<p>word</p>".repeat(BODY_WORD_LIMIT + 100);
         assert!(
-            length_message(&long, &sections(&long)).is_some(),
+            length_message(BODY_WORD_LIMIT, &long, &sections(&long)).is_some(),
             "adjacent HTML elements are separate words and pass the limit"
         );
+    }
+
+    /// TSK-267: the limit is `git.pr_body_max_words`; a project's own
+    /// number moves the warning, and `0` turns it off.
+    #[test]
+    fn the_word_limit_follows_the_policy_key() {
+        assert_eq!(
+            usize::try_from(GitPolicy::default().pr_body_max_words).unwrap(),
+            BODY_WORD_LIMIT,
+            "the shipped default is the number these tests measure against"
+        );
+        let body = format!("## Summary\n{}", words(150));
+        assert!(length_message(BODY_WORD_LIMIT, &body, &sections(&body)).is_none());
+        let project = length_message(100, &body, &sections(&body)).unwrap();
+        assert!(
+            project.contains("151 words, over the 100-word limit"),
+            "{project}"
+        );
+        assert!(
+            length_message(0, &body, &sections(&body)).is_none(),
+            "0 is off"
+        );
+
+        let long = format!("## Summary\n{}", words(BODY_WORD_LIMIT + 5));
+        let default = GitPolicy::default();
+        assert!(presentation(&default, &long, false)
+            .iter()
+            .any(|finding| finding.message.contains("-word limit")));
+        let off = GitPolicy {
+            pr_body_max_words: 0,
+            ..GitPolicy::default()
+        };
+        assert!(!presentation(&off, &long, false)
+            .iter()
+            .any(|finding| finding.message.contains("-word limit")));
+        let tight = GitPolicy {
+            pr_body_max_words: 100,
+            ..GitPolicy::default()
+        };
+        assert!(presentation(&tight, &body, false)
+            .iter()
+            .any(|finding| finding.message.contains("over the 100-word limit")));
     }
 
     /// Review round 2: a `>` inside a quoted attribute does not end the
@@ -2207,12 +2258,12 @@ mod tests {
             "{}<div><img src=\"x.png\" alt=\"a > hidden image alternative words here\"></div>",
             words(BODY_WORD_LIMIT - 2)
         );
-        assert!(length_message(&at, &sections(&at)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none());
         let over = format!(
             "{}<div>one&ensp;two&emsp;three&Tab;four&NewLine;five</div>",
             words(BODY_WORD_LIMIT - 2)
         );
-        assert!(length_message(&over, &sections(&over)).is_some());
+        assert!(length_message(BODY_WORD_LIMIT, &over, &sections(&over)).is_some());
     }
 
     /// Review round 3: every space the HTML specification names, however it
@@ -2250,7 +2301,10 @@ mod tests {
                 words(BODY_WORD_LIMIT - 2)
             );
             assert_eq!(word_count(&body), BODY_WORD_LIMIT + 1, "{space}");
-            assert!(length_message(&body, &sections(&body)).is_some(), "{space}");
+            assert!(
+                length_message(BODY_WORD_LIMIT, &body, &sections(&body)).is_some(),
+                "{space}"
+            );
         }
         assert_eq!(word_count("<div>one&nbsptwo</div>"), 2, "legacy form");
         for space in ["&#32", "&#x20", "&#X20", "&#9", "&#160", "&#xA0", "&#00032"] {
@@ -2349,7 +2403,8 @@ mod tests {
             words(400),
             words(700)
         );
-        let message = length_message(&sections, &super::sections(&sections)).unwrap();
+        let message =
+            length_message(BODY_WORD_LIMIT, &sections, &super::sections(&sections)).unwrap();
         assert!(
             message.ends_with("## Second (700 words), ## First (400 words)"),
             "{message}"
@@ -2365,7 +2420,7 @@ mod tests {
             words(BODY_WORD_LIMIT - 2)
         );
         assert!(
-            length_message(&at, &sections(&at)).is_none(),
+            length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none(),
             "an unused definition does not push a body over the limit"
         );
     }
@@ -2378,7 +2433,7 @@ mod tests {
             "## Images\n![alt text of an image][img] and [a link here][lnk]\n\n## Big\n{}\n## Links\n[img]: x.png\n[lnk]: https://example.com\n",
             words(BODY_WORD_LIMIT + 100),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         let named = message.split("largest sections: ").nth(1).unwrap();
         assert!(
             named.starts_with("## Big (1100 words), ## Images (4 words)"),
@@ -2398,7 +2453,7 @@ mod tests {
             words(400),
             words(400),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         assert!(
             message.ends_with("## First (400 words), ## Second (400 words), ## Third (400 words)"),
             "{message}"
@@ -2409,15 +2464,15 @@ mod tests {
     fn length_message_fires_only_over_the_limit() {
         let at = format!("## Summary\n{}", words(BODY_WORD_LIMIT - 1));
         assert_eq!(word_count(&at), BODY_WORD_LIMIT);
-        assert!(length_message(&at, &sections(&at)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &at, &sections(&at)).is_none());
         let over = format!("{at}word");
-        let message = length_message(&over, &sections(&over)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &over, &sections(&over)).unwrap();
         assert!(
             message.starts_with("PR body is 1001 words, over the 1000-word limit"),
             "{message}"
         );
         let commented = format!("{at}\n<!-- {} -->", words(500));
-        assert!(length_message(&commented, &sections(&commented)).is_none());
+        assert!(length_message(BODY_WORD_LIMIT, &commented, &sections(&commented)).is_none());
     }
 
     /// TSK-228: the three largest `##` sections are named with their words;
@@ -2434,7 +2489,7 @@ mod tests {
             words(400),
             words(450),
         );
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         let named = message.split("largest sections: ").nth(1).unwrap();
         assert_eq!(
             named, "## Testing (501 words), ## Reviews (450 words), ## Changes (300 words)",
@@ -2447,7 +2502,7 @@ mod tests {
     #[test]
     fn length_message_without_sections_names_none() {
         let body = words(1200);
-        let message = length_message(&body, &sections(&body)).unwrap();
+        let message = length_message(BODY_WORD_LIMIT, &body, &sections(&body)).unwrap();
         assert!(message.contains("1200 words"), "{message}");
         assert!(!message.contains("largest sections"), "{message}");
     }
