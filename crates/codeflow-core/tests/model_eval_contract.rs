@@ -5001,8 +5001,8 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
         );
     }
     // The pass signals grade what a name states, never a prescribed token:
-    // the folder filter names what it includes, and the purge help states a
-    // local-index deletion and no more.
+    // the folder filter flag names a list of folders to include, and the
+    // purge help states the boundary, the index deleted and the notes kept.
     let signals: BTreeSet<&str> = case["expected"]["signals"]
         .as_array()
         .expect("signals")
@@ -5010,8 +5010,8 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
         .map(|item| item.as_str().expect("string"))
         .collect();
     for signal in [
-        "folder_filter_named_for_what_it_includes",
-        "purge_help_states_local_index_deletion_only",
+        "folder_filter_flag_names_a_list_of_folders_to_include",
+        "purge_help_states_index_deleted_and_notes_kept",
     ] {
         assert!(signals.contains(signal), "missing pass signal: {signal}");
     }
@@ -5031,6 +5031,7 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
     assert!(overlay["FACTS.md"].contains("Behaviour is frozen for 0.4"));
     for (file, fault) in [
         ("src/messages.py", "FATAL"),
+        ("src/messages.py", "Nuke"),
         ("src/messages.py", "You corrupted"),
         ("src/messages.py", "john.smith"),
         ("src/cli.py", "--trusted"),

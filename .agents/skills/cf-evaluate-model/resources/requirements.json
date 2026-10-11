@@ -3071,7 +3071,7 @@
     {
       "id": "CF-OUT-008",
       "level": "hard",
-      "statement": "Every piece of content is checked for what a reader could take it to mean before it leaves the session: copy, replies, records, figures, images and code. A name says what the thing does and promises no more; a message names the cause and the fix, states what did and did not happen, and neither alarms nor blames the reader; a new name uses the ordinary word for what the thing does, never a term with a violent, demeaning or political load; example data is invented and neutral; a figure asserts only what its facts carry, colour and icons carry the meaning the audience already gives them, and no state is carried by hue alone. A reading that is wrong, unsafe, alarming, offensive or a false promise is a material finding in review, never a wording nit.",
+      "statement": "Every piece of content is checked for what a reader could take it to mean before it leaves the session: copy, replies, records, figures, images and code. A new name uses the ordinary word for what the thing does; a name is a defect when a plausible reader takes it to promise more than the code does or to soften what the code does, and a name people already depend on stays with its meaning stated where it is used; a message names the cause and the fix, states what did and did not happen, and neither alarms nor blames the reader; example data is invented and neutral; a figure asserts only what its facts carry, colour and icons carry the meaning the audience already gives them, and no state is carried by hue alone. A reading that is wrong, unsafe, alarming, offensive or a false promise is a material finding in review, never a wording nit.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -3086,7 +3086,7 @@
             "## Meaning the reader takes",
             "Read it as a reader who does not know the intent.",
             "Read it as a hostile or careless reader.",
-            "a name that promises more than the code does (a `verify` that checks nothing), or softens what it does (a `cleanup` that deletes), is a defect",
+            "A name is a defect when a plausible reader takes it to promise more than the code does (a `verify` that checks nothing) or to soften what the code does (a `cleanup` that deletes)",
             "never alarms or blames the reader",
             "A new name uses the ordinary word for what the thing does",
             "Example data is invented and neutral",
@@ -3108,7 +3108,7 @@
         {
           "path": ".agents/skills/cf-develop/SKILL.md",
           "markers": [
-            "with no second reading, no loaded term and no blame"
+            "and check what a plausible reader takes it to mean"
           ]
         },
         {

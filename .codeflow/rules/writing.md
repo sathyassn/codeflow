@@ -41,9 +41,10 @@ What to check:
 - **Unintended readings.** A reading that is offensive, alarming, blaming,
   misleading, overclaiming, unsafe or legally risky: a message that lets a
   reader think data was lost when nothing was deleted, a name that promises
-  a safety the code does not give, a term that carries a slur or a political
-  load, an unsourced or damaging claim about a third party's product. A
-  sourced sentence that names another tool is not one.
+  a safety the code does not give, a term that carries a slur or an
+  association the subject lacks, an unsourced or damaging claim about a
+  third party's product. A sourced sentence that names another tool is not
+  one.
 - **Audience and context.** A reader in another culture or language, a
   non-native speaker, a reader who skims, a screen-reader user who hears
   the words and the description only, and a reader who sees this one line
@@ -67,17 +68,17 @@ block". Keep a term that is exact even when it is unfamiliar; one term for
 one thing (Words below) still holds, and a qualifier resolves a term the
 project uses for several things.
 
-In code, a name or a message is read by someone who sees only it. Name a
-thing for what it does, with the verb that names the operation: `delete`
-deletes, `copy` copies; a name that promises more than the code does (a
-`verify` that checks nothing), or softens what it does (a `cleanup` that
-deletes), is a defect. An error or refusal names the cause and the fix,
-says what did and did not happen, and never alarms or blames the reader; a
-refusal names the rule and the sanctioned path. A new name uses the
-ordinary word for what the thing does, never a term with a violent,
-demeaning or political load; a name people already depend on stays, with
-its meaning stated where it is used. Example data is invented and neutral:
-no real person, company, address, credential or in-joke. At the standard and full tiers the copy guide
+In code, a name or a message is read by someone who sees only it. A new
+name uses the ordinary word for what the thing does, with the verb that
+names the operation: `delete` deletes, `copy` copies, `kill` stops a
+process. A name is a defect when a plausible reader takes it to promise
+more than the code does (a `verify` that checks nothing) or to soften what
+the code does (a `cleanup` that deletes); a name people already depend on
+stays, with that meaning stated where it is used. An error or refusal names
+the cause and the fix, says what did and did not happen, and never alarms
+or blames the reader; a refusal names the rule and the sanctioned path.
+Example data is invented and neutral: no real person, company, address,
+credential or in-joke. At the standard and full tiers the copy guide
 (`.agents/skills/cf-editorial-review/references/copy-guide.md`) "Names and
 code strings" has the rules string by string.
 

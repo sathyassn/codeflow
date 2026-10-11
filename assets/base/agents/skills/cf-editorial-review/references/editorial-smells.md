@@ -84,8 +84,8 @@ whatever its size; a plainer word with no such reading is a nit
 - A message, log line or notification alarms or blames: a word stronger
   than the fact, a cause laid on the reader, or silence about what did not
   happen where a reader would fear worse.
-- A new name carries a violent, demeaning or political load where the
-  ordinary word for what the thing does exists.
+- A term reads as a slur to a plausible reader, or carries an association
+  the subject lacks.
 - An example, placeholder or test value names a real person, company,
   credential or in-joke, or carries an association the subject lacks.
 - A figure implies an order, cause, certainty, urgency or completeness the

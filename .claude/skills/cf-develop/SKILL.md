@@ -35,9 +35,9 @@ records the required interactive seat unavailable and the reduced assurance.
       discipline rules' "Write only what earns its keep". Keep modular
       boundaries and explicit failure handling; add no speculative
       behavior, abstraction or dependency. Name each identifier, flag,
-      message, log line, comment, test and example value for what it does,
-      with no second reading, no loaded term and no blame
-      (`.codeflow/rules/writing.md` "Meaning the reader takes"). Apply the
+      message, log line, comment, test and example value with the ordinary
+      word for what it does, and check what a plausible reader takes it to
+      mean (`.codeflow/rules/writing.md` "Meaning the reader takes"). Apply the
       quality contract's
       typed-interface and runtime trust-boundary rule and test accepted
       invalid-input behavior; never force a stricter compiler, dependency,

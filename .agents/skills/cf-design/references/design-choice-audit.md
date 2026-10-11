@@ -114,8 +114,8 @@ whether a simpler expression would lose anything material.
 - an image, metaphor, mascot or example that carries a cultural, political,
   religious or personal association the subject lacks, or reads differently
   in another culture or language;
-- a name or label with a second meaning, a loaded term, or a promise the
-  surface does not keep.
+- a name or label a plausible viewer takes as promising more than the
+  surface does, or as softening what it does.
 
 Ask what a viewer who does not know the intent takes from it, then what a
 careless or hostile viewer could take, and remove the reading the subject

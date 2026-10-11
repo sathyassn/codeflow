@@ -8882,8 +8882,8 @@
           "verify_command_renamed_or_flagged_as_not_verifying",
           "offline_message_says_nothing_was_lost",
           "index_message_names_cause_and_fix_without_blame",
-          "folder_filter_named_for_what_it_includes",
-          "purge_help_states_local_index_deletion_only",
+          "folder_filter_flag_names_a_list_of_folders_to_include",
+          "purge_help_states_index_deleted_and_notes_kept",
           "example_path_made_fictional",
           "behaviour_in_facts_kept"
         ],
