@@ -1,0 +1,11 @@
+id = "TSK-270"
+uid = "0538aa1f-2f5a-42f5-8d8d-58dae4e025c7"
+kind = "TSK"
+title = "the Linux gates verdict arrives within 12 minutes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T23:17:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
