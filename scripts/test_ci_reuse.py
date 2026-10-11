@@ -55,7 +55,7 @@ def job(name, conclusion="success"):
     return {"name": name, "conclusion": conclusion}
 
 
-GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("windows tests (1 of 10)"),
+GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("windows tests (1 of 12)"),
               job("windows"), job("secret scan"), job("reuse a pull request verdict", "skipped")]
 
 
@@ -143,7 +143,7 @@ class DecisionTests(unittest.TestCase):
                               self.skipped(api=FakeApi(runs=[other])))
 
     def test_a_skipped_failed_or_missing_job_runs_everything(self):
-        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 10)", "skipped"), *GREEN_JOBS[3:]],
+        for jobs in ([*GREEN_JOBS[:2], job("windows tests (1 of 12)", "skipped"), *GREEN_JOBS[3:]],
                      [*GREEN_JOBS[:3], job("windows", "failure"), *GREEN_JOBS[4:]],
                      [*GREEN_JOBS[:5], job("reuse a pull request verdict", "success")],
                      [job for job in GREEN_JOBS if job["name"] != "windows"],

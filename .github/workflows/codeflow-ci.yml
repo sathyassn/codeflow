@@ -302,7 +302,7 @@ jobs:
   # verdict below is the one check branch rules and .release/config.json
   # read. Timeouts: the build compiled in about 3 minutes inside the old
   # partitions (p95 about 4) and gets room for a cold dependency build; a
-  # partition is planned at about 7 minutes of tests, a quarter of the old
+  # partition is planned at about 5.5 minutes of tests, a fifth of the old
   # 27.2 minute peak; the release journey took 4.3 to 4.7 minutes.
   windows-build:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
@@ -364,14 +364,14 @@ jobs:
 
   windows-tests:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
-    name: windows tests (${{ matrix.partition }} of 10)
+    name: windows tests (${{ matrix.partition }} of 12)
     needs: windows-build
     runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v6
       # The tests run git, and a cargo they find on PATH resolves the pinned

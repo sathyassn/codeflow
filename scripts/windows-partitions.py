@@ -61,7 +61,7 @@ REST_SHARE = 0.25
 # A test at least this slow (median seconds) is always its own unit.
 NAMED_SECONDS = 20.0
 # Defaults for `measure`; the data file records the values in use.
-PARTITIONS = 10
+PARTITIONS = 12
 THREADS = 4
 
 

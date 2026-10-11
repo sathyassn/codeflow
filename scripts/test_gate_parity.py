@@ -266,21 +266,22 @@ class WindowsPartitionControls(unittest.TestCase):
     stand for the whole suite only when the archive holds the whole
     workspace and the matrix runs every planned partition from 1 to N once."""
 
-    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"
+    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]"
 
     def test_the_committed_partitions_run_the_whole_suite(self):
         self.assertIn(self.PARTITIONS, WORKFLOW)
         self.assertIn("run: " + ARCHIVED_RUN, WORKFLOW)
-        self.assertEqual(parity.planned_partitions(), 10)
+        self.assertEqual(parity.planned_partitions(), 12)
         self.assertIn(parity.SUITE, CI)
 
     def test_a_partition_set_that_misses_or_exceeds_the_plan_is_drift(self):
-        for matrix in ("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9]", "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]",
-                       "partition: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9]"):
+        for matrix in ("partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]",
+                       "partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]",
+                       "partition: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]"):
             with self.subTest(matrix=matrix):
                 workflow = WORKFLOW.replace(self.PARTITIONS, matrix)
                 self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
-        self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(WORKFLOW, planned=11))
+        self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(WORKFLOW, planned=13))
 
     def test_a_partial_archive_another_file_or_a_count_split_is_drift(self):
         for old, new in ((ARCHIVE, ARCHIVE.replace("--workspace", "-p codeflow-core")),
@@ -290,7 +291,7 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
                                                              '${{ matrix.partition }})"',
-                                                             "--partition count:${{ matrix.partition }}/10"))):
+                                                             "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)
                 self.assertNotEqual(workflow, WORKFLOW)
