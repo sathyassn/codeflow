@@ -1,0 +1,11 @@
+id = "TSK-265"
+uid = "9c064a0b-b277-433a-9da2-2596b550f356"
+kind = "TSK"
+title = "CodeFlow's own CI finishes in about half the time"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T00:46:32Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
