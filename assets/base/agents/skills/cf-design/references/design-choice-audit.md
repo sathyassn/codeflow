@@ -104,6 +104,23 @@ actions. Structure is information, not a decoration layer.
 Ask what the metaphor communicates, whether that communication is true, and
 whether a simpler expression would lose anything material.
 
+### Implied meaning the subject does not carry
+
+- colour or an icon used against the meaning the audience already gives it
+  (red for an ordinary state where red marks an error, a warning sign for a
+  tip), or a state carried by hue alone;
+- a figure whose arrows, order or weight imply a flow, cause, rank,
+  certainty or completeness the sources do not state;
+- an image, metaphor, mascot or example that carries a cultural, political,
+  religious or personal association the subject lacks, or reads differently
+  in another culture or language;
+- a name or label a plausible viewer takes as promising more than the
+  surface does, or as softening what it does.
+
+Ask what a viewer who does not know the intent takes from it, then what a
+careless or hostile viewer could take, and remove the reading the subject
+does not support (`.codeflow/rules/writing.md` "Meaning the reader takes").
+
 ### Motion without an interaction purpose
 
 - identical reveal animation on every element;
@@ -225,6 +242,8 @@ Use the lenses that fit the surface:
 - **System fit:** does it extend existing foundations rather than fragment them?
 - **Accessibility:** does the design work for relevant input, perception,
   cognition, viewport, and motion needs?
+- **Reading:** does a viewer who does not know the intent take only what is
+  meant, in the cultures, languages and perception modes of that audience?
 - **Fidelity:** does the implementation preserve the settled direction and
   behavior?
 

@@ -238,3 +238,33 @@ TSK-177 applies this note.
   is unknown. A docs-portal page uses the portal's figure grammar.
 - The inline HTML figure, the `cf-present` page and the Mermaid rule are
   unchanged.
+
+## Note (2026-10-11): the meaning a reader takes
+
+On 2026-10-11 the operator asked that every piece of content, copy, visuals
+and code included, be checked for what a reader could take it to mean. The
+text above stays unchanged as the record of what was first decided. TSK-266
+applies this note.
+
+- The plain-writing rule now reads "simple, straightforward, clear and
+  unambiguous" and ends "State the fact directly, and check what a reader
+  could take it to mean", at every tier.
+- The one home of the check is `writing.md` "Meaning the reader takes":
+  what to check (connotation, ambiguity, unintended readings, audience and
+  context), how to check (read as a reader who does not know the intent,
+  then as a hostile or careless reader, then name by name and claim by
+  claim), what it means in code (names, flags, messages, log lines,
+  comments, commit subjects, test names, example data) and in figures and
+  images (implied order or certainty, colour and icon conventions, no state
+  by hue alone, associations the subject lacks).
+- A reading that is wrong, unsafe, alarming, offensive or a false promise is
+  a material finding under "Review verdicts"; a plainer word with no such
+  reading stays a nit. No hook or linter judges it: review and evaluation
+  do, as for the three graded smells above.
+- Owners: `writing.md` for the rule; the copy guide "Names and code
+  strings" for the string-by-string rules; the editorial smells "Meaning
+  taken" for the reviewer's diagnostic list; the design-choice audit
+  "Implied meaning the subject does not carry" and the explanation method's
+  "Reading" check for visuals; `cf-develop`, `cf-reviewer`, `cf-design`,
+  the UI verification section and the release policy point there. The
+  evaluation kit grades it on CF-OUT-008 with six faulty controls.

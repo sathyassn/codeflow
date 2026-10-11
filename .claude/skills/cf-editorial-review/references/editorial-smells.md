@@ -66,6 +66,37 @@ needed, such as a quoted title or a numeric range in data.
 - Interface words and visual treatment imply conflicting levels of urgency,
   trust, playfulness, or certainty.
 
+## Meaning taken
+
+A reader takes what the text can plausibly mean. A reading that is wrong,
+unsafe, alarming, offensive or a false promise is a material finding,
+whatever its size; a plainer word with no such reading is a nit
+(`.codeflow/rules/writing.md` "Meaning the reader takes").
+
+- A word, name, image, colour or icon suggests something beyond what is
+  meant, and a reader who does not know the intent would take that
+  suggestion.
+- A sentence, label or name has more than one reasonable reading, and the
+  readings lead to different actions.
+- A name promises what the code does not do (`verify` that only formats,
+  `safe` that only skips a prompt) or softens what it does (`cleanup` for a
+  deletion).
+- A message, log line or notification alarms or blames: a word stronger
+  than the fact, a cause laid on the reader, or silence about what did not
+  happen where a reader would fear worse.
+- A term reads as a slur to a plausible reader, or carries an association
+  the subject lacks.
+- An example, placeholder or test value names a real person, company,
+  credential or in-joke, or carries an association the subject lacks.
+- A figure implies an order, cause, certainty, urgency or completeness the
+  sources do not state; an arrow, a weight or a colour is decoration.
+- Colour or an icon is used against the meaning the audience already gives
+  it (red for an ordinary state where red marks an error, a warning sign for
+  a tip), or a state is carried by hue alone.
+- A claim reads as larger than its evidence to a reader who skims, or a
+  sentence depends on an idiom, a pun or a culture-bound reference that a
+  non-native speaker or a screen-reader user misses.
+
 ## Mannered prose
 
 Mannered prose performs instead of informing. It is a defect in any

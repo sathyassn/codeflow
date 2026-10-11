@@ -124,8 +124,10 @@ authoritative:
 
 A published section stays byte-identical. Correct it with a dated erratum
 that names the version, never by editing the section. Before the tag, render
-the notes from the final source and read them twice: as a new user and as a
-user upgrading from the last release, in the order they would act.
+the notes from the final source and read them three times: as a new user, as
+a user upgrading from the last release, in the order they would act, and as a
+reader who does not know the intent, for a second meaning in any line
+(`.codeflow/rules/writing.md` "Meaning the reader takes").
 
 ## Assess each change
 

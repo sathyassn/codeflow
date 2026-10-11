@@ -86,6 +86,7 @@ const C1_HEADINGS: &[(&str, &str)] = &[
     ("rules/worktrees.md", "Cleanup"),
     ("rules/writing.md", "Replies and status"),
     ("rules/writing.md", "Figures by surface"),
+    ("rules/writing.md", "Meaning the reader takes"),
     ("rules/git-rules.md", "Enforcement"),
     ("rules/git-rules.md", "Protected branches"),
     ("rules/git-rules.md", "Bodies of work"),
@@ -1143,10 +1144,11 @@ fn no_skill_entry_widens_the_map_routing_rule() {
 #[test]
 fn every_tier_map_states_the_plain_writing_rule() {
     const RULE: &str = "**Write plainly.** Everything you write, replies and status updates \
-        included, is simple, straightforward and clear, with the detail the reader needs and \
-        no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but \
-        Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, \
-        self-narration, ceremonial framing and walls of text. State the fact directly.";
+        included, is simple, straightforward, clear and unambiguous, with the detail the \
+        reader needs and no more. Avoid mannered prose, writing that performs for effect: \
+        slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked \
+        hedges, colon reveals, self-narration, ceremonial framing and walls of text. State \
+        the fact directly, and check what a reader could take it to mean.";
     let kernel = Kernel::shipped();
     for tier in Kernel::tiers() {
         let block = normalized(

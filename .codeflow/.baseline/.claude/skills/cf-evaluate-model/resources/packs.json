@@ -441,6 +441,14 @@
         "flow-reply-carries-figure",
         "simple-answer-not-overformatted"
       ]
+    },
+    {
+      "id": "meaning-taken",
+      "description": "Blind diagnostic for the meaning a reader takes (CF-OUT-008): the flag names, messages and example data of a frozen release, where each faulty string must be changed and the behaviour behind it kept. Each fault is a control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "release-strings-say-what-they-do"
+      ]
     }
   ]
 }
