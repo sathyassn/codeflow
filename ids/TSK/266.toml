@@ -1,0 +1,11 @@
+id = "TSK-266"
+uid = "ce5b405d-339a-43d4-b125-a61b9bb95978"
+kind = "TSK"
+title = "Guidance checks what content could be taken to mean"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T04:27:26Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
