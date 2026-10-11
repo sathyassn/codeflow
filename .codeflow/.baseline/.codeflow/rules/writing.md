@@ -42,7 +42,8 @@ What to check:
   misleading, overclaiming, unsafe or legally risky: a message that lets a
   reader think data was lost when nothing was deleted, a name that promises
   a safety the code does not give, a term that carries a slur or a political
-  load, a claim about a third party's product.
+  load, an unsourced or damaging claim about a third party's product. A
+  sourced sentence that names another tool is not one.
 - **Audience and context.** A reader in another culture or language, a
   non-native speaker, a reader who skims, a screen-reader user who hears
   the words and the description only, and a reader who sees this one line
@@ -67,27 +68,27 @@ one thing (Words below) still holds, and a qualifier resolves a term the
 project uses for several things.
 
 In code, a name or a message is read by someone who sees only it. Name a
-thing for what it does, with the exact verb: `verify` verifies, `safe` is
-safe, `delete` deletes; a name that promises more than the code does, or
-softens what it does, is a defect. An error or refusal names the cause and
-the fix, says what did and did not happen, and never alarms or blames the
-reader; a refusal names the rule and the sanctioned path. A loaded term is
-replaced by the plain technical word where a new name is chosen (`primary`
-and `replica`, `allowlist` and `denylist`); an inherited name that adopters
-depend on is kept and its meaning stated where it is used. Example data is
-invented and neutral: no real person, company, address, credential or
-in-joke. At the standard and full tiers the copy guide
+thing for what it does, with the verb that names the operation: `delete`
+deletes, `copy` copies; a name that promises more than the code does (a
+`verify` that checks nothing), or softens what it does (a `cleanup` that
+deletes), is a defect. An error or refusal names the cause and the fix,
+says what did and did not happen, and never alarms or blames the reader; a
+refusal names the rule and the sanctioned path. A new name uses the
+ordinary word for what the thing does, never a term with a violent,
+demeaning or political load; a name people already depend on stays, with
+its meaning stated where it is used. Example data is invented and neutral:
+no real person, company, address, credential or in-joke. At the standard and full tiers the copy guide
 (`.agents/skills/cf-editorial-review/references/copy-guide.md`) "Names and
 code strings" has the rules string by string.
 
 In a figure or an image, the drawing asserts only what its facts carry: no
 order, cause, certainty, urgency or completeness the sources do not state;
 an arrow means travel or dependency, never decoration. Colour and icons
-keep their conventional meaning (red for an error or a stop, green for a
-pass, a lock for a secured thing, a warning sign for a warning) and are used
-for nothing else, and no state is carried by hue alone, so a colour-blind
-reader and a screen-reader user, who gets the description, take the same
-reading. An image, metaphor or example carries no association the subject
+carry the meaning the audience already gives them for that state, and
+nothing else: where red marks an error or a stop for that audience, red
+marks nothing ordinary, and a warning sign marks a warning, never a tip. No
+state is carried by hue alone, so a colour-blind reader and a screen-reader
+user, who gets the description, take the same reading. An image, metaphor or example carries no association the subject
 lacks; a person, flag, symbol or culture-bound reference appears only when
 it is the subject.
 

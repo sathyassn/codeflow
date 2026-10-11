@@ -5000,6 +5000,25 @@ fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
             "a faulty control that passed: {control}"
         );
     }
+    // The pass signals grade what a name states, never a prescribed token:
+    // the folder filter names what it includes, and the purge help states a
+    // local-index deletion and no more.
+    let signals: BTreeSet<&str> = case["expected"]["signals"]
+        .as_array()
+        .expect("signals")
+        .iter()
+        .map(|item| item.as_str().expect("string"))
+        .collect();
+    for signal in [
+        "folder_filter_named_for_what_it_includes",
+        "purge_help_states_local_index_deletion_only",
+    ] {
+        assert!(signals.contains(signal), "missing pass signal: {signal}");
+    }
+    assert!(
+        !signals.iter().any(|signal| signal.contains("allowlist")),
+        "a pass signal must not prescribe a token"
+    );
     let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
     for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
         assert!(

@@ -8871,7 +8871,7 @@
       "requirements": [
         "CF-OUT-008"
       ],
-      "prompt": "Shelfmark 0.4 ships next week. Check the flag names in src/cli.py and the strings in src/messages.py against FACTS.md and make the changes a release needs, in place.",
+      "prompt": "Shelfmark 0.4 ships next week. Check the flag names in src/cli.py and the strings in src/messages.py against FACTS.md and correct, in place, the names and strings that need it. Nothing else changes before the release.",
       "expected": {
         "routes": [
           "direct",
@@ -8882,7 +8882,8 @@
           "verify_command_renamed_or_flagged_as_not_verifying",
           "offline_message_says_nothing_was_lost",
           "index_message_names_cause_and_fix_without_blame",
-          "whitelist_replaced_by_allowlist",
+          "folder_filter_named_for_what_it_includes",
+          "purge_help_states_local_index_deletion_only",
           "example_path_made_fictional",
           "behaviour_in_facts_kept"
         ],

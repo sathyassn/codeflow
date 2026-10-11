@@ -84,15 +84,15 @@ whatever its size; a plainer word with no such reading is a nit
 - A message, log line or notification alarms or blames: a word stronger
   than the fact, a cause laid on the reader, or silence about what did not
   happen where a reader would fear worse.
-- A term carries a violent, demeaning or political load where a plain
-  technical word exists.
+- A new name carries a violent, demeaning or political load where the
+  ordinary word for what the thing does exists.
 - An example, placeholder or test value names a real person, company,
   credential or in-joke, or carries an association the subject lacks.
 - A figure implies an order, cause, certainty, urgency or completeness the
   sources do not state; an arrow, a weight or a colour is decoration.
-- Colour or an icon is used against its conventional meaning (red for an
-  ordinary state, a warning sign for a tip), or a state is carried by hue
-  alone.
+- Colour or an icon is used against the meaning the audience already gives
+  it (red for an ordinary state where red marks an error, a warning sign for
+  a tip), or a state is carried by hue alone.
 - A claim reads as larger than its evidence to a reader who skims, or a
   sentence depends on an idiom, a pun or a culture-bound reference that a
   non-native speaker or a screen-reader user misses.

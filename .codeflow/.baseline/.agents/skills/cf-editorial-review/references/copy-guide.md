@@ -300,9 +300,10 @@ comment, commit subject, test name or example value. Each is checked for
 what a reader could take it to mean (`.codeflow/rules/writing.md` "Meaning
 the reader takes").
 
-- Name a thing for what it does, with the exact verb: `verify` verifies,
-  `safe` is safe, `delete` deletes. A name that promises more than the code
-  does, or softens what it does (`cleanup` for a deletion), is a defect.
+- Name a thing for what it does, with the verb that names the operation:
+  `delete` deletes, `copy` copies. A name that promises more than the code
+  does (a `verify` that checks nothing) or softens what it does (a `cleanup`
+  that deletes) is a defect.
 - Reuse the neighbour's vocabulary: one term per thing (Words), and a new
   name in the form its siblings already have.
 - Write an error or refusal as cause, then fix: what was found, which rule
@@ -319,10 +320,9 @@ the reader takes").
 - Invent example data and keep it neutral: no real person, company,
   address, credential, slur or in-joke; a placeholder names its slot
   (`<project>`, `example.test`).
-- Replace a term with a violent, demeaning or political load by the plain
-  technical word where a new name is chosen (`primary` and `replica`,
-  `allowlist` and `denylist`). Keep an inherited name that adopters depend
-  on and state its meaning where it is used.
+- Use the ordinary word for what the thing does in a new name, never a term
+  with a violent, demeaning or political load. Keep a name people already
+  depend on and state its meaning where it is used.
 
 Example, a test named for what it pins (source: `crates/codeflow-cli/tests/init_e2e.rs`):
 > init_and_update_bring_the_plain_writing_rule_at_every_tier

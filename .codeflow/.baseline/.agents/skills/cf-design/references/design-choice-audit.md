@@ -106,9 +106,9 @@ whether a simpler expression would lose anything material.
 
 ### Implied meaning the subject does not carry
 
-- colour or an icon used against its conventional meaning (red for an
-  ordinary state, green for an unverified one, a warning sign for a tip), or
-  a state carried by hue alone;
+- colour or an icon used against the meaning the audience already gives it
+  (red for an ordinary state where red marks an error, a warning sign for a
+  tip), or a state carried by hue alone;
 - a figure whose arrows, order or weight imply a flow, cause, rank,
   certainty or completeness the sources do not state;
 - an image, metaphor, mascot or example that carries a cultural, political,
@@ -243,7 +243,7 @@ Use the lenses that fit the surface:
 - **Accessibility:** does the design work for relevant input, perception,
   cognition, viewport, and motion needs?
 - **Reading:** does a viewer who does not know the intent take only what is
-  meant, in every culture, language and perception mode the audience uses?
+  meant, in the cultures, languages and perception modes of that audience?
 - **Fidelity:** does the implementation preserve the settled direction and
   behavior?
 

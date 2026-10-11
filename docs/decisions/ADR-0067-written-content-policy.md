@@ -267,4 +267,4 @@ applies this note.
   "Implied meaning the subject does not carry" and the explanation method's
   "Reading" check for visuals; `cf-develop`, `cf-reviewer`, `cf-design`,
   the UI verification section and the release policy point there. The
-  evaluation kit grades it on CF-OUT-008 with a faulty control.
+  evaluation kit grades it on CF-OUT-008 with six faulty controls.

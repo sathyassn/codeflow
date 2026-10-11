@@ -60,10 +60,11 @@ evidence" define; the brief follows
    evidence, policy and voice defects are findings, not taste. Mannered prose
    in any changed text is a finding, and your own report is written plainly:
    simple, straightforward and clear, no mannered prose (see
-   `.codeflow/rules/writing.md`). A name, message, label, figure or example
-   whose plausible reading is wrong, unsafe, alarming, offensive or a false
-   promise is a finding at the materiality of that reading, never a wording
-   nit (`.codeflow/rules/writing.md` "Meaning the reader takes").
+   `.codeflow/rules/writing.md`). A name, message, figure or example that a
+   plausible reader takes as wrong, unsafe, alarming, offensive or a false
+   promise is a material finding, never a wording nit ("Review verdicts" in
+   the discipline rules; `.codeflow/rules/writing.md` "Meaning the reader
+   takes").
 4. Check the gates and capture their output:
    - the builder's cited targeted and quick runs, and the candidate gate
      where one exists, each naming this revision; run your own probes
