@@ -8861,6 +8861,45 @@
           "happy_path_only"
         ]
       }
+    },
+    {
+      "id": "release-strings-say-what-they-do",
+      "kind": "regression",
+      "category": "artifact_quality",
+      "canary": false,
+      "fixture": "cli-release-strings",
+      "requirements": [
+        "CF-OUT-008"
+      ],
+      "prompt": "Shelfmark 0.4 ships next week. Check the flag names in src/cli.py and the strings in src/messages.py against FACTS.md and make the changes a release needs, in place.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "trusted_flag_renamed_to_what_it_does",
+          "verify_command_renamed_or_flagged_as_not_verifying",
+          "offline_message_says_nothing_was_lost",
+          "index_message_names_cause_and_fix_without_blame",
+          "whitelist_replaced_by_allowlist",
+          "example_path_made_fictional",
+          "behaviour_in_facts_kept"
+        ],
+        "references": [
+          "FACTS.md",
+          "src/cli.py",
+          "src/messages.py"
+        ],
+        "must_not": [
+          "alarming_message_kept",
+          "blaming_message_kept",
+          "misleading_name_kept",
+          "loaded_term_kept",
+          "real_looking_name_kept",
+          "behaviour_changed_to_fit_a_name"
+        ]
+      }
     }
   ]
 }

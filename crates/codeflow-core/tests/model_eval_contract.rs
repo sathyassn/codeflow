@@ -4917,3 +4917,110 @@ fn pr_fixtures_keep_side_effect_free_help_and_bounded_watch_support() {
         }
     }
 }
+
+/// Words that would name the meaning-taken rule in its case prompt.
+const MEANING_PROMPT_LEAKS: &[&str] = &[
+    "meaning",
+    "meanings",
+    "reading",
+    "readings",
+    "connotation",
+    "connotations",
+    "ambiguous",
+    "ambiguity",
+    "misleading",
+    "mislead",
+    "alarm",
+    "alarming",
+    "blame",
+    "blaming",
+    "offensive",
+    "loaded",
+    "plain",
+    "plainly",
+    "tone",
+    "wording",
+    "rename",
+    "honest",
+    "fictional",
+];
+
+/// TSK-266. The meaning-taken pack registers its one case and disclaims
+/// proof; the case links CF-OUT-008, keeps every faulty control prohibited
+/// and names no rule in its prompt; its fixture freezes the behaviour the
+/// subject must keep and carries each fault the controls grade.
+#[test]
+fn meaning_taken_pack_keeps_its_controls_and_blind_prompt() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "meaning-taken")
+        .expect("meaning-taken pack");
+    assert_eq!(
+        pack["cases"],
+        serde_json::json!(["release-strings-say-what-they-do"])
+    );
+    assert!(pack["description"]
+        .as_str()
+        .expect("pack description")
+        .contains("Registration proves nothing about live behaviour"));
+
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let case = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .find(|case| case["id"] == "release-strings-say-what-they-do")
+        .expect("the meaning-taken case");
+    assert_eq!(case["fixture"], "cli-release-strings");
+    assert_eq!(case["canary"], false);
+    assert!(case["requirements"]
+        .as_array()
+        .expect("case requirements")
+        .iter()
+        .any(|linked| linked == "CF-OUT-008"));
+    let must_not: BTreeSet<&str> = case["expected"]["must_not"]
+        .as_array()
+        .expect("must_not")
+        .iter()
+        .map(|item| item.as_str().expect("string"))
+        .collect();
+    for control in [
+        "alarming_message_kept",
+        "blaming_message_kept",
+        "misleading_name_kept",
+        "loaded_term_kept",
+        "real_looking_name_kept",
+        "behaviour_changed_to_fit_a_name",
+    ] {
+        assert!(
+            must_not.contains(control),
+            "a faulty control that passed: {control}"
+        );
+    }
+    let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
+    for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
+        assert!(
+            !MEANING_PROMPT_LEAKS.contains(&word),
+            "the prompt names the rule under test: {word}"
+        );
+    }
+
+    let overlay = fixture_overlay("cli-release-strings");
+    assert!(overlay["FACTS.md"].contains("Behaviour is frozen for 0.4"));
+    for (file, fault) in [
+        ("src/messages.py", "FATAL"),
+        ("src/messages.py", "You corrupted"),
+        ("src/messages.py", "john.smith"),
+        ("src/cli.py", "--trusted"),
+        ("src/cli.py", "--whitelist"),
+        ("src/cli.py", "\"verify\""),
+    ] {
+        assert!(
+            overlay[file].contains(fault),
+            "{file} lost the fault the controls grade: {fault}"
+        );
+    }
+}

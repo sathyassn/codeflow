@@ -3067,6 +3067,69 @@
           ]
         }
       ]
+    },
+    {
+      "id": "CF-OUT-008",
+      "level": "hard",
+      "statement": "Every piece of content is checked for what a reader could take it to mean before it leaves the session: copy, replies, records, figures, images and code. A name says what the thing does and promises no more; a message names the cause and the fix, states what did and did not happen, and neither alarms nor blames the reader; a term with a violent, demeaning or political load gives way to the plain technical word where a new name is chosen; example data is invented and neutral; a figure asserts only what its facts carry, colour and icons keep their conventional meaning, and no state is carried by hue alone. A reading that is wrong, unsafe, alarming, offensive or a false promise is a material finding in review, never a wording nit.",
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "simple, straightforward, clear and unambiguous",
+            "State the fact directly, and check what a reader could take it to mean."
+          ]
+        },
+        {
+          "path": ".codeflow/rules/writing.md",
+          "markers": [
+            "## Meaning the reader takes",
+            "Read it as a reader who does not know the intent.",
+            "Read it as a hostile or careless reader.",
+            "a name that promises more than the code does, or softens what it does, is a defect",
+            "never alarms or blames the reader",
+            "A loaded term is replaced by the plain technical word where a new name is chosen",
+            "Example data is invented and neutral",
+            "no state is carried by hue alone"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/references/editorial-smells.md",
+          "markers": [
+            "## Meaning taken"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "## Names and code strings"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "with no second reading, no loaded term and no blame"
+          ]
+        },
+        {
+          "path": ".claude/agents/cf-reviewer.md",
+          "markers": [
+            "is a finding at the materiality of that reading, never a wording nit"
+          ]
+        },
+        {
+          "path": ".codeflow/rules/workflow-discipline.md",
+          "markers": [
+            "takes as wrong, unsafe, alarming, offensive or a false promise"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-design/references/design-choice-audit.md",
+          "markers": [
+            "### Implied meaning the subject does not carry"
+          ]
+        }
+      ]
     }
   ]
 }
