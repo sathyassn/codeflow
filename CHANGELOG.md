@@ -142,8 +142,10 @@ erratum below, never an edit of the section.
   blocks and tables counted), draws one warning that names the count, the
   limit and the three largest `##` sections, and asks for the body to be
   rewritten to its final state with records linked instead of copied. It
-  joins the existing presentation warnings under `git.pr_sections`: no new
-  policy key, advisory at any level, and never a blocking finding. It runs
+  joins the existing presentation warnings under `git.pr_sections`, takes
+  its limit from the new policy key `git.pr_body_max_words` (1,000 by
+  default, `0` turns it off), is advisory at any level, and is never a
+  blocking finding. It runs
   wherever `codeflow ci` is given a body: a pull request event in hosted CI,
   `CODEFLOW_PR_BODY`, `--pr-body` or `--pr-body-file`. The pre-push hook
   passes no body, so it runs no body check. cf-ship's PR evidence reference
