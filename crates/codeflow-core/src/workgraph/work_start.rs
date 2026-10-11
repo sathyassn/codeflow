@@ -1046,15 +1046,18 @@ impl ReviewedPin {
     }
 }
 
+/// Whether a revision an approving review row names covers a pin: the pin
+/// itself, or an ancestor the pin follows only by changes to the pinned
+/// record's status and Closeout. A lookup calls it only once it has found the
+/// pull request with the pin as its head, so a lookup that finds none
+/// never reads the predecessor's history.
+pub type ReviewCovers<'a> = dyn Fn(&str) -> Result<bool, String> + 'a;
+
 /// How a pin's review is looked up: the predecessor's branch, the pin (its
-/// tip), and the revisions a review row may name for it (the pin, then
-/// each commit it follows only by its status and Closeout), computed only
-/// when called, so a lookup that finds no pull request with that head
-/// never reads them. It answers whether the pull request of that branch
-/// has the pin as its head and an approving review row naming one of those
-/// revisions.
-pub type ReviewLookup<'a> =
-    dyn Fn(&str, &str, &dyn Fn() -> Vec<String>) -> Result<bool, String> + 'a;
+/// tip), and [`ReviewCovers`] for that pin. It answers whether the pull
+/// request of that branch has the pin as its head and an approving review
+/// row naming a revision that covers it.
+pub type ReviewLookup<'a> = dyn Fn(&str, &str, &ReviewCovers<'_>) -> Result<bool, String> + 'a;
 
 /// Resolve explicit pins against predecessor branches and review evidence.
 ///
@@ -1104,12 +1107,13 @@ pub(crate) fn reviewed_pins_in(
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
-        // Read only when a pull request with this head is found.
-        let named = || match branches.record_path(repo, &pin) {
-            Ok(Some(path)) => reviewable_revisions(repo, &pin, &path),
-            _ => vec![pin.revision.to_string()],
+        // Read only when a pull request with this head is found. Without
+        // the record's path at the pin, only the pin itself is covered.
+        let covers = |reviewed: &str| match branches.record_path(repo, &pin) {
+            Ok(Some(path)) => review_covers_pin(repo, &pin, &path, reviewed),
+            _ => Ok(resolve_reviewed(repo, reviewed) == Some(pin.revision)),
         };
-        if !lookup(&branch, &revision.to_string(), &named)? {
+        if !lookup(&branch, &revision.to_string(), &covers)? {
             return Err(format!(
                 "no review names {task_id}@{sha}, or a commit it follows only by {task_id}'s status and Closeout; cannot verify review for this pin"
             ));
@@ -1122,42 +1126,88 @@ pub(crate) fn reviewed_pins_in(
     Ok(pins)
 }
 
-/// The revisions a review row may name for `pin` (SPC-013 R-42, issue #69):
-/// the pin itself, then each commit it follows only by single-parent
-/// commits that change the pinned task's own record and nothing in it but
-/// its status and Closeout. A completion recorded after the review, as
-/// cf-ship asks, so needs no second review before a successor stacks on
-/// it; any other change after the reviewed commit stops the walk, so the
-/// review still names everything but that record's status and Closeout.
-/// `path` is the pinned record's path at the pin
-/// ([`PinBranches::record_path`]).
-#[must_use]
-pub(crate) fn reviewable_revisions(
+/// The commit a review row names by `reviewed`, a full revision or a
+/// uniquely resolved hexadecimal abbreviation of at least 7 characters;
+/// `None` when it names none or several.
+fn resolve_reviewed(repo: &Repository, reviewed: &str) -> Option<Oid> {
+    if !(7..=40).contains(&reviewed.len()) || !reviewed.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    repo.find_commit_by_prefix(reviewed)
+        .ok()
+        .map(|commit| commit.id())
+}
+
+/// Whether a review that approves `reviewed` covers `pin` (SPC-013 R-42,
+/// issue #69, TSK-250): `reviewed` resolves to the pin, or to an ancestor
+/// of it that the pin follows only by single-parent commits that change
+/// the pinned task's own record and nothing in it but its status and
+/// Closeout. A completion recorded after the review, as cf-ship asks, so
+/// needs no second review before a successor stacks on it. Each commit in
+/// the span is judged against its parent, so a change followed by its
+/// revert still refuses. A merge in the span carries no review: the
+/// predecessor's own acceptance binding (R-60) accepts a merge after its
+/// reviewed commit only as a clean re-merge of its target, which changes
+/// other files and so never passes this check either, and a pin that
+/// binding refuses would pass `work claim` and then fail its own push. A
+/// root commit in the span refuses, since the record appears in it
+/// unreviewed. A history overlay (grafts or replace refs) could fake the
+/// parents walked, and a shallow boundary cuts the walk, so either stops
+/// it, as in the acceptance binding's own walk. `path` is the pinned
+/// record's path at the pin ([`PinBranches::record_path`]).
+///
+/// # Errors
+/// Returns why the ancestry or the history walk between the review and the
+/// pin cannot be read or trusted. A record or tree that cannot be read
+/// inside the span is no proof of coverage and returns `Ok(false)`.
+pub(crate) fn review_covers_pin(
     repo: &Repository,
     pin: &ReviewedPin,
     path: &str,
-) -> Vec<String> {
-    let mut named = vec![pin.revision.to_string()];
-    let mut cursor = pin.revision;
-    loop {
-        let Ok(commit) = repo.find_commit(cursor) else {
-            break;
+    reviewed: &str,
+) -> Result<bool, String> {
+    let Some(review) = resolve_reviewed(repo, reviewed) else {
+        return Ok(false);
+    };
+    if review == pin.revision {
+        return Ok(true);
+    }
+    if let Some(overlay) = super::release_line::history_overlay(repo)? {
+        return Err(format!(
+            "this clone overlays its recorded history with {overlay}, so the parents from the review to the pin cannot be trusted; remove it, or judge from a clone without it"
+        ));
+    }
+    let shallow = super::release_line::shallow_boundary(repo)?;
+    if !repo
+        .graph_descendant_of(pin.revision, review)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(false);
+    }
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(pin.revision).map_err(|e| e.to_string())?;
+    walk.hide(review).map_err(|e| e.to_string())?;
+    for revision in walk {
+        let revision = revision.map_err(|e| e.to_string())?;
+        if shallow.contains(&revision) {
+            return Err(format!(
+                "this clone is shallow at {revision}, so the history to the reviewed commit is cut; fetch it in full"
+            ));
+        }
+        let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
+        let Some(content) = super::acceptance::blob_at(repo, revision, path) else {
+            return Ok(false);
         };
         let Ok(parent) = commit.parent_id(0) else {
-            break;
-        };
-        let Some(content) = super::acceptance::blob_at(repo, cursor, path) else {
-            break;
+            return Ok(false);
         };
         if commit.parent_count() != 1
-            || super::acceptance::later_change(repo, path, &content, parent, cursor).is_some()
+            || super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
         {
-            break;
+            return Ok(false);
         }
-        named.push(parent.to_string());
-        cursor = parent;
     }
-    named
+    Ok(true)
 }
 
 fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
