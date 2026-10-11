@@ -3358,7 +3358,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "grammar:yaml-frontmatter",
     ),
-    // Reads the scaffold version out of the ASCII managed-block marker `codeflow:managed:begin scaffold=`, which ends at whitespace or the hash separator; the version is displayed, never used as a path.
+    // Reads the scaffold version out of the ASCII managed-block marker `codeflow:managed:begin scaffold=`, which ends at whitespace or the `-` that opens the comment closer; the version is displayed, never used as a path.
     (
         "crates/codeflow-core/src/doctor/mod.rs",
         "installed_scaffold_version",
@@ -6117,6 +6117,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/model_qualification.rs", "read_bounded_json", "is_file", 2, "Type checks on metadata obtained with errors propagated; false returns Err."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_dir", 1, "Type check on entry.file_type(), whose error propagates out of load_skill_tree to its callers."),
     ("crates/codeflow-core/src/reading.rs", "load_under", "is_file", 1, "Type check on entry.file_type(), whose error propagates; a regular file is then read with its error propagated."),
+    ("crates/codeflow-core/src/reading.rs", "regular_text", "is_file", 1, "Type check on std::fs::metadata taken after proven_absent, with its error propagated, so a dangling link fails; only a regular file is read, with its error propagated, and a directory, fifo or device is never read."),
     ("crates/codeflow-core/src/recall.rs", "collect_sources", "try_exists", 2, "Only decides whether capabilities.md and product.md enter the rebuildable search cache; recall output goes to a person and a missing kind is disclosed as a note."),
     ("crates/codeflow-core/src/recall.rs", "files_in", "is_file", 1, "Type check on entry.file_type(), whose error propagates as RecallError::Io."),
     ("crates/codeflow-core/src/recall.rs", "files_in", "try_exists", 1, "Only decides which ledger and doc files enter the search cache; results reach a person and an empty kind is disclosed as a coverage note."),

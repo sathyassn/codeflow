@@ -347,20 +347,20 @@ impl AlwaysLoaded {
 const IMPORT_DEPTH: usize = 4;
 
 /// The always-loaded instruction set under `root`, or `None` when it has no
-/// instruction file. An instruction file or import that exists but cannot be
-/// read is the error.
+/// instruction file. A candidate that is proven absent or is not a regular
+/// file is not the instruction file; one that exists but cannot be read is
+/// the error.
 ///
 /// # Errors
 ///
-/// A candidate or import whose absence cannot be proven, or that cannot be
-/// read.
+/// A candidate or import whose absence cannot be proven, whose metadata
+/// cannot be taken (a dangling link), or that cannot be read. The error
+/// names the path.
 pub fn always_loaded(root: &Path) -> std::io::Result<Option<AlwaysLoaded>> {
     for file in ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"] {
-        let path = root.join(file);
-        if crate::absence::proven_absent(&path)? {
+        let Some(text) = regular_text(&root.join(file))? else {
             continue;
-        }
-        let text = std::fs::read_to_string(&path)?;
+        };
         let mut imports = Vec::new();
         let mut lines = authored_lines(&text);
         collect_imports(root, file, &text, 1, &mut imports, &mut lines)?;
@@ -373,12 +373,40 @@ pub fn always_loaded(root: &Path) -> std::io::Result<Option<AlwaysLoaded>> {
     Ok(None)
 }
 
-/// Follow the `@path` imports of `text` (the file at `from`, a `/`-joined
-/// path relative to `root`), adding each new file's path and lines, as
-/// Claude Code's memory guide describes: a path runs to the next whitespace,
-/// a quoted path or one inside a code span or fenced block is not an import,
-/// and a relative path resolves against the importing file. An import that
-/// is proven absent is not loaded; one that exists is read, with its error.
+/// The text at `path`, or `None` when it is proven absent or is not a
+/// regular file (a directory, fifo or device, or a link to one), so it is
+/// never read. Metadata follows a link, so a dangling link is an error, and
+/// every error names the path.
+fn regular_text(path: &Path) -> std::io::Result<Option<String>> {
+    let named = |error: std::io::Error| {
+        std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+    };
+    if crate::absence::proven_absent(path).map_err(named)? {
+        return Ok(None);
+    }
+    if !std::fs::metadata(path).map_err(named)?.is_file() {
+        return Ok(None);
+    }
+    std::fs::read_to_string(path).map(Some).map_err(named)
+}
+
+/// The import path `relative` as it is shown and compared: `/`-joined on
+/// every host.
+fn import_display(relative: &str) -> String {
+    if cfg!(windows) {
+        relative.replace('\\', "/")
+    } else {
+        relative.to_string()
+    }
+}
+
+/// Follow the `@path` imports of `text` (the file at `from`, a path relative
+/// to `root` in the host's form), adding each new file's `/`-joined path and
+/// lines, as Claude Code's memory guide describes: a path runs to the next
+/// whitespace, a quoted path or one inside a code span or fenced block is
+/// not an import, and a relative path resolves against the importing file's
+/// directory. An import that is proven absent or is not a regular file is
+/// not loaded; one that is a regular file is read, with its error.
 fn collect_imports(
     root: &Path,
     from: &str,
@@ -390,7 +418,12 @@ fn collect_imports(
     if depth > IMPORT_DEPTH {
         return Ok(());
     }
-    let dir = from.rsplit_once('/').map_or("", |(dir, _)| dir);
+    // `from` is UTF-8 text and separators are ASCII, so its parent is too.
+    let dir = Path::new(from)
+        .parent()
+        .and_then(Path::to_str)
+        .unwrap_or("");
+    let from_display = import_display(from);
     let mut fenced = false;
     for line in text.lines() {
         if line.trim_start().starts_with("```") {
@@ -412,24 +445,23 @@ fn collect_imports(
                 let candidate = rest[..end].trim_end_matches(['.', ',', ';', ':', ')']);
                 if !candidate.is_empty() && !candidate.starts_with('"') {
                     let rooted = candidate.starts_with('~') || candidate.starts_with('/');
-                    let display = if rooted || dir.is_empty() {
+                    let relative = if rooted || dir.is_empty() {
                         candidate.to_string()
                     } else {
-                        format!("{dir}/{candidate}")
+                        format!("{dir}{}{candidate}", std::path::MAIN_SEPARATOR)
                     };
+                    let display = import_display(&relative);
                     let path = if rooted {
                         PathBuf::from(candidate)
                     } else {
-                        root.join(&display)
+                        root.join(&relative)
                     };
-                    if !imports.contains(&display)
-                        && display != from
-                        && !crate::absence::proven_absent(&path)?
-                    {
-                        let imported = std::fs::read_to_string(&path)?;
-                        imports.push(display.clone());
-                        *lines += authored_lines(&imported);
-                        collect_imports(root, &display, &imported, depth + 1, imports, lines)?;
+                    if !imports.contains(&display) && display != from_display {
+                        if let Some(imported) = regular_text(&path)? {
+                            imports.push(display);
+                            *lines += authored_lines(&imported);
+                            collect_imports(root, &relative, &imported, depth + 1, imports, lines)?;
+                        }
                     }
                 }
                 for _ in 0..end {
@@ -2219,6 +2251,77 @@ mod tests {
 
         std::fs::remove_file(root.join("AGENTS.md")).unwrap();
         assert_eq!(always_loaded(root).unwrap(), None);
+    }
+
+    #[test]
+    fn a_non_regular_candidate_is_not_the_instruction_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
+        std::fs::create_dir(root.join("CLAUDE.md")).unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
+        assert_eq!(set.file, "AGENTS.md");
+        assert_eq!(set.lines, 2);
+    }
+
+    #[test]
+    fn a_missing_import_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("CLAUDE.md"), "@gone.md\n@docs/gone.md\n").unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
+        assert!(set.imports.is_empty());
+        assert_eq!(set.lines, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_device_is_not_the_instruction_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("AGENTS.md"), "a\nb\n").unwrap();
+        std::os::unix::fs::symlink("/dev/null", root.join("CLAUDE.md")).unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
+        assert_eq!(set.file, "AGENTS.md");
+        assert_eq!(set.lines, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_fails_with_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("AGENTS.md"), "a\n").unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("CLAUDE.md")).unwrap();
+        let error = always_loaded(root).unwrap_err();
+        assert!(error.to_string().contains("CLAUDE.md"), "{error}");
+
+        std::fs::remove_file(root.join("CLAUDE.md")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "@docs/lost.md\n").unwrap();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), root.join("docs/lost.md")).unwrap();
+        let error = always_loaded(root).unwrap_err();
+        assert!(error.to_string().contains("lost.md"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_device_import_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // A read of the fifo would block with no writer, and /dev/zero never
+        // ends, so the walk returning at all shows neither was read.
+        assert!(std::process::Command::new("mkfifo")
+            .arg(root.join("pipe.md"))
+            .status()
+            .unwrap()
+            .success());
+        std::os::unix::fs::symlink("/dev/zero", root.join("zero.md")).unwrap();
+        std::os::unix::fs::symlink("/dev/null", root.join("null.md")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "@pipe.md @zero.md @null.md\n").unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
+        assert!(set.imports.is_empty());
+        assert_eq!(set.lines, 1);
     }
     /// Shipped files frozen as they stood when the scanner moved to the
     /// Markdown parser, keyed as they install.
