@@ -39,19 +39,23 @@ pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
 /// Repository content: refuse symlinks and oversized files like binding records.
 fn project_selection(root: &Path) -> Result<Option<Vec<u8>>, String> {
     let path = root.join(".codeflow/model-selection.json");
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => crate::model_qualification::read_bounded_json(&path, "model selection").map(Some),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("stat {}: {error}", path.display())),
+    if crate::absence::proven_absent(&path)
+        .map_err(|error| format!("stat {}: {error}", path.display()))?
+    {
+        return Ok(None);
     }
+    crate::model_qualification::read_bounded_json(&path, "model selection").map(Some)
 }
 
 pub(super) fn optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("read {}: {error}", path.display())),
+    if crate::absence::proven_absent(path)
+        .map_err(|error| format!("stat {}: {error}", path.display()))?
+    {
+        return Ok(None);
     }
+    std::fs::read(path)
+        .map(Some)
+        .map_err(|error| format!("read {}: {error}", path.display()))
 }
 
 /// Validated, read-only inputs shared by resolution and diagnostics.
@@ -139,5 +143,27 @@ impl CatalogInputs {
             exclusions,
             canary_observations,
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_optional_catalog_inputs_require_proven_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("optional.json");
+        assert!(optional_file(&path).unwrap().is_none());
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        assert!(optional_file(&path).is_err());
+        assert!(optional_file(&path.join("child")).is_err());
+    }
+    #[test]
+    fn r22_project_selection_requires_proven_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(project_selection(dir.path()).unwrap().is_none());
+        std::os::unix::fs::symlink("missing", dir.path().join(".codeflow")).unwrap();
+        assert!(project_selection(dir.path()).is_err());
     }
 }

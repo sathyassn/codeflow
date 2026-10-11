@@ -55,15 +55,14 @@ impl SecurityPolicy {
         }
     }
 
-    /// Load policy from a JSON file, returning defaults when the file is
-    /// missing or unreadable. Malformed JSON also falls back to defaults so
-    /// the scanner never silently disables itself (fail-safe direction:
-    /// defaults are the strict baseline).
-    #[must_use]
-    pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-            Err(_) => Self::defaults(),
+    /// Read security policy; genuine absence retains built-in defaults.
+    /// # Errors
+    /// Existing policy bytes cannot be read or parsed.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        match crate::hooks::policy::optional_text(path)? {
+            Some(data) => serde_json::from_str(&data)
+                .map_err(|error| format!("cannot parse security policy: {error}")),
+            None => Ok(Self::defaults()),
         }
     }
 
@@ -107,7 +106,7 @@ mod tests {
     #[test]
     fn test_load_missing_file_returns_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let p = SecurityPolicy::load(&dir.path().join("nope.json"));
+        let p = SecurityPolicy::load(&dir.path().join("nope.json")).unwrap();
         assert_eq!(p.protected_branches, vec!["main", "master"]);
     }
 
@@ -120,18 +119,17 @@ mod tests {
             r#"{"protected_branches": ["main", "release/*"], "protected_paths": ["conf/**"]}"#,
         )
         .unwrap();
-        let p = SecurityPolicy::load(&path);
+        let p = SecurityPolicy::load(&path).unwrap();
         assert_eq!(p.protected_branches, vec!["main", "release/*"]);
         assert_eq!(p.all_protected_paths(), vec!["conf/**"]);
     }
 
     #[test]
-    fn test_load_malformed_json_returns_defaults() {
+    fn test_load_malformed_json_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("policy.json");
         std::fs::write(&path, "{ not json").unwrap();
-        let p = SecurityPolicy::load(&path);
-        assert_eq!(p.protected_branches, vec!["main", "master"]);
+        assert!(SecurityPolicy::load(&path).is_err());
     }
 
     #[test]

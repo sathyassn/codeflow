@@ -184,15 +184,26 @@ pub fn locked_read(path: &Path) -> Result<Value, String> {
 pub fn locked_read_critical(path: &Path, max_retries: u32) -> Result<Value, String> {
     // Fast-fail: if parent dir doesn't exist, the file cannot exist.
     // Check before locked_read to avoid its create_dir_all side effect on the lock path.
-    if !path.parent().is_some_and(std::path::Path::exists) {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "read: path has no parent directory".to_string())?;
+    if crate::absence::proven_absent(parent).map_err(|error| format!("read parent: {error}"))? {
         return Err("read: parent directory does not exist".to_string());
+    }
+    if !std::fs::metadata(parent)
+        .map_err(|error| format!("read parent: {error}"))?
+        .is_dir()
+    {
+        return Err("read: parent is not a directory".to_string());
     }
 
     match locked_read(path) {
         Ok(v) => Ok(v),
         Err(first_err) => {
             // Parent dir may have been removed during the read attempt.
-            if !path.parent().is_some_and(std::path::Path::exists) {
+            if crate::absence::proven_absent(parent)
+                .map_err(|error| format!("read parent: {error}"))?
+            {
                 return Err(first_err);
             }
             let mut delay_ms = 50u64;
@@ -687,5 +698,22 @@ mod tests {
     fn test_sidecar_lock_path_no_extension() {
         let path = Path::new("/tmp/lockfile");
         assert_eq!(sidecar_lock_path(path), Path::new("/tmp/lockfile.lock"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_critical_read_reports_unreadable_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parent/file.json");
+        assert!(locked_read_critical(&path, 0)
+            .unwrap_err()
+            .contains("does not exist"));
+        std::os::unix::fs::symlink("missing", dir.path().join("parent")).unwrap();
+        let error = locked_read_critical(&path, 0).unwrap_err();
+        assert!(!error.contains("does not exist"), "{error}");
     }
 }

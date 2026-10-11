@@ -517,9 +517,13 @@ pub(crate) fn linked_component(root: &Path, relative: &str) -> Option<String> {
 
 /// Whether `path` itself, read without following, is a link: on Unix a
 /// symbolic link, on Windows any reparse point, a junction included, which
-/// is what [`Tree`] refuses.
-pub(crate) fn is_link_at(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| is_link(&metadata))
+/// is what [`Tree`] refuses. A name proven absent is no link.
+///
+/// # Errors
+///
+/// When the name cannot be read (issue 79): never read as no link.
+pub(crate) fn is_link_at(path: &Path) -> io::Result<bool> {
+    Ok(crate::absence::symlink_metadata_optional(path)?.is_some_and(|metadata| is_link(&metadata)))
 }
 
 /// Whether `metadata`, taken without following, is a link as [`Tree`]

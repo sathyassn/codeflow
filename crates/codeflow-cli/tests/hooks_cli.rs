@@ -614,10 +614,22 @@ fn git_guard_holds_the_text_floor_for_wrapped_writes() {
             "git clean -ffdxn",
             "rm -rf .worktrees/v/target",
             r#"rm -f "$d""#,
-            // `PATH` is set wherever the tests run, and the line leaves it.
-            r#"rm -rf "$PATH/codeflow-scratch-tsk216""#,
         ],
         "git.hook_integrity",
+    );
+    // Keep this native environment expansion bounded, independent of host PATH.
+    let payload = serde_json::json!({"tool_name":"Bash","tool_input":{"command":r#"rm -rf "$CODEFLOW_R16_GUARD_PATH/codeflow-scratch-tsk216""#},"cwd":root}).to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .current_dir(&root)
+            .env("CODEFLOW_R16_GUARD_PATH", root.join("build"))
+            .args(["hook", "git-guard"]),
+        &payload,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
     // A worktree holds no other worktree, so an unresolved target there
     // is not refused for that reason.
@@ -711,6 +723,10 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
+    // The guard cannot obtain a sed script supplied through stdin.
+    r"printf 'p\n' | sed -f - .codeflow/policy.json",
+    r"printf 'p\n' | sed -f - '.codeflow/policy.json'",
+    r"printf 'p\n' | sed -f - .codeflow/policy\.json",
     // Round two.
     r"printf 'w .codeflow/policy.json\n' | sed -f - README.md",
     "sed -f large.sed README.md",
@@ -916,10 +932,7 @@ const REVIEWER_ALLOWED: &[&str] = &[
     r#"cd "$dir" && printf "%s\n" *.json | xargs cat"#,
     // Round seven: plain reads of the file the writes above target.
     r#"cd "$dir" && sed -n p policy.json"#,
-    r"printf 'p\n' | sed -f - .codeflow/policy.json",
     // Round eight: the same plain reads with a quoted or escaped operand.
-    r"printf 'p\n' | sed -f - '.codeflow/policy.json'",
-    r"printf 'p\n' | sed -f - .codeflow/policy\.json",
     r#"cd "$dir" && sed -n p 'policy.json'"#,
     r#"cd "$dir" && sed -n p policy\.json"#,
     // Round ten: `pushd -n` alone stays put, and a read after a rotation
@@ -2679,7 +2692,7 @@ fn git_guard_blocks_pr_body_attribution() {
 }
 
 #[test]
-fn git_guard_ignores_non_bash_tools_and_garbage() {
+fn git_guard_ignores_non_shell_tools_and_refuses_garbage() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
 
@@ -2697,7 +2710,11 @@ fn git_guard_ignores_non_bash_tools_and_garbage() {
             .current_dir(dir.path()),
         "not json",
     );
-    assert_eq!(out.status.code(), Some(0), "fail open on garbage payload");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "unreadable guard payload must refuse"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3041,7 +3058,7 @@ fn real_wired_reference_transaction_closes_ff_merge_gap() {
 }
 
 #[test]
-fn reference_transaction_invalid_utf8_blocks_but_pre_push_remains_nonblocking() {
+fn reference_transaction_and_pre_push_invalid_utf8_both_refuse() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
 
@@ -3071,9 +3088,9 @@ fn reference_transaction_invalid_utf8_blocks_but_pre_push_remains_nonblocking() 
         &[0xff],
     );
     let pre_push_stderr = String::from_utf8_lossy(&pre_push.stderr);
-    assert_eq!(pre_push.status.code(), Some(0), "{pre_push_stderr}");
+    assert_eq!(pre_push.status.code(), Some(1), "{pre_push_stderr}");
     assert!(
-        pre_push_stderr.contains("ref checks degraded"),
+        pre_push_stderr.contains("operation blocked"),
         "{pre_push_stderr}"
     );
 }
@@ -4295,7 +4312,7 @@ fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
 
 #[cfg(unix)]
 #[test]
-fn unreadable_state_blocks_ci_not_the_commit() {
+fn unreadable_state_blocks_ci_and_the_hook() {
     use std::io::ErrorKind;
 
     let dir = tempfile::tempdir().unwrap();
@@ -4323,6 +4340,9 @@ permission_preset = "strict"
     std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
     git(dir.path(), &["add", "implementation.rs"]);
 
+    // Wired hooks resolve the current binary from PATH. Establish the CI
+    // commit while policy is readable, before testing the refusal paths.
+    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
     let denied_state = RestorePermissions::deny(&state_path);
     match std::fs::read(&state_path) {
         Ok(_) => {
@@ -4339,18 +4359,17 @@ permission_preset = "strict"
     );
     assert_eq!(
         hook.status.code(),
-        Some(0),
-        "pre-commit leaves the tracking state to work start and CI: {}",
+        Some(2),
+        "pre-commit refuses unreadable effective policy: {}",
         String::from_utf8_lossy(&hook.stderr)
     );
 
-    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
     let ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-state", false);
-    assert_eq!(ci.status.code(), Some(1));
+    assert_eq!(ci.status.code(), Some(2));
     let ci_error = String::from_utf8_lossy(&ci.stderr);
-    assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
+    assert!(ci_error.contains("cannot read policy"), "{ci_error}");
     assert!(
-        ci_error.contains("cannot read existing CodeFlow state"),
+        ci_error.contains("project.toml") && ci_error.contains("Permission denied"),
         "{ci_error}"
     );
     drop(denied_state);
@@ -4923,10 +4942,7 @@ fn push_set_refuses_a_rewrite_when_ls_remote_fails() {
     );
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
     assert_eq!(code, Some(1), "{err}");
-    assert!(
-        err.contains("the destination did not answer, so whether 'task/t' is a release branch cannot be read"),
-        "{err}"
-    );
+    assert!(err.contains("cannot prove push inputs"), "{err}");
     assert!(
         !err.contains("`codeflow ci --base"),
         "no range is judged: {err}"
@@ -5213,10 +5229,7 @@ fn push_set_refuses_a_new_branch_when_ls_remote_fails() {
     let good = commit_file(local.path(), "f.txt", "f\n", "feat: add f");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/f", &good)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(
-        err.contains("the destination did not answer, so whether 'feat/f' is a release branch cannot be read"),
-        "{err}"
-    );
+    assert!(err.contains("cannot prove push inputs"), "{err}");
     assert!(!err.contains("is bounded by its tracked"), "{err}");
 }
 
@@ -5271,8 +5284,7 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &head)]);
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("the destination did not answer, so whether 'feat/new' is a release branch cannot be read")
-            && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 }
@@ -5357,7 +5369,7 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     assert!(!marker.exists(), "askpass was invoked: {err}");
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("the destination did not answer") && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
         "{err}"
     );
 
@@ -5452,7 +5464,7 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     // release branch under its policy: refused, whatever the name.
     let (code, err) = push_hook(lone.path(), "nowhere", &[("feat/lone", &head)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("the destination did not answer"), "{err}");
+    assert!(err.contains("cannot prove push inputs"), "{err}");
 }
 
 /// A repo on `feat/t` whose quick target is `command`, committed.
@@ -5546,6 +5558,54 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
         err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
         "{err}"
     );
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+/// The submodule state comes from git, never from whether `.gitmodules`
+/// can be found: a `.gitmodules` that is a dangling link is a mapping git
+/// cannot read, so the push refuses instead of judging the checkout whole.
+#[cfg(unix)]
+#[test]
+fn r23_push_set_reads_submodules_whatever_gitmodules_is() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
+    let dir = quick_repo("test ! -f vendor/bad.txt");
+    let url = vendor.path().to_str().unwrap();
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            url,
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-q", "-m", "chore: add vendor"]);
+    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
+    // The control: a readable mapping names the uninitialized submodule.
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
+        "{err}"
+    );
+
+    std::fs::remove_file(dir.path().join(".gitmodules")).unwrap();
+    std::os::unix::fs::symlink("gone", dir.path().join(".gitmodules")).unwrap();
+    git(dir.path(), &["add", ".gitmodules"]);
+    git(
+        dir.path(),
+        &["commit", "-q", "-m", "chore: link the mapping"],
+    );
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_ne!(code, Some(0), "{err}");
+    assert!(err.contains("cannot read Git submodule answer"), "{err}");
     assert!(!err.contains("quick targets passed"), "{err}");
 }
 
@@ -6988,6 +7048,114 @@ fn git_hook_help_matches_the_install_path_constant() {
         !line.contains(".git/hooks"),
         "git-hook help names .git/hooks, which the install code does not use"
     );
+}
+
+#[test]
+fn unicode_branch_and_unreadable_aliases_reach_the_hook_refusals() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"protected_branches":["release\u00a0"]}}"#,
+    );
+    let payload = guard_payload("git push origin HEAD:release\u{a0}", dir.path());
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.push_to_protected"));
+
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join(".git/config"))
+        .unwrap();
+    config
+        .write_all(b"[alias]\n bad = push origin caf\xff\n nested = bad\n shell = !sh -c 'git push origin caf\xff'\n")
+        .unwrap();
+    for command in [
+        "git bad",
+        "git nested",
+        "git shell",
+        "git -c alias.outer=bad outer",
+    ] {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        );
+        assert_eq!(out.status.code(), Some(2), "{command}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn root_branch_with_unicode_whitespace_is_compared_exactly_by_the_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "release");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_branch":"release\u00a0","root_checkout_commits":"block"}}"#,
+    );
+    git(dir.path(), &["branch", "release\u{a0}"]);
+    let run = || {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
+            &guard_payload("git commit -m 'fix: fixture'", dir.path()),
+        )
+    };
+    let wrong = run();
+    assert_eq!(wrong.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("git.root_checkout_commits"));
+    git(dir.path(), &["checkout", "release\u{a0}"]);
+    assert_eq!(run().status.code(), Some(0));
+}
+
+#[test]
+fn r16_commit_message_read_error_refuses_at_real_hook_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/probe");
+    let message = dir.path().join("message");
+    std::fs::write(&message, b"feat: caf\xff\n").unwrap();
+    let output = codeflow()
+        .current_dir(dir.path())
+        .arg("git-hook")
+        .arg("commit-msg")
+        .arg(&message)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot read the message file"));
+}
+
+#[test]
+fn r16_pre_push_input_error_refuses_at_real_hook_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/probe");
+    let output = run_with_stdin_bytes(
+        codeflow()
+            .current_dir(dir.path())
+            .args(["git-hook", "pre-push"]),
+        b"0 1 refs/heads/caf\xff\n",
+    );
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("operation blocked"));
 }
 
 #[path = "support/line_adoption.rs"]

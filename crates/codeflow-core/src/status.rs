@@ -142,12 +142,25 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
 
     let (branch, worktrees, cleanup_target, cleanup) =
         if let Ok(repo) = git2::Repository::open(repo_root) {
-            let branch = repo
-                .head()
-                .ok()
-                .and_then(|h| h.shorthand().ok().map(ToString::to_string));
-            let worktrees = list_worktrees(&repo);
-            let target = cleanup_target(&repo);
+            let branch = repo.head().ok().map(|h| {
+                crate::git::name::reference_shorthand(&h)
+                    .display()
+                    .to_string()
+            });
+            let worktrees = match list_worktrees(&repo) {
+                Ok(worktrees) => worktrees,
+                Err(error) => {
+                    notes.push(format!("cannot read linked worktrees: {error}"));
+                    Vec::new()
+                }
+            };
+            let target = match cleanup_target(&repo) {
+                Ok(target) => target,
+                Err(error) => {
+                    notes.push(format!("cannot read cleanup target: {error}"));
+                    None
+                }
+            };
             let cleanup = collect_cleanup(repo_root, &repo, target.as_ref());
             (
                 branch,
@@ -200,12 +213,20 @@ struct CleanupTarget {
     oid: git2::Oid,
 }
 
-fn cleanup_target(repo: &git2::Repository) -> Option<CleanupTarget> {
+fn cleanup_target(repo: &git2::Repository) -> Result<Option<CleanupTarget>, String> {
     let mut names = Vec::new();
-    if let Ok(head) = repo.find_reference("refs/remotes/origin/HEAD") {
-        if let Ok(Some(symbolic)) = head.symbolic_target() {
-            names.push(symbolic.to_string());
+    match repo.find_reference("refs/remotes/origin/HEAD") {
+        Ok(head) => {
+            if let Some(bytes) = head.symbolic_target_bytes() {
+                names.push(
+                    std::str::from_utf8(bytes)
+                        .map_err(|error| format!("default branch is not valid UTF-8: {error}"))?
+                        .to_string(),
+                );
+            }
         }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(error.to_string()),
     }
     names.extend(
         [
@@ -215,17 +236,24 @@ fn cleanup_target(repo: &git2::Repository) -> Option<CleanupTarget> {
             "refs/heads/master",
         ]
         .into_iter()
-        .map(ToString::to_string),
+        .map(str::to_owned),
     );
-
-    names.into_iter().find_map(|name| {
-        let reference = repo.find_reference(&name).ok()?;
-        let oid = reference.peel_to_commit().ok()?.id();
-        Some(CleanupTarget {
+    for name in names {
+        let reference = match repo.find_reference(&name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let oid = reference
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        return Ok(Some(CleanupTarget {
             name: display_ref(&name),
             oid,
-        })
-    })
+        }));
+    }
+    Ok(None)
 }
 
 fn display_ref(name: &str) -> String {
@@ -243,17 +271,27 @@ fn collect_cleanup(
     let mut out = Vec::new();
     let mut checked_out = std::collections::BTreeSet::new();
     if let Ok(head) = repo.head() {
-        if let Ok(name) = head.shorthand() {
-            checked_out.insert(name.to_string());
-        }
+        checked_out.insert(crate::git::name::reference_shorthand(&head));
     }
 
-    if let Ok(names) = repo.worktrees() {
-        for name in names.iter().filter_map(|name| name.ok().flatten()) {
-            let Ok(worktree) = repo.find_worktree(name) else {
-                continue;
-            };
-            let path = worktree.path();
+    {
+        let linked = match crate::git::linked_worktrees(repo) {
+            Ok(linked) => linked,
+            Err(error) => {
+                out.push(CleanupInfo {
+                    kind: "worktree".into(),
+                    name: "unproven inventory".into(),
+                    path: None,
+                    disposition: CleanupDisposition::RetainUnproven,
+                    proof: format!("cannot read linked worktrees: {error}"),
+                });
+                return out;
+            }
+        };
+        for linked in linked {
+            let name = linked.name.display().to_string();
+            let name = name.as_str();
+            let path = linked.path.as_path();
             let Ok(worktree_repo) = git2::Repository::open(path) else {
                 out.push(CleanupInfo {
                     kind: "worktree".to_string(),
@@ -265,10 +303,7 @@ fn collect_cleanup(
                 continue;
             };
             let head = worktree_repo.head().ok();
-            let branch = head
-                .as_ref()
-                .and_then(|item| item.shorthand().ok())
-                .map(ToString::to_string);
+            let branch = head.as_ref().map(crate::git::name::reference_shorthand);
             if let Some(branch) = &branch {
                 checked_out.insert(branch.clone());
             }
@@ -277,13 +312,16 @@ fn collect_cleanup(
                 repo_root,
                 repo,
                 oid,
-                branch.as_deref(),
+                // Advice only: a branch that is not valid UTF-8 has no landing
+                // proof by name, so it is classified as unproven.
+                branch.as_ref().and_then(|b| b.rule_text().ok()),
                 target,
                 repository_dirty(path),
             );
             out.push(CleanupInfo {
                 kind: "worktree".to_string(),
-                name: branch.unwrap_or_else(|| format!("{name} (detached)")),
+                name: branch
+                    .map_or_else(|| format!("{name} (detached)"), |b| b.display().to_string()),
                 path: Some(path.display().to_string()),
                 disposition,
                 proof,
@@ -294,10 +332,19 @@ fn collect_cleanup(
     if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
         for item in branches.flatten() {
             let (branch, _) = item;
-            let Some(name) = branch.name().ok().flatten() else {
+            // OS text rule (issue 79): a branch whose name is not valid UTF-8
+            // is left out of the cleanup advice. Leaving it out keeps it, and
+            // advice only ever offers a removal, so nothing is lost.
+            let Ok(exact) = crate::git::name::branch_name(&branch) else {
                 continue;
             };
-            if checked_out.contains(name) || target_matches_branch(target, name) {
+            if checked_out.contains(&exact) {
+                continue;
+            }
+            let Ok(name) = exact.rule_text() else {
+                continue;
+            };
+            if target_matches_branch(target, name) {
                 continue;
             }
             let oid = branch.get().peel_to_commit().ok().map(|commit| commit.id());
@@ -407,19 +454,15 @@ fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
     readiness::cherry_landed(repo_root, target, branch)
 }
 
-fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
+fn list_worktrees(repo: &git2::Repository) -> Result<Vec<WorktreeInfo>, String> {
     let mut out = Vec::new();
-    if let Ok(names) = repo.worktrees() {
-        for name in names.iter().filter_map(|name| name.ok().flatten()) {
-            if let Ok(wt) = repo.find_worktree(name) {
-                out.push(WorktreeInfo {
-                    name: name.to_string(),
-                    path: wt.path().display().to_string(),
-                });
-            }
-        }
+    for linked in crate::git::linked_worktrees(repo)? {
+        out.push(WorktreeInfo {
+            name: linked.name.to_string(),
+            path: linked.path.display().to_string(),
+        });
     }
-    out
+    Ok(out)
 }
 
 fn collect_work(repo_root: &Path, notes: &mut Vec<String>) -> Option<WorkSummary> {
@@ -853,6 +896,30 @@ mod tests {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    /// Review finding on issue 79: an `origin/HEAD` that names a branch whose
+    /// name is not valid UTF-8 fell back to `main`, so cleanup advice proved
+    /// landing against the wrong branch. No target is named instead.
+    #[test]
+    fn a_default_branch_that_is_not_utf8_names_no_cleanup_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/main", b"refs/remotes/origin/release/caf\xe9"],
+        );
+        assert!(
+            cleanup_target(&repo).unwrap().is_some(),
+            "main is the fallback"
+        );
+        let origin = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::write(
+            origin.join("HEAD"),
+            b"ref: refs/remotes/origin/release/caf\xe9\n",
+        )
+        .unwrap();
+        assert!(cleanup_target(&repo).is_err());
     }
 
     fn init_repo(dir: &Path) {

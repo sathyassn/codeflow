@@ -130,7 +130,7 @@ pub fn findings(
                 .map(|path| if *path == "AGENTS.md" {
                     "AGENTS.md (outside its managed block)".to_string()
                 } else {
-                    (*path).to_string()
+                    crate::git::display_key(path)
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -162,7 +162,6 @@ fn owners(before: Option<&RecordView>, after: Option<&RecordView>) -> BTreeSet<S
                 if let Some(epic) = record
                     .epic_id
                     .as_deref()
-                    .map(str::trim)
                     .filter(|epic| !epic.is_empty() && *epic != "null")
                 {
                     owners.insert(epic.to_string());
@@ -282,13 +281,19 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     if record.kind != RecordKind::Task {
         return None;
     }
-    let line = record.integration_target.as_deref()?.trim();
+    let line = record.integration_target.as_deref()?;
     if !line.starts_with("integration/") {
         return None;
     }
-    target_tips(repo, line).into_iter().find_map(|(name, tip)| {
-        let shared = repo.merge_base(tip, target_tip).ok()?;
-        (blob_at(repo, tip, &record.path) != blob_at(repo, shared, &record.path)).then(|| {
+    let tips = match target_tips(repo, line) {
+        Ok(tips) => tips,
+        Err(error) => return Some(format!("cannot read task target {line}: {error}")),
+    };
+    tips.into_iter().find_map(|(name, tip)| {
+        let shared = match repo.merge_base(tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
+        let before = match blob_at(repo, shared, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
+        let after = match blob_at(repo, tip, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
+        (after != before).then(|| {
             format!(
                 "{} is newer on {name} than on the target; this amendment lands on the target, so merge the target into {line} and check the record there",
                 record.id
@@ -341,14 +346,24 @@ const GITLINK_MODE: i32 = 0o160_000;
 
 /// [`range_problem`] for revisions named as text, as `codeflow ci` holds
 /// them: the target (`base`) and the head of a range whose changed paths
-/// are `paths`.
+/// are `paths`, as git's exact bytes. A path that is not valid UTF-8 is
+/// refused by name, as the entry check of [`range_problem`] refuses it, before any rule reads
+/// the others as text.
 #[must_use]
 pub fn range_problem_at(
     repo_root: &std::path::Path,
     base: &str,
     head: &str,
-    paths: &[String],
+    paths: &[crate::git::GitName],
 ) -> Option<String> {
+    let mut texts = Vec::with_capacity(paths.len());
+    for path in paths {
+        match path.rule_text() {
+            Ok(text) => texts.push(text.to_string()),
+            Err(odd) => return Some(odd_name_problem(odd.display())),
+        }
+    }
+    let paths = texts.as_slice();
     let resolved = Repository::discover(repo_root)
         .map_err(|error| error.message().to_string())
         .and_then(|repo| {
@@ -412,12 +427,31 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             }
         }
     }
-    let bytes = |at: Oid| entry_at(repo, at, "AGENTS.md").map(|(_, bytes)| bytes);
-    if instructions && !instructions_block_unchanged(bytes(base).as_deref(), bytes(head).as_deref())
-    {
-        return Some(MANAGED_BLOCK_CHANGED.to_string());
+    if instructions {
+        let before = match entry_at(repo, base, "AGENTS.md") {
+            Ok(entry) => entry,
+            Err(error) => return Some(error),
+        };
+        let after = match entry_at(repo, head, "AGENTS.md") {
+            Ok(entry) => entry,
+            Err(error) => return Some(error),
+        };
+        if !instructions_block_unchanged(
+            before.as_ref().map(|(_, bytes)| bytes.as_slice()),
+            after.as_ref().map(|(_, bytes)| bytes.as_slice()),
+        ) {
+            return Some(MANAGED_BLOCK_CHANGED.to_string());
+        }
     }
     None
+}
+
+/// Why an entry named `shown` cannot ride in a planning amendment: its name
+/// is not plain UTF-8 or holds a backslash.
+fn odd_name_problem(shown: &str) -> String {
+    format!(
+        "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
+    )
 }
 
 /// What an entry of `mode` is when it is not a regular file or folder.
@@ -438,7 +472,17 @@ fn special(mode: i32) -> Option<&'static str> {
 /// is refused. The fault comes with the path of the entry at fault, empty
 /// when the range cannot be read.
 fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, String)> {
-    let from = repo.merge_base(base, head).unwrap_or(base);
+    // A range with no common ancestor is read from the target; a history
+    // that cannot be read is no range at all.
+    let from = match super::acceptance::common_base(repo, base, head) {
+        Ok(found) => found.unwrap_or(base),
+        Err(error) => {
+            return Some((
+                String::new(),
+                format!("cannot read the range to classify it: {error}"),
+            ))
+        }
+    };
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = tree(from)
         .and_then(|before| {
@@ -460,11 +504,9 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
             let Some(name) = file.path_bytes() else {
                 continue;
             };
-            let shown = String::from_utf8_lossy(name).into_owned();
+            let shown = crate::git::GitName::from_bytes(name).display().to_string();
             if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
-                let message = format!(
-                    "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
-                );
+                let message = odd_name_problem(&shown);
                 return Some((shown, message));
             }
             if let Some(kind) = special(i32::from(file.mode())) {
@@ -492,15 +534,14 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
         return unreadable();
     };
     let mut found = None;
-    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-        match special(entry.filemode()) {
-            Some(kind) => {
-                let name = String::from_utf8_lossy(entry.name_bytes());
-                found = Some((kind, format!("{dir}{name}")));
-                git2::TreeWalkResult::Abort
-            }
-            None => git2::TreeWalkResult::Ok,
+    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special(
+        entry.filemode(),
+    ) {
+        Some(kind) => {
+            found = Some((kind, path.display().to_string()));
+            crate::git::Walk::Stop
         }
+        None => crate::git::Walk::Continue,
     });
     match (found, walked) {
         (Some(found), _) => Some(found),
@@ -510,58 +551,78 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
 }
 
 /// The mode and bytes of the entry at `path` in the tree of `commit`.
-fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)> {
+fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, Vec<u8>)>, String> {
     let tree = repo
         .find_commit(commit)
         .and_then(|commit| commit.tree())
-        .ok()?;
-    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
-    let blob = repo.find_blob(entry.id()).ok()?;
-    Some((entry.filemode(), blob.content().to_vec()))
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    Ok(Some((entry.filemode(), blob.content().to_vec())))
 }
 
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
 /// records, and its `git.breaking_watch_paths`.
 fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
-    let list = |value: &serde_json::Value| -> Vec<String> {
-        value
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json") {
+    let list =
+        |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
+            let Some(value) = value else { return Ok(None) };
+            let items = value
+                .as_array()
+                .ok_or_else(|| format!("git.{key} is not a list"))?;
+            items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| format!("git.{key} contains a non-string path"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
+        };
+    let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json")? {
         Some((_, bytes)) => serde_json::from_slice(&bytes).map_err(|error| error.to_string())?,
         None => serde_json::Value::Null,
     };
     let git = &policy["git"];
-    let product = if git["product_paths"].is_array() {
-        list(&git["product_paths"])
+    let product = if let Some(paths) = list(git.get("product_paths"), "product_paths")? {
+        paths
     } else {
-        let stack = entry_at(repo, commit, ".codeflow/project.toml")
-            .and_then(|(_, bytes)| String::from_utf8(bytes).ok())
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|table| {
-                table
-                    .get("stack")
-                    .and_then(|stack| stack.as_str().map(str::to_string))
+        let project = entry_at(repo, commit, ".codeflow/project.toml")?
+            .map(|(_, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+                text.parse::<toml::Table>()
+                    .map_err(|error| error.to_string())
             })
+            .transpose()?;
+        let stack = project
+            .as_ref()
+            .and_then(|table| table.get("stack"))
+            .map(|stack| {
+                stack
+                    .as_str()
+                    .ok_or_else(|| "project stack is not a string".to_string())
+            })
+            .transpose()?
             .unwrap_or_default();
-        super::classify::stack_product_paths(&stack)
+        super::classify::stack_product_paths(stack)
             .iter()
             .map(ToString::to_string)
             .collect()
     };
-    Ok(ProjectPaths {
+    let paths = ProjectPaths {
         product,
-        watched: list(&git["breaking_watch_paths"]),
-    })
+        watched: list(git.get("breaking_watch_paths"), "breaking_watch_paths")?.unwrap_or_default(),
+    };
+    paths.validate()?;
+    Ok(paths)
 }
 
 /// The path that keeps a criteria change landed by `landing` (on top of
@@ -583,13 +644,15 @@ pub(super) fn landing_problem(
     };
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = repo.diff_tree_to_tree(Some(&tree(parent)?), Some(&tree(landing)?), None)?;
-    let paths: Vec<String> = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+    let names: BTreeSet<crate::git::GitName> = crate::git::diff_paths(&diff).into_iter().collect();
+    // A planning amendment carries plainly named files only, and a name that
+    // is not valid UTF-8 is not one (see `entry_problem`).
+    if let Some(odd) = names.iter().find(|name| name.rule_text().is_err()) {
+        return Ok(Some(odd.display().to_string()));
+    }
+    let paths: Vec<String> = names
+        .iter()
+        .filter_map(|name| name.rule_text().ok().map(str::to_string))
         .collect();
     if range_problem(repo, parent, landing, &paths).is_none() {
         return Ok(None);
@@ -609,4 +672,150 @@ pub(super) fn landing_problem(
         .find(|path| single(path).is_some())
         .or_else(|| paths.first())
         .cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round 23: a changed path that is not valid UTF-8 is refused by name
+    /// before any rule reads the paths as text, with or without a readable
+    /// repository; a plainly named path reaches the repository read.
+    #[test]
+    fn r23_range_problem_at_refuses_an_odd_name_by_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let odd = crate::git::GitName::from_bytes(b"docs/caf\xe9.md");
+        let problem = range_problem_at(dir.path(), "HEAD", "HEAD", &[odd]).unwrap();
+        assert!(problem.contains(r"docs/caf\xe9.md"), "{problem}");
+        assert!(problem.contains("not plain UTF-8"), "{problem}");
+        let plain = crate::git::GitName::from_text("docs/cafe.md");
+        let problem = range_problem_at(dir.path(), "HEAD", "HEAD", &[plain]).unwrap();
+        assert!(problem.contains("cannot read the range"), "{problem}");
+    }
+
+    /// A history whose shared ancestor cannot be read is refused; it is
+    /// never read as a range with no common ancestor and diffed from the
+    /// target.
+    #[test]
+    fn r23_an_unreadable_shared_ancestor_refuses_the_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = "project-management/tasks/TSK-002.md".to_string();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"1")]);
+        let base = crate::git::add_commit(&repo, &[(b"a", b"2")]);
+        let who = git2::Signature::now("Test", "test@example.com").unwrap();
+        let (head, orphan) = {
+            let parent = repo.find_commit(first).unwrap();
+            let mut index = repo.index().unwrap();
+            index.read_tree(&parent.tree().unwrap()).unwrap();
+            let blob = repo.blob(b"y").unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 1,
+                    id: blob,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: record.as_bytes().to_vec(),
+                })
+                .unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let head = repo
+                .commit(None, &who, &who, "record", &tree, &[&parent])
+                .unwrap();
+            let orphan = repo.commit(None, &who, &who, "orphan", &tree, &[]).unwrap();
+            (head, orphan)
+        };
+        let paths = std::slice::from_ref(&record);
+        // The controls: an ordinary planning range, and disjoint histories
+        // read from the target, both pass.
+        assert_eq!(range_problem(&repo, base, head, paths), None);
+        assert_eq!(range_problem(&repo, base, orphan, paths), None);
+        drop(repo);
+
+        let hex = first.to_string();
+        std::fs::remove_file(
+            dir.path()
+                .join(".git")
+                .join("objects")
+                .join(&hex[..2])
+                .join(&hex[2..]),
+        )
+        .unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let problem = range_problem(&repo, base, head, paths).expect("refused");
+        assert!(problem.contains("cannot read the range"), "{problem}");
+    }
+
+    #[test]
+    fn r22_historical_project_paths_reject_invalid_globs_and_keep_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        assert!(project_at(&repo, first).is_ok());
+        for key in ["product_paths", "breaking_watch_paths"] {
+            let policy = serde_json::json!({"git": {key: ["src/["]}}).to_string();
+            let oid =
+                crate::git::add_commit(&repo, &[(b".codeflow/policy.json", policy.as_bytes())]);
+            assert!(project_at(&repo, oid).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn r22_historical_project_paths_reject_malformed_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        for key in ["product_paths", "breaking_watch_paths"] {
+            for value in [serde_json::json!(42), serde_json::json!([42])] {
+                let policy = serde_json::json!({"git": {key: value}}).to_string();
+                let oid =
+                    crate::git::add_commit(&repo, &[(b".codeflow/policy.json", policy.as_bytes())]);
+                assert!(project_at(&repo, oid).is_err(), "{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn unreadable_project_never_uses_default_product_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b".codeflow/project.toml", b"stack = \"rust\"\n#\xff")],
+        );
+        assert!(project_at(&repo, oid).is_err());
+    }
+
+    /// Issue 79: a landing that changes a path that is not valid UTF-8 is not
+    /// a plain planning amendment, and the path is named by its exact bytes.
+    #[test]
+    fn a_landing_that_changes_a_path_that_is_not_utf8_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b"project-management/tasks/TSK-001.md", b"x")],
+        );
+        let second =
+            crate::git::add_commit(&repo, &[(b"project-management/tasks/TSK-002\xff.md", b"y")]);
+        let problem = landing_problem(&repo, Some(first), second).unwrap();
+        assert_eq!(
+            problem.as_deref(),
+            Some(r"project-management/tasks/TSK-002\xff.md")
+        );
+    }
+
+    /// A symbolic link below a directory whose name is not valid UTF-8 is
+    /// found: git2's own walk stopped at the directory.
+    #[test]
+    fn a_symlink_below_a_directory_that_is_not_utf8_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let second =
+            crate::git::add_commit_modes(&repo, &[(b"dir\xff/link", b"target", 0o120_000)]);
+        let found = first_special(&repo, second).expect("the link is found");
+        assert_eq!(found.1, r"dir\xff/link");
+    }
 }

@@ -58,7 +58,12 @@ pub fn load(git: &Git) -> Result<State, IdsError> {
     match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text)
             .map_err(|error| IdsError::Invalid(format!("{}: {error}", path.display()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(State::default()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path)? =>
+        {
+            Ok(State::default())
+        }
         Err(error) => Err(error.into()),
     }
 }
@@ -86,4 +91,24 @@ pub fn update(git: &Git, change: impl FnOnce(&mut State)) -> Result<(), IdsError
     let mut state = load(git)?;
     change(&mut state);
     save(git, &state)
+}
+
+#[cfg(all(test, unix))]
+mod r22_tests {
+    #[test]
+    fn r22_state_dangling_leaf_and_ancestor_refuse_missing_state_is_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path()).unwrap();
+        let git = super::Git::new(root.path());
+        assert!(super::load(&git).unwrap().unwritten.is_empty());
+        let dir = repo.path().join("codeflow");
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("registry-state.json");
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        assert!(super::load(&git).is_err());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        std::os::unix::fs::symlink("missing", &dir).unwrap();
+        assert!(super::load(&git).is_err());
+    }
 }

@@ -143,10 +143,19 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         ),
     ];
     for (files, validator, valid_identity) in record_sets {
+        let files = match files {
+            Ok(files) => files,
+            Err(error) => {
+                report
+                    .issues
+                    .push(format!("cannot read work record inventory: {error}"));
+                continue;
+            }
+        };
         for path in files {
             report.checked_records += 1;
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
-            let display = relative.to_string_lossy().replace('\\', "/");
+            let display = crate::git::display_key(&crate::portable_path::slashed(relative));
             if let Ok(content) = std::fs::read(&path) {
                 if let Ok((data, _)) = parse_frontmatter(&content) {
                     if let Some(identity) = supported_identity(&data, valid_identity) {
@@ -238,10 +247,12 @@ impl Default for ValidateOptions {
 pub fn parse_frontmatter(
     content: &[u8],
 ) -> Result<(HashMap<String, serde_yaml::Value>, Vec<u8>), ValidateError> {
-    let s = String::from_utf8_lossy(content);
+    let s = std::str::from_utf8(content).map_err(|error| {
+        ValidateError::InvalidFrontmatter(format!("record is not valid UTF-8: {error}"))
+    })?;
 
     // Strip BOM if present.
-    let s = s.strip_prefix('\u{FEFF}').unwrap_or(&s);
+    let s = s.strip_prefix('\u{FEFF}').unwrap_or(s);
 
     if !s.starts_with("---") {
         return Err(ValidateError::InvalidFrontmatter(
@@ -521,9 +532,11 @@ pub(crate) fn canonical_identity(
             message: "must be the lower-case UUIDv4 `new` wrote; a uid is never edited".into(),
         });
     }
+    // OS text rule (issue 79): compared with an ASCII id, so the display form
+    // (an escape for an invalid byte) never equals it either.
     let base = path
         .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
+        .map(|s| crate::git::GitName::from_os_str(s).display().to_string())
         .unwrap_or_default();
     if !canonical.is_empty() && base != canonical {
         errors.push(ValidationError {
@@ -531,7 +544,7 @@ pub(crate) fn canonical_identity(
             message: format!(
                 "filename \"{}\" does not match stable id \"{canonical}\"",
                 path.file_name()
-                    .map(|s| s.to_string_lossy().to_string())
+                    .map(|s| crate::git::GitName::from_os_str(s).display().to_string())
                     .unwrap_or_default()
             ),
         });
@@ -714,7 +727,7 @@ fn awaiting_selection_errors(
     repo_root: Option<&Path>,
 ) -> Vec<ValidationError> {
     let path = get_string_field(data, "awaiting_selection");
-    if path.trim().is_empty() {
+    if path.is_empty() {
         return Vec::new();
     }
     let mut errs = Vec::new();
@@ -942,6 +955,14 @@ pub(crate) fn open_questions(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_frontmatter_refuses_undecodable_target_identity() {
+        assert!(
+            super::parse_frontmatter(b"---\nid: TSK-001\nintegration_target: caf\xff\n---\n")
+                .is_err()
+        );
+    }
+
     use std::str::FromStr;
 
     use crate::models::{EpicStatus, TaskStatus};

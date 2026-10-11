@@ -18,12 +18,15 @@ pub struct DetectedTarget {
 ///
 /// Order: Cargo.toml -> package.json+vitest -> package.json+jest ->
 ///        go.mod -> pyproject.toml+pytest
-#[must_use]
-pub fn detect_stacks(repo_root: &Path) -> Vec<DetectedTarget> {
+///
+/// # Errors
+///
+/// Returns an error when an existing stack manifest cannot be read or parsed.
+pub fn detect_stacks(repo_root: &Path) -> std::io::Result<Vec<DetectedTarget>> {
     let mut targets = Vec::new();
 
     // 1. Cargo.toml → rust-core target
-    if detect_rust(repo_root) {
+    if detect_rust(repo_root)? {
         targets.push(DetectedTarget {
             config: build_rust_target(),
         });
@@ -31,89 +34,72 @@ pub fn detect_stacks(repo_root: &Path) -> Vec<DetectedTarget> {
 
     // 2. package.json + vitest → web target with vitest
     // 3. package.json + jest → web target with jest
-    if let Some(node_target) = detect_node(repo_root) {
+    if let Some(node_target) = detect_node(repo_root)? {
         targets.push(DetectedTarget {
             config: node_target,
         });
     }
 
     // 4. go.mod → go-service target
-    if detect_go(repo_root) {
+    if detect_go(repo_root)? {
         targets.push(DetectedTarget {
             config: build_go_target(),
         });
     }
 
     // 5. pyproject.toml or setup.py + pytest → python target
-    if detect_python(repo_root) {
+    if detect_python(repo_root)? {
         targets.push(DetectedTarget {
             config: build_python_target(),
         });
     }
 
-    targets
+    Ok(targets)
 }
 
-fn detect_rust(repo_root: &Path) -> bool {
-    let cargo_toml = repo_root.join("Cargo.toml");
-    if !cargo_toml.exists() {
-        return false;
+fn detect_rust(repo_root: &Path) -> std::io::Result<bool> {
+    let path = repo_root.join("Cargo.toml");
+    if !path.try_exists()? {
+        return Ok(false);
     }
-    // Check if it's a workspace or a single crate
-    if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-        return content.contains("[package]") || content.contains("[workspace]");
-    }
-    true
+    let text = std::fs::read_to_string(path)?;
+    let _: toml::Value = toml::from_str(&text).map_err(std::io::Error::other)?;
+    Ok(text.contains("[package]") || text.contains("[workspace]"))
 }
-
-fn detect_node(repo_root: &Path) -> Option<TargetConfig> {
-    let pkg_json = repo_root.join("package.json");
-    if !pkg_json.exists() {
-        return None;
+fn detect_node(repo_root: &Path) -> std::io::Result<Option<TargetConfig>> {
+    let path = repo_root.join("package.json");
+    if !path.try_exists()? {
+        return Ok(None);
     }
-    let content = std::fs::read_to_string(&pkg_json).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-    let has_dep = |name: &str| -> bool {
-        for section in ["devDependencies", "dependencies"] {
-            if let Some(deps) = parsed.get(section).and_then(|v| v.as_object()) {
-                if deps.contains_key(name) {
-                    return true;
-                }
-            }
-        }
-        false
+    let text = std::fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(std::io::Error::other)?;
+    let has_dep = |name| {
+        ["devDependencies", "dependencies"].iter().any(|section| {
+            value
+                .get(*section)
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|deps| deps.contains_key(name))
+        })
     };
-
-    // Vitest takes priority over jest
-    if has_dep("vitest") {
-        return Some(build_vitest_target());
-    }
-    if has_dep("jest") {
-        return Some(build_jest_target());
-    }
-
-    None
+    Ok(if has_dep("vitest") {
+        Some(build_vitest_target())
+    } else if has_dep("jest") {
+        Some(build_jest_target())
+    } else {
+        None
+    })
 }
-
-fn detect_go(repo_root: &Path) -> bool {
-    repo_root.join("go.mod").exists()
+fn detect_go(repo_root: &Path) -> std::io::Result<bool> {
+    repo_root.join("go.mod").try_exists()
 }
-
-fn detect_python(repo_root: &Path) -> bool {
-    // Check pyproject.toml
-    if let Ok(content) = std::fs::read_to_string(repo_root.join("pyproject.toml")) {
-        if content.contains("pytest") {
-            return true;
+fn detect_python(repo_root: &Path) -> std::io::Result<bool> {
+    for name in ["pyproject.toml", "setup.py"] {
+        let path = repo_root.join(name);
+        if path.try_exists()? && std::fs::read_to_string(path)?.contains("pytest") {
+            return Ok(true);
         }
     }
-    // Check setup.py
-    if let Ok(content) = std::fs::read_to_string(repo_root.join("setup.py")) {
-        if content.contains("pytest") {
-            return true;
-        }
-    }
-    false
+    Ok(false)
 }
 
 fn build_rust_target() -> TargetConfig {
@@ -313,7 +299,7 @@ mod tests {
             "[package]\nname = \"test\"\n",
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "rust-core");
         assert_eq!(targets[0].config.runner, RunnerType::Cargo);
@@ -338,7 +324,7 @@ mod tests {
             "[workspace]\nmembers = [\"crate-a\"]\n",
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "rust-core");
     }
@@ -351,7 +337,7 @@ mod tests {
             r#"{"devDependencies": {"vitest": "^1.0"}}"#,
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "web");
         assert_eq!(targets[0].config.runner, RunnerType::Vitest);
@@ -372,7 +358,7 @@ mod tests {
             r#"{"devDependencies": {"jest": "^29.0"}}"#,
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "web");
         assert_eq!(targets[0].config.runner, RunnerType::Jest);
@@ -389,7 +375,7 @@ mod tests {
     fn detect_go_mod() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("go.mod"), "module example.com/foo\n").unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "go-service");
         assert_eq!(targets[0].config.runner, RunnerType::Go);
@@ -407,7 +393,7 @@ mod tests {
             "[tool.pytest.ini_options]\nminversion = \"6.0\"\n",
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "python");
         assert_eq!(targets[0].config.runner, RunnerType::Pytest);
@@ -420,7 +406,7 @@ mod tests {
     #[test]
     fn detect_no_sentinels_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert!(targets.is_empty());
     }
 
@@ -437,7 +423,7 @@ mod tests {
             r#"{"devDependencies": {"vitest": "^1.0"}}"#,
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].config.name, "rust-core");
         assert_eq!(targets[1].config.name, "web");
@@ -454,8 +440,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(detect_stacks(dir.path()).is_empty());
-        assert_eq!(detect_stacks(&nested).len(), 1);
+        assert!(detect_stacks(dir.path()).unwrap().is_empty());
+        assert_eq!(detect_stacks(&nested).unwrap().len(), 1);
     }
 
     #[test]
@@ -466,7 +452,7 @@ mod tests {
             "setup(install_requires=['pytest'])\n",
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.name, "python");
     }
@@ -479,8 +465,19 @@ mod tests {
             r#"{"devDependencies": {"vitest": "^1.0", "jest": "^29.0"}}"#,
         )
         .unwrap();
-        let targets = detect_stacks(dir.path());
+        let targets = detect_stacks(dir.path()).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].config.runner, RunnerType::Vitest);
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_stack_detection_refuses_unreadable_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), [0xff]).unwrap();
+        assert!(super::detect_stacks(dir.path()).is_err());
     }
 }

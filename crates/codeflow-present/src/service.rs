@@ -384,10 +384,8 @@ async fn bootstrap(
     if let Err(response) = require_host(&state, &headers) {
         return response;
     }
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok());
-    if !matches!(origin, None | Some("null")) {
+    let origin = headers.get(header::ORIGIN);
+    if origin.is_some_and(|value| value.as_bytes() != b"null") {
         return plain(StatusCode::FORBIDDEN, "bootstrap Origin is not allowed");
     }
     let Ok(mut bootstrap_state) = state.bootstrap.lock() else {
@@ -591,7 +589,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
 
 fn csp_source_hash(source: &str) -> String {
     format!(
-        "'sha256-{}'",
+        "sha256-{}",
         STANDARD.encode(sha2::Sha256::digest(source.as_bytes()))
     )
 }
@@ -1013,6 +1011,8 @@ async fn not_found() -> Response<Body> {
     clippy::result_large_err,
     reason = "Axum responses preserve exact request-rejection headers at this private boundary"
 )]
+// Unreadable header values are unproven; every endpoint caller returns the
+// HTTP refusal supplied here before reading or changing session state.
 fn require_application_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -1023,12 +1023,15 @@ fn require_application_request(
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let authenticated = cookie.split(';').map(str::trim).any(|part| {
-        part.split_once('=').is_some_and(|(name, value)| {
-            name == state.cookie_name.as_str()
-                && constant_time_equal(value.as_bytes(), state.cookie_value.as_bytes())
-        })
-    });
+    let authenticated = cookie
+        .split(';')
+        .map(|part| part.trim_matches([' ', '\t']))
+        .any(|part| {
+            part.split_once('=').is_some_and(|(name, value)| {
+                name == state.cookie_name.as_str()
+                    && constant_time_equal(value.as_bytes(), state.cookie_value.as_bytes())
+            })
+        });
     if !authenticated {
         return Err(plain(
             StatusCode::UNAUTHORIZED,
@@ -1075,6 +1078,8 @@ fn require_application_request(
     clippy::result_large_err,
     reason = "Axum responses preserve exact request-rejection headers at this private boundary"
 )]
+// An unreadable Host is unproven; require_application_request and bootstrap
+// endpoint callers return this HTTP 421 refusal.
 fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<(), Response<Body>> {
     if headers
         .get(header::HOST)
@@ -1091,18 +1096,23 @@ fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<()
 
 // Both representations are equivalent. Prefer Brotli whenever explicitly
 // acceptable; q=0 and malformed quality values never opt into an encoding.
+// An unreadable value is unproven: asset refuses None with HTTP 406.
 fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
+    let values = headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .map(|value| value.to_str().ok())
+        .collect::<Option<Vec<_>>>()?;
     ["br", "gzip"].into_iter().find(|wanted| {
-        headers
-            .get_all(header::ACCEPT_ENCODING)
+        values
             .iter()
-            .filter_map(|value| value.to_str().ok())
+            .copied()
             .flat_map(|value| value.split(','))
             .any(|item| {
                 let mut parts = item.split(';');
                 if !parts
                     .next()
-                    .is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))
+                    .is_some_and(|name| name.trim_matches([' ', '\t']).eq_ignore_ascii_case(wanted))
                 {
                     return false;
                 }
@@ -1112,13 +1122,14 @@ fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
                 if parts.next().is_some() {
                     return false;
                 }
-                let Some((name, value)) = parameter.trim().split_once('=') else {
+                let Some((name, value)) = parameter.trim_matches([' ', '\t']).split_once('=')
+                else {
                     return false;
                 };
                 if !name.eq_ignore_ascii_case("q") {
                     return false;
                 }
-                let value = value.trim();
+                let value = value.trim_matches([' ', '\t']);
                 let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
                 if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
                     return false;
@@ -1159,6 +1170,8 @@ fn plain(status: StatusCode, message: &str) -> Response<Body> {
     )
 }
 
+// An unreadable output header is unproven; secure_html and plain return the
+// empty HTTP 500 refusal instead of exposing content without its headers.
 fn response_with_headers(
     status: StatusCode,
     body: Body,
@@ -1170,7 +1183,9 @@ fn response_with_headers(
         if let Ok(value) = HeaderValue::from_str(value) {
             response.headers_mut().insert(name.clone(), value);
         } else {
-            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            let mut refused = Response::new(Body::empty());
+            *refused.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            return refused;
         }
     }
     response
@@ -1208,8 +1223,7 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             "renderer prepaint source is missing".to_string(),
         ));
     };
-    if prepaint.source.len() > 64 * 1024
-        || prepaint.csp_sha256 != csp_source_hash(&prepaint.source).trim_matches('\'')
+    if prepaint.source.len() > 64 * 1024 || prepaint.csp_sha256 != csp_source_hash(&prepaint.source)
     {
         return Err(PresentError::CorruptState(
             "renderer prepaint source violates its CSP integrity contract".to_string(),
@@ -1700,6 +1714,27 @@ fn change_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn r15_invalid_origin_is_not_absent() {
+        let (_temp, state) = app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&state.authority).unwrap(),
+        );
+        headers.insert(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+        let response = bootstrap(
+            State(state),
+            headers,
+            Form(BootstrapForm {
+                capability: "capability".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
     use crate::document::{Block, ParsedDocument, PresentationDocument, Provenance};
 
     fn parsed_with(block: Block) -> ParsedDocument {
@@ -2583,6 +2618,31 @@ mod tests {
             );
         }
         assert_ne!(etags["br"], etags["gzip"]);
+    }
+
+    #[test]
+    fn r16_unreadable_encoding_refuses_even_beside_supported_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.append(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        assert_eq!(service_encoding(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn r16_invalid_response_header_refuses_the_content() {
+        let response = response_with_headers(
+            StatusCode::OK,
+            Body::from("private"),
+            &[(header::CONTENT_TYPE, "bad\nvalue")],
+        );
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(response.into_body(), 100)
+            .await
+            .unwrap();
+        assert!(bytes.is_empty());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::entry::{frontmatter_value, new_uid, record_id_from_path, Entry, RegId, RECORD_ROOTS};
-use super::git::{z_fields, Git};
+use super::git::Git;
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::issue::{self, Fetched, Pushed, Request};
 use super::ledger::{short, Ledger};
@@ -103,7 +103,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
     if git.is_shallow()? {
         return Err(IdsError::Shallow);
     }
-    let online = git.has_remote(AUTHORITY);
+    let online = git.has_remote(AUTHORITY)?;
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();
     for _ in 0..PUSH_ATTEMPTS {
@@ -174,7 +174,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
 /// The entries a seed would add: every id on every ref or in retained
 /// history that the registry does not hold yet.
 fn plan(git: &Git, ledger: &Ledger, map: Option<&SeedMap>) -> Result<Vec<Entry>, IdsError> {
-    let mapped_by = format!("{} {}", git.user_email(), super::today());
+    let mapped_by = format!("{} {}", git.user_email()?, super::today());
     let mut entries = Vec::new();
     let mut undecided = Vec::new();
     for (id, copies) in copies_on_refs(git)? {
@@ -324,7 +324,7 @@ fn decide(
     Ok(Ok(Entry {
         id: id.clone(),
         uid: uids.into_iter().next().cloned().unwrap_or_else(new_uid),
-        title: title_of(git, &chosen.intro, id).unwrap_or_default(),
+        title: title_of(git, &chosen.intro, id)?.unwrap_or_default(),
         issuer: "seed".to_string(),
         created: crate::workgraph::now_rfc3339(),
         target: chosen.refname.clone(),
@@ -337,13 +337,15 @@ fn decide(
     }))
 }
 
-fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let (_, blob) = inventory::added_records(git, commit)
-        .ok()?
+fn title_of(git: &Git, commit: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    let Some((_, blob)) = inventory::added_records(git, commit)?
         .into_iter()
-        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))?;
-    let text = git.run(&["cat-file", "blob", &blob]).ok()?;
-    frontmatter_value(&text, "title")
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))
+    else {
+        return Ok(None);
+    };
+    let text = git.run(&["cat-file", "blob", &blob])?;
+    Ok(frontmatter_value(&text, "title"))
 }
 
 /// The record files in the working tree, by id. A link, to a file or a
@@ -351,28 +353,35 @@ fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
 /// reparse point such as a junction, by the test the contained walk
 /// applies, so a renumbering never reads or writes outside the checkout.
 /// A linked record root is left out here; `backfill` refuses it by name
-/// (issue 94).
-fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
+/// (issue 94). A directory or entry that cannot be read is an error, never
+/// an absent record (issue 79).
+fn worktree_records(root: &Path) -> std::io::Result<BTreeMap<RegId, Vec<PathBuf>>> {
     let mut out: BTreeMap<RegId, Vec<PathBuf>> = BTreeMap::new();
-    let mut stack: Vec<PathBuf> = RECORD_ROOTS
+    let mut stack: Vec<(PathBuf, bool)> = RECORD_ROOTS
         .iter()
         .filter(|base| crate::contained::linked_component(root, base).is_none())
-        .map(|base| root.join(base))
+        .map(|base| (root.join(base), true))
         .collect();
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+    while let Some((dir, optional)) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error)
+                if optional
+                    && error.kind() == std::io::ErrorKind::NotFound
+                    && crate::absence::proven_absent(&dir)? =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
+        for entry in entries {
+            let path = entry?.path();
+            let metadata = std::fs::symlink_metadata(&path)?;
             if crate::contained::is_link(&metadata) {
                 continue;
             }
             if metadata.is_dir() {
-                stack.push(path);
+                stack.push((path, false));
                 continue;
             }
             if !metadata.is_file() {
@@ -381,13 +390,13 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
-            let relative = relative.to_string_lossy().replace('\\', "/");
+            let relative = crate::portable_path::slashed(relative);
             if let Some(id) = record_id_from_path(&relative) {
                 out.entry(id).or_default().push(path);
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// A frontmatter fence, read as the record parser reads it: `---` with
@@ -403,7 +412,10 @@ fn insert_after(text: &str, after: &str, line: &str) -> Option<String> {
     let mut in_front = false;
     for (index, current) in text.split_inclusive('\n').enumerate() {
         out.push_str(current);
-        let bare = current.trim_end_matches(['\r', '\n']);
+        let bare = current
+            .strip_suffix("\r\n")
+            .or_else(|| current.strip_suffix('\n'))
+            .unwrap_or(current);
         if index == 0 {
             in_front = is_fence(bare);
             continue;
@@ -435,7 +447,7 @@ pub struct BackfillReport {
 /// Returns an error when git fails or no registry is available.
 pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
     let git = Git::new(root);
-    let Some(registry) = super::check::registry_ref(&git) else {
+    let Some(registry) = super::check::registry_ref(&git)? else {
         return Err(IdsError::Invalid(
             "no `codeflow/registry` to backfill from; fetch it or seed it first".to_string(),
         ));
@@ -453,7 +465,9 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
             _ => {}
         }
     }
-    for (id, paths) in worktree_records(root) {
+    for (id, paths) in worktree_records(root).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
+    })? {
         for path in paths {
             let relative = crate::contained::relative_to(root, &path)?;
             let text = String::from_utf8(tree.read(&relative, u64::MAX)?)
@@ -506,7 +520,9 @@ pub struct Retarget {
 /// `uid`, and a record the registry already binds to its number.
 pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     let git = Git::new(root);
-    let records = worktree_records(root);
+    let records = worktree_records(root).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
+    })?;
     let paths = records
         .get(from)
         .ok_or_else(|| IdsError::Invalid(format!("{from} is not a record in this working tree")))?;
@@ -515,11 +531,11 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
             "{from} has several files in this working tree"
         )));
     };
-    let rel = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
+    // The exact name (issue 79): a name the contained walk cannot address
+    // refuses, never a lossy lookalike.
+    let rel = crate::contained::relative_to(root, path).map_err(|error| {
+        IdsError::Invalid(format!("{} cannot be renumbered: {error}", path.display()))
+    })?;
     // Read through the contained walk before the registry changes, so a
     // link refuses before any reservation is dropped or made (issue 94).
     let bytes = crate::contained::Tree::open(root)
@@ -546,7 +562,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
             )));
         }
     }
-    let registry = super::check::registry_ref(&git);
+    let registry = super::check::registry_ref(&git)?;
     let ledger = match &registry {
         Some(registry) => Ledger::read(&git, registry)?,
         None => Ledger::default(),
@@ -699,7 +715,10 @@ fn retarget_rollback_error(
 
 fn add_former_id(text: &str, from: &RegId) -> String {
     if let Some(current) = frontmatter_value(text, "former_ids") {
-        let inner = current.trim_start_matches('[').trim_end_matches(']').trim();
+        let inner = current
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_matches([' ', '\t']);
         let list = if inner.is_empty() {
             format!("[{from}]")
         } else {
@@ -802,26 +821,50 @@ fn plan_link_rewrites(
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
-    let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
-    // A tracked link, or a file under one, is skipped like an unreadable
-    // file: it is read and written only beneath the root (issue 94), so a
-    // rewrite never changes a file outside the checkout.
+    // OS text rule (issue 79): the name is a file system location, so its
+    // exact bytes are kept. The contained walk addresses a name as text, so a
+    // tracked name that is not UTF-8 refuses the renumber before any write:
+    // skipping it could report success with a link left on the old id.
+    let files: BTreeSet<crate::git::GitName> =
+        crate::git::name::parse_nul_list(&git.run_bytes(&args)?)
+            .into_iter()
+            .collect();
     let mut planned = Vec::new();
-    for file in files
-        .into_iter()
-        .filter(|file| !skip.contains(&file.as_str()))
-    {
-        let Some(text) = tree
-            .read(&file, u64::MAX)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-        else {
+    for file in &files {
+        let rel = file.rule_text().map_err(|_| {
+            IdsError::Invalid(format!(
+                "cannot rewrite links in {}: its name is not UTF-8, so the contained walk cannot address it; rename the tracked file, then retry",
+                file.display()
+            ))
+        })?;
+        if skip.contains(&rel) {
+            continue;
+        }
+        // A tracked link, or a file under one, is left alone: it is read and
+        // written only beneath the root (issue 94), so a rewrite never
+        // changes a file outside the checkout. Any other failure to read a
+        // tracked file refuses, never a skipped rewrite.
+        if crate::contained::linked_component(tree.path(), rel).is_some() {
+            continue;
+        }
+        let cannot_read = |error: std::io::Error| {
+            IdsError::Invalid(format!(
+                "cannot read {rel} while rewriting links: {error}; restore the tracked file, then retry"
+            ))
+        };
+        match tree.metadata(rel) {
+            Ok(meta) if meta.is_file() => {}
+            Ok(_) => continue,
+            Err(error) => return Err(cannot_read(error)),
+        }
+        // A file that is not UTF-8 text holds no link to rewrite.
+        let Ok(text) = String::from_utf8(tree.read(rel, u64::MAX).map_err(cannot_read)?) else {
             continue;
         };
-        if let Some(updated) = replace_id(&text, from, to, kept_range(&file, &text).as_ref()) {
+        if let Some(updated) = replace_id(&text, from, to, kept_range(rel, &text).as_ref()) {
             planned.push(Rewrite {
-                path: git.root().join(&file),
-                rel: file,
+                path: git.root().join(rel),
+                rel: rel.to_string(),
                 before: text,
                 after: updated,
             });
@@ -936,7 +979,7 @@ mod tests {
         let error = retarget(root, &RegId::parse("TSK-005").unwrap()).unwrap_err();
         assert!(error.to_string().contains("injected failure"), "{error}");
         assert_eq!(
-            Git::new(root).rev(crate::ids::REGISTRY_REF),
+            Git::new(root).rev(crate::ids::REGISTRY_REF).unwrap(),
             None,
             "nothing was reserved"
         );
@@ -961,7 +1004,7 @@ mod tests {
         let record = outside.path().join("tasks/TSK-005.md");
         let before = std::fs::read(&record).unwrap();
         assert!(retarget(root, &RegId::parse("TSK-005").unwrap()).is_err());
-        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF), None);
+        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF).unwrap(), None);
         assert_eq!(std::fs::read(&record).unwrap(), before);
         assert_eq!(
             std::fs::read_dir(outside.path().join("tasks"))
@@ -990,7 +1033,7 @@ mod tests {
         )
         .unwrap();
         assert!(retarget(root, &RegId::parse("TSK-005").unwrap()).is_err());
-        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF), None);
+        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF).unwrap(), None);
         assert_eq!(std::fs::read(&record).unwrap(), before);
         assert_eq!(
             std::fs::read_dir(outside.path().join("tasks"))
@@ -1206,7 +1249,7 @@ mod tests {
         symlink(outside.path(), root.join("project-management/linked")).unwrap();
         std::fs::write(outside.path().join("TSK-009.md"), "---\nid: TSK-009\n---\n").unwrap();
 
-        let records = worktree_records(root);
+        let records = worktree_records(root).unwrap();
         assert!(records.contains_key(&RegId::parse("FB-001").unwrap()));
         assert!(!records.contains_key(&RegId::parse("FB-002").unwrap()));
         assert!(!records.contains_key(&RegId::parse("TSK-009").unwrap()));
@@ -1464,5 +1507,99 @@ mod tests {
         let map = SeedMap::parse("[ids.\"TSK-050\"]\ncopies = [\"a\", \"b\"]\n").unwrap();
         assert_eq!(map.copies[&RegId::parse("TSK-050").unwrap()].len(), 2);
         assert!(SeedMap::parse("[ids.\"nope\"]\ncopies = []\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+
+    #[test]
+    fn r22_seed_title_read_failure_is_not_an_empty_title() {
+        let (dir, repo, commit) = repository(TASK, TEXT);
+        let git = Git::new(dir.path());
+        let id = RegId::parse("TSK-001").unwrap();
+        assert!(title_of(&git, &commit.to_string(), &id).unwrap().is_none());
+        remove_blob(&repo, TEXT);
+        assert!(title_of(&git, &commit.to_string(), &id).is_err());
+    }
+
+    #[test]
+    fn r22_seed_missing_copy_refuses_and_no_records_need_no_seed() {
+        let (dir, repo, _) = repository(TASK, TEXT);
+        remove_blob(&repo, TEXT);
+        assert!(matches!(
+            plan(&Git::new(dir.path()), &Ledger::default(), None),
+            Err(IdsError::Git(_))
+        ));
+        let (dir, _, _) = repository(b"README.md", b"hello");
+        assert!(plan(&Git::new(dir.path()), &Ledger::default(), None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn r22_retarget_missing_landed_blob_refuses_before_renumbering() {
+        let (dir, repo, _) = repository(TASK, TEXT);
+        let path = dir.path().join(std::str::from_utf8(TASK).unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, TEXT).unwrap();
+        remove_blob(&repo, TEXT);
+        assert!(matches!(
+            retarget(dir.path(), &RegId::parse("TSK-001").unwrap()),
+            Err(IdsError::Git(_))
+        ));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn r22_worktree_record_walk_refuses_bad_root_and_keeps_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(worktree_records(dir.path()).unwrap().is_empty());
+        std::fs::write(dir.path().join("project-management"), b"not a directory").unwrap();
+        assert!(worktree_records(dir.path()).is_err());
+    }
+
+    #[test]
+    fn r22_link_rewrite_refuses_missing_tracked_file_but_skips_binary() {
+        let (dir, repo, commit) = repository(b"docs/link.md", b"TSK-001");
+        let mut index = repo.index().unwrap();
+        index
+            .read_tree(&repo.find_commit(commit).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        let from = RegId::parse("TSK-001").unwrap();
+        let to = RegId::parse("TSK-002").unwrap();
+        let git = Git::new(dir.path());
+        let tree = crate::contained::Tree::open(dir.path()).unwrap();
+        assert!(plan_link_rewrites(&git, &tree, &from, &to, &[]).is_err());
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/link.md"), [0xff]).unwrap();
+        assert!(plan_link_rewrites(&git, &tree, &from, &to, &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A tracked name that is not UTF-8 refuses the renumber before any
+    /// write instead of keeping a link on the old id. The name comes from the
+    /// index, so the test runs where the file system refuses it (APFS).
+    #[test]
+    fn r22_link_rewrite_refuses_a_tracked_name_that_is_not_utf8() {
+        let (dir, repo, commit) = repository(b"docs/caf\xe9.md", b"see TSK-001");
+        let mut index = repo.index().unwrap();
+        index
+            .read_tree(&repo.find_commit(commit).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        let from = RegId::parse("TSK-001").unwrap();
+        let to = RegId::parse("TSK-002").unwrap();
+        let git = Git::new(dir.path());
+        let tree = crate::contained::Tree::open(dir.path()).unwrap();
+        let Err(error) = plan_link_rewrites(&git, &tree, &from, &to, &[]) else {
+            panic!("a tracked name that is not UTF-8 was left out of the renumber");
+        };
+        assert!(error.to_string().contains(r"docs/caf\xe9.md"), "{error}");
+        assert!(error.to_string().contains("not UTF-8"), "{error}");
     }
 }
