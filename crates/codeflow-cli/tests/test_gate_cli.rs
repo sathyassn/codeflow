@@ -967,3 +967,49 @@ fn only_refuses_an_unknown_or_disabled_name_before_any_target_starts() {
         stderr(&output)
     );
 }
+
+/// Issue 79: a path in the git index that is not valid UTF-8 stopped the gate
+/// at its snapshot of tracked files, so `codeflow test` failed in any project
+/// with such a file name. The entry is added to the index only, so the test
+/// also runs on file systems that refuse the name.
+#[cfg(unix)]
+#[test]
+fn a_tracked_path_that_is_not_utf8_does_not_stop_the_gate() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"all","runner":"custom","narrow":["docs/**"],"modes":{"full":{"command":"true"}}}]}"#,
+    );
+    let blob = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child.stdin.take().unwrap().write_all(b"data")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    let blob = String::from_utf8(blob.stdout).unwrap().trim().to_owned();
+    let entry = [
+        b"100644,".as_slice(),
+        blob.as_bytes(),
+        b",caf\xe9.txt".as_slice(),
+    ]
+    .concat();
+    let update = Command::new("git")
+        .args(["update-index", "--add", "--cacheinfo"])
+        .arg(OsStr::from_bytes(&entry))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(update.status.success(), "{}", stderr(&update));
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("test gate: passed"));
+}

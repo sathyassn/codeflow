@@ -78,22 +78,49 @@ impl ProjectPaths {
     /// Read the project's paths from its effective policy, falling back to the
     /// default for the stack recorded in `.codeflow/project.toml` (or the
     /// generic default when no stack is recorded).
-    #[must_use]
-    pub fn load(repo_root: &Path) -> Self {
-        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
-        let product = policy.git.product_paths.clone().unwrap_or_else(|| {
-            let stack = crate::scaffold::state::ProjectState::load(repo_root)
-                .map(|state| state.stack)
-                .unwrap_or_default();
-            stack_product_paths(&stack)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the effective policy or project stack cannot be read.
+    pub fn load(repo_root: &Path) -> Result<Self, String> {
+        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)?;
+        let product = if let Some(paths) = policy.git.product_paths {
+            paths
+        } else {
+            let project = crate::hooks::policy::read_project_toml(repo_root)?;
+            let stack = match project.as_ref().and_then(|value| value.get("stack")) {
+                None => "",
+                Some(value) => value.as_str().ok_or("project stack is not a string")?,
+            };
+            stack_product_paths(stack)
                 .iter()
                 .map(ToString::to_string)
                 .collect()
-        });
-        Self {
+        };
+        let paths = Self {
             product,
             watched: policy.git.breaking_watch_paths,
+        };
+        paths.validate()?;
+        Ok(paths)
+    }
+
+    /// Validate configured globs before they can classify a decision path.
+    ///
+    /// # Errors
+    /// Returns the invalid policy key and pattern, with a repair instruction.
+    pub fn validate(&self) -> Result<(), String> {
+        for (key, patterns) in [
+            ("product_paths", &self.product),
+            ("breaking_watch_paths", &self.watched),
+        ] {
+            for pattern in patterns {
+                glob::Pattern::new(pattern).map_err(|error| {
+                    format!("invalid git.{key} glob {pattern:?}: {error}; correct the path pattern in .codeflow/policy.json")
+                })?;
+            }
         }
+        Ok(())
     }
 
     fn for_key(&self, key: &str) -> &[String] {
@@ -187,10 +214,14 @@ impl PathSets {
 
 /// Whether `path` is a planning path: a record under `project-management/`
 /// (not the record templates, which are schema) or a plan under `docs/plan/`.
+/// A storage key of a name that is not text is never one (OS text rule,
+/// issue 79).
 #[must_use]
 pub fn is_planning_path(path: &str) -> bool {
-    (path.starts_with("project-management/") && !path.starts_with("project-management/templates/"))
-        || path.starts_with("docs/plan/")
+    crate::git::key_is_text(path)
+        && ((path.starts_with("project-management/")
+            && !path.starts_with("project-management/templates/"))
+            || path.starts_with("docs/plan/"))
 }
 
 /// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
@@ -226,6 +257,10 @@ const INSTRUCTION_STEMS: &[&str] = &["agents.", "claude.", "gemini."];
 pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPath> {
     if path == "AGENTS.md" {
         return Some(AmendmentPath::Instructions);
+    }
+    // A name that is not text is outside every planning class (issue 79).
+    if !crate::git::key_is_text(path) {
+        return None;
     }
     let parts: Vec<&str> = path.split('/').collect();
     let hidden = parts
@@ -296,6 +331,18 @@ mod tests {
             for pattern in &member.patterns {
                 assert!(glob::Pattern::new(pattern).is_ok(), "bad glob {pattern}");
             }
+        }
+    }
+
+    #[test]
+    fn r22_project_paths_reject_invalid_globs_and_keep_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(ProjectPaths::load(dir.path()).is_ok());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        for key in ["product_paths", "breaking_watch_paths"] {
+            let policy = serde_json::json!({"schema_version": 1, "git": {key: ["src/["]}});
+            std::fs::write(dir.path().join(".codeflow/policy.json"), policy.to_string()).unwrap();
+            assert!(ProjectPaths::load(dir.path()).is_err(), "{key}");
         }
     }
 
@@ -504,6 +551,26 @@ mod tests {
         assert!(!is_planning_path("project-management/templates/task.md"));
         assert!(!is_planning_path("docs/guide.md"));
         assert!(!is_planning_path("src/lib.rs"));
+    }
+
+    /// Issue 79: the storage key of a name that is not text is no planning
+    /// record and no amendment document, whatever its prefix says.
+    #[test]
+    fn a_name_that_is_not_text_is_outside_the_planning_class() {
+        let project = ProjectPaths {
+            product: vec![],
+            watched: vec![],
+        };
+        let record = crate::git::GitName::from_bytes(b"project-management/tasks/TSK-002\xff.md")
+            .storage_key();
+        let doc = crate::git::GitName::from_bytes(b"docs/caf\xe9.md").storage_key();
+        assert!(!is_planning_path(&record));
+        assert_eq!(amendment_path(&record, &project), None);
+        assert_eq!(amendment_path(&doc, &project), None);
+        assert_eq!(
+            amendment_path("docs/cafe.md", &project),
+            Some(AmendmentPath::Doc)
+        );
     }
 
     /// TSK-229 AC-2, AC-4: a planning amendment carries records, plans,

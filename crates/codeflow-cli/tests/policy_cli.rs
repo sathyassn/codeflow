@@ -149,9 +149,14 @@ fn policy_show_flags_invalid_values_and_exits_one() {
         stdout.contains("INVALID  git.commit_ticket_required"),
         "{stdout}"
     );
-    // The whole-file fallback is stated loudly: one bad value defaults EVERY key.
+    // The consequence is stated loudly: enforcement refuses the whole file
+    // (issue 79 AC-10); it never falls back to the built-in defaults.
     assert!(
-        stdout.contains("built-in defaults for EVERY key"),
+        stdout.contains("DOES NOT PARSE — enforcement refuses this policy"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("built-in defaults for EVERY key"),
         "{stdout}"
     );
     assert!(stderr.contains("off, warn, allow, block"), "{stderr}");

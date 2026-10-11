@@ -172,10 +172,12 @@ const SHELL_ROOT_NAMES: &[&str] = &[
 pub(crate) fn shell_roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = var("EXEPATH").map(PathBuf::from).into_iter().collect();
     if let Some(path) = var("PATH") {
+        // Kept strict: a folder whose entry cannot be read stays a
+        // candidate, which [`shell_root`] then judges.
         candidates.extend(std::env::split_paths(&path).filter(|dir| {
             ["git.exe", "bash.exe"]
                 .iter()
-                .any(|n| dir.join(n).is_file())
+                .any(|n| crate::absence::is_kind(&dir.join(n), false) != Some(false))
         }));
     }
     for (name, below) in [
@@ -201,12 +203,16 @@ pub(crate) fn shell_roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<PathBuf
 
 /// Whether `dir` is the root of a Unix-like shell install: an `etc` folder
 /// beside a `bin\bash.exe` or `usr\bin\bash.exe`, as Git for Windows,
-/// MSYS2 and Cygwin lay it out.
+/// MSYS2 and Cygwin lay it out. Kept strict: an entry whose type cannot be
+/// read counts as present, so an unread install is still protected.
 fn shell_root(dir: &Path) -> bool {
-    dir.join("etc").is_dir()
+    let present = |name: &str, want_dir: bool| {
+        crate::absence::is_kind(&dir.join(name), want_dir) != Some(false)
+    };
+    present("etc", true)
         && ["bin/bash.exe", "usr/bin/bash.exe"]
             .iter()
-            .any(|bash| dir.join(bash).is_file())
+            .any(|bash| present(bash, false))
 }
 
 /// Whether `dir` is a shell install's `etc` folder: named `etc`, in a
@@ -476,8 +482,9 @@ pub(crate) const PATH_END_NEEDLES: &[&str] = &["git/config"];
 /// A directory-stack word (`~1`, `~+1`, `~-`) does not.
 fn tilde_names_a_home(text: &str) -> bool {
     text.match_indices('~').any(|(at, _)| {
+        // Words split at the shell's blanks only (issue 79).
         let word_start = text[..at].chars().next_back().is_none_or(|c| {
-            c.is_whitespace()
+            crate::hooks::git_guard::shell_blank(c)
                 || matches!(
                     c,
                     '\'' | '"' | '=' | ':' | ';' | '(' | '|' | '&' | '<' | '>'
@@ -486,7 +493,7 @@ fn tilde_names_a_home(text: &str) -> bool {
         let prefix: String = text[at + 1..]
             .chars()
             .take_while(|c| {
-                !(c.is_whitespace()
+                !(crate::hooks::git_guard::shell_blank(*c)
                     || matches!(c, '/' | '\'' | '"' | ';' | ')' | '|' | '&' | '<' | '>'))
             })
             .collect();
@@ -1828,7 +1835,10 @@ const RUNNING_WORDS: &[&str] = &["cmd", "command", "exec", "script", "eval", "lo
 /// character and run nothing of their own. `vim -S x`, `sh r.sh` and
 /// `ssh -o ProxyCommand=sh` are not.
 fn viewer_command(value: &str, line: &Line<'_>) -> bool {
-    let mut words = value.split_whitespace();
+    // git runs the value through the shell, which splits at its blanks only.
+    let mut words = value
+        .split(crate::hooks::git_guard::shell_blank)
+        .filter(|word| !word.is_empty());
     let Some(viewer) = words.next().filter(|w| VIEWERS.contains(w)) else {
         return false;
     };
@@ -2421,8 +2431,12 @@ fn sed_reads(args: &[String]) -> bool {
 /// or `s/regex/text/` with only the `g`, `p`, `i`, `I` or number flags.
 /// Anything else, a `w`, `r`, `e` or another delimiter included, is not.
 fn sed_script_prints(script: &str) -> bool {
+    // sed's blanks between an address and its command (issue 79): another
+    // whitespace character is part of the command, which then is not one
+    // of the print commands below.
+    const BLANK: [char; 2] = [' ', '\t'];
     fn address(s: &str) -> Option<&str> {
-        let s = s.trim_start();
+        let s = s.trim_start_matches(BLANK);
         if let Some(rest) = s.strip_prefix('$') {
             return Some(rest);
         }
@@ -2435,20 +2449,20 @@ fn sed_script_prints(script: &str) -> bool {
     }
     let mut any = false;
     for command in script.split([';', '\n']) {
-        let mut s = command.trim();
+        let mut s = command.trim_matches(BLANK);
         if s.is_empty() {
             continue;
         }
         any = true;
         if let Some(rest) = address(s) {
-            s = rest.trim_start();
+            s = rest.trim_start_matches(BLANK);
             if let Some(rest) = s.strip_prefix(',') {
                 let Some(rest) = address(rest) else {
                     return false;
                 };
-                s = rest.trim_start();
+                s = rest.trim_start_matches(BLANK);
             }
-            s = s.strip_prefix('!').unwrap_or(s).trim_start();
+            s = s.strip_prefix('!').unwrap_or(s).trim_start_matches(BLANK);
         }
         let ok = if let Some(rest) = s.strip_prefix("s/") {
             let parts: Vec<&str> = rest.splitn(3, '/').collect();
@@ -2456,13 +2470,13 @@ fn sed_script_prints(script: &str) -> bool {
                 && !parts[0].contains('\\')
                 && !parts[1].contains('\\')
                 && parts[2]
-                    .trim_end()
+                    .trim_end_matches(BLANK)
                     .chars()
                     .all(|c| matches!(c, 'g' | 'p' | 'i' | 'I') || c.is_ascii_digit())
         } else {
             let mut chars = s.chars();
             let first = chars.next();
-            let rest = chars.as_str().trim();
+            let rest = chars.as_str().trim_matches(BLANK);
             first.is_some_and(|c| "pPdDqQ=lnNgGhHxz".contains(c))
                 && (rest.is_empty()
                     || (matches!(first, Some('q' | 'Q'))
@@ -2674,7 +2688,8 @@ fn value_of(word: &str) -> &str {
 fn path_like(word: &str) -> bool {
     !word.is_empty()
         && !word.contains(|c: char| {
-            c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | ';' | '<' | '>' | '|' | '&')
+            crate::hooks::git_guard::shell_blank(c)
+                || matches!(c, '\'' | '"' | '(' | ')' | ';' | '<' | '>' | '|' | '&')
         })
 }
 
@@ -2866,10 +2881,12 @@ fn copy_judgment(
                 return Some(v);
             }
         }
+        // Kept strict: a destination whose type cannot be read may be a
+        // directory, so the landing place is judged too.
         let existing_dir = dirs
             .iter()
             .filter_map(|d| line.expand(dest, d))
-            .any(|p| p.is_dir());
+            .any(|p| crate::absence::is_kind(&p, true) != Some(false));
         let base = Path::new(source.trim_end_matches('/'))
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

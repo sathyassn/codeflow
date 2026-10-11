@@ -231,7 +231,12 @@ fn session_entries<'a>(
         .filter_map(move |line| match line {
             Err(error) => Some(Err(format!("cannot read the session transcript: {error}"))),
             Ok(line) => {
-                let entry = serde_json::from_str::<serde_json::Value>(&line).ok()?;
+                let entry = match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        return Some(Err(format!("cannot read session transcript JSON: {error}")))
+                    }
+                };
                 let foreign = entry
                     .get("sessionId")
                     .is_some_and(|value| value != session_id);

@@ -79,11 +79,13 @@ fn init_writes(
     let manifest = ScaffoldManifest::load(source)?;
 
     let was_empty = detect::is_empty_dir(root);
-    let had_repo = gitutil::is_repo(root);
+    let had_repo = gitutil::is_repo(root)?;
     if !had_repo {
         gitutil::init_repo(root)?;
     }
-    let fresh_repo = !had_repo || !gitutil::has_commits(root);
+    let fresh_repo = !had_repo || !gitutil::has_commits(root)?;
+    // Obtain the existing hook owner before writing scaffold state or assets.
+    let hook_manager = detect::detect_hook_manager(root)?;
 
     // Resolve tier / answers against any previous install.
     let previous = if ProjectState::exists(root) {
@@ -116,7 +118,7 @@ fn init_writes(
         .clone()
         .or_else(|| previous.as_ref().map(|s| s.product_one_liner.clone()))
         .unwrap_or_else(|| project_name.clone());
-    let detected = detect::detect_stack(root);
+    let detected = detect::detect_stack(root)?;
     let stack = if detected == "unset" {
         previous
             .as_ref()
@@ -179,8 +181,10 @@ fn init_writes(
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
     let policy_created = !root.join(".codeflow/policy.json").exists();
-    let kept_template = read_text(source, "base/ci/pull_request_template.md")
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
+    let kept_template = read_text(source, "base/ci/pull_request_template.md")?
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
         if !entry.applies(tier, &preset) {
@@ -255,7 +259,6 @@ fn init_writes(
     // with a dirty, un-committable project.toml on the just-armed protected
     // branch: a post-commit re-store would otherwise flip git_hooks and dirty
     // the file that the armed policy now refuses to let them commit.
-    let hook_manager = detect::detect_hook_manager(root);
     state.git_hooks = if hook_manager.is_none() {
         GIT_HOOKS_WIRED.to_string()
     } else {
@@ -358,7 +361,7 @@ fn project_name(root: &Path) -> String {
         .file_name()
         .map_or_else(
             || "project".to_string(),
-            |n| n.to_string_lossy().to_string(),
+            |n| crate::git::GitName::from_os_str(n).display().to_string(),
         )
 }
 
@@ -389,9 +392,6 @@ pub(crate) fn build_context(
 /// Renders an entry's asset: read, UTF-8 check, optional template
 /// substitution. `None` (with a report line) when the asset is missing —
 /// parallel asset authoring must not break init.
-// Result kept for symmetry with the render/install pipeline (callers use `?`);
-// the body is infallible now that minimal-policy softening is gone.
-#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn render_entry(
     source: &dyn super::AssetSource,
     entry: &ManifestEntry,
@@ -399,14 +399,14 @@ pub(crate) fn render_entry(
     report: &mut Report,
 ) -> Result<Option<String>, ScaffoldError> {
     let asset_path = format!("base/{}", entry.src);
-    let Some(text) = read_text(source, &asset_path) else {
+    let Some(text) = read_text(source, &asset_path)? else {
         report.file_with_notes(
             &entry.dest,
             Action::MissingAsset,
             vec![format!("asset {asset_path} not shipped in this build")],
         );
         report.warnings.push(format!(
-            "asset {asset_path} missing (not authored yet, or not valid UTF-8) — {} skipped",
+            "asset {asset_path} missing (not authored yet) — {} skipped",
             entry.dest
         ));
         return Ok(None);
@@ -498,7 +498,7 @@ fn install_entry(
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);
-    let exists = dest_path.exists();
+    let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
 
     match entry.ownership {
@@ -519,12 +519,13 @@ fn install_entry(
                 return Ok(());
             }
             // Exists, no force: never overwrite. Report precisely why.
-            let current = std::fs::read_to_string(&dest_path).unwrap_or_default();
+            let current = std::fs::read_to_string(&dest_path)
+                .map_err(|error| ScaffoldError::io(&dest_path, error))?;
             let recorded = installed.files.get(&entry.dest);
             let note = match (entry.ownership, recorded) {
                 (Ownership::UserOwned, _) => {
                     // Make sure update has a shipped-default baseline to diff.
-                    if Baseline::read(root, &entry.dest).is_none() {
+                    if Baseline::read(root, &entry.dest)?.is_none() {
                         Baseline::write(root, &entry.dest, &rendered)?;
                     }
                     if recorded.is_none() {
@@ -553,7 +554,7 @@ fn install_entry(
                         // its creation. No baseline means a genuinely
                         // pre-existing user file: adopt it as managed.
                         let written_by_codeflow =
-                            Baseline::read(root, &entry.dest).is_some_and(|b| b == rendered);
+                            Baseline::read(root, &entry.dest)?.is_some_and(|b| b == rendered);
                         record(installed, entry, hash::sha256_hex(current.as_bytes()));
                         Baseline::write(root, &entry.dest, &rendered)?;
                         if written_by_codeflow {

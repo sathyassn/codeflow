@@ -8,7 +8,7 @@ use std::io::{self, BufRead, Write};
 
 /// Abstraction over user prompts.
 pub trait PromptProvider {
-    /// Ask the user a question and return their answer (trimmed).
+    /// Ask the user a question and return their answer without its terminal line ending.
     ///
     /// # Errors
     ///
@@ -82,8 +82,23 @@ impl PromptProvider for TerminalPromptProvider {
         io::stdout().flush()?;
         let mut line = String::new();
         io::stdin().lock().read_line(&mut line)?;
-        Ok(line.trim().to_string())
+        Ok(terminal_answer(&line).to_string())
     }
+}
+
+/// Remove a single terminal record delimiter, never a bare operand CR.
+fn terminal_answer(line: &str) -> &str {
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(line)
+}
+
+#[cfg(test)]
+#[test]
+fn r15_terminal_answer_removes_only_record_framing() {
+    assert_eq!(terminal_answer("path\r"), "path\r");
+    assert_eq!(terminal_answer("path\r\n"), "path");
+    assert_eq!(terminal_answer("path\u{a0}\n"), "path\u{a0}");
 }
 
 /// Scripted prompt provider for testing.

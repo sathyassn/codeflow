@@ -152,12 +152,13 @@ fn managed_release_identity_agrees_across_installed_state_and_generators() {
         .unwrap()
         .unwrap();
     let manifest: serde_json::Value =
-        serde_json::from_slice(&source.read(MANIFEST_ASSET).unwrap()).unwrap();
+        serde_json::from_slice(&source.read(MANIFEST_ASSET).unwrap().unwrap()).unwrap();
     assert_eq!(state.starter_version, manifest["version"].as_str().unwrap());
     assert_eq!(state.generator, Generator::managed(&state.starter_version));
     let generator = String::from_utf8(
         source
             .read(&format!("{ASSET_PREFIX}scripts/generator.mjs"))
+            .unwrap()
             .unwrap(),
     )
     .unwrap();
@@ -165,14 +166,19 @@ fn managed_release_identity_agrees_across_installed_state_and_generators() {
         "Object.freeze({{ name: \"{}\", version: \"{}\" }})",
         state.generator.name, state.generator.version
     )));
-    let package: serde_json::Value =
-        serde_json::from_slice(&source.read(&format!("{ASSET_PREFIX}package.json")).unwrap())
-            .unwrap();
+    let package: serde_json::Value = serde_json::from_slice(
+        &source
+            .read(&format!("{ASSET_PREFIX}package.json"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(package["name"], state.generator.name);
     assert_eq!(package["version"], state.generator.version);
     let lock: serde_json::Value = serde_json::from_slice(
         &source
             .read(&format!("{ASSET_PREFIX}package-lock.json"))
+            .unwrap()
             .unwrap(),
     )
     .unwrap();
@@ -184,6 +190,7 @@ fn managed_release_identity_agrees_across_installed_state_and_generators() {
         let code = String::from_utf8(
             source
                 .read(&format!("{ASSET_PREFIX}scripts/{consumer}"))
+                .unwrap()
                 .unwrap(),
         )
         .unwrap();
@@ -496,7 +503,7 @@ fn transfer_v1_and_v2_preserves_edits_deletions_and_older_release_provenance() {
 fn transferred_update_does_not_consult_incoming_assets() {
     struct NoAssets;
     impl AssetSource for NoAssets {
-        fn read(&self, _: &str) -> Option<Vec<u8>> {
+        fn read(&self, _: &str) -> std::io::Result<Option<Vec<u8>>> {
             panic!("transferred runtime must not read incoming assets");
         }
     }

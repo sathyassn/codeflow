@@ -34,7 +34,7 @@ use codeflow_core::registry;
 /// environment (charter §6.2 / D9).
 #[must_use]
 pub fn integrate_token_present() -> bool {
-    std::env::var(INTEGRATE_TOKEN_ENV).is_ok_and(|v| !v.is_empty())
+    std::env::var_os(INTEGRATE_TOKEN_ENV).is_some_and(|value| !value.is_empty())
 }
 
 /// `true` when a human's `CODEFLOW_HUMAN_OVERRIDE=1` is present (ADR-0007).
@@ -42,14 +42,17 @@ pub fn integrate_token_present() -> bool {
 /// and blocks in-session attempts to set it.
 #[must_use]
 pub fn human_override_present() -> bool {
-    std::env::var(HUMAN_OVERRIDE_ENV).is_ok_and(|v| v == "1")
+    std::env::var_os(HUMAN_OVERRIDE_ENV).is_some_and(|value| value == "1")
 }
 
 /// Project root for hook evaluation: the repo containing `start`, or `start`
 /// itself when not in a repository (policy then falls back to defaults).
-#[must_use]
-pub fn project_root(start: &std::path::Path) -> PathBuf {
-    codeflow_core::hooks::RepoInfo::discover(start).map_or_else(|| start.to_path_buf(), |i| i.root)
+///
+/// # Errors
+/// Returns why repository state cannot be read.
+pub fn project_root(start: &std::path::Path) -> Result<PathBuf, String> {
+    Ok(codeflow_core::hooks::RepoInfo::discover(start)?
+        .map_or_else(|| start.to_path_buf(), |i| i.root))
 }
 
 /// Print violations and notes for one enforcement plane run in `root`;
@@ -167,8 +170,13 @@ fn record_refusal(
 ) {
     use codeflow_core::hooks::{rfc3339_utc_now, session_summary, PolicyLevel};
     use codeflow_core::ledger::refusal;
-    let Some(info) = codeflow_core::hooks::RepoInfo::discover(root) else {
-        return;
+    let info = match codeflow_core::hooks::RepoInfo::discover(root) {
+        Ok(Some(info)) => info,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("codeflow: cannot record refusal: {error}");
+            return;
+        }
     };
     let ledger = info.ledger_dir();
     let now = rfc3339_utc_now();
@@ -220,7 +228,19 @@ pub fn touch_registry_best_effort() {
     let Ok(cwd) = std::env::current_dir() else {
         return;
     };
-    if let Some(root) = registry::find_repo_root(&cwd) {
+    let root = match registry::find_repo_root_checked(&cwd) {
+        Ok(root) => root,
+        Err(unreadable) => {
+            let path = unreadable.path.display().to_string();
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("registry touch skipped: {unreadable}"),
+                codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.with(&[("path", &path)]),
+            );
+            eprintln!("{}", finding.line("codeflow", "warning"));
+            return;
+        }
+    };
+    if let Some(root) = root {
         if let Err(e) = registry::touch_registry(&home, &root) {
             let path = registry::registry_path(&home).display().to_string();
             let finding = codeflow_core::remedy::Finding::new(
@@ -232,19 +252,95 @@ pub fn touch_registry_best_effort() {
     }
 }
 
-/// Walk up from the current directory to the nearest git repository root.
-/// Falls back to the current directory when none is found (commands that
-/// don't need git still work there).
-pub(crate) fn repo_root() -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut dir = cwd.clone();
-    loop {
-        if dir.join(".git").exists() {
-            return dir;
+/// Discover the nearest repository, or keep the current directory when no
+/// repository exists. An unreadable directory or repository is not absence.
+pub(crate) fn repo_root() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("cannot resolve current directory: {error}; run from an existing, readable working directory"))?;
+    repo_root_from(&cwd)
+}
+
+fn repo_root_from(cwd: &std::path::Path) -> Result<PathBuf, String> {
+    match codeflow_core::hooks::repo::open(cwd).map_err(|error| {
+        format!("{error}; repair repository metadata or run from a readable working directory")
+    })? {
+        Some(repo) => repo
+            .workdir()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| "repository has no worktree; run from a working checkout".to_string()),
+        None => Ok(cwd.to_path_buf()),
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    #[cfg(unix)]
+    #[test]
+    fn r22_repository_root_missing_cwd_is_not_dot() {
+        const CHILD: &str = "CODEFLOW_R22_REMOVED_CWD";
+        if let Some(path) = std::env::var_os(CHILD) {
+            std::fs::remove_dir(path).unwrap();
+            // The baseline returned PathBuf("."). Check the result without
+            // depending on the changed return type so this test runs there too.
+            let result = format!("{:?}", super::repo_root());
+            assert!(result.starts_with("Err("), "{result}");
+            return;
         }
-        match dir.parent() {
-            Some(parent) => dir = parent.to_path_buf(),
-            None => return cwd,
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        std::fs::create_dir(&gone).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cmd::root_tests::r22_repository_root_missing_cwd_is_not_dot",
+                "--nocapture",
+            ])
+            .env(CHILD, &gone)
+            .current_dir(&gone)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_repository_root_refuses_dangling_nested_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::os::unix::fs::symlink(nested.join("missing"), nested.join(".git")).unwrap();
+        assert!(super::repo_root_from(&nested).is_err());
+    }
+
+    #[test]
+    fn r22_repository_root_preserves_real_absence_and_unborn_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(super::repo_root_from(dir.path()).unwrap(), dir.path());
+        assert!(codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert_eq!(
+            super::repo_root_from(&nested)
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
     }
 }

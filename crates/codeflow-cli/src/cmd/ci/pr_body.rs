@@ -205,7 +205,7 @@ impl HtmlContainers {
             let tag = &token[..end];
             let name = tag
                 .trim_start_matches('/')
-                .split_whitespace()
+                .split([' ', '\t', '\r', '\n', '\u{c}'])
                 .next()
                 .unwrap_or_default()
                 .trim_end_matches('/')
@@ -217,7 +217,11 @@ impl HtmlContainers {
                         self.closed[id] = true;
                     }
                 }
-            } else if !tag.trim_end().ends_with('/') && html_container(&name) {
+            } else if !tag
+                .trim_end_matches([' ', '\t', '\r', '\n', '\u{c}'])
+                .ends_with('/')
+                && html_container(&name)
+            {
                 self.open.push((name, self.closed.len()));
                 self.closed.push(false);
             }
@@ -234,7 +238,10 @@ impl Section<'_> {
 
     fn matches(&self, name: &str) -> bool {
         matches!(self.depth, HeadingLevel::H2 | HeadingLevel::H3)
-            && self.name.trim().eq_ignore_ascii_case(name)
+            && self
+                .name
+                .trim_matches([' ', '\t', '\r', '\n'])
+                .eq_ignore_ascii_case(name)
     }
 }
 
@@ -368,7 +375,7 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         .any(|line| {
             let cells: Vec<_> = line
                 .split('|')
-                .map(str::trim)
+                .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
                 .filter(|cell| !cell.is_empty())
                 .collect();
             cells.len() >= 3
@@ -398,14 +405,17 @@ pub(crate) fn reviewed_revisions(body: &str, heading: &str) -> Vec<String> {
     };
     let mut revisions = Vec::new();
     for line in rendered_text(section.content(), false, false).lines() {
+        // The row grammar `review_names_revision` reads (issue 79): ASCII
+        // space, tab, CR and LF pad a cell, and the verdict's first word
+        // ends at a space or tab.
         let cells: Vec<_> = line
             .split('|')
-            .map(str::trim)
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
             .filter(|cell| !cell.is_empty())
             .collect();
         if cells.len() < 2
             || !cells.last().is_some_and(|verdict| {
-                verdict.split_whitespace().next().is_some_and(|word| {
+                verdict.split([' ', '\t']).next().is_some_and(|word| {
                     matches!(word.to_ascii_lowercase().as_str(), "approved" | "approve")
                 })
             })
@@ -456,6 +466,15 @@ mod review_revision_tests {
             assert!(reviewed_revisions(&body, "Reviews").is_empty(), "{body}");
         }
     }
+
+    /// Issue 79: a cell is padded only by ASCII space, tab, CR and LF, as
+    /// `review_names_revision` reads it, so a verdict padded with another
+    /// whitespace character is not an approval.
+    #[test]
+    fn a_verdict_padded_with_other_whitespace_is_no_approval() {
+        let body = "## Reviews\n| peer | 316c7e8f7 | \u{a0}approved |\n";
+        assert!(reviewed_revisions(body, "Reviews").is_empty(), "{body}");
+    }
 }
 
 /// The Reviews section records no review: it names no commit and has no
@@ -471,8 +490,9 @@ pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
         .split(|c: char| !c.is_ascii_hexdigit())
         .any(|token| token.len() >= 7 && token.bytes().any(|b| b.is_ascii_digit()));
     let approves = text.lines().any(|line| {
+        // The row grammar `review_names_revision` reads (issue 79).
         line.split('|')
-            .map(str::trim)
+            .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
             .rfind(|cell| !cell.is_empty())
             .is_some_and(|verdict| {
                 matches!(
@@ -626,7 +646,9 @@ impl HtmlScan {
                     {
                         let name = rest[1..]
                             .trim_start_matches('/')
-                            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                            .split(|c: char| {
+                                matches!(c, ' ' | '\t' | '\r' | '\n' | '\u{c}' | '/' | '>')
+                            })
                             .next()
                             .unwrap_or_default()
                             .to_ascii_lowercase();
@@ -902,9 +924,11 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     // checked mechanically under `git.pr_summary` (the note of 2026-10-03).
     for section in outline.sections {
         if section.matches("Testing")
-            && !visible_text(section.content(), false)
-                .lines()
-                .any(|line| line.trim().to_ascii_lowercase().starts_with("not tested:"))
+            && !visible_text(section.content(), false).lines().any(|line| {
+                line.trim_matches([' ', '\t', '\r', '\n'])
+                    .to_ascii_lowercase()
+                    .starts_with("not tested:")
+            })
         {
             warn("PR Testing has no Not tested: line".into());
         }
@@ -1262,8 +1286,14 @@ fn release_fields_under(body: &str, heading: &str) -> Option<Vec<(String, String
     Some(
         field_text(&content[..end])
             .lines()
-            .filter_map(|line| line.trim().split_once(':'))
-            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .filter_map(|line| line.trim_matches([' ', '\t', '\r', '\n']).split_once(':'))
+            .map(|(key, value)| {
+                (
+                    key.trim_matches([' ', '\t', '\r', '\n'])
+                        .to_ascii_lowercase(),
+                    value.trim_matches([' ', '\t', '\r', '\n']).to_string(),
+                )
+            })
             .collect(),
     )
 }
@@ -1480,7 +1510,8 @@ fn migration_guidance(parsed: &[Section<'_>], migration: &str) -> bool {
 fn guidance(value: &str) -> String {
     value
         .replace(['`', '"', '\''], "")
-        .split_whitespace()
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
