@@ -1,0 +1,11 @@
+id = "TSK-272"
+uid = "5eec27c7-e6eb-4e49-a0ec-3e3fbc9663bb"
+kind = "TSK"
+title = "the extended CodeQL triage is reviewed and its false positives are settled"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-11T23:18:04Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
