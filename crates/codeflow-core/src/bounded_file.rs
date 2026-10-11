@@ -10,6 +10,26 @@ use std::path::Path;
 pub(crate) mod confined;
 pub(crate) use confined::ConfinedRoot;
 
+/// The bytes of `path`, following a link, read only when it is a regular
+/// file. A directory, fifo or device, or a link to one, is refused with
+/// `InvalidInput` before it is opened, so a fifo cannot block the reader; a
+/// missing path or a dangling link keeps `NotFound`.
+pub(crate) fn read_regular(path: &Path) -> std::io::Result<Vec<u8>> {
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    std::fs::read(path)
+}
+
+/// [`read_regular`] as UTF-8 text.
+pub(crate) fn read_regular_to_string(path: &Path) -> std::io::Result<String> {
+    String::from_utf8(read_regular(path)?)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
 pub(crate) fn read_bounded_regular(path: &Path, maximum_bytes: u64) -> std::io::Result<Vec<u8>> {
     read_bounded_regular_with_hook(path, maximum_bytes, || Ok(()))
 }

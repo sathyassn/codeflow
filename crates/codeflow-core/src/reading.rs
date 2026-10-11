@@ -377,7 +377,7 @@ pub fn always_loaded(root: &Path) -> std::io::Result<Option<AlwaysLoaded>> {
 /// regular file (a directory, fifo or device, or a link to one), so it is
 /// never read. Metadata follows a link, so a dangling link is an error, and
 /// every error names the path.
-fn regular_text(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn regular_text(path: &Path) -> std::io::Result<Option<String>> {
     let named = |error: std::io::Error| {
         std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
     };
@@ -464,7 +464,8 @@ fn collect_imports(
                         }
                     }
                 }
-                for _ in 0..end {
+                // `end` is a byte offset; the iterator steps by character.
+                for _ in 0..rest[..end].chars().count() {
                     chars.next();
                 }
                 previous = ' ';
@@ -2251,6 +2252,38 @@ mod tests {
 
         std::fs::remove_file(root.join("AGENTS.md")).unwrap();
         assert_eq!(always_loaded(root).unwrap(), None);
+    }
+
+    #[test]
+    fn imports_after_a_multibyte_path_on_one_line_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join("docs")).unwrap();
+        for (name, text) in [
+            ("docs/référence.md", "r\nr\nr\n"),
+            ("note📄.md", "n\n"),
+            ("café.md", "c\n"),
+            ("suite.md", "s\ns\ns\ns\n"),
+            ("a.md", "a\n"),
+            ("b.md", "b\nb\n"),
+        ] {
+            std::fs::write(root.join(name), text).unwrap();
+        }
+        for (line, first, first_lines) in [
+            ("@docs/référence.md @suite.md", "docs/référence.md", 3),
+            ("@docs/référence.md\t@suite.md", "docs/référence.md", 3),
+            ("@note📄.md @suite.md", "note📄.md", 1),
+            ("@café.md @suite.md", "café.md", 1),
+        ] {
+            std::fs::write(root.join("CLAUDE.md"), format!("{line}\n")).unwrap();
+            let set = always_loaded(root).unwrap().unwrap();
+            assert_eq!(set.imports, vec![first, "suite.md"], "{line}");
+            assert_eq!(set.lines, 1 + first_lines + 4, "{line}");
+        }
+        std::fs::write(root.join("CLAUDE.md"), "@a.md @b.md\n").unwrap();
+        let set = always_loaded(root).unwrap().unwrap();
+        assert_eq!(set.imports, vec!["a.md", "b.md"]);
+        assert_eq!(set.lines, 4);
     }
 
     #[test]

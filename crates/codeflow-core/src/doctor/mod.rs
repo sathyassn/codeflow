@@ -666,7 +666,7 @@ fn shims_not_called(active: &Path, shims: &Path) -> Result<Vec<String>, String> 
     let mut uncalled = Vec::new();
     for name in names {
         let hook = active.join(&name);
-        let text = match std::fs::read_to_string(&hook) {
+        let text = match crate::bounded_file::read_regular_to_string(&hook) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 uncalled.push(format!("{name} (no hook)"));
@@ -926,10 +926,12 @@ struct CodexHookState {
 /// it). `Err` when the hooks file does not read as Codex reads it, wires no
 /// hook, or holds a hook shape that hash does not cover.
 fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usize), String> {
-    let text = std::fs::read_to_string(hooks_json).map_err(|e| format!("hooks.json: {e}"))?;
+    let text = crate::bounded_file::read_regular_to_string(hooks_json)
+        .map_err(|e| format!("hooks.json: {e}"))?;
     let file: CodexHooksFile =
         serde_json::from_str(&text).map_err(|e| format!("hooks.json as codex reads it: {e}"))?;
-    let config = match std::fs::read_to_string(codex_home.join("config.toml")) {
+    let config = match crate::bounded_file::read_regular_to_string(&codex_home.join("config.toml"))
+    {
         Ok(text) => text
             .parse::<toml::Table>()
             .map_err(|e| format!("codex config.toml: {e}"))?,
@@ -1515,7 +1517,7 @@ fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> Result<bool, String
         {
             continue;
         }
-        let text = std::fs::read_to_string(path)
+        let text = crate::bounded_file::read_regular_to_string(&path)
             .map_err(|error| format!("cannot read {name}: {error}"))?;
         let table = text
             .parse::<toml::Table>()
@@ -1597,7 +1599,7 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
         Ok(true) => {}
     }
     let path = grok_home.join("trusted_folders.toml");
-    let document = match std::fs::read_to_string(&path) {
+    let document = match crate::bounded_file::read_regular_to_string(&path) {
         Ok(text) => match toml::from_str::<GrokTrustDocument>(&text) {
             Ok(document) => document,
             Err(e) => return GrokTrust::Unreadable(format!("trusted_folders.toml: {e}")),
@@ -1905,6 +1907,13 @@ fn observe_binding_drift(
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    // Opening a fifo blocks, so a non-regular file is refused first.
+    if !std::fs::metadata(path)
+        .map_err(|error| format!("open: {error}"))?
+        .is_file()
+    {
+        return Err("open: not a regular file".to_string());
+    }
     let file = std::fs::File::open(path).map_err(|error| format!("open: {error}"))?;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
@@ -2123,7 +2132,7 @@ fn walk_json_files_inner(
             let rel = crate::git::display_key(&crate::portable_path::slashed(
                 path.strip_prefix(root).unwrap_or(&path),
             ));
-            match std::fs::read(&path) {
+            match crate::bounded_file::read_regular(&path) {
                 Ok(data) => {
                     if serde_json::from_slice::<serde_json::Value>(&data).is_err() {
                         invalid.push(rel);
@@ -2939,7 +2948,7 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
             }
             Ok(false) => {}
         }
-        match std::fs::read_to_string(path) {
+        match crate::bounded_file::read_regular_to_string(&path) {
             Ok(content) => {
                 found = Some((dest.to_string(), content));
                 break;
@@ -3093,7 +3102,7 @@ fn read_installed_manifest(root: &Path) -> Result<InstalledManifest, String> {
     if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
         return Ok(InstalledManifest::new("0"));
     }
-    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let bytes = crate::bounded_file::read_regular(&path).map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
@@ -3150,7 +3159,7 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
             Ok(false) => {}
             Err(error) => return input_failure("managed-drift", start, &path, error),
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match crate::bounded_file::read_regular_to_string(&path) {
             Ok(content) => content,
             Err(error) => return input_failure("managed-drift", start, &path, error),
         };
@@ -3237,7 +3246,7 @@ fn check_customization(opts: &Options) -> CheckResult {
             &["{{ARCHITECTURE_OVERVIEW}}", "{{ARCHITECTURE_AREAS}}"][..],
         ),
     ] {
-        match std::fs::read_to_string(root.join(path)) {
+        match crate::bounded_file::read_regular_to_string(&root.join(path)) {
             Ok(content) if sentinels.iter().any(|sentinel| content.contains(sentinel)) => {
                 incomplete.push(path.to_string());
             }
@@ -3254,7 +3263,7 @@ fn check_customization(opts: &Options) -> CheckResult {
 
     let agents = root.join("AGENTS.md");
     match exists(&agents) {
-        Ok(true) => match std::fs::read_to_string(&agents) {
+        Ok(true) => match crate::bounded_file::read_regular_to_string(&agents) {
             Ok(content) if content.contains("<!-- Add project-specific notes here. -->") => {
                 incomplete.push("AGENTS.md".to_string());
             }
@@ -3391,11 +3400,7 @@ fn installed_scaffold_version(root: &Path, agents: Option<&str>) -> String {
 }
 
 fn reading_kernel(root: &Path) -> std::io::Result<Option<String>> {
-    let path = root.join("AGENTS.md");
-    if crate::absence::proven_absent(&path)? {
-        return Ok(None);
-    }
-    std::fs::read_to_string(path).map(Some)
+    crate::reading::regular_text(&root.join("AGENTS.md"))
 }
 
 fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static str), String> {
@@ -3427,6 +3432,8 @@ struct ReadingSizes {
 
 /// Measure the kernel, the always-loaded set `always`, the per-task chain
 /// and each shipped skill and agent under `root` against `guidelines`.
+/// A shipped agent file that is missing or not a regular file is skipped;
+/// one that exists but cannot be read is the error, naming its path.
 fn reading_sizes(
     root: &Path,
     agents: Option<&str>,
@@ -3434,7 +3441,7 @@ fn reading_sizes(
     files: &crate::reading::SkillFiles,
     skill_tree: &str,
     guidelines: &crate::reading::Guidelines,
-) -> ReadingSizes {
+) -> std::io::Result<ReadingSizes> {
     use crate::hooks::guidance::{installed_inventory, SCAFFOLD_MANIFEST};
     use crate::reading::{self, Inventory, Measure, Unit};
     use crate::scaffold::rule_map;
@@ -3506,7 +3513,7 @@ fn reading_sizes(
     }
     for name in &shipped_agents {
         let path = format!(".claude/agents/{name}.md");
-        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
+        let Some(text) = reading::regular_text(&root.join(&path))? else {
             continue;
         };
         sizes.advisory.push((
@@ -3517,7 +3524,7 @@ fn reading_sizes(
             sizes.descriptions.push((measure, path));
         }
     }
-    sizes
+    Ok(sizes)
 }
 
 /// The measures joined for a report.
@@ -3711,14 +3718,17 @@ fn check_reading(opts: &Options) -> CheckResult {
         Ok(config) => (config.guidelines(defaults), config.set_keys(), None),
         Err(error) => (defaults, Vec::new(), Some(error.to_string())),
     };
-    let sizes = reading_sizes(
+    let sizes = match reading_sizes(
         &root,
         agents.as_deref(),
         always,
         &files,
         skill_tree,
         &guidelines,
-    );
+    ) {
+        Ok(sizes) => sizes,
+        Err(error) => return unreadable("a shipped agent", &error),
+    };
     let (status, message) = reading_verdict(&sizes, &own, config_error.as_deref());
     CheckResult {
         name: "reading".into(),

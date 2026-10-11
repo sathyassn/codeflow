@@ -73,17 +73,18 @@ pub enum LimitSource {
 
 /// The `project_doc_max_bytes` the project's `.codex/config.toml` sets, when
 /// it sets a positive integer; `None` without the file, the key or a usable
-/// value. A file that exists but cannot be read is the error.
+/// value, or when the path is not a regular file (a directory, fifo or
+/// device is never read). A file that exists but cannot be read is the
+/// error.
 ///
 /// # Errors
 ///
-/// The config file's absence cannot be proven, or it cannot be read.
+/// The config file's absence cannot be proven, its metadata cannot be taken
+/// (a dangling link), or it cannot be read.
 pub fn project_doc_max_bytes(root: &std::path::Path) -> std::io::Result<Option<usize>> {
-    let path = root.join(".codex/config.toml");
-    if crate::absence::proven_absent(&path)? {
+    let Some(text) = crate::reading::regular_text(&root.join(".codex/config.toml"))? else {
         return Ok(None);
-    }
-    let text = std::fs::read_to_string(&path)?;
+    };
     let Ok(value) = text.parse::<toml::Value>() else {
         return Ok(None);
     };
@@ -839,6 +840,25 @@ see = [{ target = "cf-plan", must_open = true }, { target = "cf-ship", reason = 
             let error = codex_instruction_limit(root).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
         }
+    }
+
+    /// A fifo at the config path is not read: a read would block with no
+    /// writer, so returning at all shows it was skipped.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_config_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir(root.join(".codex")).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(root.join(".codex/config.toml"))
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            codex_instruction_limit(root).unwrap(),
+            (CODEX_INSTRUCTION_LIMIT_BYTES, LimitSource::Default)
+        );
     }
 
     #[test]
