@@ -19,16 +19,20 @@ class GateContracts(unittest.TestCase):
     def test_windows_jobs_are_a_gate_behind_one_verdict(self):
         # Native Windows is a release target (TSK-197). TSK-203 splits the
         # referee into test partitions, the other checks and the journey gate
-        # over every partition's results; none of them may forgive a failure,
-        # and one `windows` verdict, never skipped, passes only when all three
-        # succeeded. Publication requires that verdict by its name.
+        # over every partition's results. TSK-265 builds the suite once into
+        # an archive the partitions run, and runs the Python journeys beside
+        # the partitions. None of them may forgive a failure, and one
+        # `windows` verdict, never skipped, passes only when all of them
+        # succeeded, or when the push reuse decision named a run and all were
+        # skipped. Publication requires that verdict by its name.
         workflow = read('.github/workflows/codeflow-ci.yml')
         parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
-        self.assertEqual(set(windows), {'windows', 'windows-tests', 'windows-journeys', 'windows-verdict'})
+        gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
+        self.assertEqual(set(windows), {*gated, 'windows-verdict'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        for key in ('windows', 'windows-tests', 'windows-journeys'):
+        for key in gated:
             with self.subTest(job=key):
                 job = windows[key]
                 self.assertIn('runs-on: windows-latest', job)
@@ -36,19 +40,59 @@ class GateContracts(unittest.TestCase):
                 name = job.split('name: ', 1)[1].split('\n', 1)[0]
                 self.assertNotIn('advisory', name)
                 self.assertNotIn(name, checks)
-        self.assertIn('journey-gate.py --results target/nextest/partitions', windows['windows-journeys'])
-        self.assertIn('needs: windows-tests', windows['windows-journeys'])
-        self.assertIn('pattern: windows-junit-*', windows['windows-journeys'])
-        self.assertIn('name: windows-junit-${{ matrix.partition }}', windows['windows-tests'])
+        # AC-1: the job after the partitions reads results only; the Python
+        # journeys run in a job that starts with the run.
+        journeys = windows['windows-journeys']
+        self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
+        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertNotIn('test_release.py', journeys)
+        self.assertIn('needs: windows-tests', journeys)
+        self.assertIn('pattern: windows-junit-*', journeys)
+        release = windows['windows-release-journey']
+        self.assertIn('journey-gate.py --part python --skip-benchmark', release)
+        self.assertIn('    needs: reuse\n', release)
+        # AC-2: one build, and partitions that run the archive without compiling.
+        self.assertIn('cargo nextest archive --workspace --profile codeflow', windows['windows-build'])
+        tests = windows['windows-tests']
+        self.assertIn('name: windows-junit-${{ matrix.partition }}', tests)
+        self.assertIn('    needs: windows-build\n', tests)
+        self.assertIn('cargo nextest run --archive-file', tests)
+        self.assertNotIn('rust-cache', tests)
+        self.assertNotIn('cargo build', tests)
+        self.assertNotIn('--workspace --no-fail-fast', tests)
         verdict = windows['windows-verdict']
         self.assertTrue(verdict.startswith('    if: always() && ('), verdict)
         self.assertIn('    name: windows\n', verdict)
-        self.assertIn('    needs: [windows, windows-tests, windows-journeys]\n', verdict)
+        self.assertIn('    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, '
+                      'windows-release-journey]\n', verdict)
         self.assertNotIn('continue-on-error', verdict)
-        for result in ('needs.windows.result', 'needs.windows-tests.result', 'needs.windows-journeys.result'):
+        for result in ('needs.windows.result', 'needs.windows-build.result', 'needs.windows-tests.result',
+                       'needs.windows-journeys.result', 'needs.windows-release-journey.result'):
             self.assertIn(result, verdict)
-        self.assertIn('[ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ]', verdict)
+        self.assertIn('[ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] '
+                      '|| [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]', verdict)
+        self.assertIn('[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
+                      '"skipped skipped skipped skipped skipped" ]', verdict)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
+
+    def test_only_a_push_reuses_a_verdict_and_the_heavy_jobs_follow_it(self):
+        # TSK-265 AC-4: pull request runs never reuse; every gate and Windows
+        # job before the verdicts is skipped exactly when the decision names
+        # a run, and the decision's token reads only.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        reuse = jobs['reuse']
+        self.assertTrue(reuse.startswith("    if: github.event_name == 'push'\n"), reuse)
+        self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
+        self.assertNotIn(': write', workflow)
+        self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
+        for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
+            with self.subTest(job=key):
+                self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
+                self.assertIn('    needs: reuse\n', jobs[key])
+        self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
+        self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
     # TSK-254: pull request runs share one group per pull request and cancel
     # the run they supersede; push, schedule and dispatch runs each get a
