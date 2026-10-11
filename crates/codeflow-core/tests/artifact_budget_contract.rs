@@ -2952,7 +2952,9 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     (
         "assets/base/rules/writing.md",
         &[
-            "**Write plainly.** Everything you write, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more.",
+            "**Write plainly.** Everything you write, replies and status updates included, is simple, straightforward, clear and unambiguous, with the detail the reader needs and no more.",
+            "State the fact directly, and check what a reader could take it to mean.",
+            "## Meaning the reader takes",
             "`.agents/skills/cf-editorial-review/references/editorial-smells.md` lists each pattern under \"Mannered prose\" with a plain rewrite.",
             "**Prose length.** Default to short prose and bullets. Write long prose only when the reader asks for it or the artifact is prose by nature",
             "Bullets for the enumerable, short prose for the rest",
@@ -2968,7 +2970,7 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     (
         "assets/base/agents/skills/cf-editorial-review/SKILL.md",
         &[
-            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward and clear, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly.",
+            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward, clear and unambiguous, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly, and check what a reader could take it to mean.",
             "Default to short prose and bullets, and write long prose only when the reader asks for it or the artifact is prose by nature.",
             "\"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
             "In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a docs-portal page it is the portal's figure grammar.",

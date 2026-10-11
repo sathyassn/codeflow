@@ -6,17 +6,96 @@ summaries, documents, records, commit messages and PR bodies. Managed by
 `AGENTS.md`.
 
 **Write plainly.** Everything you write, replies and status updates
-included, is simple, straightforward and clear, with the detail the reader
-needs and no more. Avoid mannered prose, writing that performs for effect:
-slogans, "not X but Y" turns, rhetorical triplets, dramatic fragments,
-stacked hedges, colon reveals, self-narration, ceremonial framing and walls
-of text. State the fact directly. At the standard and full tiers,
+included, is simple, straightforward, clear and unambiguous, with the detail
+the reader needs and no more. Avoid mannered prose, writing that performs
+for effect: slogans, "not X but Y" turns, rhetorical triplets, dramatic
+fragments, stacked hedges, colon reveals, self-narration, ceremonial framing
+and walls of text. State the fact directly, and check what a reader could
+take it to mean. At the standard and full tiers,
 `.agents/skills/cf-editorial-review/references/editorial-smells.md` lists
 each pattern under "Mannered prose" with a plain rewrite.
 
 **Prose length.** Default to short prose and bullets. Write long prose only
 when the reader asks for it or the artifact is prose by nature, such as an
 essay or a narrative guide.
+
+## Meaning the reader takes
+
+A reader takes from a text whatever it can plausibly mean, not only what the
+writer meant. The check below is part of thinking, not a pass after
+drafting: choose each word, name, figure and image with its readings in
+mind, then read the draft again as the reader. It covers everything that
+leaves the session: a reply, a document, a record, a commit message, a PR
+body, release notes, a figure, an interface string, and code, where it
+covers identifiers, flags, messages, log lines, comments, test names and
+example data.
+
+What to check:
+
+- **Connotation.** What a word, phrase, name, image, colour, icon or example
+  suggests beyond its literal meaning. `force` suggests damage where the
+  flag only skips a prompt; a skull icon suggests danger where the state is
+  a disabled option.
+- **Ambiguity.** More than one reasonable reading. "The review is blocked"
+  can mean the reviewer cannot proceed or the merge is held; say which.
+- **Unintended readings.** A reading that is offensive, alarming, blaming,
+  misleading, overclaiming, unsafe or legally risky: a message that lets a
+  reader think data was lost when nothing was deleted, a name that promises
+  a safety the code does not give, a term that carries a slur or a political
+  load, a claim about a third party's product.
+- **Audience and context.** A reader in another culture or language, a
+  non-native speaker, a reader who skims, a screen-reader user who hears
+  the words and the description only, and a reader who sees this one line
+  alone: a log line, a commit subject, a notification, an error.
+
+How to check, once per draft, briefly:
+
+1. Read it as a reader who does not know the intent. What would they
+   conclude, and what would they do next? If either differs from what you
+   mean, change the text, not the reader.
+2. Read it as a hostile or careless reader. What is the worst thing it could
+   be taken to mean, and does the text leave that reading open?
+3. Go name by name and claim by claim. Does each name, label, number,
+   colour and claim have a second meaning? Does the plainer word serve
+   better?
+
+Fix what a plausible reading gets wrong. Prefer the plainer word and the
+literal statement over a metaphor. State the boundary where silence lets a
+reader fear worse: "nothing was deleted", "the check reports and does not
+block". Keep a term that is exact even when it is unfamiliar; one term for
+one thing (Words below) still holds, and a qualifier resolves a term the
+project uses for several things.
+
+In code, a name or a message is read by someone who sees only it. Name a
+thing for what it does, with the exact verb: `verify` verifies, `safe` is
+safe, `delete` deletes; a name that promises more than the code does, or
+softens what it does, is a defect. An error or refusal names the cause and
+the fix, says what did and did not happen, and never alarms or blames the
+reader; a refusal names the rule and the sanctioned path. A loaded term is
+replaced by the plain technical word where a new name is chosen (`primary`
+and `replica`, `allowlist` and `denylist`); an inherited name that adopters
+depend on is kept and its meaning stated where it is used. Example data is
+invented and neutral: no real person, company, address, credential or
+in-joke. At the standard and full tiers the copy guide
+(`.agents/skills/cf-editorial-review/references/copy-guide.md`) "Names and
+code strings" has the rules string by string.
+
+In a figure or an image, the drawing asserts only what its facts carry: no
+order, cause, certainty, urgency or completeness the sources do not state;
+an arrow means travel or dependency, never decoration. Colour and icons
+keep their conventional meaning (red for an error or a stop, green for a
+pass, a lock for a secured thing, a warning sign for a warning) and are used
+for nothing else, and no state is carried by hue alone, so a colour-blind
+reader and a screen-reader user, who gets the description, take the same
+reading. An image, metaphor or example carries no association the subject
+lacks; a person, flag, symbol or culture-bound reference appears only when
+it is the subject.
+
+In review, a reading that is wrong, unsafe, alarming, offensive or a false
+promise is a material finding ("Review verdicts" in
+`workflow-discipline.md`), whatever its size; a plainer word with no such
+reading is a nit. At the standard and full tiers the editorial smells
+reference lists the patterns under "Meaning taken".
 
 ## Replies and status
 

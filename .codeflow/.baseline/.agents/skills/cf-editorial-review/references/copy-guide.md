@@ -292,6 +292,47 @@ Example, a no-results message with the next step (source: `cf-docs-portal/resour
 Example, a one-clause tooltip with its shortcut (source: `cf-docs-portal/resources/design-system/chrome.js`):
 > Comment mode (C)
 
+## Names and code strings
+
+A name or a string in code is read by someone who sees only it: an
+identifier, type, function, flag, command, error, refusal, log line,
+comment, commit subject, test name or example value. Each is checked for
+what a reader could take it to mean (`.codeflow/rules/writing.md` "Meaning
+the reader takes").
+
+- Name a thing for what it does, with the exact verb: `verify` verifies,
+  `safe` is safe, `delete` deletes. A name that promises more than the code
+  does, or softens what it does (`cleanup` for a deletion), is a defect.
+- Reuse the neighbour's vocabulary: one term per thing (Words), and a new
+  name in the form its siblings already have.
+- Write an error or refusal as cause, then fix: what was found, which rule
+  or input it fails, the sanctioned path. Say what did and did not happen
+  when a reader could fear worse. Use no word stronger than the fact, and
+  never blame the reader.
+- Write a log line so it reads alone: subject, event and value, with no
+  humour.
+- Say why in a comment, in plain words; a comment carries no joke,
+  complaint or person's name.
+- Name the change in a commit subject as its reader will find it: what now
+  holds.
+- Name a test for what it pins; a test named after a ticket says nothing.
+- Invent example data and keep it neutral: no real person, company,
+  address, credential, slur or in-joke; a placeholder names its slot
+  (`<project>`, `example.test`).
+- Replace a term with a violent, demeaning or political load by the plain
+  technical word where a new name is chosen (`primary` and `replica`,
+  `allowlist` and `denylist`). Keep an inherited name that adopters depend
+  on and state its meaning where it is used.
+
+Example, a test named for what it pins (source: `crates/codeflow-cli/tests/init_e2e.rs`):
+> init_and_update_bring_the_plain_writing_rule_at_every_tier
+
+Example, the refusal rule every message follows (source: `assets/base/AGENTS.md.tmpl`):
+> the message names the rule and the sanctioned path; fix the cause
+
+Example, a boundary stated so the reader does not fear worse (source: `.codeflow/rules/writing.md`):
+> the check reports and does not block
+
 ## Replies
 
 A reply is sized to its question. The rules below say when it grows a

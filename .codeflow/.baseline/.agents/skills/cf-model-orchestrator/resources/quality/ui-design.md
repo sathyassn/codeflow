@@ -101,7 +101,9 @@ Check at least:
   journeys;
 - navigation, actions, guidance, validation, loading, empty, error, disabled,
   success, destructive, and recovery copy states where applicable;
-- visual/verbal coherence and terminology against the project voice; localized
+- visual/verbal coherence and terminology against the project voice, and what
+  each label, icon and colour could be taken to mean
+  (`.codeflow/rules/writing.md` "Meaning the reader takes"); localized
   variants, writing direction (LTR/RTL), and text expansion before claiming
   localization quality;
 - applicable light, dark, high-contrast, system-following, manual-override,

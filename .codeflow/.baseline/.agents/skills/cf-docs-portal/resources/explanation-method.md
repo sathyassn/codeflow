@@ -136,6 +136,7 @@ every answer; the figure checks hold only for a figure.
 |---|---|---|
 | Sources | every answer | every fact names a repository source, and that source says it today |
 | Copy | every answer | the prose around the carrier follows the copy guide under the written content policy (ADR-0067); substantial prose passes `cf-editorial-review` |
+| Reading | every answer | a reader who does not know the intent takes only what the facts carry: no name, label or claim with a second meaning; no order, cause, certainty or urgency a figure implies beyond its sources; colour and icons in their conventional meaning (`.codeflow/rules/writing.md` "Meaning the reader takes") |
 | Policy characters | every answer | no em or en dash and no emoji; a chat form is also printable ASCII and under 78 columns |
 | Masked title | a figure | with kicker, title, caption and legend masked, an observer names the idea in five seconds and decodes every keyed pair |
 | Removal | a figure | with every sentence removed, the carrier still states the relationship |

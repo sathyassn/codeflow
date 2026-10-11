@@ -2112,11 +2112,15 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
             BTreeSet::from(["Acting text".to_string()]),
             "{carrier} takes only the acting text as a universal part"
         );
+        // TSK-266: the reading check holds for every answer, a figureless
+        // one included, since a name or a claim can carry a second meaning
+        // without a figure.
         assert_eq!(
             universal_checks,
             BTreeSet::from([
                 "Sources".to_string(),
                 "Copy".to_string(),
+                "Reading".to_string(),
                 "Policy characters".to_string()
             ]),
             "{carrier} must pass on the universal checks alone"
@@ -2729,8 +2733,9 @@ fn portal_utility_tokens_match_present_skins() {
 /// writing rules that other skill files point at.
 const COPY_GUIDE: &str = "assets/base/agents/skills/cf-editorial-review/references/copy-guide.md";
 
-/// The thirteen sections of the copy guide, in order (TSK-073 AC-2).
-const COPY_GUIDE_SECTIONS: [&str; 13] = [
+/// The sections of the copy guide, in order: the thirteen of TSK-073 AC-2
+/// and "Names and code strings" from TSK-266.
+const COPY_GUIDE_SECTIONS: [&str; 14] = [
     "Voice",
     "Sentences",
     "Words",
@@ -2741,6 +2746,7 @@ const COPY_GUIDE_SECTIONS: [&str; 13] = [
     "Summaries",
     "Bullets and tables",
     "Microcopy",
+    "Names and code strings",
     "Replies",
     "Skill prose",
     "ADR and PR shapes",
@@ -2862,16 +2868,16 @@ fn example_resolves(path: &str, example: &str) -> Result<bool, String> {
         || (is_html && html_visible_text(&source).contains(example)))
 }
 
-/// TSK-073 AC-2. The guide carries its thirteen sections in order.
+/// TSK-073 AC-2, TSK-266. The guide carries its sections in order.
 #[test]
-fn copy_guide_carries_its_thirteen_sections_in_order() {
+fn copy_guide_carries_its_sections_in_order() {
     let headings: Vec<String> = level_two_sections(&repo_text(COPY_GUIDE))
         .into_iter()
         .map(|(heading, _)| heading)
         .collect();
     assert_eq!(
         headings, COPY_GUIDE_SECTIONS,
-        "copy guide sections drifted from the thirteen in TSK-073"
+        "copy guide sections drifted from the list TSK-073 and TSK-266 pin"
     );
 }
 
