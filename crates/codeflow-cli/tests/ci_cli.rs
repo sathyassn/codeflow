@@ -65,6 +65,7 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
                 .find(|pair| pair[0] == "--branch")
                 .map_or("", |pair| pair[1]);
             let id = codeflow_core::workgraph::task_id_from_branch(dir, branch)
+                .unwrap()
                 .unwrap_or_else(|| "TSK-001".into());
             named[at] = format!("Task: {id}\n{body}");
         }
@@ -265,9 +266,9 @@ fn ci_blocks_indeterminate_state_without_a_task_directory() {
             "task/TSK-001-repair",
         ],
     );
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let err = String::from_utf8_lossy(&output.stderr);
-    assert!(err.contains("work.tracking_state"), "{err}");
+    assert!(err.contains("cannot read policy"), "{err}");
     assert!(
         !err.contains("[invalid"),
         "state contents must not be echoed: {err}"
@@ -1468,11 +1469,8 @@ fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
             ],
         );
         let out = combined(&ci);
-        assert_eq!(ci.status.code(), Some(1), "{level}: {out}");
-        assert!(
-            out.contains("work.tracking_state (block)"),
-            "{level}: {out}"
-        );
+        assert_eq!(ci.status.code(), Some(2), "{level}: {out}");
+        assert!(out.contains("cannot read policy"), "{level}: {out}");
 
         std::fs::remove_file(dir.path().join(".codeflow/project.toml")).unwrap();
         let start = run_in(dir.path(), &["work", "start", "TSK-001"]);

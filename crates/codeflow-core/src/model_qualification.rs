@@ -375,7 +375,9 @@ pub fn trusted_version_probe(id: &str) -> Option<TrustedVersionProbe> {
 ///
 /// Returns an error naming the malformed record or catalog mismatch.
 pub fn load_bindings(directory: &Path) -> Result<Vec<QualifiedBinding>, String> {
-    if !directory.exists() {
+    if crate::absence::proven_absent(directory)
+        .map_err(|error| format!("stat {}: {error}", directory.display()))?
+    {
         return Ok(Vec::new());
     }
     if !directory.is_dir() {
@@ -988,5 +990,20 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_bindings_only_proven_absence_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bindings");
+        assert!(load_bindings(&path).unwrap().is_empty());
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        assert!(load_bindings(&path).is_err());
+        assert!(load_bindings(&path.join("child")).is_err());
     }
 }

@@ -71,7 +71,8 @@ fn command(root: &Path, program: &Path, args: &[&str]) -> Result<String, String>
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    command(root, Path::new("git"), args).map(|text| text.trim().to_string())
+    command(root, Path::new("git"), args)
+        .map(|text| text.strip_suffix('\n').unwrap_or(&text).to_string())
 }
 
 fn quote(value: &str) -> String {
@@ -153,7 +154,7 @@ fn prepare(
         &clone,
         &["checkout", "--quiet", "--detach", &default_tip.to_string()],
     )?;
-    let holders = release_owners(&clone);
+    let holders = release_owners(&clone)?;
     if !holders.is_empty() {
         *owner = holders.join(", ");
     }
@@ -214,8 +215,8 @@ fn prepare(
     Ok(report)
 }
 
-fn release_owners(root: &Path) -> Vec<String> {
-    Graph::from_worktree(root)
+fn release_owners(root: &Path) -> Result<Vec<String>, String> {
+    Ok(Graph::from_worktree(root)?
         .records
         .values()
         .filter(|record| {
@@ -224,7 +225,7 @@ fn release_owners(root: &Path) -> Vec<String> {
                 && !matches!(record.status.as_str(), "complete" | "cancelled")
         })
         .map(|record| record.id.clone())
-        .collect()
+        .collect())
 }
 
 fn merge_and_check(
@@ -279,7 +280,8 @@ fn check_reading(root: &Path) -> Result<(), String> {
     ] {
         let mut files = SkillFiles::new();
         for tree in trees {
-            reading::load_skill_tree(&root.join(tree), &mut files);
+            reading::load_skill_tree(&root.join(tree), &mut files)
+                .map_err(|error| error.to_string())?;
         }
         if files.is_empty() {
             continue;

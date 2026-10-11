@@ -137,7 +137,13 @@ pub enum ConfirmedByArg {
 
 /// Run `codeflow feedback`.
 pub fn run(args: &FeedbackArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     match &args.command {
         FeedbackCommand::New {
             topic,
@@ -214,25 +220,32 @@ fn tier_refusal(root: &Path) -> Option<String> {
 
 /// The project's `project-management/templates/feedback.md` when usable,
 /// else the embedded template, with a warning naming why.
-fn template(root: &Path) -> Option<String> {
-    let embedded = EmbeddedAssets
-        .read("base/pm/feedback.md.tmpl")
-        .and_then(|bytes| String::from_utf8(bytes).ok())?;
+///
+/// # Errors
+/// The embedded template cannot be read as text.
+fn template(root: &Path) -> Result<String, String> {
+    const SHIPPED: &str = "base/pm/feedback.md.tmpl";
+    let bytes = EmbeddedAssets
+        .read(SHIPPED)
+        .map_err(|error| format!("cannot read the shipped {SHIPPED}: {error}"))?
+        .ok_or_else(|| format!("the shipped {SHIPPED} is missing from this build"))?;
+    let embedded = String::from_utf8(bytes)
+        .map_err(|error| format!("the shipped {SHIPPED} is not UTF-8: {error}"))?;
     match feedback::read_project_template(root) {
         Ok(Some(own)) => match feedback::check_template(&own) {
-            Ok(()) => Some(own),
+            Ok(()) => Ok(own),
             Err(reason) => {
                 eprintln!(
                     "warning: {} is not usable ({reason}); the shipped template is used",
                     feedback::PROJECT_TEMPLATE
                 );
-                Some(embedded)
+                Ok(embedded)
             }
         },
-        Ok(None) => Some(embedded),
+        Ok(None) => Ok(embedded),
         Err(reason) => {
             eprintln!("warning: {reason}; the shipped template is used");
-            Some(embedded)
+            Ok(embedded)
         }
     }
 }
@@ -253,9 +266,12 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
         eprintln!("error: {refusal}");
         return 1;
     }
-    let Some(template) = template(root) else {
-        eprintln!("error: feedback template unavailable");
-        return 1;
+    let template = match template(root) {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: feedback template unavailable: {error}");
+            return 1;
+        }
     };
     match FeedbackConfig::write_defaults(root) {
         Ok((_, true)) => eprintln!(
@@ -302,20 +318,30 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             return 1;
         }
     };
+    // A directory that cannot be read is an error, never no items.
+    let tracked = match feedback::tracked(root) {
+        Ok(tracked) => tracked,
+        Err(error) => {
+            eprintln!("error: {} cannot be read: {error}", feedback::FEEDBACK_DIR);
+            return 1;
+        }
+    };
     let loaded = feedback::load(root);
     for (path, reason) in &loaded.unreadable {
         eprintln!("warning: {path} cannot be read: {reason}");
     }
+    // An item or a directory that cannot be read is an error, never a
+    // smaller inventory or index that reads as complete.
+    if !loaded.unreadable.is_empty() {
+        eprintln!("error: fix the unreadable items first; nothing is listed or written");
+        return 1;
+    }
     if write {
-        if !feedback::tracked(root) {
+        if !tracked {
             eprintln!(
                 "error: {} does not exist; record an item with `codeflow feedback new` first",
                 feedback::FEEDBACK_DIR
             );
-            return 1;
-        }
-        if !loaded.unreadable.is_empty() {
-            eprintln!("error: fix the unreadable items before writing the index");
             return 1;
         }
         // The index is rendered from item frontmatter, so it is written
@@ -368,7 +394,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         }
         return 0;
     }
-    if !feedback::tracked(root) {
+    if !tracked {
         println!("feedback: none ({} does not exist)", feedback::FEEDBACK_DIR);
         return 0;
     }

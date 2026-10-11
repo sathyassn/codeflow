@@ -200,7 +200,10 @@ fn validate_vocabulary(fragment: &Html) -> Result<()> {
         let Some(names) = element.value().attr("data-cf-for") else {
             continue;
         };
-        let ids = names.split_whitespace().collect::<Vec<_>>();
+        let ids = names
+            .split([' ', '\t', '\r', '\n', '\u{c}'])
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
         if ids.is_empty() || ids.len() > limits::MAX_ENTITY_FOR_IDS {
             return Err(invalid(format!(
                 "data-cf-for must name 1 to {} entity ids",
@@ -306,7 +309,7 @@ fn validate_element(element: ElementRef<'_>, vocabulary: bool) -> Result<()> {
 }
 
 fn allowed_fragment_reference(tag: &str, attribute: &str, value: &str) -> bool {
-    let value = value.trim();
+    let value = value.trim_matches([' ', '\t', '\r', '\n', '\u{c}']);
     if matches!(attribute, "href" | "xlink:href") && tag != "a" && tag != "area" {
         return is_safe_fragment(value);
     }
@@ -366,6 +369,21 @@ fn invalid(message: impl Into<String>) -> PresentError {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_fragment_reference_keeps_unicode_whitespace() {
+        assert!(!super::allowed_fragment_reference(
+            "use",
+            "href",
+            "\u{a0}#shape"
+        ));
+        assert!(super::allowed_fragment_reference(
+            "use",
+            "href",
+            "\t#shape "
+        ));
+    }
+
     use super::*;
 
     #[test]

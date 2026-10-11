@@ -137,7 +137,7 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
                 continue;
             }
             let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
-            let normalized = relative.to_string_lossy().replace('\\', "/");
+            let normalized = crate::portable_path::slashed(relative);
             if catalog_or_fixture(&normalized)
                 || if retired {
                     historical(&normalized)
@@ -148,12 +148,18 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
                 continue;
             }
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            let Ok(text) = std::str::from_utf8(&bytes) else {
-                continue;
-            };
-            for (index, line) in text.lines().enumerate() {
+            // Every file is checked, a binary asset or a file that is not
+            // valid UTF-8 included: each line is searched in its valid UTF-8
+            // runs, and an invalid byte bounds a token as any other
+            // non-token character does. Nothing is skipped and nothing is
+            // decoded lossily.
+            for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
                 for token in &tokens {
-                    if contains_token(line, token) {
+                    if line
+                        .utf8_chunks()
+                        .any(|chunk| contains_token(chunk.valid(), token))
+                    {
                         findings.push(Finding {
                             path: relative.to_path_buf(),
                             line: index + 1,
@@ -166,4 +172,48 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
     }
     findings.sort_by(|a, b| (&a.path, a.line, &a.token).cmp(&(&b.path, b.line, &b.token)));
     Ok(findings)
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    /// A file that is not valid UTF-8 is still scanned, never skipped and
+    /// never refused: a token beside an invalid byte is found on its line,
+    /// and a binary asset with no token yields nothing (round 23; main
+    /// skipped such a file, and round 22 refused it, which stopped the real
+    /// tree scan at its first font file).
+    #[test]
+    fn r22_catalog_scan_reads_non_utf8_input_as_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = crate::model_catalog::inputs::load_catalog(dir.path()).unwrap();
+        assert!(instruction_selectors(dir.path(), &catalog)
+            .unwrap()
+            .is_empty());
+        let token = catalog.lines[0].versions[0].alias.clone();
+        let mut skill = b"first line\n\xff ".to_vec();
+        skill.extend_from_slice(token.as_bytes());
+        skill.extend_from_slice(b" \xfe\r\n");
+        std::fs::write(dir.path().join("SKILL.md"), &skill).unwrap();
+        let findings = instruction_selectors(dir.path(), &catalog).unwrap();
+        assert_eq!(
+            findings,
+            [Finding {
+                path: PathBuf::from("SKILL.md"),
+                line: 2,
+                token: token.clone(),
+            }]
+        );
+        // A token glued to other letters is still no token.
+        let mut glued = b"\xffx".to_vec();
+        glued.extend_from_slice(token.as_bytes());
+        std::fs::write(dir.path().join("SKILL.md"), &glued).unwrap();
+        assert!(instruction_selectors(dir.path(), &catalog)
+            .unwrap()
+            .is_empty());
+        std::fs::write(dir.path().join("SKILL.md"), b"\x00\xff\xfe binary").unwrap();
+        assert!(instruction_selectors(dir.path(), &catalog)
+            .unwrap()
+            .is_empty());
+    }
 }

@@ -160,10 +160,47 @@ fn tier_installs_docs(repo_root: &Path) -> bool {
         .is_ok_and(|state| matches!(state.tier, Tier::Standard | Tier::Full))
 }
 
+// Only proven absence removes a layer from the graph. An unreadable layer
+// remains owed and the report carries a blocking issue.
+fn input_present(path: &Path, report: &mut DocsLintReport) -> bool {
+    match crate::absence::proven_absent(path) {
+        Ok(true) => false,
+        Ok(false) => {
+            if let Err(error) = std::fs::metadata(path) {
+                cannot_read(report, path, error);
+            }
+            true
+        }
+        Err(error) => {
+            cannot_read(report, path, error);
+            true
+        }
+    }
+}
+
+fn directory_present(path: &Path, report: &mut DocsLintReport) -> bool {
+    if !input_present(path, report) {
+        return false;
+    }
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => cannot_read(report, path, "expected a directory"),
+        Err(error) => cannot_read(report, path, error),
+    }
+    true
+}
+
 fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintReport) {
     let capabilities_path = repo_root.join("docs/capabilities.md");
-    let Ok(content) = std::fs::read_to_string(&capabilities_path) else {
+    if !input_present(&capabilities_path, report) {
         return;
+    }
+    let content = match std::fs::read_to_string(&capabilities_path) {
+        Ok(content) => content,
+        Err(error) => {
+            cannot_read(report, &capabilities_path, error);
+            return;
+        }
     };
     let (entries, _) = parse_capabilities(&content);
     let capability_epics: BTreeMap<String, (BTreeSet<String>, usize)> = entries
@@ -171,12 +208,24 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
         .map(|entry| (entry.id, (entry.epics.into_iter().collect(), entry.line)))
         .collect();
     let mut epic_capabilities = BTreeMap::<String, (BTreeSet<String>, PathBuf)>::new();
-    for path in crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")) {
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
+    for path in inventory_files(
+        crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")),
+        repo_root,
+        report,
+    ) {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                cannot_read(report, &path, error);
+                continue;
+            }
         };
-        let Ok((data, _)) = parse_frontmatter(&bytes) else {
-            continue;
+        let (data, _) = match parse_frontmatter(&bytes) {
+            Ok(data) => data,
+            Err(error) => {
+                cannot_read(report, &path, error);
+                continue;
+            }
         };
         let format_id = get_string_field(&data, "format_id");
         let epic_id = if is_valid_epic_format_id(&format_id) {
@@ -232,9 +281,17 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     // Capability ids.
     let caps_path = repo_root.join("docs/capabilities.md");
-    let capabilities = if let Ok(content) = std::fs::read_to_string(&caps_path) {
-        let (entries, _) = parse_capabilities(&content);
-        Some(entries.into_iter().map(|e| e.id).collect())
+    let capabilities = if input_present(&caps_path, report) {
+        match std::fs::read_to_string(&caps_path) {
+            Ok(content) => {
+                let (entries, _) = parse_capabilities(&content);
+                Some(entries.into_iter().map(|entry| entry.id).collect())
+            }
+            Err(error) => {
+                cannot_read(report, &caps_path, error);
+                None
+            }
+        }
     } else {
         if tier_installs_docs(repo_root) {
             report.notes.push(crate::remedy::Finding::new(
@@ -248,22 +305,26 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     // ADR ids: from frontmatter `id` and from the filename stem prefix
     // (ADR-0001-stack-choice.md resolves ADR-0001).
     let decisions = repo_root.join("docs/decisions");
-    let adrs = if decisions.is_dir() {
+    let adrs = if directory_present(&decisions, report) {
         let mut ids = BTreeSet::new();
-        for path in adr_files(&decisions) {
+        for path in inventory_files(adr_files(&decisions), &decisions, report) {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                 ids.insert(stem.to_string());
                 if let Some(short) = adr_id_prefix(stem) {
                     ids.insert(short);
                 }
             }
-            if let Ok(content) = std::fs::read(&path) {
-                if let Ok((data, _)) = parse_frontmatter(&content) {
-                    let id = get_string_field(&data, "id");
-                    if !id.is_empty() {
-                        ids.insert(id);
+            match std::fs::read(&path) {
+                Ok(content) => match parse_frontmatter(&content) {
+                    Ok((data, _)) => {
+                        let id = get_string_field(&data, "id");
+                        if !id.is_empty() {
+                            ids.insert(id);
+                        }
                     }
-                }
+                    Err(error) => cannot_read(report, &path, error),
+                },
+                Err(error) => cannot_read(report, &path, error),
             }
         }
         Some(ids)
@@ -279,26 +340,34 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
 
     // Epic ids from project-management/epics file stems.
     let epics_dir = repo_root.join("project-management/epics");
-    let epics = if epics_dir.is_dir() {
+    let epics = if directory_present(&epics_dir, report) {
         Some(
-            crate::workgraph::layout::epic_record_files(&repo_root.join("project-management"))
-                .iter()
-                .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
-                .map(ToString::to_string)
-                .collect(),
+            inventory_files(
+                crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")),
+                repo_root,
+                report,
+            )
+            .iter()
+            .filter_map(|p| p.file_stem().and_then(|s| s.to_str()))
+            .map(ToString::to_string)
+            .collect(),
         )
     } else {
         None
     };
 
     let specs_dir = repo_root.join("project-management/specs");
-    let specs = if specs_dir.is_dir() {
+    let specs = if directory_present(&specs_dir, report) {
         Some(
-            crate::workgraph::layout::spec_record_files(&repo_root.join("project-management"))
-                .iter()
-                .filter_map(|path| path.file_stem().and_then(|stem| stem.to_str()))
-                .map(str::to_owned)
-                .collect(),
+            inventory_files(
+                crate::workgraph::layout::spec_record_files(&repo_root.join("project-management")),
+                repo_root,
+                report,
+            )
+            .iter()
+            .filter_map(|path| path.file_stem().and_then(|stem| stem.to_str()))
+            .map(str::to_owned)
+            .collect(),
         )
     } else {
         None
@@ -408,14 +477,18 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
 
 fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
     let decisions = repo_root.join("docs/decisions");
-    if !decisions.is_dir() {
+    if !directory_present(&decisions, report) {
         return; // absence already noted
     }
 
-    for path in adr_files(&decisions) {
+    for path in inventory_files(adr_files(&decisions), &decisions, report) {
         let rel = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
-        let Ok(content) = std::fs::read(&path) else {
-            continue;
+        let content = match std::fs::read(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                cannot_read(report, &path, error);
+                continue;
+            }
         };
         let Ok((data, _)) = parse_frontmatter(&content) else {
             report.issues.push(DocsLintIssue {
@@ -466,17 +539,29 @@ fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
 
 fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     let epics_dir = repo_root.join("project-management/epics");
-    if !epics_dir.is_dir() {
+    if !directory_present(&epics_dir, report) {
         return; // absence already noted
     }
 
-    for path in crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")) {
+    for path in inventory_files(
+        crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")),
+        repo_root,
+        report,
+    ) {
         let rel = path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf();
-        let Ok(content) = std::fs::read(&path) else {
-            continue;
+        let content = match std::fs::read(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                cannot_read(report, &path, error);
+                continue;
+            }
         };
-        let Ok((data, _)) = parse_frontmatter(&content) else {
-            continue; // frontmatter shape is `validate`'s job, not the lint's
+        let (data, _) = match parse_frontmatter(&content) {
+            Ok(data) => data,
+            Err(error) => {
+                cannot_read(report, &path, error);
+                continue;
+            }
         };
 
         // capabilities[] resolve back into the registry.
@@ -552,7 +637,11 @@ struct TaskGraphRecord {
 }
 
 fn lint_tasks(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
-    let files = crate::workgraph::layout::task_record_files(&repo_root.join("project-management"));
+    let files = inventory_files(
+        crate::workgraph::layout::task_record_files(&repo_root.join("project-management")),
+        repo_root,
+        report,
+    );
     // No task records: nothing to check, and nothing to note.
     if files.is_empty() {
         return;
@@ -571,8 +660,24 @@ fn parse_task_graph_record(
     report: &mut DocsLintReport,
 ) -> Option<TaskGraphRecord> {
     let rel = path.strip_prefix(repo_root).unwrap_or(path).to_path_buf();
-    let content = std::fs::read(path).ok()?;
-    let (data, _) = parse_frontmatter(&content).ok()?; // general validation owns malformed YAML
+    let content = match std::fs::read(path) {
+        Ok(content) => content,
+        Err(error) => {
+            report.issues.push(DocsLintIssue {
+                file: rel,
+                line: 1,
+                message: format!("cannot read task record: {error}"),
+            });
+            return None;
+        }
+    };
+    let (data, _) = match parse_frontmatter(&content) {
+        Ok(data) => data,
+        Err(error) => {
+            cannot_read(report, path, error);
+            return None;
+        }
+    };
 
     let id = stable_record_id(&data, is_valid_task_format_id);
     if id.is_empty() {
@@ -877,29 +982,49 @@ fn adr_id_prefix(stem: &str) -> Option<String> {
 }
 
 /// Markdown files named `ADR-*` in a directory, sorted.
-fn adr_files(dir: &Path) -> Vec<PathBuf> {
-    md_files(dir)
+fn adr_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    Ok(md_files(dir)?
         .into_iter()
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("ADR-"))
-        })
-        .collect()
+        .filter(|p| adr_filename(p))
+        .collect())
+}
+
+fn adr_filename(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"ADR-"))
 }
 
 /// All `.md` files directly in a directory, sorted.
-fn md_files(dir: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-                .collect()
-        })
-        .unwrap_or_default();
+fn md_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    if crate::absence::proven_absent(dir)? {
+        return Ok(paths);
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "md") {
+            paths.push(path);
+        }
+    }
     paths.sort();
-    paths
+    Ok(paths)
+}
+fn inventory_files(
+    result: std::io::Result<Vec<PathBuf>>,
+    path: &Path,
+    report: &mut DocsLintReport,
+) -> Vec<PathBuf> {
+    match result {
+        Ok(files) => files,
+        Err(error) => {
+            report.issues.push(DocsLintIssue {
+                file: path.to_path_buf(),
+                line: 1,
+                message: format!("cannot read document inventory: {error}"),
+            });
+            Vec::new()
+        }
+    }
 }
 
 /// 1-based line number of the first line containing `needle`.
@@ -926,7 +1051,7 @@ fn optional_string(
     key: &str,
 ) -> Option<String> {
     let value = get_string_field(data, key);
-    (!value.trim().is_empty()).then_some(value)
+    (!value.is_empty()).then_some(value)
 }
 
 fn stable_record_id(
@@ -943,6 +1068,14 @@ fn stable_record_id(
     } else {
         String::new()
     }
+}
+
+fn cannot_read(report: &mut DocsLintReport, path: &Path, error: impl std::fmt::Display) {
+    report.issues.push(DocsLintIssue {
+        file: path.to_path_buf(),
+        line: 1,
+        message: format!("cannot read document: {error}"),
+    });
 }
 
 #[cfg(test)]
@@ -1852,5 +1985,89 @@ mod tests {
         }
 
         visit(nodes, graph, &mut Vec::new(), &mut BTreeSet::new())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    fn unreadable_layer(layer: &str, check: fn(&Path, &mut DocsLintReport)) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut absent = DocsLintReport::default();
+        check(dir.path(), &mut absent);
+        assert!(absent.is_clean(), "{absent:?}");
+        let path = dir.path().join(layer);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        let mut report = DocsLintReport::default();
+        check(dir.path(), &mut report);
+        assert!(!report.is_clean(), "{layer}: {report:?}");
+    }
+    fn graph(root: &Path, report: &mut DocsLintReport) {
+        build_graph(root, report);
+    }
+    #[test]
+    fn r22_graph_adrs() {
+        unreadable_layer("docs/decisions", graph);
+    }
+    #[test]
+    fn r22_graph_epics() {
+        unreadable_layer("project-management/epics", graph);
+    }
+    #[test]
+    fn r22_graph_specs() {
+        unreadable_layer("project-management/specs", graph);
+    }
+    #[test]
+    fn r22_lint_adrs() {
+        unreadable_layer("docs/decisions", lint_adrs);
+    }
+    #[test]
+    fn r22_lint_epics() {
+        unreadable_layer("project-management/epics", |root, report| {
+            let graph = build_graph(root, &mut DocsLintReport::default());
+            lint_epics(root, &graph, report);
+        });
+    }
+    #[test]
+    fn r22_graph_capabilities() {
+        unreadable_layer("docs/capabilities.md", graph);
+    }
+    #[test]
+    fn r22_reciprocity_capabilities() {
+        unreadable_layer("docs/capabilities.md", lint_capability_epic_reciprocity);
+    }
+    #[test]
+    fn r22_doc_capabilities_dangling_ancestor_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("docs")).unwrap();
+        for check in [graph, lint_capability_epic_reciprocity] {
+            let mut report = DocsLintReport::default();
+            check(dir.path(), &mut report);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.file.ends_with("capabilities.md")),
+                "{report:?}"
+            );
+        }
+    }
+    #[test]
+    fn r22_adr_prefix_is_checked_as_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(adr_files(dir.path()).unwrap().is_empty());
+        let path = dir
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"ADR-0001-\xff.md"));
+        assert!(adr_filename(&path));
+        assert!(!adr_filename(&dir.path().join("other.md")));
+        // Some filesystems and sandbox profiles cannot create non-UTF-8 names.
+        // The exact-byte predicate above still runs on those hosts.
+        if std::fs::write(&path, "bad ADR").is_ok() {
+            assert_eq!(adr_files(dir.path()).unwrap(), vec![path]);
+        }
     }
 }
