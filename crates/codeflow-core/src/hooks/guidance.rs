@@ -17,8 +17,9 @@
 //! digest) instead of refusing the prompt with a parse error. Both texts are
 //! advisory. Neither can fail a session or a prompt: a missing or unreadable
 //! kernel, project state or policy file yields no text, or the default
-//! level, never an error. Their sizes are guidelines, not caps
-//! ([`GUIDANCE_BLOCK_GUIDELINE_BYTES`], [`REMINDER_LINE_GUIDELINE_BYTES`]).
+//! level, never an error. Their sizes are printed by the tests as
+//! information; one reminder line aims for [`REMINDER_LINE_GUIDELINE_BYTES`]
+//! because it recurs on every prompt, and the block has no number (TSK-267).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -28,12 +29,8 @@ use crate::scaffold::{ScaffoldManifest, Tier};
 
 use super::policy::{read_project_toml, Policy};
 
-/// The size the compaction guidance block aims for. A guideline, not a
-/// cap: no skill or rule is dropped to meet it, and the tests print the
-/// measured size against it.
-pub const GUIDANCE_BLOCK_GUIDELINE_BYTES: usize = 1536;
-
-/// The size one prompt reminder line aims for; a guideline, not a cap.
+/// The size one prompt reminder line aims for, since it recurs on every
+/// prompt; a guideline the tests print against, not a cap.
 pub const REMINDER_LINE_GUIDELINE_BYTES: usize = 300;
 
 /// The scaffold manifest, the inventory of what each tier installs.
@@ -542,7 +539,7 @@ mod tests {
     }
 
     /// The block holds every always rule, every moment and the tier's whole
-    /// inventory; its size is printed against the guideline.
+    /// inventory; its size is printed as information.
     #[test]
     fn guidance_holds_the_kernel_and_the_whole_inventory_at_every_tier() {
         let kernel = Kernel::shipped();
@@ -562,10 +559,7 @@ mod tests {
             for name in inventory.skills.iter().chain(&inventory.agents) {
                 assert!(block.contains(name.as_str()), "{tier}: {name}");
             }
-            println!(
-                "guidance {tier}: {} bytes (guideline {GUIDANCE_BLOCK_GUIDELINE_BYTES})",
-                block.len()
-            );
+            println!("guidance {tier}: {} bytes", block.len());
         }
     }
 

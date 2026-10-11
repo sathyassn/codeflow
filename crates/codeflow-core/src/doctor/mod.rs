@@ -36,7 +36,8 @@ pub enum Status {
     /// A warning, with the step that clears it (SPC-013 R-80).
     Warn(Remedy),
     /// A state doctor cannot read, with the manual step that confirms it
-    /// (TSK-147 AC-1). Never fails and never warns.
+    /// (TSK-147 AC-1), or an advisory guideline above its number with the
+    /// step that clears it (TSK-267). Never fails and never warns.
     Note(Remedy),
 }
 
@@ -665,7 +666,7 @@ fn shims_not_called(active: &Path, shims: &Path) -> Result<Vec<String>, String> 
     let mut uncalled = Vec::new();
     for name in names {
         let hook = active.join(&name);
-        let text = match std::fs::read_to_string(&hook) {
+        let text = match crate::bounded_file::read_regular_to_string(&hook) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 uncalled.push(format!("{name} (no hook)"));
@@ -925,10 +926,12 @@ struct CodexHookState {
 /// it). `Err` when the hooks file does not read as Codex reads it, wires no
 /// hook, or holds a hook shape that hash does not cover.
 fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usize), String> {
-    let text = std::fs::read_to_string(hooks_json).map_err(|e| format!("hooks.json: {e}"))?;
+    let text = crate::bounded_file::read_regular_to_string(hooks_json)
+        .map_err(|e| format!("hooks.json: {e}"))?;
     let file: CodexHooksFile =
         serde_json::from_str(&text).map_err(|e| format!("hooks.json as codex reads it: {e}"))?;
-    let config = match std::fs::read_to_string(codex_home.join("config.toml")) {
+    let config = match crate::bounded_file::read_regular_to_string(&codex_home.join("config.toml"))
+    {
         Ok(text) => text
             .parse::<toml::Table>()
             .map_err(|e| format!("codex config.toml: {e}"))?,
@@ -1514,7 +1517,7 @@ fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> Result<bool, String
         {
             continue;
         }
-        let text = std::fs::read_to_string(path)
+        let text = crate::bounded_file::read_regular_to_string(&path)
             .map_err(|error| format!("cannot read {name}: {error}"))?;
         let table = text
             .parse::<toml::Table>()
@@ -1596,6 +1599,8 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
         Ok(true) => {}
     }
     let path = grok_home.join("trusted_folders.toml");
+    // Read as Grok reads it: the launch-path canary test in codex_hooks
+    // holds a fifo here to pause doctor after start-up, so a fifo is opened.
     let document = match std::fs::read_to_string(&path) {
         Ok(text) => match toml::from_str::<GrokTrustDocument>(&text) {
             Ok(document) => document,
@@ -1904,6 +1909,13 @@ fn observe_binding_drift(
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
+    // Opening a fifo blocks, so a non-regular file is refused first.
+    if !std::fs::metadata(path)
+        .map_err(|error| format!("open: {error}"))?
+        .is_file()
+    {
+        return Err("open: not a regular file".to_string());
+    }
     let file = std::fs::File::open(path).map_err(|error| format!("open: {error}"))?;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
@@ -2122,7 +2134,7 @@ fn walk_json_files_inner(
             let rel = crate::git::display_key(&crate::portable_path::slashed(
                 path.strip_prefix(root).unwrap_or(&path),
             ));
-            match std::fs::read(&path) {
+            match crate::bounded_file::read_regular(&path) {
                 Ok(data) => {
                     if serde_json::from_slice::<serde_json::Value>(&data).is_err() {
                         invalid.push(rel);
@@ -2938,7 +2950,7 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
             }
             Ok(false) => {}
         }
-        match std::fs::read_to_string(path) {
+        match crate::bounded_file::read_regular_to_string(&path) {
             Ok(content) => {
                 found = Some((dest.to_string(), content));
                 break;
@@ -3092,7 +3104,7 @@ fn read_installed_manifest(root: &Path) -> Result<InstalledManifest, String> {
     if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
         return Ok(InstalledManifest::new("0"));
     }
-    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let bytes = crate::bounded_file::read_regular(&path).map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
@@ -3149,7 +3161,7 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
             Ok(false) => {}
             Err(error) => return input_failure("managed-drift", start, &path, error),
         }
-        let content = match std::fs::read_to_string(&path) {
+        let content = match crate::bounded_file::read_regular_to_string(&path) {
             Ok(content) => content,
             Err(error) => return input_failure("managed-drift", start, &path, error),
         };
@@ -3236,7 +3248,7 @@ fn check_customization(opts: &Options) -> CheckResult {
             &["{{ARCHITECTURE_OVERVIEW}}", "{{ARCHITECTURE_AREAS}}"][..],
         ),
     ] {
-        match std::fs::read_to_string(root.join(path)) {
+        match crate::bounded_file::read_regular_to_string(&root.join(path)) {
             Ok(content) if sentinels.iter().any(|sentinel| content.contains(sentinel)) => {
                 incomplete.push(path.to_string());
             }
@@ -3253,7 +3265,7 @@ fn check_customization(opts: &Options) -> CheckResult {
 
     let agents = root.join("AGENTS.md");
     match exists(&agents) {
-        Ok(true) => match std::fs::read_to_string(&agents) {
+        Ok(true) => match crate::bounded_file::read_regular_to_string(&agents) {
             Ok(content) if content.contains("<!-- Add project-specific notes here. -->") => {
                 incomplete.push("AGENTS.md".to_string());
             }
@@ -3289,15 +3301,33 @@ fn check_customization(opts: &Options) -> CheckResult {
 
 /// Always-loaded instruction size (TSK-127). Codex concatenates the
 /// instruction file of each directory from the project root down to its
-/// working directory, reads at most 32 KiB of that chain and silently cuts
-/// the rest. The project section sits last in each `AGENTS.md`, so an
-/// oversized chain loses the adopter's own rules first. Every directory that
-/// holds an instruction file is a possible working directory, so each one's
-/// chain is measured. Warns, never fails: the fix is the project's call.
+/// working directory, reads at most `project_doc_max_bytes` of that chain
+/// (32 KiB by default; the project's `.codex/config.toml` may raise it,
+/// TSK-267) and silently cuts the rest. The project section sits last in
+/// each `AGENTS.md`, so an oversized chain loses the adopter's own rules
+/// first. Every directory that holds an instruction file is a possible
+/// working directory, so each one's chain is measured. Warns, never fails:
+/// the fix is the project's call.
 fn check_instructions(opts: &Options) -> CheckResult {
+    use crate::scaffold::rule_map::{codex_instruction_limit, LimitSource};
+
     let start = Instant::now();
-    let limit = crate::scaffold::rule_map::CODEX_INSTRUCTION_LIMIT_BYTES;
     let root = PathBuf::from(&opts.project_dir);
+    let (limit, source) = match codex_instruction_limit(&root) {
+        Ok(limit) => limit,
+        Err(error) => {
+            return CheckResult {
+                name: "instructions".into(),
+                status: Status::Fail,
+                message: format!("cannot read .codex/config.toml: {error}"),
+                duration: start.elapsed(),
+            }
+        }
+    };
+    let source = match source {
+        LimitSource::Default => String::new(),
+        LimitSource::ProjectConfig => " (project_doc_max_bytes in .codex/config.toml)".to_string(),
+    };
     let mut chains = Vec::new();
     if let Err(error) = instruction_chains(&root, Path::new(""), 0, 0, &mut chains) {
         return CheckResult {
@@ -3321,7 +3351,7 @@ fn check_instructions(opts: &Options) -> CheckResult {
         (
             Status::Pass,
             format!(
-                "{} is {bytes} bytes, {} under Codex's {limit}-byte instruction limit",
+                "{} is {bytes} bytes, {} under Codex's {limit}-byte instruction limit{source}",
                 chain_label(file),
                 limit - bytes
             ),
@@ -3334,7 +3364,7 @@ fn check_instructions(opts: &Options) -> CheckResult {
         (
             Status::Warn(remedy::DOCTOR_INSTRUCTIONS.remedy()),
             format!(
-                "{}, over Codex's {limit}-byte instruction limit: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
+                "{}, over Codex's {limit}-byte instruction limit{source}: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
                 listed.join("; ")
             ),
         )
@@ -3347,34 +3377,32 @@ fn check_instructions(opts: &Options) -> CheckResult {
     }
 }
 
-/// Reading sizes (TSK-150): the always-read kernel (the managed block of
-/// `AGENTS.md`), the per-task reading chain of the installed skills, and each
-/// shipped skill, each against its guideline number in [`crate::reading`].
-/// Sizes are reported, never failed: within every guideline is a pass that
-/// states the numbers; above one is a warning that names moving detail
-/// behind a trigger as the step that clears it. The Codex limit on the whole
-/// `AGENTS.md` is the `instructions` check.
-/// Where to edit to bring a reading measure within its guideline: a
-/// skill's directory, the kernel's file, or the files the chain lists.
-fn reading_location(subject: &str, skill_tree: &str) -> String {
-    if subject.starts_with("kernel") {
-        "the managed block of AGENTS.md".to_string()
-    } else if crate::reading::SKILL_GUIDELINES
-        .iter()
-        .any(|(name, _)| *name == subject)
-    {
-        format!("{skill_tree}/{subject}/")
-    } else {
-        format!("the files of the {subject}")
-    }
+/// The scaffold version the installed tree carries, for a reading report
+/// whose chain differs from the map this binary ships: `scaffold_version`
+/// in `project.toml`, else the managed block's marker, else unknown.
+fn installed_scaffold_version(root: &Path, agents: Option<&str>) -> String {
+    crate::hooks::policy::read_project_toml(root)
+        .ok()
+        .flatten()
+        .and_then(|table| {
+            table
+                .get("scaffold_version")
+                .and_then(toml::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            agents.and_then(|text| {
+                let at = text.find("codeflow:managed:begin scaffold=")?;
+                let rest = &text[at + "codeflow:managed:begin scaffold=".len()..];
+                let end = rest.find(|c: char| c.is_whitespace() || c == '-')?;
+                Some(rest[..end].to_string())
+            })
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn reading_kernel(root: &Path) -> std::io::Result<Option<String>> {
-    let path = root.join("AGENTS.md");
-    if crate::absence::proven_absent(&path)? {
-        return Ok(None);
-    }
-    std::fs::read_to_string(path).map(Some)
+    crate::reading::regular_text(&root.join("AGENTS.md"))
 }
 
 fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static str), String> {
@@ -3389,13 +3417,265 @@ fn reading_skills(root: &Path) -> Result<(crate::reading::SkillFiles, &'static s
     Ok((files, ".claude/skills"))
 }
 
-fn check_reading(opts: &Options) -> CheckResult {
-    use crate::reading::{self, Inventory, Measure};
+/// One reading measure with the path its note or warning names.
+type Measured = (crate::reading::Measure, String);
+
+/// What one reading run measured.
+#[derive(Debug, Default)]
+struct ReadingSizes {
+    /// Advisory measures: a note above the guideline, never a warning.
+    advisory: Vec<Measured>,
+    /// Description measures against the API limit: a warning above it.
+    descriptions: Vec<Measured>,
+    /// Lines reported as information, such as a chain whose installed read
+    /// edges differ from the shipped map.
+    information: Vec<String>,
+}
+
+/// Measure the kernel, the always-loaded set `always`, the per-task chain
+/// and each shipped skill and agent under `root` against `guidelines`.
+/// A shipped agent file that is missing or not a regular file is skipped;
+/// one that exists but cannot be read is the error, naming its path.
+fn reading_sizes(
+    root: &Path,
+    agents: Option<&str>,
+    always: Option<crate::reading::AlwaysLoaded>,
+    files: &crate::reading::SkillFiles,
+    skill_tree: &str,
+    guidelines: &crate::reading::Guidelines,
+) -> std::io::Result<ReadingSizes> {
+    use crate::hooks::guidance::{installed_inventory, SCAFFOLD_MANIFEST};
+    use crate::reading::{self, Inventory, Measure, Unit};
     use crate::scaffold::rule_map;
+    use crate::scaffold::Tier;
+
+    let mut sizes = ReadingSizes::default();
+    if let Some(block) = agents.and_then(rule_map::managed_block) {
+        sizes.advisory.push((
+            Measure {
+                subject: "kernel (AGENTS.md managed block)".to_string(),
+                value: reading::authored_len(block.as_bytes()),
+                guideline: guidelines.kernel_bytes,
+                unit: Unit::Bytes,
+                basis: reading::KERNEL_BASIS,
+            },
+            "the managed block of AGENTS.md".to_string(),
+        ));
+    }
+    if let Some(set) = always {
+        let file = set.file.clone();
+        sizes
+            .advisory
+            .push((set.measure(guidelines.instructions_lines), file));
+    }
+
+    let mut shipped_skills = BTreeSet::new();
+    let mut shipped_agents = BTreeSet::new();
+    for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
+        let inventory = installed_inventory(SCAFFOLD_MANIFEST, tier);
+        shipped_skills.extend(inventory.skills);
+        shipped_agents.extend(inventory.agents);
+    }
+    if !files.is_empty() {
+        let chain = reading::reading_chain(files, &Inventory::SHIPPED);
+        if !chain.files.is_empty() {
+            if chain.errors.is_empty() {
+                sizes.advisory.push((
+                    chain.measure(guidelines),
+                    "the files of the per-task reading chain".to_string(),
+                ));
+            } else {
+                sizes.information.push(format!(
+                    "per-task reading chain {} bytes (information only: {} installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold {}; `codeflow update` aligns them)",
+                    chain.total,
+                    chain.errors.len(),
+                    env!("CARGO_PKG_VERSION"),
+                    installed_scaffold_version(root, agents)
+                ));
+            }
+        }
+        for measure in reading::skill_measures(files, guidelines) {
+            if shipped_skills.contains(&measure.subject) {
+                let path = format!("{skill_tree}/{}/", measure.subject);
+                sizes.advisory.push((measure, path));
+            }
+        }
+        for measure in reading::description_measures(files) {
+            let name = measure
+                .subject
+                .strip_suffix(" description")
+                .unwrap_or(&measure.subject)
+                .to_string();
+            if shipped_skills.contains(&name) {
+                sizes
+                    .descriptions
+                    .push((measure, format!("{skill_tree}/{name}/SKILL.md")));
+            }
+        }
+    }
+    for name in &shipped_agents {
+        let path = format!(".claude/agents/{name}.md");
+        let Some(text) = reading::regular_text(&root.join(&path))? else {
+            continue;
+        };
+        sizes.advisory.push((
+            reading::body_measure(name, &text, guidelines.body_lines),
+            path.clone(),
+        ));
+        if let Some(measure) = reading::description_measure(name, &text) {
+            sizes.descriptions.push((measure, path));
+        }
+    }
+    Ok(sizes)
+}
+
+/// The measures joined for a report.
+fn listed_measures(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The measures above their guidelines, each with its basis.
+fn listed_with_basis(items: &[&Measured]) -> String {
+    items
+        .iter()
+        .map(|(measure, _)| measure.with_basis())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The reading verdict: a description over the API limit or an unreadable
+/// `[reading]` section warns, an advisory measure above its guideline
+/// notes, and within every number the check passes and states them.
+/// `own` names the `[reading]` keys the project set.
+fn reading_verdict(
+    sizes: &ReadingSizes,
+    own: &[&str],
+    config_error: Option<&str>,
+) -> (Status, String) {
+    use std::fmt::Write as _;
+
+    use crate::reading;
+
+    let (over, within): (Vec<&Measured>, Vec<&Measured>) = sizes
+        .advisory
+        .iter()
+        .partition(|(measure, _)| measure.over());
+    let long: Vec<&Measured> = sizes
+        .descriptions
+        .iter()
+        .filter(|(measure, _)| measure.over())
+        .collect();
+    let mut tail = String::new();
+    if let Some(longest) = sizes
+        .descriptions
+        .iter()
+        .map(|(measure, _)| measure.value)
+        .max()
+    {
+        let _ = write!(
+            tail,
+            "; descriptions at most {longest} of {} characters",
+            reading::DESCRIPTION_LIMIT_CHARS
+        );
+    }
+    if !own.is_empty() {
+        let _ = write!(
+            tail,
+            " (project values for {} in the [reading] section of project.toml)",
+            own.join(", ")
+        );
+    }
+    for item in &sizes.information {
+        let _ = write!(tail, "; {item}");
+    }
+
+    if sizes.advisory.is_empty() && sizes.descriptions.is_empty() {
+        return (
+            Status::Pass,
+            "no AGENTS.md managed block or installed skills (reading sizes not applicable)"
+                .to_string(),
+        );
+    }
+    if let Some(error) = config_error {
+        return (
+            Status::Warn(remedy::DOCTOR_READING_CONFIG.remedy()),
+            format!(
+                "the [reading] section of project.toml was not read ({error}), so the shipped guidelines apply: {}{tail}",
+                listed_measures(&sizes.advisory.iter().collect::<Vec<_>>())
+            ),
+        );
+    }
+    if !long.is_empty() {
+        let named: Vec<String> = long
+            .iter()
+            .map(|(measure, path)| {
+                format!(
+                    "{} ({path}) is {} characters, over the {}-character API limit (Claude Code cuts the listing at {})",
+                    measure.subject,
+                    measure.value,
+                    measure.guideline,
+                    reading::DESCRIPTION_LISTING_CHARS
+                )
+            })
+            .collect();
+        let paths: Vec<&str> = long.iter().map(|(_, path)| path.as_str()).collect();
+        let above = if over.is_empty() {
+            String::new()
+        } else {
+            format!("; above guideline: {}", listed_with_basis(&over))
+        };
+        return (
+            Status::Warn(remedy::DOCTOR_DESCRIPTION.with(&[("path", &paths.join(", "))])),
+            format!(
+                "{}{above}. Within: {}{tail}",
+                named.join("; "),
+                listed_measures(&within)
+            ),
+        );
+    }
+    if over.is_empty() {
+        return (
+            Status::Pass,
+            format!("within guidelines: {}{tail}", listed_measures(&within)),
+        );
+    }
+    let subjects = over
+        .iter()
+        .map(|(_, path)| path.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        Status::Note(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
+        format!(
+            "above guideline: {}. Guidelines are notes, never failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{tail}",
+            listed_with_basis(&over),
+            listed_measures(&within)
+        ),
+    )
+}
+
+/// Reading sizes (TSK-150, TSK-267): the always-read kernel (the managed
+/// block of `AGENTS.md`), the always-loaded instruction set, the per-task
+/// reading chain of the installed shipped skills, and each shipped skill
+/// and agent body, each against an advisory guideline from
+/// [`crate::reading`] or the project's `[reading]` section. Within every
+/// guideline is a pass that states the numbers; above one is a note that
+/// states the measure with its basis and names moving detail behind a
+/// trigger as the step that clears it, never a warning. Two real limits
+/// warn: a skill or agent description over the API limit here, and the
+/// Codex limit on the whole `AGENTS.md` in the `instructions` check. An
+/// `AGENTS.md` or skill tree that cannot be read fails (TSK-238).
+fn check_reading(opts: &Options) -> CheckResult {
+    use crate::reading::Guidelines;
+    use crate::scaffold::rule_map;
+    use crate::scaffold::state::ReadingConfig;
 
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let mut measures: Vec<Measure> = Vec::new();
     let agents = match reading_kernel(&root) {
         Ok(agents) => agents,
         Err(error) => {
@@ -3407,13 +3687,6 @@ fn check_reading(opts: &Options) -> CheckResult {
             }
         }
     };
-    if let Some(block) = agents.as_deref().and_then(rule_map::managed_block) {
-        measures.push(Measure {
-            subject: "kernel (AGENTS.md managed block)".to_string(),
-            bytes: reading::authored_len(block.as_bytes()),
-            guideline: rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
-        });
-    }
     let (files, skill_tree) = match reading_skills(&root) {
         Ok(skills) => skills,
         Err(error) => {
@@ -3425,65 +3698,40 @@ fn check_reading(opts: &Options) -> CheckResult {
             }
         }
     };
-    let mut partial = None;
-    if !files.is_empty() {
-        let chain = reading::reading_chain(&files, &Inventory::SHIPPED);
-        if !chain.files.is_empty() {
-            if !chain.errors.is_empty() {
-                partial = Some(chain.errors.len());
-            }
-            measures.push(chain.measure());
-        }
-        measures.extend(
-            reading::skill_measures(&files)
-                .into_iter()
-                .filter(|measure| {
-                    reading::SKILL_GUIDELINES
-                        .iter()
-                        .any(|(name, _)| *name == measure.subject)
-                }),
-        );
-    }
-    let listed = |items: Vec<&Measure>| {
-        items
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ")
+    let unreadable = |what: &str, error: &dyn std::fmt::Display| CheckResult {
+        name: "reading".into(),
+        status: Status::Fail,
+        message: format!("cannot read {what}: {error}"),
+        duration: start.elapsed(),
     };
-    let note = partial.map_or_else(String::new, |edges| {
-        format!(
-            " ({edges} installed read edges differ from the shipped map, so the chain total may be partial)"
-        )
-    });
-    let (over, within): (Vec<&Measure>, Vec<&Measure>) =
-        measures.iter().partition(|measure| measure.over());
-    let (status, message) = if measures.is_empty() {
-        (
-            Status::Pass,
-            "no AGENTS.md managed block or installed skills (reading sizes not applicable)"
-                .to_string(),
-        )
-    } else if over.is_empty() {
-        (
-            Status::Pass,
-            format!("within guidelines: {}{note}", listed(within)),
-        )
-    } else {
-        let subjects = over
-            .iter()
-            .map(|measure| reading_location(&measure.subject, skill_tree))
-            .collect::<Vec<_>>()
-            .join(", ");
-        (
-            Status::Warn(remedy::DOCTOR_READING.with(&[("path", &subjects)])),
-            format!(
-                "above guideline: {}. Sizes are guidelines, not failures: move detail behind a trigger (an index entry or a conditional read) to clear this, never cut a duty. Within: {}{note}",
-                listed(over),
-                listed(within)
-            ),
-        )
+    let limit = match rule_map::codex_instruction_limit(&root) {
+        Ok((limit, _)) => limit,
+        Err(error) => return unreadable(".codex/config.toml", &error),
     };
+    let always = match crate::reading::always_loaded(&root) {
+        Ok(always) => always,
+        Err(error) => return unreadable("the always-loaded instructions", &error),
+    };
+    let defaults = Guidelines {
+        kernel_bytes: rule_map::managed_block_guideline(limit),
+        ..Guidelines::default()
+    };
+    let (guidelines, own, config_error) = match ReadingConfig::load(&root) {
+        Ok(config) => (config.guidelines(defaults), config.set_keys(), None),
+        Err(error) => (defaults, Vec::new(), Some(error.to_string())),
+    };
+    let sizes = match reading_sizes(
+        &root,
+        agents.as_deref(),
+        always,
+        &files,
+        skill_tree,
+        &guidelines,
+    ) {
+        Ok(sizes) => sizes,
+        Err(error) => return unreadable("a shipped agent", &error),
+    };
+    let (status, message) = reading_verdict(&sizes, &own, config_error.as_deref());
     CheckResult {
         name: "reading".into(),
         status,
@@ -5071,18 +5319,29 @@ mod tests {
         assert_eq!(result.status, Status::Pass);
     }
 
+    /// Write `skill` under `.claude/skills` with a four-line frontmatter
+    /// carrying `description` and a body that brings it to `lines` lines.
+    fn write_skill(root: &Path, skill: &str, lines: usize, description: &str) {
+        let skill_dir = root.join(".claude/skills").join(skill);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let body = "x\n".repeat(lines.saturating_sub(4));
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {skill}\ndescription: {description}\n---\n{body}"),
+        )
+        .unwrap();
+    }
+
     /// A project with a small managed `AGENTS.md` and one installed skill
-    /// whose `SKILL.md` is `skill_bytes` long.
-    fn reading_project(skill: &str, skill_bytes: usize) -> (tempfile::TempDir, Options) {
+    /// whose `SKILL.md` is `lines` lines long.
+    fn reading_project(skill: &str, lines: usize) -> (tempfile::TempDir, Options) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("AGENTS.md"),
             "# p\n\n<!-- codeflow:managed:begin scaffold=3.0.0 -->\nrules\n<!-- codeflow:managed:end -->\n",
         )
         .unwrap();
-        let skill_dir = dir.path().join(".claude/skills").join(skill);
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "x".repeat(skill_bytes)).unwrap();
+        write_skill(dir.path(), skill, lines, "Does one thing. Use when asked.");
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().to_string();
         (dir, opts)
@@ -5104,68 +5363,229 @@ mod tests {
 
     #[test]
     fn test_reading_reports_a_skill_at_its_guideline_as_information() {
-        let guideline = crate::reading::skill_guideline("cf-herdr");
-        let (_dir, opts) = reading_project("cf-herdr", guideline);
+        let lines = crate::reading::BODY_GUIDELINE_LINES;
+        let (_dir, opts) = reading_project("cf-herdr", lines);
         let result = check_reading(&opts);
         assert_eq!(result.status, Status::Pass, "{}", result.message);
         assert!(
             result
                 .message
-                .contains(&format!("cf-herdr {guideline} of {guideline} bytes")),
+                .contains(&format!("cf-herdr {lines} of {lines} lines")),
             "{}",
             result.message
         );
-        assert!(result.message.contains("kernel (AGENTS.md managed block)"));
+        assert!(result.message.contains(&format!(
+            "kernel (AGENTS.md managed block) {} of {} bytes",
+            crate::reading::authored_len(b"<!-- codeflow:managed:begin scaffold=3.0.0 -->\nrules\n<!-- codeflow:managed:end -->"),
+            crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES
+        )), "{}", result.message);
+        assert!(
+            result
+                .message
+                .contains("always-loaded instructions (AGENTS.md) 5 of 200 lines"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("descriptions at most 31 of 1024 characters"),
+            "{}",
+            result.message
+        );
     }
 
+    /// TSK-267: an advisory guideline above its number is a note with its
+    /// basis and the step that clears it, never a warning.
     #[test]
-    fn test_reading_warns_above_a_guideline_and_names_the_step_that_clears_it() {
-        let guideline = crate::reading::skill_guideline("cf-herdr");
-        let (dir, opts) = reading_project("cf-herdr", 2 * guideline);
+    fn test_reading_notes_above_a_guideline_and_names_the_step_that_clears_it() {
+        let lines = crate::reading::BODY_GUIDELINE_LINES + 1;
+        let (dir, opts) = reading_project("cf-herdr", lines);
         let result = check_reading(&opts);
-        assert!(result.status.is_warn(), "{}", result.message);
-        assert!(result.message.starts_with(&format!(
-            "above guideline: cf-herdr {} of {guideline} bytes",
-            2 * guideline
-        )));
         assert!(
-            result.message.contains("move detail behind a trigger"),
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(!result.status.is_warn());
+        assert!(
+            result.message.starts_with(&format!(
+                "above guideline: cf-herdr {lines} of {} lines ({})",
+                lines - 1,
+                crate::reading::BODY_BASIS
+            )),
             "{}",
             result.message
         );
+        assert!(
+            result
+                .message
+                .contains("Guidelines are notes, never failures: move detail behind a trigger"),
+            "{}",
+            result.message
+        );
+        if let Status::Note(remedy) = &result.status {
+            assert!(
+                remedy.to_string().contains(".claude/skills/cf-herdr/"),
+                "{remedy}"
+            );
+        }
 
-        // A kernel past its guideline warns the same way.
+        // A kernel past its guideline notes the same way, with its basis.
         let big = format!(
             "<!-- codeflow:managed:begin -->\n{}\n<!-- codeflow:managed:end -->\n",
             "r".repeat(crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES)
         );
         std::fs::write(dir.path().join("AGENTS.md"), big).unwrap();
-        std::fs::write(dir.path().join(".claude/skills/cf-herdr/SKILL.md"), "x").unwrap();
+        write_skill(dir.path(), "cf-herdr", 10, "Short.");
         let result = check_reading(&opts);
-        assert!(result.status.is_warn(), "{}", result.message);
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{}",
+            result.message
+        );
         assert!(
             result
                 .message
-                .starts_with("above guideline: kernel (AGENTS.md managed block)"),
+                .starts_with("above guideline: kernel (AGENTS.md managed block) ")
+                && result.message.contains(&format!(
+                    " of {} bytes ({})",
+                    crate::scaffold::rule_map::MANAGED_BLOCK_GUIDELINE_BYTES,
+                    crate::reading::KERNEL_BASIS
+                )),
             "{}",
             result.message
         );
     }
 
+    /// TSK-267: the API limit on a description is a real limit, so it warns
+    /// with the file to edit.
     #[test]
-    fn test_reading_measures_the_installed_chain_and_ignores_adopter_skills() {
-        let (dir, opts) = reading_project("team-release-notes", 100_000);
+    fn test_reading_warns_on_a_description_over_the_api_limit() {
+        let limit = crate::reading::DESCRIPTION_LIMIT_CHARS;
+        let (dir, opts) = reading_project("cf-herdr", 10);
+        write_skill(dir.path(), "cf-herdr", 10, &"d".repeat(limit));
+        let at = check_reading(&opts);
+        assert_eq!(at.status, Status::Pass, "{}", at.message);
+        assert!(
+            at.message.contains(&format!(
+                "descriptions at most {limit} of {limit} characters"
+            )),
+            "{}",
+            at.message
+        );
+
+        write_skill(dir.path(), "cf-herdr", 10, &"d".repeat(limit + 1));
+        let over = check_reading(&opts);
+        assert!(over.status.is_warn(), "{}", over.message);
+        assert!(
+            over.message.starts_with(&format!(
+                "cf-herdr description (.claude/skills/cf-herdr/SKILL.md) is {} characters, over the {limit}-character API limit (Claude Code cuts the listing at {})",
+                limit + 1,
+                crate::reading::DESCRIPTION_LISTING_CHARS
+            )),
+            "{}",
+            over.message
+        );
+        if let Status::Warn(remedy) = &over.status {
+            assert!(
+                remedy
+                    .to_string()
+                    .contains(".claude/skills/cf-herdr/SKILL.md"),
+                "{remedy}"
+            );
+        }
+    }
+
+    /// TSK-267: a project's `[reading]` values replace the defaults, a
+    /// raised Codex limit moves the derived kernel number, and a section
+    /// that does not read warns with the shipped numbers applied.
+    #[test]
+    fn test_reading_uses_the_project_values_and_the_codex_limit() {
+        let (dir, opts) = reading_project("cf-herdr", 150);
+        let project = dir.path().join(".codeflow/project.toml");
+        std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+        std::fs::write(
+            &project,
+            "schema_version = 1\n\n[reading]\nskill_max_lines = 100\n",
+        )
+        .unwrap();
+        let result = check_reading(&opts);
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .starts_with("above guideline: cf-herdr 150 of 100 lines"),
+            "{}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("project values for skill_max_lines in the [reading] section"),
+            "{}",
+            result.message
+        );
+
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "project_doc_max_bytes = 65536\n",
+        )
+        .unwrap();
+        let raised = check_reading(&opts);
+        assert!(
+            raised.message.contains(&format!(
+                "kernel (AGENTS.md managed block) 82 of {} bytes",
+                crate::scaffold::rule_map::managed_block_guideline(65536)
+            )),
+            "{}",
+            raised.message
+        );
+
+        std::fs::write(
+            &project,
+            "schema_version = 1\n\n[reading]\nskill_max_lines = \"many\"\n",
+        )
+        .unwrap();
+        let unread = check_reading(&opts);
+        assert!(unread.status.is_warn(), "{}", unread.message);
+        assert!(
+            unread
+                .message
+                .contains("the [reading] section of project.toml was not read")
+                && unread.message.contains("reading.skill_max_lines")
+                && unread.message.contains("cf-herdr 150 of 500 lines"),
+            "{}",
+            unread.message
+        );
+    }
+
+    /// Copy the shipped skill trees into `root/.claude/skills`.
+    fn install_shipped_skills(root: &Path) {
         let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
         let mut shipped = crate::reading::SkillFiles::new();
         for tree in ["agents/skills", "claude/skills"] {
             crate::reading::load_skill_tree(&assets.join(tree), &mut shipped).unwrap();
         }
         for (path, text) in &shipped {
-            let dest = dir.path().join(".claude/skills").join(path);
+            let dest = root.join(".claude/skills").join(path);
             std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
             std::fs::write(dest, text).unwrap();
         }
+    }
+
+    #[test]
+    fn test_reading_measures_the_installed_chain_and_ignores_adopter_skills() {
+        let (dir, opts) = reading_project("team-release-notes", 1000);
+        install_shipped_skills(dir.path());
         let result = check_reading(&opts);
+        assert!(!result.status.is_warn(), "{}", result.message);
         assert!(
             result.message.contains("per-task reading chain"),
             "{}",
@@ -5181,9 +5601,76 @@ mod tests {
             "an adopter's own skill is not measured: {}",
             result.message
         );
-        for (skill, _) in crate::reading::SKILL_GUIDELINES {
-            assert!(result.message.contains(&format!("{skill} ")), "{skill}");
+        for skill in ["cf-stack", "cf-model-orchestrator"] {
+            assert!(
+                result.message.contains(&format!("{skill} ")),
+                "a shipped skill is measured: {}",
+                result.message
+            );
         }
+    }
+
+    /// TSK-267 AC-9: when the installed tree's read edges differ from the
+    /// map this binary ships, the chain is information that names both
+    /// versions, not a note or a warning.
+    #[test]
+    fn test_reading_reports_a_skewed_chain_as_information() {
+        let (dir, opts) = reading_project("cf-herdr", 10);
+        install_shipped_skills(dir.path());
+        std::fs::remove_file(dir.path().join(".claude/skills/cf-develop/SKILL.md")).unwrap();
+        let result = check_reading(&opts);
+        assert!(!result.status.is_warn(), "{}", result.message);
+        assert!(
+            result.message.contains(&format!(
+                "installed read edges differ from the map codeflow {} ships, and the installed skills are scaffold 3.0.0",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{}",
+            result.message
+        );
+        assert!(
+            result.message.contains("per-task reading chain")
+                && result.message.contains("(information only:")
+                && !result.message.contains("per-task reading chain 0 of"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// TSK-267: the project's `.codex/config.toml` sets the Codex limit the
+    /// instructions check measures against.
+    #[test]
+    fn test_instructions_reads_the_project_codex_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(40 * 1024)).unwrap();
+        assert!(check_instructions(&opts).status.is_warn());
+
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "project_doc_max_bytes = 65536\n",
+        )
+        .unwrap();
+        let raised = check_instructions(&opts);
+        assert_eq!(raised.status, Status::Pass, "{}", raised.message);
+        assert!(
+            raised.message.contains(
+                "under Codex's 65536-byte instruction limit (project_doc_max_bytes in .codex/config.toml)"
+            ),
+            "{}",
+            raised.message
+        );
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(65536 + 1)).unwrap();
+        let over = check_instructions(&opts);
+        assert!(over.status.is_warn(), "{}", over.message);
+        assert!(
+            over.message.contains("over Codex's 65536-byte instruction limit (project_doc_max_bytes in .codex/config.toml)"),
+            "{}",
+            over.message
+        );
     }
 
     #[test]

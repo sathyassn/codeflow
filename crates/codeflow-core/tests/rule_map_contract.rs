@@ -15,8 +15,7 @@ use std::path::{Path, PathBuf};
 
 use codeflow_core::scaffold::rule_map::{
     self, codex_overflow, is_agent_pointer, is_skill_pointer, managed_block, File, Group, Kernel,
-    CODEX_INSTRUCTION_LIMIT_BYTES, MANAGED_BLOCK_GUIDELINE_BYTES, OUTPUTS, RULES_GUIDELINE,
-    RULE_LINE_GUIDELINE_BYTES,
+    CODEX_INSTRUCTION_LIMIT_BYTES, MANAGED_BLOCK_GUIDELINE_BYTES, OUTPUTS,
 };
 use codeflow_core::scaffold::{
     self, AssetSource, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions,
@@ -207,9 +206,10 @@ fn every_root_template_is_rendered_from_the_one_kernel() {
     );
 }
 
-/// AC-1: one-line rules with pointers and every moment. The block size, the
-/// rule count and each rule's length are reported against their guideline
-/// numbers, never failed (TSK-150).
+/// AC-1: one-line rules with pointers and every moment. The block size is
+/// reported against its guideline, never failed (TSK-150); the rule count
+/// and each rule's length are printed as information, with no number
+/// (TSK-267).
 #[test]
 fn each_tier_map_has_one_line_rules_and_every_moment() {
     let kernel = Kernel::shipped();
@@ -217,7 +217,7 @@ fn each_tier_map_has_one_line_rules_and_every_moment() {
         let rendered = kernel.render(agents_output(tier));
         let block = managed_block(&rendered).expect("managed markers");
         println!(
-            "{tier}: kernel {} of {MANAGED_BLOCK_GUIDELINE_BYTES} bytes, {} of {RULES_GUIDELINE} always rules",
+            "{tier}: kernel {} of {MANAGED_BLOCK_GUIDELINE_BYTES} bytes, {} always rules",
             block.len(),
             kernel.rules_for(tier).len()
         );
@@ -238,13 +238,7 @@ fn each_tier_map_has_one_line_rules_and_every_moment() {
             );
             let line = kernel.render_rule_at(tier, rule);
             assert!(!line.contains('\n'), "{tier}: rule {} spans lines", rule.id);
-            if line.len() > RULE_LINE_GUIDELINE_BYTES {
-                println!(
-                    "{tier}: rule {} is {} bytes, above its {RULE_LINE_GUIDELINE_BYTES}-byte guideline",
-                    rule.id,
-                    line.len()
-                );
-            }
+            println!("{tier}: rule {} is {} bytes", rule.id, line.len());
             assert!(
                 block.contains(&line),
                 "{tier}: rule {} is not in the map",

@@ -99,7 +99,7 @@ text = """
 <!-- Add project-specific notes here. -->
 """
 
-# --- always rules (one line each; the count is a reported guideline) --------
+# --- always rules (one line each with a pointer; no count guideline) --------
 #
 # The route rule comes first at the standard and full tiers: it is the one
 # home of what is routed, and a reader acts on it before any inspection.

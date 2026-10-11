@@ -136,6 +136,17 @@ Tier is recorded in `project.toml`; re-running init at a higher tier is an **ide
 
 ### 4.4 Managed-artifact effectiveness (reading structure, sizes reported)
 
+> Note (2026-10-11): the guideline tables below and the sentence "a change
+> that moves a shipped file past its number sets the new number in the
+> same change" are superseded by ADR-0083. Tool limits are hard (Codex's
+> `project_doc_max_bytes`, the API's 1,024-character description), every
+> other number is an advisory doctor note in the unit its vendor publishes
+> (500 lines for a skill or agent body, 200 for the always-loaded set, 160
+> KiB for the chain, the kernel derived from the Codex limit), no byte
+> number per skill remains, and a project tunes the advisory numbers in the
+> `[reading]` section of `.codeflow/project.toml`. The structure principles
+> of this section still hold.
+
 v1's instruction corpus is the anti-pattern: duplicated, always loaded, and
 expensive to maintain. v2 keeps only artifacts that have an evidenced job and
 loads them progressively: a small always-read kernel, and everything else

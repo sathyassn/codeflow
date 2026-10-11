@@ -652,9 +652,15 @@ catalog! {
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";
-    /// Reading sizes above their guidelines.
+    /// Reading sizes above their advisory guidelines (a note, TSK-267).
     DOCTOR_READING = Step::Edit("{path}"),
         "move detail in {path} behind a trigger (an index entry or a conditional read), never cutting a duty";
+    /// A `[reading]` section doctor could not read (TSK-267).
+    DOCTOR_READING_CONFIG = Step::Edit(".codeflow/project.toml"),
+        "repair the [reading] section of .codeflow/project.toml so each key it sets is a positive integer, or remove the key";
+    /// A skill or agent description over the API limit (TSK-267).
+    DOCTOR_DESCRIPTION = Step::Edit("{path}"),
+        "shorten the description in {path} to 1,024 characters or fewer, the API limit, keeping what it does and when to use it";
     /// The root checkout, nested repositories and linked worktrees
     /// (ADR-0074); each finding names its own next step.
     DOCTOR_ROOT_CHECKOUT = Step::Codeflow("codeflow doctor"),
