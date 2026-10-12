@@ -6879,6 +6879,45 @@ mod tests {
         }
     }
 
+    /// Issue 148: the shipped policy workflow pins its checkout by commit. A
+    /// copy that still has the `v6` tag that 3.1.0 shipped, or a commit an
+    /// adopter pinned itself, is the same install; any other ref is an edit.
+    #[test]
+    fn test_ci_perimeter_recognizes_the_policy_workflow_under_either_checkout_pin() {
+        const SHIPPED_STEP: &str =
+            "- uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0";
+        assert!(SHIPPED_GITHUB_POLICY.contains(SHIPPED_STEP));
+        for step in [
+            "- uses: actions/checkout@v6",
+            "- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567",
+            "- uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v6.0.0",
+        ] {
+            let r = perimeter(
+                CI_DEFAULT_DEST,
+                &edit_line(SHIPPED_GITHUB_POLICY, SHIPPED_STEP, step),
+            );
+            assert_eq!(r.status, Status::Pass, "{step}: {}", r.message);
+            assert!(
+                r.message
+                    .contains("the codeflow version the target branch pins (1.2.3 here)"),
+                "{step}: {}",
+                r.message
+            );
+        }
+        for step in [
+            "- uses: actions/checkout@main",
+            "- uses: actions/checkout@v6.1.0",
+            "- uses: actions/checkout@0123456789abcdef",
+            "- uses: actions/checkout@v6x",
+        ] {
+            let r = perimeter(
+                CI_DEFAULT_DEST,
+                &edit_line(SHIPPED_GITHUB_POLICY, SHIPPED_STEP, step),
+            );
+            assert_unverified(&r);
+        }
+    }
+
     #[test]
     fn test_ci_perimeter_warns_when_nothing_is_pinned() {
         let dir = tempfile::tempdir().unwrap();

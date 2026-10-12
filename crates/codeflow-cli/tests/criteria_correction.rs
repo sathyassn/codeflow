@@ -853,7 +853,8 @@ fn a_checkbox_form_change_is_refused() {
         root,
         ".codeflow/project.toml",
         &format!(
-            "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\nwork_records_baseline = \"{legacy}\"\n"
+            "schema_version = 1\ntier = \"full\"\nscaffold_version = \"{version}\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\nwork_records_baseline = \"{legacy}\"\n",
+            version = env!("CARGO_PKG_VERSION"),
         ),
     );
     commit(root, "chore: record the migration baseline");

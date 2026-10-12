@@ -51,7 +51,7 @@ const INSTALLS: [(&str, &str, &str); 5] = [
     ),
     (
         include_str!("../../../../assets/base/ci/codeflow-policy.yml"),
-        "- uses: actions/checkout@v6",
+        "- uses: actions/checkout@",
         "installed and verified against ${verified}",
     ),
     (
@@ -83,16 +83,39 @@ pub(super) fn recognized(content: &str) -> bool {
         lines
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.trim_matches([' ', '\t']) == span[0])
+            .filter(|(_, line)| canonical(line.trim_matches([' ', '\t'])) == canonical(&span[0]))
             .any(|(at, line)| {
                 let indent = &line[..line.len() - line.trim_start_matches([' ', '\t']).len()];
                 lines.len() >= at + span.len()
                     && lines[at..at + span.len()]
                         .iter()
                         .zip(&span)
-                        .all(|(line, want)| dedent(line, indent) == Some(want.as_str()))
+                        .all(|(line, want)| {
+                            dedent(line, indent)
+                                .is_some_and(|have| canonical(have) == canonical(want))
+                        })
             })
     })
+}
+
+/// The shipped policy workflow starts its span at the checkout step. The
+/// action version does not change which codeflow CI installs, so the step
+/// reads the same whether it carries the `v6` tag that 3.1.0 shipped or a
+/// full commit with its release tag as a comment, as later releases ship and
+/// as an adopter that pins its own actions writes it. Any other ref stays a
+/// different line.
+fn canonical(line: &str) -> &str {
+    const STEP: &str = "- uses: actions/checkout@";
+    let Some(rest) = line.strip_prefix(STEP) else {
+        return line;
+    };
+    let (reference, comment) = rest.split_once(' ').unwrap_or((rest, ""));
+    let pinned = reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit());
+    if (reference == "v6" || pinned) && (comment.is_empty() || comment.starts_with('#')) {
+        STEP
+    } else {
+        line
+    }
 }
 
 /// The lines of `template` from the one holding `first` to the next one
