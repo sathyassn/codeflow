@@ -1,0 +1,11 @@
+id = "TSK-282"
+uid = "b5f13344-9d1c-4b10-a7e1-497e005143a1"
+kind = "TSK"
+title = "Test fixtures stay in their own folder and never hang on pipes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
