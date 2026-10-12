@@ -1,0 +1,11 @@
+id = "TSK-297"
+uid = "737cb732-0b19-43ee-a9cc-e3116085140d"
+kind = "TSK"
+title = "The dependency audit accepts the unmaintained unsafe-libyaml advisory until the YAML parser is replaced"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T11:52:13Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
