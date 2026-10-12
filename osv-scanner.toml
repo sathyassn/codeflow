@@ -1,0 +1,20 @@
+# osv-scanner reads this file for Cargo.lock in this directory only. The
+# dependency audit in .github/workflows/codeflow-ci.yml takes it from the
+# trusted commit, so a change here takes effect once its pull request lands.
+# Each entry names one advisory, why it is accepted here, and when it must be
+# triaged again.
+
+# unsafe-libyaml 0.2.11 comes in through serde_yaml_ng 0.10.0, which parses the
+# YAML of CodeFlow records. The advisory is informational: the crate is
+# unmaintained and its repository is archived. It has no fixed version, the
+# current OSV record lists no alias, and no exploit is known for 0.2.11.
+# The parser reads files in the repository the command runs in. That includes
+# pull request files that `codeflow validate --docs` parses in CI before merge,
+# and files in the repositories of adopters who run the binary. This codebase
+# parses no HTTP response with it. The entry also ignores any later alias of
+# this id until 2026-12-31; a different advisory id still fails the job.
+# TSK-298 removes the parser and this entry in 3.2.0.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+ignoreUntil = 2026-12-31
+reason = "Informational advisory: unsafe-libyaml is unmaintained, with no fixed version, no alias in the current OSV record and no known exploit for 0.2.11. The parser reads files in the repository it runs in, including pull request files that validate --docs parses in CI before merge and files in adopter repositories; this codebase parses no HTTP response with it. This entry also ignores any later alias of the id until 2026-12-31. TSK-298 removes the parser and this entry in 3.2.0."

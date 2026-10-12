@@ -37,6 +37,7 @@
       "*.md",
       "LICENSE-*",
       "dist-workspace.toml",
+      "osv-scanner.toml",
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
