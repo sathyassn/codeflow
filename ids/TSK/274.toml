@@ -1,0 +1,11 @@
+id = "TSK-274"
+uid = "bb2e8eec-7ee6-4c1e-9406-2b86db2e21d4"
+kind = "TSK"
+title = "the startup-file guard reads Cygwin and MSYS2 home spellings"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T00:01:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
