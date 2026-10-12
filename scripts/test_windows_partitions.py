@@ -136,7 +136,7 @@ class CheckTests(unittest.TestCase):
     def test_an_unlisted_test_or_a_missing_report_fails(self):
         layout = self.planned()
         layout[1].append(("cli::fast", "not_listed"))
-        self.assertIn("not in the archive's list", "\n".join(self.problems(layout)))
+        self.assertIn("not in the list of tests", "\n".join(self.problems(layout)))
         layout = self.planned()
         del layout[2]
         self.assertIn("no JUnit report from partition(s) [2]", "\n".join(self.problems(layout)))
@@ -147,6 +147,47 @@ class CheckTests(unittest.TestCase):
             path.write_text(json.dumps({"rust-suites": {"cli::read_benchmark": {"testcases": {
                 "bench": {"ignored": True}, "unit": {"ignored": False}}}}}))
             self.assertEqual(wp.listed_tests(path), {("cli::read_benchmark", "unit")})
+
+
+CS_SPEC = importlib.util.spec_from_file_location("coverage_shards", ROOT / "scripts" / "coverage-shards.py")
+cs = importlib.util.module_from_spec(CS_SPEC)
+CS_SPEC.loader.exec_module(cs)
+
+
+class CoverageShardTests(unittest.TestCase):
+    """TSK-270 AC-2: the Linux coverage shards use this planner with their
+    own measurements, results directories and per-shard test lists."""
+
+    def test_the_real_coverage_data_is_balanced_over_two_shards(self):
+        plan = wp.Plan(wp.load(cs.DATA))
+        self.assertEqual(plan.count, 2)
+        mean = sum(plan.estimates) / plan.count
+        self.assertLessEqual(max(plan.estimates), mean * 1.05)
+
+    def write_list(self, path: Path, tests) -> Path:
+        suites = {}
+        for binary, name in tests:
+            suites.setdefault(binary, {"testcases": {}})["testcases"][name] = {"ignored": False}
+        path.write_text(json.dumps({"rust-suites": suites}))
+        return path
+
+    def test_check_reads_the_shard_directories_and_every_shards_list(self):
+        plan = wp.Plan(DATA)
+        listed = [("cli::fast", "x"), ("cli::slow", "y"), ("cli::remedy", "two")]
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(StringIO()):
+            root = Path(directory)
+            for partition in range(1, plan.count + 1):
+                report = root / f"coverage-shard-{partition}" / "junit.xml"
+                report.parent.mkdir()
+                report.write_text(junit([t for t in listed if plan.partition_of(*t) == partition]))
+                self.write_list(report.parent / "tests.json", listed)
+            lists = [root / f"coverage-shard-{p}" / "tests.json" for p in range(1, plan.count + 1)]
+            self.assertEqual(wp.check(plan, wp.listed_once(lists), wp.junit_reports(root, cs.RESULTS)), [])
+            with self.assertRaises(SystemExit):
+                wp.junit_reports(root)
+            self.write_list(lists[-1], listed[:-1])
+            with self.assertRaises(SystemExit):
+                wp.listed_once(lists)
 
 
 class MeasureTests(unittest.TestCase):

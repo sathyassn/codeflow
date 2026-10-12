@@ -44,7 +44,12 @@
       "scripts/windows-test-times.json",
       "scripts/test_windows_partitions.py",
       "scripts/ci-reuse.py",
-      "scripts/test_ci_reuse.py"
+      "scripts/test_ci_reuse.py",
+      "scripts/coverage-shards.py",
+      "scripts/coverage-test-times.json",
+      "scripts/coverage-merge.py",
+      "scripts/test_coverage_merge.py",
+      "scripts/fixtures/coverage-merge/**"
     ]
   },
   "defaults": {
@@ -102,8 +107,7 @@
         }
       },
       "requires": [
-        "present-web-build",
-        "rust-build"
+        "present-web-build"
       ],
       "outputs": [
         "target/debug/codeflow"
@@ -221,7 +225,7 @@
       },
       "timeout_seconds": 1800,
       "requires": [
-        "rust-build"
+        "present-web-build"
       ],
       "report": {
         "format": "junit",
@@ -259,13 +263,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
         }
       }
     },
@@ -384,12 +388,23 @@
       ]
     },
     {
+      "name": "journey-python",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/journey-gate.py --part python"
+        }
+      },
+      "timeout_seconds": 900
+    },
+    {
       "name": "journey-gate",
       "enabled": true,
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --results \"$CODEFLOW_GATE_RESULTS\""
+          "command": "python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --part results --results \"$CODEFLOW_GATE_RESULTS\""
         }
       },
       "timeout_seconds": 3600,
@@ -445,7 +460,7 @@
         }
       },
       "requires": [
-        "rust-build"
+        "present-web-build"
       ],
       "outputs": [],
       "exclusive": true,
@@ -461,7 +476,7 @@
         }
       },
       "requires": [
-        "rust-build"
+        "present-web-build"
       ],
       "outputs": [],
       "exclusive": false,
