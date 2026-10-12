@@ -1,0 +1,11 @@
+id = "TSK-287"
+uid = "7b07b69d-53d5-4b88-b61a-f3225142d008"
+kind = "TSK"
+title = "Every judging history read refuses an overlaid history"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:31Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
