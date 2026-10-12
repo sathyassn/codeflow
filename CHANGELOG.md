@@ -24,21 +24,34 @@ erratum below, never an edit of the section.
 > 1. Install the 3.1.1 `codeflow` on `PATH`. On macOS, copy it to a new
 >    file beside the installed one and move it into place with `mv`; the
 >    entry "Replacing the binary on macOS" below says why. Then run
->    `codeflow update` on a new branch and land it, which moves the managed
->    workflows to the commit-pinned actions.
-> 2. When you run `codeflow ci` by hand, pass `--base` as a commit id, not a
->    branch name, and always pass `--branch`. The pre-push hook already
->    does both (issues 130 and 141).
-> 3. CodeFlow's own pushes (`task new`, `adr new`, `work claim`) use the
->    ambient git credential. To make them use a bot or app identity, set a
->    credential helper at repository scope (`git config credential.helper`
->    in that repository) or set `remote.origin.pushurl`, instead of
->    building `GIT_CONFIG_*` variables on each command (issue 151).
+>    `codeflow update` on a new branch and land it. It pins the actions in
+>    an unmodified managed workflow, merges the pins into an edited one, and
+>    leaves a workflow whose edits conflict in place with a `.new` file
+>    beside it to review; the pin is live only once that file is merged.
+> 2. When you run `codeflow ci` by hand, pass `--base` as a commit id and
+>    always pass `--branch`. A branch name or any other ref, a
+>    remote-tracking ref such as `origin/main` included, can give a
+>    different `work.acceptance_binding` verdict for the same commit. The
+>    pre-push hook already passes a commit id and `--branch` (issues 130
+>    and 141).
+> 3. CodeFlow's own pushes (`task new`, `adr new`, `work claim`) push to
+>    `origin` with the git credential that answers for its URL. To make
+>    them push as a bot or app, set the helper at repository scope, first
+>    with an empty value so git skips any global or system helper:
+>    `git config --local --add credential.helper ""`, then
+>    `git config --local --add credential.helper '<bot helper>'`. A
+>    repository helper added without the empty value is never asked when
+>    a global helper, such as the macOS keychain or `gh`, already answers.
+>    To push to a different URL as well, set `remote.origin.pushurl`
+>    yourself, outside an agent session: the git guard refuses remote
+>    configuration from an agent (issue 151).
 > 4. When the secret scan flags a finding that needs a `.gitleaksignore`
 >    line (issue 139), land that line first in its own standalone task pull
 >    request, holding its task record and that line, then rerun the
->    original branch. The line names a commit, so it must reach `main` by a
->    merge commit, not a squash.
+>    original branch. The line names the commit that holds the finding, so
+>    land that original branch by a merge commit, not a squash, which would
+>    give the commit a new id. The exemption pull request itself can merge
+>    either way.
 
 ### Changed
 
