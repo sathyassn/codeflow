@@ -318,9 +318,9 @@ class GatePartControls(unittest.TestCase):
 
     def test_a_target_no_part_names_is_refused(self):
         self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
-                            "no gate part runs", "read-benchmark")
-        self.assert_problem(WORKFLOW.replace(",journey-gate\n", "\n"),
-                            "no gate part runs", "journey-gate")
+                            "no gate part or coverage job runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-python\n", "\n"),
+                            "no gate part or coverage job runs", "journey-python")
 
     def test_a_new_full_mode_target_must_join_a_part(self):
         def add(c):
@@ -350,12 +350,15 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: gates\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
-        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ]; then', 'if false; then'), self.EXACT)
+        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || '
+                                             '[ "$REPORT" != success ]; then', 'if false; then'), self.EXACT)
+        self.assert_problem(WORKFLOW.replace(' || [ "$REPORT" != success ]; then', '; then'), self.EXACT)
 
     def test_a_verdict_that_could_pass_a_failed_part_is_refused(self):
         """The four forms the TSK-203 review showed a substring check accepting."""
@@ -366,9 +369,12 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates]\n", "    needs: [reuse, gates]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
-                '[ "$REUSE" = success ] && [ "$PARTS" = skipped ]', '[ "$REUSE" = success ]'),
+                '[ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]',
+                '[ "$REUSE" = success ]'),
+            "a reuse that needs only the parts skipped": WORKFLOW.replace(
+                '[ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -434,10 +440,10 @@ class GatePartControls(unittest.TestCase):
 
     def test_a_continued_matrix_value_is_refused(self):
         """A continuation line joins `|| true` onto the command (round three)."""
-        only = "            only: rust-coverage,journey-gate\n"
+        only = "            only: prose-exhaustive\n"
         self.assertIn(only, WORKFLOW)
         self.assert_problem(WORKFLOW.replace(only, only + "              || true\n"), self.STRATEGY)
-        self.assert_problem(WORKFLOW.replace(only, "            only: 'rust-coverage,journey-gate || true'\n"),
+        self.assert_problem(WORKFLOW.replace(only, "            only: 'prose-exhaustive || true'\n"),
                             self.STRATEGY)
 
     def test_a_second_command_in_a_script_is_refused(self):
@@ -473,9 +479,154 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates]\n", "    needs: [reuse, gates]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
+
+
+def verdict_script(workflow: str = WORKFLOW) -> str:
+    """The `codeflow gates` verdict's bash script, as the runner sees it."""
+    job = parity.workflow_jobs(workflow)["gates-verdict"]
+    lines = job.splitlines()
+    start = lines.index("        run: |") + 1
+    script = []
+    for line in lines[start:]:
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        script.append(line[10:])
+    return "\n".join(script)
+
+
+class VerdictOutcomeControls(unittest.TestCase):
+    """TSK-270 AC-3: the verdict fails when a part, a coverage shard or the
+    coverage report failed, was cancelled or was skipped, and passes only
+    when all succeeded or the reuse decision named a run and all were
+    skipped. Each case runs the committed script in bash."""
+
+    def verdict(self, parts, shards, report, reuse="skipped", reused=""):
+        env = {"PATH": os.environ.get("PATH", ""), "PARTS": parts, "SHARDS": shards, "REPORT": report,
+               "REUSE": reuse, "REUSED": reused, "GITHUB_SERVER_URL": "https://github.com",
+               "GITHUB_REPOSITORY": "sathyassn/codeflow"}
+        return subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True).returncode
+
+    def test_it_passes_only_when_every_job_passed(self):
+        self.assertEqual(self.verdict("success", "success", "success"), 0)
+
+    def test_a_failed_cancelled_or_skipped_job_fails_it(self):
+        for outcome in ("failure", "cancelled", "skipped"):
+            for which in range(3):
+                results = ["success"] * 3
+                results[which] = outcome
+                with self.subTest(outcome=outcome, job=("parts", "shards", "report")[which]):
+                    self.assertEqual(self.verdict(*results), 1)
+
+    def test_reuse_passes_only_when_every_job_was_skipped(self):
+        self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123"), 0)
+        for results in (("skipped", "success", "skipped"), ("skipped", "skipped", "failure"),
+                        ("success", "skipped", "skipped")):
+            with self.subTest(results=results):
+                self.assertEqual(self.verdict(*results, "success", "123"), 1)
+        self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", ""), 1)
+        self.assertEqual(self.verdict("skipped", "skipped", "skipped", "failure", "123"), 1)
+
+
+class CoverageShardControls(unittest.TestCase):
+    """TSK-270 AC-1 to AC-3: the shards run the rust-coverage command on
+    every planned shard once, after its prerequisite, and the report reads
+    the floor from the config and the journeys from the shards' results."""
+
+    EXACT = "must be exactly this, built from .codeflow/test-config.json"
+
+    def problems(self, workflow: str = WORKFLOW, cfg: dict = CONFIG, data: Path | None = None) -> list[str]:
+        jobs = parity.workflow_jobs(workflow)
+        guarded = parity.GATES_IF.match(re.search(r"^ {4}if:\s*(.+?)\s*$", jobs["gates"], re.M).group(1))
+        return parity.coverage_job_problems(cfg, jobs, guarded.group(1), data)
+
+    def assert_problem(self, needle: str, workflow: str = WORKFLOW, cfg: dict = CONFIG, data=None) -> None:
+        problems = self.problems(workflow, cfg, data)
+        self.assertTrue(any(needle in p for p in problems), f"{needle} not in {problems}")
+
+    def test_the_committed_jobs_match_the_config_and_plan(self):
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(parity.planned_partitions(parity.SHARD_DATA), 2)
+        self.assertIn("        shard: [1, 2]\n", WORKFLOW)
+
+    def test_a_shard_that_runs_less_or_another_command_is_refused(self):
+        run = 'cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E'
+        self.assertIn(run, WORKFLOW)
+        for changed in (run.replace("--workspace", "-p codeflow-core"), run.replace("--no-fail-fast ", ""),
+                        run.replace("--profile codeflow", "--profile default"),
+                        run.replace(" -E", " --lib -E")):
+            with self.subTest(changed=changed):
+                self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("coverage-shards.py filter ${{ matrix.shard }}",
+                                                         "coverage-shards.py filter 1"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
+                                                         "        run: true\n"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
+                                                         "        run: cargo llvm-cov",
+                                                         "          LLVM_PROFILE_FILE_NAME: codeflow-%p.profraw\n"
+                                                         "        run: cargo llvm-cov"))
+
+    def test_a_shard_set_that_misses_or_exceeds_the_plan_is_refused(self):
+        for matrix in ("        shard: [1]\n", "        shard: [1, 2, 3]\n", "        shard: [1, 1]\n"):
+            with self.subTest(matrix=matrix):
+                self.assert_problem(self.EXACT, WORKFLOW.replace("        shard: [1, 2]\n", matrix))
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / "times.json"
+            data.write_text(json.dumps({"partitions": 3}))
+            self.assert_problem(self.EXACT, data=data)
+
+    def test_the_config_commands_drive_the_jobs(self):
+        def narrowed(c):
+            target(c, "rust-coverage")["modes"]["full"]["command"] += " --lib"
+        self.assert_problem("the rust-coverage target must run", cfg=mutated(narrowed))
+        def threshold(c):
+            target(c, "rust-coverage")["modes"]["full"]["command"] = (
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80 --profile codeflow")
+        self.assertEqual(self.problems(cfg=mutated(threshold)), [])
+        def web(c):
+            target(c, "present-web-build")["modes"]["full"]["command"] += " && true"
+        self.assert_problem(self.EXACT, cfg=mutated(web))
+        def journey(c):
+            target(c, "journey-gate")["modes"]["full"]["command"] = "python3 -B scripts/journey-gate.py --list"
+        self.assert_problem(self.EXACT, cfg=mutated(journey))
+        def requires(c):
+            target(c, "rust-coverage")["requires"] = ["present-web-build", "rust-build"]
+        self.assert_problem("must require exactly present-web-build", cfg=mutated(requires))
+
+    def test_a_report_that_could_pass_without_every_shard_or_the_floor_is_refused(self):
+        merge = "--floor-from .codeflow/test-config.json --shards 2 target/coverage/data"
+        self.assertIn(merge, WORKFLOW)
+        controls = {
+            "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 2 target/coverage/data"),
+            "one shard": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 1 target/coverage/data"),
+            "a forgiven merge": WORKFLOW.replace(merge, merge + " || true"),
+            "a skipped journey step": WORKFLOW.replace(
+                "      - name: journey gate\n        if: ${{ !cancelled() }}\n",
+                "      - name: journey gate\n        if: false\n"),
+            "one shard's list": WORKFLOW.replace(" target/coverage/results/coverage-shard-2/tests.json", ""),
+            "a report that runs on skipped shards": WORKFLOW.replace(
+                "    if: always() && needs.gates-coverage.result != 'skipped' && (",
+                "    if: always() && ("),
+            "continue-on-error on the report": WORKFLOW.replace(
+                "    needs: gates-coverage\n", "    needs: gates-coverage\n    continue-on-error: true\n"),
+        }
+        for label, workflow in controls.items():
+            with self.subTest(label):
+                self.assertNotEqual(workflow, WORKFLOW)
+                self.assert_problem(self.EXACT, workflow)
+
+    def test_a_part_that_names_a_coverage_target_is_refused(self):
+        workflow = WORKFLOW.replace("only: prose-exhaustive\n", "only: prose-exhaustive,rust-coverage\n")
+        problems = parity.gate_part_problems(CONFIG, workflow)
+        self.assertTrue(any("which the coverage jobs run" in p for p in problems), problems)
+
+    def test_without_the_coverage_jobs_their_targets_go_unrun(self):
+        start = WORKFLOW.index("  gates-coverage:\n")
+        end = WORKFLOW.index("  # The required check.")
+        problems = parity.gate_part_problems(CONFIG, WORKFLOW[:start] + WORKFLOW[end:])
+        self.assertTrue(any("`gates-coverage` job must be exactly" in p for p in problems), problems)
 
 
 class SharedInstallControls(unittest.TestCase):

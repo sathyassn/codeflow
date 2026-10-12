@@ -4,7 +4,7 @@
 Windows independently runs fmt, nextest (in partitions), doctests, clippy and
 rustdoc. Unix-only journeys and the ignored read benchmark remain Linux-only.
 Node versions, coordinator-owned binary paths and the parts of the split
-Linux full gate are also checked.
+Linux full gate, its coverage shards and their report are also checked.
 """
 
 import json
@@ -169,12 +169,17 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     unknown = sorted(set(named) - owed)
     if unknown:
         problems.append(f"gate parts name targets with no enabled full mode: {unknown}")
-    missing = sorted(owed - requires_closure(cfg, set(named)))
+    by_coverage = requires_closure(cfg, set(COVERAGE_TARGETS))
+    missing = sorted(owed - requires_closure(cfg, set(named)) - by_coverage)
     if missing:
-        problems.append(f"no gate part runs these full-mode targets: {missing}")
+        problems.append(f"no gate part or coverage job runs these full-mode targets: {missing}")
     twice = sorted({n for n in named if named.count(n) > 1})
     if twice:
         problems.append(f"more than one gate part names: {twice}")
+    shared = sorted(set(named) & set(COVERAGE_TARGETS))
+    if shared:
+        problems.append(f"gate parts name {shared}, which the coverage jobs run; a second run would "
+                        "repeat the instrumented suite")
     problems.extend(gate_step_problems(gate, workflow))
     verdicts = [
         (name, text) for name, text in jobs.items()
@@ -195,14 +200,178 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always() && (<the gates job's event condition>)`, need the reuse and gates jobs, "
-                "and fail unless needs.gates.result is success or the reuse decision named a run and "
-                "every part was skipped; any other form could let a skipped, failed or cancelled part "
-                "read as passed. Expected:\n" + expected)
+                "`if: always() && (<the gates job's event condition>)`, need the reuse, gates and "
+                "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
+                "run and all of them were skipped; any other form could let a skipped, failed or "
+                "cancelled part read as passed. Expected:\n" + expected)
     if "    needs: reuse" not in [l.rstrip() for l in gate.splitlines()]:
         problems.append("the gates job must need exactly the reuse job (`needs: reuse`), whose output its "
                         "condition reads")
     problems.extend(reuse_job_problems(jobs))
+    line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+    guarded = GATES_IF.match(line.group(1)) if line else None
+    problems.extend(coverage_job_problems(cfg, jobs, guarded.group(1) if guarded else ""))
+    return problems
+
+
+# TSK-270: the instrumented suite runs as shards beside the gate parts, and a
+# report job adds up their coverage, applies the floor and reads the
+# journeys. Both jobs are pinned exactly, like the verdict, and are built
+# from the config: the shards run the rust-coverage command with
+# --no-report and their planned filterset after its present-web-build
+# prerequisite, the report reads the floor from the config and runs the
+# journey-gate command on the shards' results, and the matrix, the merge
+# and the partition check cover every shard scripts/coverage-test-times.json
+# plans, once. The merge's own tests (scripts/test_coverage_merge.py) and
+# the planner's (scripts/test_windows_partitions.py) cover the rest.
+COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
+SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
+SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
+COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
+COVERAGE_JOB = """\
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
+    name: codeflow gates (coverage ${{ matrix.shard }} of @COUNT@)
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [@SHARDS@]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: coverage-gates
+          save-if: ${{ matrix.shard == 1 }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
+      - name: present-web-build
+        shell: bash
+        run: @WEB_BUILD@
+      - name: Remove old coverage profiles
+        run: cargo llvm-cov clean --workspace
+      - name: cargo llvm-cov nextest (one shard)
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: @SHARD_RUN@
+      - name: Export this shard's coverage and list its tests
+        shell: bash
+        run: |
+          cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+          eval "$(cargo llvm-cov show-env --sh)"
+          CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR" cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
+      - name: Keep this shard's coverage for the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.shard }}
+          path: target/coverage-data/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep this shard's results for the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            target/nextest/codeflow/junit.xml
+            target/nextest/codeflow/tests.json
+          if-no-files-found: ignore
+          retention-days: 7
+"""
+COVERAGE_REPORT_JOB = """\
+    if: always() && needs.gates-coverage.result != 'skipped' && (@CONDITION@)
+    name: codeflow gates (coverage report)
+    needs: gates-coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/coverage
+          echo "CODEFLOW_GATE_STARTED_AT=$(python3 -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+      - name: Fetch every shard's coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*
+          path: target/coverage/data
+      - name: Fetch every shard's results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-shard-*
+          path: target/coverage/results
+      - name: Line coverage of the whole suite
+        shell: bash
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards @COUNT@ target/coverage/data
+      - name: journey gate
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CODEFLOW_GATE_RESULTS: target/coverage/results
+        run: @JOURNEY@
+      - name: Every test ran in exactly one shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list @LISTS@ --results target/coverage/results
+"""
+
+
+def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, list[str]]:
+    """(the shard job, the report job, problems) this config and plan pin."""
+    problems = []
+    targets = {t.get("name"): t for t in cfg.get("targets", [])}
+    full = {name: norm(t.get("modes", {}).get("full", {}).get("command", "")) for name, t in targets.items()}
+    coverage = full.get("rust-coverage", "")
+    if not (COVERAGE.match(coverage) and plain(targets.get("rust-coverage", {}))
+            and applicable(targets.get("rust-coverage", {}))):
+        problems.append(f"the rust-coverage target must run `{COVERAGE_FORM}` with no cwd or env; the coverage "
+                        f"shards run it with --no-report; found {coverage!r}")
+        coverage = COVERAGE_CANONICAL
+    if targets.get("rust-coverage", {}).get("requires") != ["present-web-build"]:
+        problems.append("the rust-coverage target must require exactly present-web-build, the one prerequisite "
+                        "the coverage shards run")
+    if targets.get("journey-gate", {}).get("requires") != ["rust-coverage"] or not full.get("journey-gate"):
+        problems.append("the journey-gate target must require exactly rust-coverage, whose results the coverage "
+                        "report reads")
+    shard_run = (re.sub(r" --fail-under-lines \S+", "", coverage).replace(" --profile ", " --no-report --profile ")
+                 + " " + SHARD_FILTER)
+    numbers = range(1, shards + 1)
+    lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
+    fill = {"@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
+            "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
+            "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
+    jobs = []
+    for template in (COVERAGE_JOB, COVERAGE_REPORT_JOB):
+        for marker, value in fill.items():
+            template = template.replace(marker, value)
+        jobs.append(template)
+    return jobs[0], jobs[1], problems
+
+
+def coverage_job_problems(cfg: dict, jobs: dict[str, str], condition: str,
+                          data: Path | None = None) -> list[str]:
+    """The shard and report jobs are exactly the pinned ones for this config
+    and plan, and nothing else in the workflow claims their names."""
+    shards, report, problems = coverage_jobs(cfg, condition, planned_partitions(data or SHARD_DATA))
+    for job, expected in (("gates-coverage", shards), ("gates-coverage-report", report)):
+        if norm_job(jobs.get(job, "")) != norm_job(expected):
+            problems.append(f"the `{job}` job must be exactly this, built from .codeflow/test-config.json and "
+                            "scripts/coverage-test-times.json: any other form could run part of the suite, skip "
+                            "a shard or judge the floor on another number. Expected:\n" + expected)
     return problems
 
 
@@ -313,7 +482,7 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 VERDICT_JOB = """\
     if: always() && ({condition})
     name: codeflow gates
-    needs: [reuse, gates]
+    needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -321,15 +490,17 @@ VERDICT_JOB = """\
         shell: bash
         env:
           PARTS: ${{{{ needs.gates.result }}}}
+          SHARDS: ${{{{ needs.gates-coverage.result }}}}
+          REPORT: ${{{{ needs.gates-coverage-report.result }}}}
           REUSE: ${{{{ needs.reuse.result }}}}
           REUSED: ${{{{ needs.reuse.outputs.run }}}}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS" = skipped ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
             exit 0
           fi
-          if [ "$PARTS" != success ]; then
-            echo "::error::the full gate's parts concluded ${{PARTS}}; see the codeflow gates (part) jobs"
+          if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
+            echo "::error::the full gate concluded parts=${{PARTS}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
             exit 1
           fi
           echo "every part of the full gate passed"
@@ -935,7 +1106,7 @@ def main() -> int:
         return 1
     if status == 0:
         print("gate-parity OK: Node targets run on their CI pins, the "
-              "real-browser check runs the gate's binary, the gate parts "
+              "real-browser check runs the gate's binary, the gate parts and coverage shards "
               "run every full-mode target, every job of every workflow has a timeout, and only "
               "the present part touches Playwright, through the pinned steps")
     return status
