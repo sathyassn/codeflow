@@ -140,11 +140,13 @@ jobs:
       # floating stable clippy cannot break CI out from under a green local run.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Each part builds different things (instrumented, release, debug), so
-      # each keeps its own cache.
+      # Each part builds different things (release, debug), so each keeps its
+      # own cache. A cache is saved only under a new key, so the key changes
+      # when what a part keeps in target/ changes: v1 holds the binary-delta
+      # check's build, now named by the locked dependencies (TSK-270).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.part }}
+          key: ${{ matrix.part }}-v1
       # Each Node target pins its version in a version file, and the full
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
