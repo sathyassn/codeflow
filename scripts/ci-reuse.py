@@ -22,8 +22,10 @@ never from a pull request's branch name or other text it controls:
    tree: the merge of a head into a base the head already contains is the
    head, and main only moves forward;
 5. the push changes none of the build cache inputs (the toolchain, the cargo
-   and npm lock files, the manifests), so a push that invalidates the caches
-   still runs and saves them on main for later pull requests;
+   and npm lock files, the manifests, and this workflow, which names the
+   cache keys and what each job builds), so a push that invalidates the
+   caches, or adds a job whose cache main lacks, still runs and saves them on
+   main for later pull requests;
 6. main already holds the present part's apt cache for this runner image
    and the locked Playwright version, keyed exactly as the workflow keys it.
    That key names the runner image and has no fallback, and only a run on
@@ -59,8 +61,12 @@ MAIN = "refs/heads/main"
 # Paths whose change invalidates a build cache that later pull request runs
 # restore from main (rust-cache keys on the toolchain, the cargo config and
 # every Cargo.lock and Cargo.toml; setup-node keys on the npm lock files).
+# The workflow names the cache keys and what each job builds into them, so
+# a change to it can add a cache main does not hold yet (TSK-270: the
+# coverage shards' cache).
 CACHE_INPUTS = ("rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml",
-                "*Cargo.toml", "*Cargo.lock", "*package-lock.json", "*.node-version")
+                "*Cargo.toml", "*Cargo.lock", "*package-lock.json", "*.node-version",
+                ".github/workflows/codeflow-ci.yml")
 
 
 # The Playwright version the present part reads, and the lock it must equal
