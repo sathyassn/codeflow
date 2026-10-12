@@ -2221,16 +2221,32 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
 /// the home directory, does not depend on the directory and is judged as
 /// written; an option's value after `=` is read as a word.
 fn word_could_name(word: &str) -> Option<&'static str> {
-    let value = if word.starts_with('-') {
-        word.split_once('=')?.1
+    // A word is read whole, and by the value an option or an assignment
+    // gives it: `--output=FILE`, `of=FILE` and, for a short option, its
+    // attached operand (`-oFILE`, `-OFILE`), since a program writes there.
+    let mut values: Vec<&str> = Vec::new();
+    if word.starts_with('-') {
+        if let Some((_, value)) = word.split_once('=') {
+            values.push(value);
+        }
+        if !word.starts_with("--") {
+            if let Some((at, _)) = word.char_indices().nth(2) {
+                values.push(&word[at..]);
+            }
+        }
     } else {
-        word
-    };
-    // Each word brace expansion can make is read (TSK-216 round 16).
-    let Some(words) = word_readings(value) else {
-        return Some(BRACE_UNREAD);
-    };
-    words.iter().find_map(|w| word_could_name_spelled(w))
+        values.push(word);
+        if let Some((_, value)) = word.split_once('=') {
+            values.push(value);
+        }
+    }
+    values.into_iter().find_map(|value| {
+        // Each word brace expansion can make is read (TSK-216 round 16).
+        let Some(words) = word_readings(value) else {
+            return Some(BRACE_UNREAD);
+        };
+        words.iter().find_map(|w| word_could_name_spelled(w))
+    })
 }
 
 /// [`word_could_name`] for one word after brace expansion. What follows a
@@ -4984,9 +5000,41 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
         vec![args.join(" ")]
+    } else if name == "sed" {
+        sed_run_commands(args)
     } else {
         launcher_commands(name, args)
     }
+}
+
+/// The shell commands a `sed` runs through GNU `e` and the `e` flag of `s`,
+/// decoded as GNU decodes them, so they are judged as a nested shell body
+/// (`sh -c '...'`) in the directory sed runs in: every writer check applies
+/// to them, a program option included (TSK-290 review round 4). Only the
+/// script text on the command line is read here; a `-f` script file is
+/// read where the directory is known ([`sed_script_split`]). A script the
+/// reader does not model has no commands to run as a body.
+fn sed_run_commands(args: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for spec in SED_GRAMMARS {
+        let texts: Vec<&str> = sed_script_pieces(args, spec)
+            .into_iter()
+            .filter_map(|piece| match piece {
+                SedPiece::Text(text) => Some(text),
+                SedPiece::File(_) => None,
+            })
+            .collect();
+        let reading = crate::security::sed_script::read_script(&texts.join("\n"));
+        if reading.unmodelled.is_some() {
+            continue;
+        }
+        for command in reading.commands {
+            if !out.contains(&command) {
+                out.push(command);
+            }
+        }
+    }
+    out
 }
 
 /// Words as shell text that reads back as the same words. Double quotes
@@ -17543,6 +17591,39 @@ mod sed_grammar_tests {
                 "sed -n 'e ls | wc -l' file.md",
                 // The same text is data when nothing runs it.
                 "cd \"$d\" && sed -n 's/a/printf \"$x\" \\\\ ;/' file.md",
+            ],
+            &root,
+        );
+    }
+
+    /// A command `e` or `s///e` runs is judged as the guard judges a nested
+    /// shell body (`sh -c '...'`) in the directory sed runs in, so every
+    /// writer check applies, a program option included (TSK-290 review
+    /// round 4).
+    #[test]
+    fn a_command_sed_runs_is_judged_as_a_nested_shell_body() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                "cd .codeflow && sed -n 'e dd if=/dev/null of=policy.json' file.md",
+                "cd \"$d\" && sed -n 'e dd if=/dev/null of=policy.json' file.md",
+                "cd .codeflow && sed -n 's,a,dd if=/dev/null of=policy.json,e' file.md",
+                "cd .codeflow && sed -n 'e curl -opolicy.json file:///etc/hosts' file.md",
+                "cd .codeflow && sed -n 'e wget -Opolicy.json file:///etc/hosts' file.md",
+                "cd .codeflow && sed -n 'e curl --output policy.json file:///etc/hosts' file.md",
+                "cd .codeflow && sed -n 'e cp notes.md policy.json' file.md",
+                "cd .codeflow && sed -n 'e tee policy.json' file.md",
+                "sed -n 'e dd if=/dev/null of=.codeflow/policy.json' file.md",
+            ],
+            &root,
+        );
+        assert_allowed(
+            &[
+                "cd .codeflow && sed -n 'e echo hi' file.md",
+                "cd .codeflow && sed -n 'e printf x > notes.md' file.md",
+                "cd .codeflow && sed -n 'e ls | wc -l' file.md",
+                "cd \"$d\" && sed -n 'e dd if=/dev/null of=notes.md' file.md",
+                "sed -n 'e curl -onotes.md file:///etc/hosts' file.md",
             ],
             &root,
         );

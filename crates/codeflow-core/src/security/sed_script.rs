@@ -38,8 +38,9 @@
 //! of `s` run a shell command, which can write any file. They name no file
 //! to the reader, so it reports the command text in
 //! [`ScriptReading::commands`], decoded as GNU decodes it for the buffer
-//! type ([`decode_escapes`]), for the guard to read as the words of a shell
-//! command.
+//! type ([`decode_escapes`]). The guard judges each as a nested shell body
+//! (`sh -c '...'`) in the directory `sed` runs in, so every check a shell
+//! command gets applies, and reads its words as possible write names.
 //!
 //! A command that is not plain words after decoding (any quote, backslash,
 //! backtick, `$`, `;`, parenthesis or newline, [`is_plain_command`]) is
