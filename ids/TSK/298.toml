@@ -1,0 +1,11 @@
+id = "TSK-298"
+uid = "3e512317-dbcd-4def-be6d-887e9a2bb8de"
+kind = "TSK"
+title = "The project's records are read by a YAML parser written in safe Rust"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T11:52:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
