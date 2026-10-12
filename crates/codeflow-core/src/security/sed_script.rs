@@ -611,7 +611,7 @@ mod tests {
         none("#n\np");
         none("/x/{\np\nd\n}");
         none("q5;Q 3;l 70");
-        none("n;N;g;G;h;H;x;z;=");
+        none("n;N;g;1G;h;H;x;z;=");
         assert_eq!(writes("p # w no\nw yes"), ["yes"]);
         none("");
         none("   \n  ;; ");
