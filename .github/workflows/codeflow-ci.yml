@@ -229,19 +229,10 @@ jobs:
           echo "::error::the Playwright install failed twice; see the attempts above"
           exit 1
 
-      # The binary that runs `codeflow test`. The prose and benchmark parts
-      # run `cargo test --release`, which reuses this release build. The
-      # present and checks parts build the debug binary instead, which is
-      # quicker and is the one their codeflow-bin target builds anyway
-      # (TSK-270).
       - name: Build codeflow from source
-        shell: bash
-        env:
-          PROFILE: ${{ (matrix.part == 'prose' || matrix.part == 'benchmark') && 'release' || 'dev' }}
         run: |
-          cargo build --locked --profile "$PROFILE" -p codeflow-cli
-          if [ "$PROFILE" = dev ]; then built=debug; else built=release; fi
-          echo "${GITHUB_WORKSPACE}/target/${built}" >> "$GITHUB_PATH"
+          cargo build --release -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
       # What adopters get passes their secret scan (TSK-206): fresh scaffolds
       # of every tier from the binary just built, and the adopter CI
@@ -342,6 +333,7 @@ jobs:
       - name: Export this shard's coverage and list its tests
         shell: bash
         run: |
+          mkdir -p target/coverage-data
           cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
           eval "$(cargo llvm-cov show-env --sh)"
           CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR" cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json

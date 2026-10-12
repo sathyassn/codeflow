@@ -270,6 +270,7 @@ COVERAGE_JOB = """\
       - name: Export this shard's coverage and list its tests
         shell: bash
         run: |
+          mkdir -p target/coverage-data
           cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
           eval "$(cargo llvm-cov show-env --sh)"
           CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR" cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json

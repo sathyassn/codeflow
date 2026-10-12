@@ -497,6 +497,9 @@ def verdict_script(workflow: str = WORKFLOW) -> str:
     return "\n".join(script)
 
 
+# The verdict runs on ubuntu-latest; on Windows `bash` may be WSL's, which
+# cannot see this checkout's paths.
+@unittest.skipIf(os.name == "nt", "the verdict script runs in Linux bash")
 class VerdictOutcomeControls(unittest.TestCase):
     """TSK-270 AC-3: the verdict fails when a part, a coverage shard or the
     coverage report failed, was cancelled or was skipped, and passes only
