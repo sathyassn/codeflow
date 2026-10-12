@@ -480,21 +480,7 @@ impl<'r> RecordStore<'r> {
                 (None, None) => Ok(None),
             }
         } else {
-            let mut versions = points.iter().flat_map(|(_, held)| held.records.iter());
-            let first = versions.next().map(|(_, record)| record.clone());
-            let agree = points.iter().all(|(_, held)| {
-                held.doubt.is_none()
-                    && held
-                        .records
-                        .first()
-                        .map(|(_, record)| record.criteria.signature())
-                        == first.as_ref().map(|record| record.criteria.signature())
-            });
-            if agree {
-                Ok(first)
-            } else {
-                Err("the judged points hold different versions of this task, and none of them is newer than the others".to_string())
-            }
+            self.agreed(task, &points)
         };
         let criteria = match at_points {
             Ok(Some(record)) => Authority::Held(Box::new(record)),
@@ -517,6 +503,60 @@ impl<'r> RecordStore<'r> {
             None => self.outside(task, judged, outside),
         };
         TaskJudgement { landing, criteria }
+    }
+
+    /// The version the judged `points` agree on when none of them is newer
+    /// than the others. A point that holds no record of the task and
+    /// carries no doubt holds no version, so it neither agrees nor
+    /// disagrees (issue 153): a default branch that never held a task
+    /// planned on a diverged integration line leaves the line's version as
+    /// the authority. Such a point still disagrees when its own history
+    /// holds a version with other criteria, which it no longer holds. The
+    /// versions the other points hold must all agree.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the criteria cannot be told: a point's doubt, held
+    /// versions with different criteria, or an absent point whose history
+    /// holds a version with other criteria or cannot prove which version
+    /// it keeps ([`Self::recovered`]).
+    fn agreed(
+        &mut self,
+        task: &Identity,
+        points: &[(Oid, Held)],
+    ) -> Result<Option<RecordView>, String> {
+        let differ = || {
+            "the judged points hold different versions of this task, and none of them is newer than the others".to_string()
+        };
+        let mut versions: Vec<&RecordView> = Vec::new();
+        let mut absent: Vec<Oid> = Vec::new();
+        for (point, held) in points {
+            if let Some(doubt) = &held.doubt {
+                return Err(doubt.clone());
+            }
+            match held.records.first() {
+                Some((_, record)) => versions.push(record),
+                None => absent.push(*point),
+            }
+        }
+        let Some((first, rest)) = versions.split_first() else {
+            return Ok(None);
+        };
+        let signature = first.criteria.signature();
+        if rest
+            .iter()
+            .any(|record| record.criteria.signature() != signature)
+        {
+            return Err(differ());
+        }
+        if !absent.is_empty() {
+            if let Some(earlier) = self.recovered(task, &absent)? {
+                if earlier.criteria.signature() != signature {
+                    return Err(differ());
+                }
+            }
+        }
+        Ok(Some((*first).clone()))
     }
 
     /// The newest version of the task's record in the history of `judged`,
@@ -1193,6 +1233,186 @@ mod tests {
             Authority::Held(record) => assert_eq!(record.status, "complete"),
             Authority::Absent => panic!("absent"),
             Authority::Unknown(reason) => panic!("unknown: {reason}"),
+        }
+    }
+
+    const LINE: &str = "integration/EPC-001-line";
+    const RECORD: &str = "project-management/tasks/TSK-001.md";
+
+    /// One commit's change to a fixture tree.
+    enum Step {
+        /// A commit that changes no record.
+        Note,
+        /// Write `text` at `path`.
+        File(&'static str, String),
+        /// Delete the task's record.
+        Delete,
+    }
+
+    /// A repository whose `main` commits `base`, then forks [`LINE`]; each
+    /// branch then commits its own steps, so neither tip is an ancestor of
+    /// the other, as when a line has diverged from `main`.
+    fn diverged(base: Step, main: Vec<Step>, line: Vec<Step>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let mut count = 0;
+        let mut apply = |step: Step| {
+            count += 1;
+            match step {
+                Step::Note => {
+                    std::fs::write(root.join(format!("note-{count}.txt")), "note\n").unwrap();
+                }
+                Step::File(path, text) => {
+                    let path = root.join(path);
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, text).unwrap();
+                }
+                Step::Delete => std::fs::remove_file(root.join(RECORD)).unwrap(),
+            }
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-q", "-m", &format!("step {count}")]);
+        };
+        apply(base);
+        git(root, &["branch", LINE]);
+        for step in main {
+            apply(step);
+        }
+        git(root, &["switch", "-q", LINE]);
+        for step in line {
+            apply(step);
+        }
+        dir
+    }
+
+    /// Judge TSK-001 at the tips `points` name, in that order, as the
+    /// pre-push does with the line's tip as the range anchor and `main`'s
+    /// tip as the candidate authority.
+    fn judge_at(root: &std::path::Path, points: &[&str]) -> TaskJudgement {
+        let repo = Repository::open(root).unwrap();
+        let judged: Vec<Oid> = points
+            .iter()
+            .map(|name| {
+                repo.revparse_single(name)
+                    .unwrap()
+                    .peel_to_commit()
+                    .unwrap()
+                    .id()
+            })
+            .collect();
+        let identity = Identity::named("TSK-001", Some(UID.to_string()), "TSK-001.md");
+        RecordStore::new(&repo).judge(
+            &identity,
+            &judged,
+            &Outside {
+                head: judged[0],
+                tips: &[],
+                at: None,
+                own: &[],
+            },
+        )
+    }
+
+    /// TSK-001's record with its one criterion reading `criterion`.
+    fn with_criterion(criterion: &str) -> String {
+        record(UID).replace("When run, the system shall work.", criterion)
+    }
+
+    /// Issue 153: a line that has diverged from `main` holds a task `main`
+    /// never held. `main` holds no version, so the line's version is the
+    /// authority, in either order of the judged points.
+    #[test]
+    fn a_point_that_never_held_the_task_holds_no_version() {
+        let dir = diverged(
+            Step::Note,
+            vec![Step::Note],
+            vec![Step::File(RECORD, record(UID))],
+        );
+        for points in [[LINE, "main"], ["main", LINE]] {
+            let judgement = judge_at(dir.path(), &points);
+            assert!(matches!(judgement.landing, Landing::Planned), "{points:?}");
+            match judgement.criteria {
+                Authority::Held(held) => assert_eq!(
+                    held.criteria.signature(),
+                    RecordView::parse(RecordKind::Task, RECORD, &record(UID))
+                        .unwrap()
+                        .criteria
+                        .signature(),
+                    "{points:?}"
+                ),
+                Authority::Absent => panic!("{points:?}: absent"),
+                Authority::Unknown(reason) => panic!("{points:?}: unknown: {reason}"),
+            }
+        }
+    }
+
+    /// Two points that are not ordered by ancestry and hold versions with
+    /// different criteria still give no answer.
+    #[test]
+    fn held_versions_that_differ_still_give_no_answer() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        match judge_at(dir.path(), &[LINE, "main"]).criteria {
+            Authority::Unknown(reason) => {
+                assert!(reason.contains("different versions"), "{reason}");
+            }
+            _ => panic!("two different held versions gave an answer"),
+        }
+    }
+
+    /// A point that no longer holds the task but held a version with other
+    /// criteria disagrees; one that only deleted the version the other
+    /// point holds does not.
+    #[test]
+    fn an_absent_point_disagrees_only_through_another_version_in_its_history() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![
+                Step::File(RECORD, with_criterion("When run, the system shall stop.")),
+                Step::Delete,
+            ],
+            vec![Step::Note],
+        );
+        match judge_at(dir.path(), &[LINE, "main"]).criteria {
+            Authority::Unknown(reason) => {
+                assert!(reason.contains("different versions"), "{reason}");
+            }
+            _ => panic!("a deleted version with other criteria was passed over"),
+        }
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Delete],
+            vec![Step::Note],
+        );
+        assert!(matches!(
+            judge_at(dir.path(), &[LINE, "main"]).criteria,
+            Authority::Held(_)
+        ));
+    }
+
+    /// A point that holds no record of the task but a file that may be it
+    /// and does not parse carries a doubt, which still refuses.
+    #[test]
+    fn a_doubt_at_a_point_without_the_record_still_gives_no_answer() {
+        let dir = diverged(
+            Step::Note,
+            vec![Step::File(
+                "project-management/tasks/TSK-999.md",
+                "---\nid: TSK-001\nstatus: [unclosed\n---\n".to_string(),
+            )],
+            vec![Step::File(RECORD, record(UID))],
+        );
+        match judge_at(dir.path(), &[LINE, "main"]).criteria {
+            Authority::Unknown(reason) => assert!(reason.contains("does not parse"), "{reason}"),
+            _ => panic!("a doubt gave an answer"),
         }
     }
 }

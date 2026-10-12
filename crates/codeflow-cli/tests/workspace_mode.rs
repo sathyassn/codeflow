@@ -41,9 +41,17 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
+    // The repository's installed hooks call `codeflow`, so they find the
+    // binary under test first, as the `codeflow` helper's commands do.
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "Test")

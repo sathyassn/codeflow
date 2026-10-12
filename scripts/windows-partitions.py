@@ -5,6 +5,8 @@ nextest's own partitioners (count, hash, slice) split by test count, so a
 partition that drew the slow journeys ran twice as long as one that did not.
 This script assigns tests to partitions from the durations that hosted runs
 measured, and each partition runs the filterset this script prints for it.
+The Linux coverage shards use the same planner through
+scripts/coverage-shards.py, with their own measurements (TSK-270).
 
 The measurements live in scripts/windows-test-times.json:
 
@@ -22,9 +24,10 @@ partition and every other test of that binary to the partition of its rest;
 a binary the measurements do not know goes to the rest partition. A new test
 therefore runs without a data refresh, only less evenly.
 
-`check` proves it on a run: it reads the archive's test list and every
-partition's JUnit report, and fails when a listed test ran in no partition,
-ran in two, or ran outside the partition this plan gives it.
+`check` proves it on a run: it reads the test list (the archive's, or each
+coverage shard's, which must agree) and every partition's JUnit report, and
+fails when a listed test ran in no partition, ran in two, or ran outside the
+partition this plan gives it.
 
 Refresh the data from a few green runs of these partitions (artifacts are
 kept seven days). Leave out runs of the older compiling partitions: they
@@ -36,7 +39,7 @@ half the time (TSK-265):
 
 Usage: windows-partitions.py filter <partition>
        windows-partitions.py plan
-       windows-partitions.py check --list <nextest list json> --results <dir>
+       windows-partitions.py check --list <nextest list json>... --results <dir>
        windows-partitions.py measure <junit dir>...
 """
 
@@ -52,6 +55,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "scripts" / "windows-test-times.json"
+# The directory each partition's results are downloaded to ends in -<n>.
+RESULTS = "windows-junit"
+SOURCE = "on windows-latest from the windows-junit artifacts"
+REFRESH = "scripts/windows-partitions.py measure"
 # A filterset matcher ends at `)` and splits at `,`; names outside these
 # characters would need escaping, so they are refused instead.
 BINARY_ID = re.compile(r"^[A-Za-z0-9_:/.-]+$")
@@ -172,13 +179,13 @@ def listed_tests(path: Path) -> set[tuple[str, str]]:
     return tests
 
 
-def junit_reports(results: Path) -> dict[int, Path]:
-    """Each partition's report, keyed by the number in `windows-junit-<n>`."""
+def junit_reports(results: Path, prefix: str = RESULTS) -> dict[int, Path]:
+    """Each partition's report, keyed by the number in `<prefix>-<n>`."""
     reports = {}
     for report in sorted(results.rglob("*.xml")):
-        found = re.search(r"windows-junit-(\d+)", report.as_posix())
+        found = re.search(rf"{re.escape(prefix)}-(\d+)", report.as_posix())
         if not found:
-            raise SystemExit(f"windows-partitions: {report} is not under a windows-junit-<n> directory")
+            raise SystemExit(f"windows-partitions: {report} is not under a {prefix}-<n> directory")
         reports[int(found.group(1))] = report
     return reports
 
@@ -214,7 +221,7 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) ->
         elif found[0] != plan.partition_of(*test):
             problems.append(f"{test[0]} {test[1]} ran in partition {found[0]}; the plan gives it {plan.partition_of(*test)}")
     for test in sorted(set(where) - listed):
-        problems.append(f"{test[0]} {test[1]} ran but is not in the archive's list of tests")
+        problems.append(f"{test[0]} {test[1]} ran but is not in the list of tests")
     counts = {p: sum(1 for found in where.values() for at in found if at == p) for p in sorted(reports)}
     print(f"windows-partitions: {len(listed)} listed tests, {sum(counts.values())} ran; per partition {counts}")
     if times:
@@ -225,7 +232,8 @@ def check(plan: Plan, listed: set[tuple[str, str]], reports: dict[int, Path]) ->
     return problems
 
 
-def measure(directories: list[Path], partitions: int, threads: int) -> dict:
+def measure(directories: list[Path], partitions: int, threads: int, source: str = SOURCE,
+            refresh: str = REFRESH) -> dict:
     """Median seconds per test across runs; whole binaries unless too large."""
     samples: dict[tuple[str, str], list[float]] = {}
     runs = []
@@ -274,8 +282,8 @@ def measure(directories: list[Path], partitions: int, threads: int) -> dict:
         split[binary] = {"rest": [round(max(rest, 0.0), 3), round(max(rest_serial, 0.0), 3)],
                          "tests": dict(sorted(named.items()))}
     return {
-        "_source": "median seconds per test on windows-latest from the windows-junit artifacts of codeflow-ci "
-                   "runs " + ", ".join(runs) + "; regenerate with `scripts/windows-partitions.py measure`",
+        "_source": f"median seconds per test {source} of codeflow-ci runs " + ", ".join(runs)
+                   + f"; regenerate with `{refresh}`",
         "partitions": partitions,
         "threads": threads,
         "binaries": whole,
@@ -283,14 +291,25 @@ def measure(directories: list[Path], partitions: int, threads: int) -> dict:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def listed_once(paths: list[Path]) -> set[tuple[str, str]]:
+    """The tests every list names; lists that disagree come from different builds."""
+    lists = [listed_tests(path) for path in paths]
+    for path, tests in zip(paths[1:], lists[1:]):
+        if tests != lists[0]:
+            raise SystemExit(f"windows-partitions: {path} lists other tests than {paths[0]}; "
+                             "the partitions ran different builds")
+    return lists[0]
+
+
+def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, refresh: str = REFRESH,
+         description: str = __doc__) -> int:
+    parser = argparse.ArgumentParser(description=description.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
     one = commands.add_parser("filter", help="print one partition's nextest filterset")
     one.add_argument("partition", type=int)
     commands.add_parser("plan", help="print each partition's estimated minutes")
     proof = commands.add_parser("check", help="prove every listed test ran in exactly its one partition")
-    proof.add_argument("--list", type=Path, required=True)
+    proof.add_argument("--list", type=Path, nargs="+", required=True)
     proof.add_argument("--results", type=Path, required=True)
     data = commands.add_parser("measure", help="write the measurements from JUnit reports")
     data.add_argument("directories", type=Path, nargs="+")
@@ -299,17 +318,17 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "measure":
         try:
-            current = json.loads(DATA.read_text())
+            current = json.loads(data_path.read_text())
         except (OSError, ValueError):
             current = {}
         out = measure(args.directories, args.partitions or current.get("partitions", PARTITIONS),
-                      args.threads or current.get("threads", THREADS))
+                      args.threads or current.get("threads", THREADS), source, refresh)
         # One line per binary or test keeps a refresh's diff readable.
         text = re.sub(r"\[\s+([^\[\]\s,]+),\s+([^\[\]\s,]+)\s+\]", r"[\1, \2]", json.dumps(out, indent=1))
-        DATA.write_text(text + "\n")
-        print(f"windows-partitions: wrote {DATA.relative_to(ROOT)}")
+        data_path.write_text(text + "\n")
+        print(f"windows-partitions: wrote {data_path.relative_to(ROOT)}")
         return 0
-    plan = Plan(load())
+    plan = Plan(load(data_path))
     if args.command == "filter":
         # No line ending: Windows Python would end the line with CR, which a
         # shell's command substitution keeps.
@@ -320,7 +339,7 @@ def main() -> int:
             print(f"partition {index + 1}: about {estimate / 60:.1f} minutes "
                   f"({plan.seconds[index] / 60:.1f} test minutes, {plan.serial[index] / 60:.1f} serial)")
         return 0
-    problems = check(plan, listed_tests(args.list), junit_reports(args.results))
+    problems = check(plan, listed_once(args.list), junit_reports(args.results, prefix))
     for problem in problems:
         print(f"windows-partitions: FAILED {problem}")
     return 1 if problems else 0
