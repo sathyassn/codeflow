@@ -1,0 +1,11 @@
+id = "TSK-280"
+uid = "e707a3ad-5261-475f-86a5-3359f19b3518"
+kind = "TSK"
+title = "Policy keys have one placement rule and a check"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
