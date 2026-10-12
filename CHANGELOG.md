@@ -17,6 +17,121 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
+## [3.1.1]
+
+> **Upgrading from 3.1.0.** This patch needs no policy or record change.
+>
+> 1. Install the 3.1.1 `codeflow` on `PATH`. On macOS, copy it to a new
+>    file beside the installed one and move it into place with `mv`; the
+>    entry "Replacing the binary on macOS" below says why. Then run
+>    `codeflow update` on a new branch and land it, which moves the managed
+>    workflows to the commit-pinned actions.
+> 2. When you run `codeflow ci` by hand, pass `--base` as a commit id, not a
+>    branch name, and always pass `--branch`. The pre-push hook already
+>    does both (issues 130 and 141).
+> 3. CodeFlow's own pushes (`task new`, `adr new`, `work claim`) use the
+>    ambient git credential. To make them use a bot or app identity, set a
+>    credential helper at repository scope (`git config credential.helper`
+>    in that repository) or set `remote.origin.pushurl`, instead of
+>    building `GIT_CONFIG_*` variables on each command (issue 151).
+> 4. When the secret scan flags a finding that needs a `.gitleaksignore`
+>    line (issue 139), land that line first in its own standalone task pull
+>    request, holding its task record and that line, then rerun the
+>    original branch. The line names a commit, so it must reach `main` by a
+>    merge commit, not a squash.
+
+### Changed
+
+<!-- codeflow:release-impact patch -->
+- **CodeFlow's own Linux gate verdict arrives sooner.** This changes this
+  repository's CI only; the managed CI templates adopters receive are
+  unchanged, and so is the local full gate, which still runs the one
+  `rust-coverage` command.
+  - The instrumented suite runs as two coverage shards on separate runners.
+    Each shard runs the tests `scripts/coverage-shards.py` gives it from
+    durations measured on hosted runs (`scripts/coverage-test-times.json`).
+    A report job adds up the shards' coverage counters with
+    `scripts/coverage-merge.py`, counts lines as llvm-cov does, and fails
+    under the 90 percent floor the `rust-coverage` target names. It also
+    fails when it cannot reproduce llvm-cov's own count for each shard, when
+    a shard is missing, and when a listed test ran in no shard, in two, or
+    in a shard other than the one the plan gives it.
+  - The coverage, prose and benchmark parts no longer build the debug
+    workspace first, and the Python journeys run in the checks part.
+  - The present binary-delta check names its build directory by the
+    locked dependencies alone, so a version stamp no longer leaves it to
+    rebuild every dependency in release mode on each run.
+  - A push to main that changes the CI workflow runs every job, so main
+    saves the caches a changed workflow adds before later pull requests
+    need them.
+
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The git guard no longer reads a letter `w` in a `sed` script as a write.**
+  In 3.1.0 the guard treated every `w` or `W` in a `sed` script as sed's
+  write command and took the rest of the line as a file name, so a read-only
+  `sed -n '/^### sathyassn\/codeflow#94/,/^### sathyassn\/codeflow#121/p'`
+  and an in-place edit of a notes file whose pattern held a `w` were refused
+  under `git.hook_integrity` (sathyassn/codeflow#147). It also read the
+  script as a word that could name a path, so a script with a `$` could be
+  refused as "cannot read paths reached through" the script text. The guard
+  now reads the script by sed's grammar: `w` and `W` are commands only at
+  the start of a command, after an optional address and `!`, and `w` is a
+  flag only on an `s` command. A letter inside an address pattern, an `s`
+  pattern or replacement, a `y` operand, the text of `a`, `i` or `c`, a
+  label or the name `r` reads is data, and a script is never read as a
+  path. A real `w file`, `s///w file`, a `-f` script that holds one, and an
+  in-place edit of an enforcement file are still refused, and so is a script
+  the guard cannot parse that names an enforcement path after a `w`. The
+  refusal came from the local guard, so installing the 3.1.1 `codeflow` on
+  `PATH` clears it.
+
+<!-- codeflow:release-impact patch -->
+- **A task on a diverged integration line can be completed again.** In
+  3.1.0 the pre-push check refused every push that changed a task's own
+  record, its completion included, when the task's integration line had
+  diverged from the default branch and the default branch did not hold the
+  task's record. The push stopped with `work.criteria_frozen`, saying the
+  judged points hold different versions of the task
+  (sathyassn/codeflow#153). The check counted the default branch's missing
+  record as a version that disagreed with the line's. A judged point that
+  holds no record of the task now holds no version of it, so the line's
+  record decides the criteria. Two points that hold different criteria, a
+  point whose history held the task with other criteria, and a task file
+  that cannot be read are still refused. The refusal came from the local
+  pre-push check, so installing the 3.1.1 `codeflow` on `PATH` clears it.
+
+<!-- codeflow:release-impact none -->
+- **Replacing the binary on macOS.** Whether you upgrade or roll back, copy
+  the new `codeflow` to a new file in the same directory and move it into
+  place with `mv`. Copying it over the installed file in place makes macOS
+  stop it at every start with `Killed: 9`, because the code signature macOS
+  cached for that file no longer matches it. Every git hook and session
+  guard that runs `codeflow` then fails closed, which stops every agent
+  shell command. The shell installer, `codeflow-cli-installer.sh`, already
+  installs this way: it unpacks the binary into a temporary directory
+  inside the install directory and moves it into place with `mv`.
+
+<!-- codeflow:release-impact patch -->
+- **The managed workflows pin every action by commit.** `codeflow-ci.yml`
+  (four steps) and `codeflow-policy.yml` (one step) referenced
+  `actions/checkout@v6` by tag. A tag can be moved, so the action's code
+  could change under a workflow that holds repository write and pull request
+  permissions, and an adopter that pins every action by commit had to
+  re-pin those lines by hand after each `codeflow update`
+  (sathyassn/codeflow#148). They now read
+  `actions/checkout@<commit> # v6.1.0`, the commit that `v6` and `v6.1.0`
+  resolve to, which runs on node24, so the code that runs does not change.
+  This repository's own `actions/checkout`, `actions/setup-node` and
+  `actions/cache` steps are pinned the same way, and `scripts/gate-parity.py`
+  now fails any workflow it runs or ships that names an action by a tag, a
+  branch or a short ref, and any shipped one that leaves out the release
+  comment. `codeflow doctor` still recognises the shipped policy install when
+  its checkout step reads `@v6` or any 40 character commit.
+  To adopt: run `codeflow update`; it merges the new lines into an edited
+  copy.
+
 ## [3.1.0]
 
 > **Upgrading from 3.0.0.** Take these steps in order; the entries below give
