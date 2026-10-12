@@ -1321,3 +1321,61 @@ jobs:
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
           fi
+
+  # TSK-270 measurement spike, removed before review. One run of the
+  # unchanged rust-coverage command on this tree, whose count the merged
+  # shards must equal, with CPU samples; and one run with debug info off and
+  # six test threads, for the single-job time.
+  spike-single:
+    if: github.event_name == 'pull_request'
+    name: spike single coverage run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [default, lean]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: coverage-gates
+          save-if: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
+      - name: present-web-build
+        shell: bash
+        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
+      - name: One instrumented run
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          if [ "$VARIANT" = lean ]; then export CARGO_PROFILE_DEV_DEBUG=0 NEXTEST_TEST_THREADS=6; fi
+          vmstat -n 15 > "$RUNNER_TEMP/vmstat.log" &
+          cargo llvm-cov clean --workspace
+          date -u +"build and tests start %T"
+          cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow --json --output-path target/single.json
+          date -u +"report done %T"
+          python3 -c "import json; print('single run lines', json.load(open('target/single.json'))['data'][0]['totals']['lines'])"
+          cat "$RUNNER_TEMP/vmstat.log"
+          nproc
+      - name: Keep the single run's coverage
+        if: matrix.variant == 'default'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spike-single
+          path: target/single.json
+          retention-days: 1
