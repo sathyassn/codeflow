@@ -239,14 +239,14 @@ COVERAGE_JOB = """\
       matrix:
         shard: [@SHARDS@]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: coverage-gates
           save-if: ${{ matrix.shard == 1 }}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 26.4.0
           cache: npm
@@ -299,7 +299,7 @@ COVERAGE_REPORT_JOB = """\
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Begin journey check
         shell: bash
         run: |
@@ -393,7 +393,7 @@ REUSE_JOB = """\
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           filter: blob:none
@@ -975,6 +975,53 @@ def all_timeout_problems() -> list[str]:
     return problems
 
 
+# Issue 148: a tag can be moved, so a workflow that holds repository write or
+# pull request permissions would run whatever code the tag points at that day.
+# Every action a workflow or a shipped template references is pinned to a full
+# 40-character commit. A shipped template also names the release the commit
+# is as a trailing `# vX.Y.Z` comment, so an adopter can read and move the pin;
+# the cargo-dist generated release.yml is pinned by commit without comments.
+USES_LINE = re.compile(r"^[ \t]*(?:-[ \t]+)?[\"']?uses[\"']?[ \t]*:[ \t]*(?P<value>.*)$")
+ACTION_PIN = re.compile(r"^(?P<action>[^@\s]+)@(?P<ref>[0-9a-f]{40})$")
+DOCKER_PIN = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+RELEASE_COMMENT = re.compile(r"^v\d+\.\d+\.\d+(?:[ \t].*)?$")
+
+
+def pin_problems(workflow: str, label: str = "", shipped: bool = False) -> list[str]:
+    """Each `uses:` reference in `workflow` that is not a full commit (or, for
+    a docker image, digest); in a shipped template also one with no release
+    tag comment. A local `./` workflow or action has no ref to pin."""
+    where = f"{label}:" if label else "line "
+    problems = []
+    for number, line in enumerate(workflow.splitlines(), 1):
+        found = USES_LINE.match(line)
+        if found is None:
+            continue
+        value, _, comment = found.group("value").partition(" #")
+        value = value.strip().strip("\"'")
+        if value.startswith("./"):
+            continue
+        if not (ACTION_PIN.match(value) or DOCKER_PIN.match(value)):
+            problems.append(
+                f"{where}{number} references `{value}` by a tag, branch or short ref; pin it to a full "
+                "40-character commit with its release as a comment (`owner/repo@<commit> # vX.Y.Z`), "
+                "so a moved tag cannot change the code a workflow runs (issue 148)")
+        elif shipped and not RELEASE_COMMENT.match(comment.strip()):
+            problems.append(
+                f"{where}{number} pins `{value}` with no release comment; a shipped template names the "
+                "release of each pin as a trailing `# vX.Y.Z` so an adopter can read and move it")
+    return problems
+
+
+def all_pin_problems() -> list[str]:
+    files = workflow_files()
+    problems = [] if files else ["no workflow files were found to check for action pins"]
+    for relative in files:
+        problems += pin_problems((ROOT / relative).read_text(), relative.as_posix(),
+                                 shipped=relative.parts[0] != ".github")
+    return problems
+
+
 # dist 0.32 writes release.yml and cannot set a job timeout, so the timeouts
 # are added by hand. dist's integrity check fails `dist plan` on a hand edit
 # unless the config allows it, and with the key removed a `dist generate`
@@ -1019,13 +1066,13 @@ PLAYWRIGHT_STEPS = (
           echo "version=$present" >> "$GITHUB_OUTPUT"
           echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 """,
-    r"""      - uses: actions/cache@v6
+    r"""      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: matrix.part == 'present'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
 """,
-    r"""      - uses: actions/cache@v6
+    r"""      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: matrix.part == 'present'
         with:
           path: ~/.cache/playwright-apt
@@ -1098,7 +1145,7 @@ def main() -> int:
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
-            + all_timeout_problems() + dist_problems() + playwright_problems(workflow)
+            + all_timeout_problems() + all_pin_problems() + dist_problems() + playwright_problems(workflow)
             + windows_verdict_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
@@ -1108,7 +1155,8 @@ def main() -> int:
     if status == 0:
         print("gate-parity OK: Node targets run on their CI pins, the "
               "real-browser check runs the gate's binary, the gate parts and coverage shards "
-              "run every full-mode target, every job of every workflow has a timeout, and only "
+              "run every full-mode target, every job of every workflow has a timeout, every action "
+              "is pinned to a commit, and only "
               "the present part touches Playwright, through the pinned steps")
     return status
 
