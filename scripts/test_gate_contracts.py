@@ -165,6 +165,33 @@ class GateContracts(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
+    def test_every_workflow_action_is_pinned_to_a_commit(self):
+        # Issue 148: a tag can be moved, so a workflow with repository write
+        # or pull request permissions must not run whatever a tag points at.
+        # Every `uses:` in this repository's workflows and in the workflows
+        # CodeFlow ships to adopters names a full 40-character commit, and a
+        # shipped one names its release in a trailing comment.
+        checked = {}
+        for directory, shipped in (('.github/workflows', False), ('assets/base/ci', True)):
+            for path in sorted((ROOT / directory).glob('*.y*ml')):
+                text = path.read_text()
+                if shipped and not re.search(r'^jobs:', text, re.M):
+                    continue
+                name = path.relative_to(ROOT).as_posix()
+                checked[name] = text
+                with self.subTest(workflow=name):
+                    self.assertEqual(PARITY.pin_problems(text, name, shipped), [])
+        for name in ('.github/workflows/codeflow-ci.yml', '.github/workflows/codeflow-policy.yml',
+                     '.github/workflows/release.yml', 'assets/base/ci/codeflow-ci.yml',
+                     'assets/base/ci/codeflow-policy.yml'):
+            self.assertIn(name, checked)
+            self.assertRegex(checked[name], r'uses: actions/checkout@[0-9a-f]{40}')
+        # The check fails on the tag form the managed workflows used to carry.
+        tagged = checked['assets/base/ci/codeflow-policy.yml'].replace(
+            re.search(r'actions/checkout@[0-9a-f]{40} # v\d+\.\d+\.\d+', checked['assets/base/ci/codeflow-policy.yml']).group(0),
+            'actions/checkout@v6')
+        self.assertTrue(PARITY.pin_problems(tagged, 'assets/base/ci/codeflow-policy.yml', True))
+
     def test_release_fixture_bodies_name_a_task(self):
         source = read('scripts/fixtures/release_impact_cases.json')
         self.assertNotIn('Task: none', source)

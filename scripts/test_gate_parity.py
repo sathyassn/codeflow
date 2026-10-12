@@ -926,5 +926,77 @@ class JobHeaderControls(unittest.TestCase):
                 parity.ROOT = original
 
 
+class EveryActionIsPinnedByCommit(unittest.TestCase):
+    """Issue 148: a workflow references an action by a full commit, never a
+    tag or a branch, in this repository's workflows and the shipped ones."""
+
+    SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
+
+    def problems(self, line: str, shipped: bool = False) -> list[str]:
+        return parity.pin_problems(f"jobs:\n  a:\n    steps:\n{line}\n", "x.yml", shipped)
+
+    def test_the_real_workflows_and_templates_are_pinned(self):
+        self.assertEqual(parity.all_pin_problems(), [])
+
+    def test_a_tag_a_branch_or_a_short_ref_is_refused(self):
+        for ref in ("v6", "v6.1.0", "main", "d23441a", self.SHA[:39], self.SHA.upper()):
+            for shipped in (False, True):
+                with self.subTest(ref=ref, shipped=shipped):
+                    problems = self.problems(f"      - uses: actions/checkout@{ref} # v6.1.0", shipped)
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn("x.yml:4", problems[0])
+                    self.assertIn("issue 148", problems[0])
+
+    def test_every_spelling_of_the_key_is_read(self):
+        for line in ("        uses: actions/cache@v6", "      - 'uses': actions/cache@v6",
+                     '      - "uses": "actions/cache@v6"', "      - uses: 'actions/cache@v6' # v6.1.0",
+                     "      -   uses:   actions/cache@v6", "        uses: github/codeql-action/init@v4"):
+            with self.subTest(line=line):
+                self.assertEqual(len(self.problems(line)), 1, line)
+
+    def test_a_commit_passes_with_or_without_a_comment_outside_a_template(self):
+        for line in (f"      - uses: actions/checkout@{self.SHA} # v6.1.0",
+                     f"      - uses: actions/checkout@{self.SHA}",
+                     f'      - uses: "actions/checkout@{self.SHA}"',
+                     f"        uses: actions/cache/restore@{self.SHA} # v6.1.0",
+                     "      - uses: ./.github/actions/prepare",
+                     "    uses: ./.github/workflows/release-plan-authority.yml",
+                     "      - uses: docker://alpine@sha256:" + "a" * 64):
+            with self.subTest(line=line):
+                self.assertEqual(self.problems(line), [], line)
+
+    def test_a_docker_image_is_pinned_by_digest(self):
+        self.assertEqual(len(self.problems("      - uses: docker://alpine:3.20")), 1)
+        self.assertEqual(len(self.problems("      - uses: docker://alpine@sha256:abc")), 1)
+
+    def test_a_shipped_template_also_names_the_release(self):
+        for comment in ("", " # v6", " # main", " #"):
+            with self.subTest(comment=comment):
+                problems = self.problems(f"      - uses: actions/checkout@{self.SHA}{comment}", shipped=True)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("release comment", problems[0])
+        self.assertEqual(self.problems(f"      - uses: actions/checkout@{self.SHA} # v6.1.0", shipped=True), [])
+        self.assertEqual(self.problems("      - uses: ./.github/actions/prepare", shipped=True), [])
+
+    def test_the_tag_form_of_each_real_workflow_is_refused(self):
+        # The 3.1.0 workflows used `@v6`; putting it back on any pinned line
+        # of any real file must fail.
+        checked = 0
+        for relative in parity.workflow_files():
+            text = (parity.ROOT / relative).read_text()
+            shipped = relative.parts[0] != ".github"
+            for number, line in enumerate(text.splitlines()):
+                found = parity.USES_LINE.match(line)
+                if found is None or found.group("value").startswith("./"):
+                    continue
+                with self.subTest(file=relative.as_posix(), line=number + 1):
+                    lines = text.splitlines()
+                    lines[number] = re.sub(r"@[0-9a-f]{40}", "@v6", line)
+                    self.assertTrue(parity.pin_problems("\n".join(lines), relative.as_posix(), shipped),
+                                    line)
+                    checked += 1
+        self.assertGreaterEqual(checked, 50)
+
+
 if __name__ == "__main__":
     unittest.main()
