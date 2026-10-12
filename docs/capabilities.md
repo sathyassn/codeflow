@@ -369,7 +369,7 @@ name: integrate
 area: engine
 status: shipped
 verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
-epics: [EPC-001]
+epics: [EPC-001, EPC-022]
 adrs: []
 ```
 
