@@ -9631,6 +9631,11 @@ fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>
         // write a file by a short name: its words are names too. They are
         // read as the shell reads them: split at blanks and operators, and
         // again with quotes and escapes removed.
+        // A command that is not plain words may write any file below its
+        // directory: the any-depth pattern stands for it.
+        if reading.complex && !run.iter().any(|word| word == "**") {
+            run.push("**".to_string());
+        }
         for command in &reading.commands {
             let split = words_of(std::iter::once(command));
             let unquoted = expand_commands(command)
@@ -17469,13 +17474,12 @@ mod sed_grammar_tests {
         assert!(wrote.contains("`w` command or backup writes"), "{wrote}");
     }
 
-    /// GNU `sed` decodes escapes in that command text before it runs it
-    /// (TSK-290 review round 2).
+    /// GNU `sed` decodes escapes in that command text before it runs it, by
+    /// buffer type: `\\` is one backslash and an unknown escape loses its
+    /// backslash in an `e` command, so `\"`, `\'`, `\;` and a backtick
+    /// become shell syntax (TSK-290 review rounds 2 and 3).
     #[test]
     fn a_command_sed_runs_is_read_after_gnu_decodes_its_escapes() {
-        // GNU `sed` turns `\x70`, `\o160` and `\d112` into the byte `p`
-        // in the text of `e` and in an `s` replacement before it runs the
-        // command, so each spelling below writes `policy.json`.
         let (_dir, root) = project();
         assert_refused(
             &[
@@ -17487,6 +17491,16 @@ mod sed_grammar_tests {
                 r"cd .codeflow && sed -n 's/a/printf x > \d112olicy.json/e' file.md",
                 r#"cd "$d" && sed -n 's/a/printf x > \d112olicy.json/e' file.md"#,
                 r"cd .codeflow && sed -n 's/a/printf x > \x70olicy.json/ge' file.md",
+                // Round 3: an `e` command is decoded as `TEXT_BUFFER`.
+                r"cd .codeflow && sed -n 'e printf x > \\policy.json' file.md",
+                r#"cd "$d" && sed -n 'e printf x > \\policy.json' file.md"#,
+                r"cd .codeflow && sed -n 'e printf x > \\\policy.json' file.md",
+                r"cd .codeflow && sed -n 'e printf x > \\\x70olicy.json' file.md",
+                r#"cd .codeflow && sed -n "e printf x > pol\\'icy\\'.json" file.md"#,
+                r#"cd .codeflow && sed -n 'e printf x > pol\"icy\".json' file.md"#,
+                r"cd .codeflow && sed -n 'e printf x > policy.json\;true' file.md",
+                r"cd .codeflow && sed -n 'e printf x > \`echo policy.json\`' file.md",
+                r"cd .codeflow && sed -n 's/a/printf x > policy.json\c/e' file.md",
             ],
             &root,
         );
@@ -17494,8 +17508,41 @@ mod sed_grammar_tests {
             &[
                 r#"cd "$d" && sed -n 'e echo hi' file.md"#,
                 r"cd .codeflow && sed -n 'e echo hi' file.md",
-                r"cd .codeflow && sed -n 'e printf x > \x6eotes.md' file.md",
-                r#"cd "$d" && sed -n 's/a/echo \x68i/e' file.md"#,
+                r"cd .codeflow && sed -n 'e printf x > notes.md' file.md",
+            ],
+            &root,
+        );
+    }
+
+    /// A command that is not plain words after decoding is not modelled, so
+    /// it is refused wherever it could write an enforcement file (TSK-290
+    /// review round 3). This stops the chase of escape spellings.
+    #[test]
+    fn a_command_that_is_not_plain_words_is_refused_where_it_could_write() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                r#"cd .codeflow && sed -n 'e printf x > "$(printf policy).json"' file.md"#,
+                r#"cd "$d" && sed -n 'e printf x > "$(printf policy).json"' file.md"#,
+                r#"sed -n 'e printf x > "$(printf .codeflow/policy).json"' file.md"#,
+                r"cd .codeflow && sed -n 's/a/printf x > $(printf policy).json/e' file.md",
+                "cd .codeflow && sed -n 'e f=policy.json; printf x > $f' file.md",
+                // The replacement decodes to text with a backslash, a
+                // semicolon or a backtick: not plain words.
+                r"cd .codeflow && sed -n 's/a/printf x > \\policy.json/e' file.md",
+                r"cd .codeflow && sed -n 's/a/printf x > policy.json\;true/e' file.md",
+                r"cd .codeflow && sed -n 's/a/printf x > \`echo policy.json\`/e' file.md",
+            ],
+            &root,
+        );
+        assert_allowed(
+            &[
+                "cd .codeflow && sed -n 'e echo hi' file.md",
+                "cd \"$d\" && sed -n 's/a/echo hi/e' file.md",
+                "sed -n 'e printf x > notes.md' file.md",
+                "sed -n 'e ls | wc -l' file.md",
+                // The same text is data when nothing runs it.
+                "cd \"$d\" && sed -n 's/a/printf \"$x\" \\\\ ;/' file.md",
             ],
             &root,
         );

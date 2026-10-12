@@ -37,8 +37,19 @@
 //! The reader writes and runs nothing. GNU's `e` command and the `e` flag
 //! of `s` run a shell command, which can write any file. They name no file
 //! to the reader, so it reports the command text in
-//! [`ScriptReading::commands`] for the guard to read as the words of a
-//! shell command.
+//! [`ScriptReading::commands`], decoded as GNU decodes it for the buffer
+//! type ([`decode_escapes`]), for the guard to read as the words of a shell
+//! command.
+//!
+//! A command that is not plain words after decoding (any quote, backslash,
+//! backtick, `$`, `;`, parenthesis or newline, [`is_plain_command`]) is
+//! shell syntax the word split may not model exactly. The reader sets
+//! [`ScriptReading::complex`] and the guard handles it as it handles an
+//! unmodelled script: it refuses the command wherever it could write an
+//! enforcement file, which for a command of unknown content is any file
+//! below its directory. A plain `e echo hi` stays allowed. GNU `e` is rare
+//! in agent use, so refusing its complex forms costs little and ends a
+//! chase of escape spellings.
 
 use std::collections::BTreeSet;
 
@@ -59,6 +70,11 @@ pub(crate) struct ScriptReading {
     /// model, the whole script. A command can write any file, so a guard
     /// reads these words as it reads the words of a shell command.
     pub commands: Vec<String>,
+    /// Whether a command in `commands` is not plain words after decoding
+    /// ([`is_plain_command`]), so the word split may not read it exactly. A
+    /// guard treats it as it treats an unmodelled script: it may write any
+    /// file the directory it runs in reaches.
+    pub complex: bool,
     /// Why neither reading could parse the script; `None` when it is
     /// modelled.
     pub unmodelled: Option<String>,
@@ -78,6 +94,7 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
     let mut writes = BTreeSet::new();
     let mut shorter = BTreeSet::new();
     let mut commands = BTreeSet::new();
+    let mut complex = false;
     let mut errors = Vec::new();
     let mut parsed = false;
     for brackets in [false, true] {
@@ -88,6 +105,7 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
             writes: BTreeSet::new(),
             shorter: BTreeSet::new(),
             commands: BTreeSet::new(),
+            complex: false,
         };
         match parser.run() {
             Ok(()) => {
@@ -95,6 +113,7 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
                 writes.append(&mut parser.writes);
                 shorter.append(&mut parser.shorter);
                 commands.append(&mut parser.commands);
+                complex |= parser.complex;
             }
             Err(error) => errors.push(error),
         }
@@ -110,6 +129,7 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
         writes: writes.into_iter().collect(),
         shorter: shorter.into_iter().collect(),
         commands: commands.into_iter().collect(),
+        complex,
         unmodelled,
     }
 }
@@ -142,14 +162,34 @@ pub(crate) fn crude_candidates(text: &str) -> Vec<String> {
     out
 }
 
+/// Which GNU `sed` buffer a command text is decoded as. The two differ in
+/// `normalize_text` (`compile.c`): see [`decode_escapes`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Buffer {
+    /// The text of an `e` command, read by `read_text` (`TEXT_BUFFER`).
+    Command,
+    /// The replacement of an `s` command (`TEXT_REPLACEMENT`).
+    Replacement,
+}
+
 /// The text of an `e` command or an `s` replacement after GNU `sed` 4.9
-/// decodes it (`normalize_text`): `\a \f \n \r \t \v`, `\cX`, a byte
-/// written `\dNNN` (decimal), `\oNNN` (octal) or `\xHH` (hexadecimal), and a
-/// backslash before a newline, which becomes the newline. `\x70olicy.json`
-/// is `policy.json` to the shell `sed` runs. Any other escape is left as
-/// written.
-pub(crate) fn decode_escapes(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
+/// decodes it, as `normalize_text` does for its buffer type:
+///
+/// - `\a \f \n \r \t \v` and a backslash before a newline are the control
+///   character; `\cX` is `X` upper-cased and xor `0x40`.
+/// - `\dNNN` (decimal), `\oNNN` (octal) and `\xHH` (hexadecimal) are the
+///   byte; with no digit the introducer letter stands alone.
+/// - Any other escape keeps its backslash in a replacement and loses it in
+///   a command, so `\\` is one backslash in a command and two in a
+///   replacement.
+/// - In a replacement, a decoded `\` or `&` gets a backslash before it, and
+///   a `\c` at the end is one backslash. In a command, a `\c` at the end
+///   reads the newline `read_text` appends after the line.
+pub(crate) fn decode_escapes(text: &str, buffer: Buffer) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    if buffer == Buffer::Command {
+        chars.push('\n');
+    }
     let mut out = String::new();
     let mut at = 0;
     while at < chars.len() {
@@ -160,11 +200,6 @@ pub(crate) fn decode_escapes(text: &str) -> String {
             continue;
         }
         let escape = chars[at + 1];
-        if escape == '\\' {
-            out.push_str("\\\\");
-            at += 2;
-            continue;
-        }
         let (radix, width) = match escape {
             'd' => (10, 3),
             'o' => (8, 3),
@@ -177,36 +212,86 @@ pub(crate) fn decode_escapes(text: &str) -> String {
                 .take(width)
                 .take_while(|d| d.is_digit(radix))
                 .collect();
-            if let Ok(value) = u32::from_str_radix(&digits, radix) {
-                // `sed` keeps the low byte.
-                out.push(char::from((value & 0xff) as u8));
-                at += 2 + digits.len();
-                continue;
+            at += 2 + digits.len();
+            match u32::from_str_radix(&digits, radix) {
+                Ok(value) => {
+                    // `sed` keeps the low byte.
+                    let byte = char::from((value & 0xff) as u8);
+                    if buffer == Buffer::Replacement && matches!(byte, '\\' | '&') {
+                        out.push('\\');
+                    }
+                    out.push(byte);
+                }
+                Err(_) => out.push(escape),
             }
+            continue;
         }
-        let decoded = match escape {
-            'a' => Some('\u{7}'),
-            'f' => Some('\u{c}'),
-            'n' | '\n' => Some('\n'),
-            'r' => Some('\r'),
-            't' => Some('\t'),
-            'v' => Some('\u{b}'),
-            _ => None,
-        };
-        if let Some(decoded) = decoded {
-            out.push(decoded);
-            at += 2;
-        } else if escape == 'c' && at + 2 < chars.len() {
-            // `\cX` is the control character `X ^ 0x40`, after upper-casing.
-            let x = chars[at + 2].to_ascii_uppercase();
-            out.push(char::from((x as u32 & 0xff) as u8 ^ 0x40));
-            at += 3;
-        } else {
-            out.push(c);
-            at += 1;
+        at += 2;
+        match escape {
+            'a' => out.push('\u{7}'),
+            'f' => out.push('\u{c}'),
+            'n' | '\n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\u{b}'),
+            'c' => match chars.get(at) {
+                Some(x) => {
+                    out.push(char::from(
+                        (x.to_ascii_uppercase() as u32 & 0xff) as u8 ^ 0x40,
+                    ));
+                    at += 1;
+                }
+                None if buffer == Buffer::Replacement => out.push('\\'),
+                None => {}
+            },
+            other => {
+                if buffer == Buffer::Replacement {
+                    out.push('\\');
+                }
+                out.push(other);
+            }
         }
     }
     out
+}
+
+/// Whether a decoded command text is a plain list of words the guard's word
+/// split reads exactly: letters, digits, blanks and the characters of a
+/// path, option or redirection (`> < | &`). Any other character (a quote, a
+/// backslash, a backtick, `$`, `;`, a parenthesis, a newline) is shell
+/// syntax the split may not model, so such a command is not modelled.
+fn is_plain_command(text: &str) -> bool {
+    text.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                ' ' | '\t'
+                    | '_'
+                    | '-'
+                    | '.'
+                    | '/'
+                    | '='
+                    | ','
+                    | ':'
+                    | '+'
+                    | '@'
+                    | '%'
+                    | '~'
+                    | '>'
+                    | '<'
+                    | '|'
+                    | '&'
+                    | '*'
+                    | '?'
+                    | '{'
+                    | '}'
+            )
+    })
+}
+
+/// Whether a line ends in an odd run of backslashes, so the line goes on.
+fn ends_in_odd_backslashes(line: &str) -> bool {
+    line.chars().rev().take_while(|c| *c == '\\').count() % 2 == 1
 }
 
 /// The blanks `sed` skips between the parts of a command.
@@ -228,6 +313,7 @@ struct Parser<'a> {
     writes: BTreeSet<String>,
     shorter: BTreeSet<String>,
     commands: BTreeSet<String>,
+    complex: bool,
 }
 
 type Step = Result<(), String>;
@@ -330,8 +416,13 @@ impl Parser<'_> {
             // GNU runs the rest of the line as a shell command.
             'e' => {
                 self.blanks();
-                let command = self.line();
-                self.note_command(command);
+                let mut command = self.line();
+                // A line that ends in an odd run of backslashes goes on.
+                while self.peek().is_some() && ends_in_odd_backslashes(&command) {
+                    command.push('\n');
+                    command.push_str(&self.line());
+                }
+                self.note_command(&command, Buffer::Command);
                 Ok(())
             }
             's' => self.substitute(),
@@ -340,14 +431,23 @@ impl Parser<'_> {
         }
     }
 
-    /// Records the text of a shell command a script runs, as written and as
-    /// GNU `sed` decodes it before it runs it ([`decode_escapes`]).
-    fn note_command(&mut self, command: String) {
+    /// Records the text of a shell command a script runs, as GNU `sed`
+    /// decodes it for its buffer type ([`decode_escapes`]). A command that
+    /// is not plain words, as written or decoded, marks the reading
+    /// complex.
+    fn note_command(&mut self, command: &str, buffer: Buffer) {
         if command.is_empty() {
             return;
         }
-        let decoded = decode_escapes(&command);
-        self.commands.insert(command);
+        let mut decoded = decode_escapes(command, buffer);
+        if buffer == Buffer::Command && decoded.ends_with('\n') {
+            // The newline `read_text` appended.
+            decoded.pop();
+        }
+        // The text `read_text` appends a newline to is plain without it.
+        if !is_plain_command(command) || !is_plain_command(&decoded) {
+            self.complex = true;
+        }
         self.commands.insert(decoded);
     }
 
@@ -578,7 +678,7 @@ impl Parser<'_> {
         };
         // With the `e` flag, `sed` runs the substituted text as a command.
         if runs {
-            self.note_command(replacement);
+            self.note_command(&replacement, Buffer::Replacement);
         }
         result
     }
@@ -780,30 +880,85 @@ mod tests {
     }
 
     #[test]
-    fn gnu_escapes_in_a_command_are_decoded() {
+    fn a_command_that_is_not_plain_words_is_complex() {
+        let complex = |script: &str| {
+            let reading = read_script(script);
+            assert_eq!(reading.unmodelled, None, "{script}");
+            reading.complex
+        };
+        assert!(!complex("e echo hi"));
+        assert!(!complex("e printf x > notes.md"));
+        assert!(!complex("s/a/echo hi/e"));
+        assert!(!complex("s/a/echo hi/"));
+        assert!(!complex("p;e ls | wc -l"));
+        for script in [
+            r#"e printf x > "$(printf policy).json""#,
+            "e echo 'hi'",
+            "e echo `date`",
+            "e echo $HOME",
+            "e echo a;echo b",
+            "e echo (a)",
+            r"e echo \x70",
+            "e echo a\\\nb",
+            r"s/a/echo \q/e",
+            "s/a/echo $b/e",
+        ] {
+            assert!(complex(script), "{script}");
+        }
+        // Text a command or replacement holds but does not run is data.
+        assert!(!complex(r"s/a/echo \q/"));
+    }
+
+    #[test]
+    fn an_e_line_that_ends_in_a_backslash_goes_on() {
+        let reading = read_script("e echo a\\\npolicy.json\np");
+        assert_eq!(reading.unmodelled, None);
+        assert_eq!(reading.commands, ["echo a\npolicy.json"]);
+        assert!(reading.complex);
+    }
+
+    #[test]
+    fn gnu_decodes_a_command_and_a_replacement_by_buffer_type() {
+        let command = |text: &str| decode_escapes(text, Buffer::Command);
+        let replacement = |text: &str| decode_escapes(text, Buffer::Replacement);
+        // Digit escapes are the byte in both.
         assert_eq!(
-            decode_escapes(r"printf x > \x70olicy.json"),
-            "printf x > policy.json"
+            command(r"printf x > \x70olicy.json"),
+            "printf x > policy.json\n"
         );
-        assert_eq!(decode_escapes(r"\o160\d112\x70"), "ppp");
-        // An escaped backslash stays, and does not start an escape.
-        assert_eq!(decode_escapes(r"a\tb\nc\\d"), "a\tb\nc\\\\d");
-        assert_eq!(decode_escapes(r"\\x70"), r"\\x70");
-        assert_eq!(decode_escapes("a\\\nb"), "a\nb");
-        assert_eq!(decode_escapes(r"\cA"), "\u{1}");
-        // No digits, or another escape: left as written.
-        assert_eq!(decode_escapes(r"\xZZ \q \"), r"\xZZ \q \");
+        assert_eq!(replacement(r"\o160\d112\x70"), "ppp");
+        // `\\`: one backslash in a command, two in a replacement.
+        assert_eq!(command(r"a\\b"), "a\\b\n");
+        assert_eq!(replacement(r"a\\b"), r"a\\b");
+        // An unknown escape loses its backslash in a command only.
+        assert_eq!(command(r"pol\'icy\;"), "pol'icy;\n");
+        assert_eq!(replacement(r"pol\'icy\;"), r"pol\'icy\;");
+        assert_eq!(command(r"\q"), "q\n");
+        // Three backslashes then `p`: one backslash, then the escaped `p`.
+        assert_eq!(command(r"\\\policy"), "\\policy\n");
+        // A decoded backslash or `&` is escaped again in a replacement only.
+        assert_eq!(replacement(r"\x5c\x26"), r"\\\&");
+        assert_eq!(command(r"\x5c\x26"), "\\&\n");
+        // Control and character escapes.
+        assert_eq!(command(r"a\tb\nc"), "a\tb\nc\n");
+        assert_eq!(command("a\\\nb"), "a\nb\n");
+        assert_eq!(replacement(r"\cA"), "\u{1}");
+        // `\c` at the end: the appended newline for a command (`J`), one
+        // backslash for a replacement.
+        assert_eq!(command(r"x\c"), "xJ");
+        assert_eq!(replacement(r"x\c"), "x\\");
+        // No digits: the introducer letter alone.
+        assert_eq!(command(r"\xZZ"), "xZZ\n");
+        assert_eq!(replacement(r"\o \d"), "o d");
         // The decoded text is a command word the reader reports.
         let reading = read_script(r"e printf x > \x70olicy.json");
-        assert!(reading
-            .commands
-            .iter()
-            .any(|c| c == "printf x > policy.json"));
+        assert_eq!(reading.commands, ["printf x > policy.json"]);
         let reading = read_script(r"s/a/printf x > \d112olicy.json/e");
-        assert!(reading
-            .commands
-            .iter()
-            .any(|c| c == "printf x > policy.json"));
+        assert_eq!(reading.commands, ["printf x > policy.json"]);
+        let reading = read_script(r"e printf x > \\policy.json");
+        assert_eq!(reading.commands, [r"printf x > \policy.json"]);
+        let reading = read_script(r"s/a/printf x > policy.json\c/e");
+        assert_eq!(reading.commands, [r"printf x > policy.json\"]);
     }
 
     #[test]
