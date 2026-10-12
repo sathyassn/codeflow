@@ -4513,7 +4513,7 @@ fn direct_write_violation(
                     // `e` flag of `s` runs, or a file a `w` command, the
                     // `w` flag or an in-place backup writes.
                     let runs = match sed_script_split(args, Some(cwd)) {
-                        SedRead::Read((writes, run)) => {
+                        SedRead::Read((writes, run, _)) => {
                             run.contains(path) && !writes.contains(path)
                         }
                         SedRead::Unreadable { .. } => false,
@@ -4535,6 +4535,9 @@ fn direct_write_violation(
                     format!("cannot read `sed` script `{file}`: {why}"),
                 ))
             }
+        }
+        if let Some(v) = sed_file_command_violation(args, level, cwd, payload_cwd) {
+            return Some(v);
         }
     }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
@@ -5011,9 +5014,10 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
 /// decoded as GNU decodes them, so they are judged as a nested shell body
 /// (`sh -c '...'`) in the directory sed runs in: every writer check applies
 /// to them, a program option included (TSK-290 review round 4). Only the
-/// script text on the command line is read here; a `-f` script file is
-/// read where the directory is known ([`sed_script_split`]). A script the
-/// reader does not model has no commands to run as a body.
+/// script text on the command line is read here; the commands of a `-f`
+/// script file are judged the same way where the directory is known
+/// ([`sed_file_command_violation`]). A script the reader does not model has
+/// no commands to run as a body.
 fn sed_run_commands(args: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for spec in SED_GRAMMARS {
@@ -9568,6 +9572,9 @@ fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
     }
 }
 
+/// The names, command words and commands of a `sed` script ([`sed_script_split`]).
+type SedSplit = (Vec<String>, Vec<String>, Vec<String>);
+
 /// One piece of a `sed` script as a grammar reads the command line.
 enum SedPiece<'a> {
     /// The text of `-e`, `--expression`, or the script operand.
@@ -9629,8 +9636,8 @@ fn sed_script_flags(args: &[String]) -> Vec<bool> {
 /// `-f` script file is read; without it the files are skipped.
 fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>> {
     match sed_script_split(args, cwd) {
-        SedRead::Read((mut names, commands)) => {
-            for word in commands {
+        SedRead::Read((mut names, run, _)) => {
+            for word in run {
                 if !names.contains(&word) {
                     names.push(word);
                 }
@@ -9641,9 +9648,10 @@ fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>>
     }
 }
 
-/// [`sed_script_names`] in two lists: the names the script writes, and the
-/// words of the shell commands it runs.
-fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>, Vec<String>)> {
+/// [`sed_script_names`] in three lists: the names the script writes, the
+/// words of the shell commands it runs, and those commands as decoded. An
+/// absolute `-f` script file is read without `cwd`; a relative one needs it.
+fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<SedSplit> {
     let mut scripts: Vec<String> = Vec::new();
     for spec in SED_GRAMMARS {
         let mut joined: Vec<String> = Vec::new();
@@ -9651,7 +9659,11 @@ fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>
             match piece {
                 SedPiece::Text(text) => joined.push(text.to_string()),
                 SedPiece::File(file) => {
-                    let Some(cwd) = cwd else { continue };
+                    let cwd = match cwd {
+                        Some(cwd) => cwd,
+                        None if Path::new(file).is_absolute() => Path::new("/"),
+                        None => continue,
+                    };
                     match read_sed_script(file, cwd) {
                         SedRead::Read(text) => joined.push(text),
                         SedRead::Unreadable { file, why } => {
@@ -9668,8 +9680,16 @@ fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>
     }
     let mut names: Vec<String> = Vec::new();
     let mut run: Vec<String> = Vec::new();
+    let mut commands: Vec<String> = Vec::new();
     for script in &scripts {
         let reading = crate::security::sed_script::read_script(script);
+        if reading.unmodelled.is_none() {
+            for command in &reading.commands {
+                if !commands.contains(command) {
+                    commands.push(command.clone());
+                }
+            }
+        }
         for name in reading.candidates() {
             if !names.iter().any(|seen| seen == name) {
                 names.push(name.to_string());
@@ -9697,7 +9717,62 @@ fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>
             }
         }
     }
-    SedRead::Read((names, run))
+    SedRead::Read((names, run, commands))
+}
+
+thread_local! {
+    /// How many `sed` script files the commands being judged are nested in.
+    static SED_FILE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The commands GNU `e` and the `e` flag of `s` run from a `-f` or `--file`
+/// script, judged as the inline ones are: each is a nested shell body
+/// (`sh -c '...'`), judged in the directory `sed` runs in, so every writer
+/// check applies (TSK-290 review round 5). A script that runs `sed` on
+/// another script file nests; past [`NESTING_LIMIT`] it is refused.
+fn sed_file_command_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    let has_file = SED_GRAMMARS.iter().any(|spec| {
+        sed_script_pieces(args, spec)
+            .iter()
+            .any(|piece| matches!(piece, SedPiece::File(_)))
+    });
+    if !has_file {
+        return None;
+    }
+    let SedRead::Read((_, _, commands)) = sed_script_split(args, Some(cwd)) else {
+        return None;
+    };
+    let depth = SED_FILE_DEPTH.with(std::cell::Cell::get);
+    if depth >= NESTING_LIMIT {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "`sed` script files run `sed` script files more than {NESTING_LIMIT} levels deep, past what the guard reads"
+            ),
+        ));
+    }
+    SED_FILE_DEPTH.with(|d| d.set(depth + 1));
+    let found = commands.iter().find_map(|command| {
+        let segments = expand_commands(command);
+        let run = run_dirs(&segments, cwd);
+        segments.iter().find_map(|segment| {
+            integrity_write_in_run(
+                &shell_tokens(segment),
+                &redirect_writes(segment),
+                level,
+                &run,
+                payload_cwd,
+                command,
+            )
+        })
+    });
+    SED_FILE_DEPTH.with(|d| d.set(depth));
+    found
 }
 
 /// The paths a `sed` command may write, whether or not it edits in place:
@@ -17624,6 +17699,72 @@ mod sed_grammar_tests {
                 "cd .codeflow && sed -n 'e ls | wc -l' file.md",
                 "cd \"$d\" && sed -n 'e dd if=/dev/null of=notes.md' file.md",
                 "sed -n 'e curl -onotes.md file:///etc/hosts' file.md",
+            ],
+            &root,
+        );
+    }
+
+    /// The commands of a `-f` or `--file` script are judged as an inline
+    /// `e` command is (TSK-290 review round 5).
+    #[test]
+    fn a_command_in_a_script_file_is_judged_as_a_nested_shell_body() {
+        let (_dir, root) = project();
+        let write = |name: &str, text: &str| {
+            std::fs::write(root.join(".codeflow").join(name), text).unwrap();
+            std::fs::write(root.join(name), text).unwrap();
+        };
+        write("run-dd.sed", "e dd if=/dev/null of=policy.json\n");
+        write("run-curl.sed", "e curl -opolicy.json file:///etc/hosts\n");
+        write("run-s.sed", "s,a,dd if=/dev/null of=policy.json,e\n");
+        write("run-ok.sed", "e echo hi\n");
+        write("run-notes.sed", "e printf x > notes.md\n");
+        // A script that runs `sed` on itself ends at the nesting limit.
+        write("loop.sed", "e sed -n -f loop.sed file.md\n");
+        let absolute = root.join(".codeflow/run-dd.sed");
+        let absolute = absolute.display();
+        let refused = [
+            "cd .codeflow && sed -n -f run-dd.sed file.md".to_string(),
+            "cd .codeflow && sed -n -f run-curl.sed file.md".to_string(),
+            "cd .codeflow && sed -n --file=run-dd.sed file.md".to_string(),
+            "cd .codeflow && sed -n -e 'e echo hi' -f run-dd.sed file.md".to_string(),
+            "cd .codeflow && sed -n -f run-ok.sed -f run-dd.sed file.md".to_string(),
+            "cd .codeflow && sed -n -s -f run-s.sed file.md".to_string(),
+            format!("cd .codeflow && sed -n -f {absolute} file.md"),
+            format!("cd \"$d\" && sed -n -f {absolute} file.md"),
+            "cd .codeflow && sed -n -f run-missing.sed file.md".to_string(),
+            "cd .codeflow && sed -n -f loop.sed file.md".to_string(),
+        ];
+        let refused: Vec<&str> = refused.iter().map(String::as_str).collect();
+        assert_refused(&refused, &root);
+        assert_allowed(
+            &[
+                "cd .codeflow && sed -n -f run-ok.sed file.md",
+                "cd .codeflow && sed -n -f run-notes.sed file.md",
+                "sed -n -f run-ok.sed -f run-notes.sed file.md",
+            ],
+            &root,
+        );
+    }
+
+    /// Every source of script text reaches the nested-body path: `-e`,
+    /// `--expression`, a bare first argument, `-s` and repeated `-e`.
+    #[test]
+    fn every_source_of_sed_script_text_reaches_the_nested_body() {
+        let (_dir, root) = project();
+        let script = "e dd if=/dev/null of=policy.json";
+        assert_refused(
+            &[
+                &format!("cd .codeflow && sed -n '{script}' file.md"),
+                &format!("cd .codeflow && sed -n -e '{script}' file.md"),
+                &format!("cd .codeflow && sed -n -e p -e '{script}' file.md"),
+                &format!("cd .codeflow && sed -n --expression='{script}' file.md"),
+                &format!("cd .codeflow && sed -n --expression '{script}' file.md"),
+                &format!("cd .codeflow && sed -s -n '{script}' file.md"),
+                &format!("cd .codeflow && sed -ne '{script}' file.md"),
+                &format!("cd .codeflow && sed --posix -n '{script}' file.md"),
+                &format!("cd .codeflow && sed -n -E '{script}' file.md"),
+                &format!("cd .codeflow && sed -n '{script}' file.md file2.md"),
+                &format!("cd .codeflow && sed -i.bak '{script}' notes.md"),
             ],
             &root,
         );

@@ -7453,9 +7453,17 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         "  - The operator re-trusts x\n",
     )
     .unwrap();
+    // A `-f` script that runs a program writing the policy file by option.
+    std::fs::write(
+        root.join(".codeflow/run-dd.sed"),
+        "e dd if=/dev/null of=policy.json\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".codeflow/run-ok.sed"), "e printf x > notes.md\n").unwrap();
     assert_guard(
         &root,
         &[
+            "cd .codeflow && sed -n -f run-dd.sed file.md",
             "sed -n '1w .codeflow/policy.json' README.md",
             "sed -n 's/a/b/w .codeflow/policy.json' README.md",
             "sed -n 'p;W .codeflow/policy.json' README.md",
@@ -7474,6 +7482,7 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         ],
         &[
             "cd \"$d\" && sed -n 'e echo hi' file.md",
+            "cd .codeflow && sed -n -f run-ok.sed file.md",
             "sed -n '/^### sathyassn\\/codeflow#94/,/^### sathyassn\\/codeflow#121/p' file.md",
             "sed -i '' 's/  - The operator re-trusts x/  - With the operator x/' RELEASE-PLAN.md",
             "sed -n 'y/w/W/;s/w/w/p' README.md",
