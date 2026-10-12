@@ -121,7 +121,8 @@ class DecisionTests(unittest.TestCase):
 
     def test_a_push_that_changes_a_cache_input_runs_everything(self):
         for path in ("Cargo.lock", "crates/codeflow-cli/Cargo.toml", "rust-toolchain.toml",
-                     ".cargo/config.toml", "docs-portal/package-lock.json", "docs-portal/.node-version"):
+                     ".cargo/config.toml", "docs-portal/package-lock.json", "docs-portal/.node-version",
+                     ".github/workflows/codeflow-ci.yml"):
             with self.subTest(path=path):
                 self.assertIn("cache inputs", self.skipped(git=FakeGit(changed=["README.md", path])))
         self.assertEqual(decide(git=FakeGit(changed=["README.md", "scripts/ci-reuse.py"])), 77)
@@ -204,6 +205,10 @@ class DecisionTests(unittest.TestCase):
         self.assertTrue(reuse.cache_input("Cargo.toml"))
         self.assertFalse(reuse.cache_input("docs/Cargo.toml.md"))
         self.assertFalse(reuse.cache_input("scripts/release.py"))
+        # TSK-270: the workflow names the cache keys, so a change to it can
+        # add a cache main lacks; the policy workflow builds nothing.
+        self.assertTrue(reuse.cache_input(".github/workflows/codeflow-ci.yml"))
+        self.assertFalse(reuse.cache_input(".github/workflows/codeflow-policy.yml"))
 
     def test_the_workflow_path_comes_from_the_workflow_ref(self):
         self.assertEqual(reuse.workflow_path(f"sathyassn/codeflow/{WORKFLOW}@refs/heads/main", "sathyassn/codeflow"),
