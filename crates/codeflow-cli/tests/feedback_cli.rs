@@ -67,9 +67,10 @@ fn refused(out: &Output, what: &str) -> String {
     text(out)
 }
 
+/// The fixture's scaffold state, stamped with the binary's own version so a
+/// release's version bump adds no "scaffold is behind" line to the output
+/// the tests compare.
 fn state(tier: &str) -> String {
-    // The scaffold version tracks the binary under test, so a release bump
-    // does not turn every command's stderr into a version-skew warning.
     let version = env!("CARGO_PKG_VERSION");
     format!(
         "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"{version}\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
