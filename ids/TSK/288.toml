@@ -1,0 +1,11 @@
+id = "TSK-288"
+uid = "3a0daf5e-d3f1-4fb7-8f76-8d806e9b46a4"
+kind = "TSK"
+title = "The autonomy diagnostic runs on the 3.1.0 uncertainty guidance"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
