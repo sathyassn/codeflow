@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "3.1.0",
+  "scaffold_version": "3.1.1",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
@@ -1799,13 +1799,13 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "f20b1dd4bf79b213bbbbfbbe716ae6ff25b28927d3c44529e4a93836575fbeda",
+      "sha256": "3e7bd072914b5961499d383146a3b669549ae904db63b27abeda114f46bf5b85",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "bad925c04fd059270006f3d272b5b3975a9ba8074f8812cecf6809a9cd68d92e",
+      "sha256": "b95b9c808895a020e517b6252f0fa6a0a88406e88e6df61fd7c37b10237cf228",
       "exec": false
     },
     ".gitignore": {
@@ -1829,13 +1829,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "ad3562599aa63e2e172956d426804bee94d689dcda022b5a5d921d98ebf0208e",
+      "sha256": "7ec981dbea2e78f188944d5bcf2d71589502b2e4ddd381e65affbca8b75e66cf",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "c9b4c561b2ce7316c41868ee1646fb41217316d87be56dee6d5e56dfd7f7096e",
+      "sha256": "eb4423f6a128ad48ac9482d591e0e85fe2bbe3e045c2650c24a2e15d4e9b61f0",
       "exec": false
     },
     "docs/architecture.md": {
