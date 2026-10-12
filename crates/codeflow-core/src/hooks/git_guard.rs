@@ -9565,7 +9565,8 @@ fn sed_script_flags(args: &[String]) -> Vec<bool> {
 /// The file names the scripts of a `sed` command line may write: the names
 /// the script reader finds in the script each grammar reads (the exact name
 /// of each `w`, `W` and `s///w`, the names a shorter reading gives, and for
-/// a script the reader does not model, the text reading). `cwd` is where a
+/// a script the reader does not model, the text reading), and the words of
+/// each shell command the script runs (GNU `e`, the `e` flag of `s`). `cwd` is where a
 /// `-f` script file is read; without it the files are skipped.
 fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>> {
     let mut scripts: Vec<String> = Vec::new();
@@ -9591,10 +9592,26 @@ fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>>
         }
     }
     let mut names: Vec<String> = Vec::new();
+    let mut add = |name: &str| {
+        if !names.iter().any(|seen| seen == name) {
+            names.push(name.to_string());
+        }
+    };
     for script in &scripts {
-        for name in crate::security::sed_script::read_script(script).candidates() {
-            if !names.iter().any(|seen| seen == name) {
-                names.push(name.to_string());
+        let reading = crate::security::sed_script::read_script(script);
+        reading.candidates().for_each(&mut add);
+        // GNU `e` and the `e` flag of `s` run a shell command, which can
+        // write a file by a short name: its words are names too.
+        // They are read as the shell reads them: split at blanks and
+        // operators, and again with quotes and escapes removed.
+        for command in &reading.commands {
+            let split = words_of(std::iter::once(command));
+            let unquoted = expand_commands(command)
+                .iter()
+                .flat_map(|segment| shell_tokens(segment))
+                .collect::<Vec<_>>();
+            for word in split.iter().chain(&unquoted) {
+                add(word);
             }
         }
     }
@@ -17402,6 +17419,39 @@ mod sed_grammar_tests {
         assert!(crate::security::sed_script::read_script("zz w notes.md")
             .unmodelled
             .is_some());
+    }
+
+    /// GNU `e` and the `e` flag of `s` run a shell command, so the words of
+    /// that command can write a short enforcement name (`policy.json`) from
+    /// the directory the command runs in. v3.1.0 refused the unknown-directory
+    /// forms because it read every script word as a possible name.
+    #[test]
+    fn a_command_sed_runs_can_name_an_enforcement_file() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                "cd \"$d\" && sed -n 'e printf x > policy.json' file.md",
+                "cd \"$d\" && sed -n 's/.*/printf x > policy.json/e' file.md",
+                "cd \"$d\" && sed -n 's/.*/printf x > policy.json/ge' file.md",
+                "cd .codeflow && sed -n 'e printf x > policy.json' file.md",
+                "cd .codeflow && sed -n 's/.*/printf x > policy.json/e' file.md",
+                "cd .codeflow && sed -n '1e printf x > \"policy.json\"' file.md",
+                "sed -n 'e printf x > .codeflow/policy.json' file.md",
+                "sed -n 's,.*,printf x > .codeflow/policy.json,e' file.md",
+            ],
+            &root,
+        );
+        assert_allowed(
+            &[
+                "cd \"$d\" && sed -n 'e echo hi' file.md",
+                "cd \"$d\" && sed -n 's/a/echo hi/e' file.md",
+                "cd \"$d\" && sed -n 's/e/echo hi/' file.md",
+                "cd .codeflow && sed -n 'e echo hi' file.md",
+                "sed -n 'e printf x > notes.md' file.md",
+                "sed -n 's/a/echo w/e' file.md",
+            ],
+            &root,
+        );
     }
 
     #[test]

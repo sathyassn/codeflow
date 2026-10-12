@@ -17,10 +17,13 @@
 //!   holds exactly those names. [`ScriptReading::shorter`] holds the names
 //!   a `sed` would write if it ended a name at `;` or `}`, which no GNU or
 //!   BSD `sed` does but a guard may not assume away.
-//! - A regular expression is read twice, once taking a delimiter inside a
-//!   bracket expression as the end (`s/[/]/x/` as GNU reads it) and once
-//!   taking it as part of the bracket expression (as BSD reads it). A
-//!   script one reading rejects is a script that `sed` itself rejects.
+//! - A regular expression is read twice: once reading a bracket expression,
+//!   so a delimiter inside it is part of the expression (`s/[/]/x/`, as GNU
+//!   4.9 and BSD both read it), and once ending the expression at the first
+//!   delimiter whatever brackets surround it, a plain reading kept as a
+//!   superset since the two can differ on a version or option the guard
+//!   cannot see. A script one reading rejects is a script that `sed`
+//!   itself may reject.
 //! - A label ends at a blank or `;`, the shorter of the two readings, so
 //!   the commands after it are read too.
 //!
@@ -32,9 +35,10 @@
 //! where its writes could reach one and allowed otherwise.
 //!
 //! The reader writes and runs nothing. GNU's `e` command and the `e` flag
-//! of `s` run a command; they write no file by themselves and stay judged
-//! by the text floor of the guard, which refuses any argument that names an
-//! enforcement path.
+//! of `s` run a shell command, which can write any file. They name no file
+//! to the reader, so it reports the command text in
+//! [`ScriptReading::commands`] for the guard to read as the words of a
+//! shell command.
 
 use std::collections::BTreeSet;
 
@@ -49,6 +53,12 @@ pub(crate) struct ScriptReading {
     /// write, and, for a script the reader does not model, every name the
     /// text reading finds.
     pub shorter: Vec<String>,
+    /// The shell commands the script runs: the rest of the line of each GNU
+    /// `e` command, and the replacement of each `s` command with the `e`
+    /// flag, which `sed` runs as a command. For a script the reader does not
+    /// model, the whole script. A command can write any file, so a guard
+    /// reads these words as it reads the words of a shell command.
+    pub commands: Vec<String>,
     /// Why neither reading could parse the script; `None` when it is
     /// modelled.
     pub unmodelled: Option<String>,
@@ -67,6 +77,7 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
     let chars: Vec<char> = script.chars().collect();
     let mut writes = BTreeSet::new();
     let mut shorter = BTreeSet::new();
+    let mut commands = BTreeSet::new();
     let mut errors = Vec::new();
     let mut parsed = false;
     for brackets in [false, true] {
@@ -76,12 +87,14 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
             brackets,
             writes: BTreeSet::new(),
             shorter: BTreeSet::new(),
+            commands: BTreeSet::new(),
         };
         match parser.run() {
             Ok(()) => {
                 parsed = true;
                 writes.append(&mut parser.writes);
                 shorter.append(&mut parser.shorter);
+                commands.append(&mut parser.commands);
             }
             Err(error) => errors.push(error),
         }
@@ -89,12 +102,14 @@ pub(crate) fn read_script(script: &str) -> ScriptReading {
     let unmodelled = (!parsed).then(|| errors.join("; "));
     if unmodelled.is_some() {
         shorter.extend(crude_candidates(script));
+        commands.insert(script.to_string());
     }
     // A name that is also an exact write is not listed twice.
     shorter.retain(|name| !writes.contains(name));
     ScriptReading {
         writes: writes.into_iter().collect(),
         shorter: shorter.into_iter().collect(),
+        commands: commands.into_iter().collect(),
         unmodelled,
     }
 }
@@ -145,6 +160,7 @@ struct Parser<'a> {
     brackets: bool,
     writes: BTreeSet<String>,
     shorter: BTreeSet<String>,
+    commands: BTreeSet<String>,
 }
 
 type Step = Result<(), String>;
@@ -244,14 +260,23 @@ impl Parser<'_> {
                 Ok(())
             }
             'a' | 'i' | 'c' => self.text(),
-            // GNU runs the rest of the line as a command: no file is named.
+            // GNU runs the rest of the line as a shell command.
             'e' => {
-                self.line();
+                self.blanks();
+                let command = self.line();
+                self.note_command(command);
                 Ok(())
             }
             's' => self.substitute(),
             'y' => self.transliterate(),
             other => Err(format!("the command `{other}`")),
+        }
+    }
+
+    /// Records the text of a shell command a script runs.
+    fn note_command(&mut self, command: String) {
+        if !command.is_empty() {
+            self.commands.insert(command);
         }
     }
 
@@ -456,22 +481,35 @@ impl Parser<'_> {
             _ => return Err("an `s` command with no delimiter".into()),
         };
         self.delimited(delimiter, true)?;
+        let start = self.at;
         self.delimited(delimiter, false)?;
-        loop {
+        // The replacement, without its closing delimiter.
+        let replacement: String = self.chars[start..self.at - 1].iter().collect();
+        let mut runs = false;
+        let result = loop {
             self.blanks();
             match self.peek() {
-                Some('g' | 'p' | 'i' | 'I' | 'm' | 'M' | 'e') => self.at += 1,
+                Some('e') => {
+                    runs = true;
+                    self.at += 1;
+                }
+                Some('g' | 'p' | 'i' | 'I' | 'm' | 'M') => self.at += 1,
                 Some(c) if c.is_ascii_digit() => self.at += 1,
                 Some('w') => {
                     self.at += 1;
-                    let name = self.file_name()?;
-                    self.note_tail(&name, true);
-                    self.writes.insert(name);
-                    return Ok(());
+                    break self.file_name().map(|name| {
+                        self.note_tail(&name, true);
+                        self.writes.insert(name);
+                    });
                 }
-                _ => return self.end_of_command(),
+                _ => break self.end_of_command(),
             }
+        };
+        // With the `e` flag, `sed` runs the substituted text as a command.
+        if runs {
+            self.note_command(replacement);
         }
+        result
     }
 
     /// `y`, the delimiter, and the two operands.
@@ -595,9 +633,10 @@ mod tests {
 
     #[test]
     fn the_delimiter_in_a_bracket_expression_is_read_both_ways() {
-        // BSD reads the `/` inside the brackets as part of the expression,
-        // GNU as the end of it; one reading parses, and sed rejects the
-        // script under the other.
+        // Both sed readings take the `/` inside the brackets as part of the
+        // expression. The plain reading, which ends the expression at that
+        // `/`, is kept as a superset; a script one reading cannot parse is
+        // read by the other.
         none("s/[^/]*$//");
         assert_eq!(writes("s/[/]/x/w out"), ["out"]);
         none("/[/]w/p");
@@ -644,9 +683,29 @@ mod tests {
     }
 
     #[test]
-    fn a_gnu_exec_command_names_no_file() {
-        none("e echo w");
-        none("1e echo w\np");
+    fn a_command_sed_runs_is_reported_as_a_command() {
+        let commands = |script: &str| {
+            let reading = read_script(script);
+            assert_eq!(reading.unmodelled, None, "{script}");
+            assert!(reading.writes.is_empty(), "{script}");
+            reading.commands
+        };
+        // The `e` command runs the rest of its line.
+        assert_eq!(commands("e echo w"), ["echo w"]);
+        assert_eq!(commands("1e echo w\np"), ["echo w"]);
+        assert_eq!(commands("$!{e printf x > a;b\n}"), ["printf x > a;b"]);
+        // The `e` flag runs the replacement, in either order with the others.
+        assert_eq!(commands("s/.*/printf x > a/e"), ["printf x > a"]);
+        assert_eq!(commands("s,.*,printf x > a,ge"), ["printf x > a"]);
+        assert_eq!(commands("s/a/b\\/c/pe;p"), ["b\\/c"]);
+        // Without the flag, the same text is data, and so is a pattern `e`.
+        assert!(commands("s/e/echo hi/").is_empty());
+        assert!(commands("/e/p").is_empty());
+        assert!(commands("y/e/f/").is_empty());
+        assert!(commands("s/a/echo hi/gp").is_empty());
+        // A script the reader does not model is reported whole.
+        let reading = read_script("zzz e echo");
+        assert_eq!(reading.commands, ["zzz e echo"]);
     }
 
     #[test]

@@ -7460,8 +7460,13 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
             "sed -n 's/a/b/w .codeflow/policy.json' README.md",
             "sed -n 'p;W .codeflow/policy.json' README.md",
             "sed -i 's/a/b/' .codeflow/policy.json",
+            "cd \"$d\" && sed -n 'e printf x > policy.json' file.md",
+            "cd \"$d\" && sed -n 's/.*/printf x > policy.json/e' file.md",
+            "cd .codeflow && sed -n 'e printf x > policy.json' file.md",
+            "cd .codeflow && sed -n 's/.*/printf x > policy.json/e' file.md",
         ],
         &[
+            "cd \"$d\" && sed -n 'e echo hi' file.md",
             "sed -n '/^### sathyassn\\/codeflow#94/,/^### sathyassn\\/codeflow#121/p' file.md",
             "sed -i '' 's/  - The operator re-trusts x/  - With the operator x/' RELEASE-PLAN.md",
             "sed -n 'y/w/W/;s/w/w/p' README.md",
