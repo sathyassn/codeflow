@@ -7432,3 +7432,40 @@ fn edit_guard_protects_the_gitconfig_of_every_home() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// TSK-290 AC-6 (issue 147): in a fresh project the installed binary's
+/// git-guard allows the two read-only `sed` commands of the issue, whose
+/// only letters `w` sit in an address pattern, an `s` pattern and its
+/// replacement, and still refuses a `sed` that writes an enforcement file.
+#[test]
+fn git_guard_reads_a_sed_script_by_its_grammar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    std::fs::write(
+        root.join("file.md"),
+        "### sathyassn/codeflow#94\nbody\n### sathyassn/codeflow#121\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("RELEASE-PLAN.md"),
+        "  - The operator re-trusts x\n",
+    )
+    .unwrap();
+    assert_guard(
+        &root,
+        &[
+            "sed -n '1w .codeflow/policy.json' README.md",
+            "sed -n 's/a/b/w .codeflow/policy.json' README.md",
+            "sed -n 'p;W .codeflow/policy.json' README.md",
+            "sed -i 's/a/b/' .codeflow/policy.json",
+        ],
+        &[
+            "sed -n '/^### sathyassn\\/codeflow#94/,/^### sathyassn\\/codeflow#121/p' file.md",
+            "sed -i '' 's/  - The operator re-trusts x/  - With the operator x/' RELEASE-PLAN.md",
+            "sed -n 'y/w/W/;s/w/w/p' README.md",
+        ],
+        "git.hook_integrity",
+    );
+}

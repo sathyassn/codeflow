@@ -1169,17 +1169,24 @@ fn unknown_dir_use(name: &str, args: &[String], line: &str) -> UnknownDirUse {
 }
 
 /// A `sed` from an unknown directory: the files it only reads are cleared
-/// as from anywhere else; its script, in-place files and option values are
-/// read by name, a script from its input by the rest of the line, and a
-/// relative script file it cannot see is uncertain.
+/// as from anywhere else; the names its script writes, its in-place files
+/// and option values are read by name, a script from its input by the rest
+/// of the line, and a relative script file it cannot see is uncertain. The
+/// text of a script is data, not a word that could name a path.
 fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
     let reads = sed_read_flags(args);
+    // A script is not a path (issue 147): the names it writes stand in for
+    // its text.
+    let scripts = sed_script_flags(args);
     let mut words = words_of(
         args.iter()
-            .zip(&reads)
-            .filter(|(_, r)| !**r)
+            .zip(reads.iter().zip(&scripts))
+            .filter(|(_, (read, script))| !**read && !**script)
             .map(|(a, _)| a),
     );
+    if let SedRead::Read(names) = sed_script_names(args, None) {
+        words.extend(words_of(names.iter()));
+    }
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             if matches!(file, "-" | "/dev/stdin") {
@@ -3630,6 +3637,58 @@ fn sed_operands_in<'a>(args: &'a [String], spec: &OptionSpec) -> Vec<&'a str> {
 /// The largest `sed -f` script the guard reads; a larger one is refused.
 const SED_SCRIPT_LIMIT: u64 = 1 << 24;
 
+/// Whether the shell fills in part of each argument of the `sed` command on
+/// `line` that has these arguments: `None` when the command cannot be
+/// found in one place on the line.
+fn sed_args_fill(line: &str, args: &[String]) -> Option<Vec<bool>> {
+    let mut own = None;
+    for segment in expand_commands(line) {
+        let words = shell_words(&segment);
+        let mut tokens: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
+        strip_reserved_words(&mut tokens);
+        let matches = strip_launchers(&tokens)
+            .is_some_and(|(program, rest)| basename(program) == "sed" && rest == args);
+        if matches {
+            if own.is_some() {
+                return None;
+            }
+            own = Some(words);
+        }
+    }
+    let words = own?;
+    let start = words.len().checked_sub(args.len())?;
+    Some(
+        words[start..]
+            .iter()
+            .map(|word| word.expands || has_substitution(&word.text))
+            .collect(),
+    )
+}
+
+/// The arguments of a `sed` that are script text, as both grammars read
+/// them, and that the shell leaves alone: written in single quotes or with
+/// nothing to expand. Where the position on the line cannot be established,
+/// a script is literal only when its text holds no `$`, backtick or
+/// substitution.
+fn literal_sed_scripts(line: &str, args: &[String]) -> Vec<bool> {
+    let scripts = sed_script_flags(args);
+    if !scripts.contains(&true) {
+        return scripts;
+    }
+    let fills = sed_args_fill(line, args);
+    scripts
+        .iter()
+        .enumerate()
+        .map(|(at, script)| {
+            *script
+                && match &fills {
+                    Some(fills) => !fills[at],
+                    None => !unresolved_word(&args[at]),
+                }
+        })
+        .collect()
+}
+
 /// The text floor for `sed`: any argument that names an enforcement path
 /// refuses, script and option values included, so a `w`, `W` or GNU `e`
 /// command and a comment alike count. The one clearance is a plain read:
@@ -3644,6 +3703,7 @@ fn sed_text_violation(
     line: &str,
 ) -> Option<Violation> {
     let reads = sed_read_flags(args);
+    let scripts = literal_sed_scripts(line, args);
     let unread = || {
         args.iter()
             .zip(&reads)
@@ -3656,14 +3716,29 @@ fn sed_text_violation(
             format!("`sed` names the enforcement path `{p}` in `{arg}`, where its script or in-place edit can write it"),
         ));
     }
-    if let Some(p) = unresolved_names_enforcement(unread(), line, cwd, payload_cwd) {
+    // A script the shell leaves alone is data: it is neither a word the
+    // shell fills in nor text to read as paths (issue 147).
+    let filled = args
+        .iter()
+        .zip(&reads)
+        .zip(&scripts)
+        .filter(|((_, read), script)| !**read && !**script)
+        .map(|((arg, _), _)| arg);
+    let without_scripts = line_without_reads(line, args, &scripts);
+    if let Some(p) = unresolved_names_enforcement(filled, &without_scripts, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("`sed` takes a word the shell fills in, and the command line names the enforcement path `{p}`"),
         ));
     }
-    // The rest of the line, without the files this `sed` only reads.
-    let elsewhere = line_without_reads(line, args, &reads);
+    // The rest of the line, without the files this `sed` only reads and the
+    // scripts it runs.
+    let quiet: Vec<bool> = reads
+        .iter()
+        .zip(&scripts)
+        .map(|(read, script)| *read || *script)
+        .collect();
+    let elsewhere = line_without_reads(line, args, &quiet);
     let line = elsewhere.as_str();
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
@@ -9384,16 +9459,7 @@ fn sed_file_operands(args: &[String]) -> Vec<&str> {
     files
 }
 
-/// The paths a `sed` script may write, whether or not it edits in place:
-/// the destination of each `w` and `W` command and of the `w` flag of `s`,
-/// which runs to the end of its line. Every argument is scanned, so a
-/// script in `-e`, `--expression` or the script operand is covered, and so
-/// is a readable `-f` script file. Each `w` yields the rest of its line,
-/// and that text cut at `;` and `}`, as candidates; a candidate that is not
-/// an enforcement path is harmless, so over-reading never refuses a
-/// legitimate script. The backup an in-place edit writes is a candidate
-/// too: the file name plus its suffix, or a GNU suffix with `*` replaced
-/// by the file name (`-i'dir/*'`).
+/// A `sed` script file read for the guard, or why it could not be.
 #[derive(Debug)]
 enum SedRead<T> {
     Read(T),
@@ -9443,17 +9509,108 @@ fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
     }
 }
 
-fn sed_script_writes(args: &[String], cwd: &Path) -> SedRead<Vec<String>> {
-    let mut scripts: Vec<String> = args.to_vec();
+/// One piece of a `sed` script as a grammar reads the command line.
+enum SedPiece<'a> {
+    /// The text of `-e`, `--expression`, or the script operand.
+    Text(&'a str),
+    /// A `-f` or `--file` script file.
+    File(&'a str),
+}
+
+/// The script pieces of a `sed` command line in the order `sed` joins them,
+/// as one grammar reads it: every `-e` and `-f` value, else the first
+/// operand.
+fn sed_script_pieces<'a>(args: &'a [String], spec: &OptionSpec) -> Vec<SedPiece<'a>> {
+    let parsed = parse_options(args, spec);
+    let mut pieces: Vec<SedPiece<'a>> = parsed
+        .values
+        .iter()
+        .filter_map(|(seen, value)| match seen {
+            Seen::Short('e') | Seen::Long("--expression", _) => Some(SedPiece::Text(value)),
+            Seen::Short('f') | Seen::Long("--file", _) => Some(SedPiece::File(value)),
+            _ => None,
+        })
+        .collect();
+    if pieces.is_empty() {
+        pieces.extend(parsed.operands.first().copied().map(SedPiece::Text));
+    }
+    pieces
+}
+
+/// The arguments that are script text in both grammars: a script is data,
+/// never a path, wherever the two readings agree on it. A script one
+/// grammar reads as a file or a backup suffix stays a word to judge.
+fn sed_script_flags(args: &[String]) -> Vec<bool> {
+    let texts = |spec: &OptionSpec| -> Vec<&str> {
+        sed_script_pieces(args, spec)
+            .into_iter()
+            .filter_map(|piece| match piece {
+                SedPiece::Text(text) => Some(text),
+                SedPiece::File(_) => None,
+            })
+            .collect()
+    };
+    let gnu = texts(&SED_OPTIONS);
+    let bsd = texts(&BSD_SED_OPTIONS);
+    let is_arg = |texts: &[&str], arg: &String| {
+        texts
+            .iter()
+            .any(|text| std::ptr::eq(text.as_ptr(), arg.as_ptr()) && text.len() == arg.len())
+    };
+    args.iter()
+        .map(|arg| is_arg(&gnu, arg) && is_arg(&bsd, arg))
+        .collect()
+}
+
+/// The file names the scripts of a `sed` command line may write: the names
+/// the script reader finds in the script each grammar reads (the exact name
+/// of each `w`, `W` and `s///w`, the names a shorter reading gives, and for
+/// a script the reader does not model, the text reading). `cwd` is where a
+/// `-f` script file is read; without it the files are skipped.
+fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>> {
+    let mut scripts: Vec<String> = Vec::new();
     for spec in SED_GRAMMARS {
-        let parsed = parse_options(args, spec);
-        for file in parsed.values_of('f', "--file") {
-            match read_sed_script(file, cwd) {
-                SedRead::Read(text) => scripts.push(text),
-                SedRead::Unreadable { file, why } => return SedRead::Unreadable { file, why },
+        let mut joined: Vec<String> = Vec::new();
+        for piece in sed_script_pieces(args, spec) {
+            match piece {
+                SedPiece::Text(text) => joined.push(text.to_string()),
+                SedPiece::File(file) => {
+                    let Some(cwd) = cwd else { continue };
+                    match read_sed_script(file, cwd) {
+                        SedRead::Read(text) => joined.push(text),
+                        SedRead::Unreadable { file, why } => {
+                            return SedRead::Unreadable { file, why }
+                        }
+                    }
+                }
+            }
+        }
+        let script = joined.join("\n");
+        if !scripts.contains(&script) {
+            scripts.push(script);
+        }
+    }
+    let mut names: Vec<String> = Vec::new();
+    for script in &scripts {
+        for name in crate::security::sed_script::read_script(script).candidates() {
+            if !names.iter().any(|seen| seen == name) {
+                names.push(name.to_string());
             }
         }
     }
+    SedRead::Read(names)
+}
+
+/// The paths a `sed` command may write, whether or not it edits in place:
+/// the files its script writes ([`sed_script_names`]), read from the script
+/// by sed's grammar, so a letter `w` in a pattern, replacement or text is
+/// not a command (issue 147). Every `-e`, `--expression`, script operand and
+/// readable `-f` script is read. A name that is not an enforcement path is
+/// harmless, so over-reading never refuses a legitimate script. The backup
+/// an in-place edit writes is a candidate too: the file name plus its
+/// suffix, or a GNU suffix with `*` replaced by the file name
+/// (`-i'dir/*'`).
+fn sed_script_writes(args: &[String], cwd: &Path) -> SedRead<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let mut add = |candidate: &str| {
         let candidate = candidate.trim_start_matches([' ', '\t']);
@@ -9461,15 +9618,9 @@ fn sed_script_writes(args: &[String], cwd: &Path) -> SedRead<Vec<String>> {
             out.push(candidate.to_string());
         }
     };
-    for script in &scripts {
-        for line in script.split('\n') {
-            for (at, _) in line.match_indices(['w', 'W']) {
-                let rest = &line[at + 1..];
-                add(rest);
-                add(rest.split(';').next().unwrap_or(rest));
-                add(rest.split('}').next().unwrap_or(rest));
-            }
-        }
+    match sed_script_names(args, Some(cwd)) {
+        SedRead::Read(names) => names.iter().for_each(|name| add(name)),
+        SedRead::Unreadable { file, why } => return SedRead::Unreadable { file, why },
     }
     let gnu = parse_options(args, &SED_OPTIONS);
     let bsd = parse_options(args, &BSD_SED_OPTIONS);
@@ -9718,6 +9869,10 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 struct ShellWord {
     text: String,
     unquoted_prefix: usize,
+    /// Whether the shell fills in part of the word when the command runs: a
+    /// `$` or a backtick outside single quotes and not escaped. A `$` in
+    /// single quotes is text, as in a `sed` script's `$p` or `[^/]*$`.
+    expands: bool,
 }
 
 /// Up to `max` digits of `radix` read from the front of `chars` without
@@ -9807,6 +9962,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut prefix_open = true;
     let mut unquoted_prefix: usize = 0;
     let mut dollar_pending = false;
+    let mut expands = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -9869,6 +10025,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     words.push(ShellWord {
                         text: std::mem::take(&mut cur),
                         unquoted_prefix,
+                        expands: std::mem::take(&mut expands),
                     });
                     started = false;
                 }
@@ -9882,6 +10039,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     unquoted_prefix += c.len_utf8();
                 }
                 dollar_pending = c == '$' && !in_single && !in_double;
+                expands |= matches!(c, '$' | '`') && !in_single;
             }
         }
     }
@@ -9889,6 +10047,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         words.push(ShellWord {
             text: cur,
             unquoted_prefix,
+            expands,
         });
     }
     words
@@ -17046,5 +17205,272 @@ mod discard_integration_tests {
             &format!("git -C '{}' reset --hard", second.path().display())
         )
         .is_empty());
+    }
+}
+
+/// TSK-290 (issue 147): the guard reads a `sed` script by sed's grammar. A
+/// letter `w` is a write command only in command position, so a read-only
+/// script that holds the letter elsewhere passes, a script is never read as
+/// a path, and the writes `sed` really makes stay refused.
+#[cfg(test)]
+mod sed_grammar_tests {
+    use super::*;
+
+    /// The first command of issue 147: prints a section of a file.
+    const ISSUE_PRINT: &str =
+        "sed -n '/^### sathyassn\\/codeflow#94/,/^### sathyassn\\/codeflow#121/p' file.md";
+    /// The second command of issue 147: a BSD in-place edit of a notes file.
+    const ISSUE_EDIT: &str =
+        "sed -i '' 's/  - The operator re-trusts x/  - With the operator x/' RELEASE-PLAN.md";
+
+    /// A repository with enforcement files and ordinary notes.
+    fn project() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
+        std::fs::write(root.join("file.md"), "### sathyassn/codeflow#94\nbody\n").unwrap();
+        std::fs::write(
+            root.join("RELEASE-PLAN.md"),
+            "  - The operator re-trusts x\n",
+        )
+        .unwrap();
+        (dir, root)
+    }
+
+    fn judged(command: &str, root: &Path) -> Vec<Violation> {
+        let policy = GitPolicy::default();
+        let context = GuardContext {
+            policy: &policy,
+            current_branch: "task/local",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            branch_lookup: None,
+            discard_lookup: Some(&|_| Ok(None)),
+            root_checkout: None,
+        };
+        evaluate_report_at(command, &context, root).violations
+    }
+
+    fn refused(command: &str, root: &Path) -> bool {
+        judged(command, root)
+            .iter()
+            .any(|v| v.level == PolicyLevel::Block && v.rule == "git.hook_integrity")
+    }
+
+    fn assert_allowed(commands: &[&str], root: &Path) {
+        let wrong: Vec<String> = commands
+            .iter()
+            .filter(|c| !judged(c, root).is_empty())
+            .map(|c| format!("{c}: {:?}", judged(c, root)))
+            .collect();
+        assert!(wrong.is_empty(), "should allow:\n{}", wrong.join("\n"));
+    }
+
+    fn assert_refused(commands: &[&str], root: &Path) {
+        let wrong: Vec<&&str> = commands.iter().filter(|c| !refused(c, root)).collect();
+        assert!(wrong.is_empty(), "should refuse: {wrong:?}");
+    }
+
+    #[test]
+    fn both_commands_of_issue_147_are_allowed() {
+        let (_dir, root) = project();
+        assert_allowed(&[ISSUE_PRINT, ISSUE_EDIT], &root);
+    }
+
+    #[test]
+    fn a_w_in_an_address_pattern_is_allowed() {
+        let (_dir, root) = project();
+        assert_allowed(
+            &[
+                "sed -n '/swap #1/p' file.md",
+                "sed -n '/a\\/w#/p' file.md",
+                "sed -n '\\,show/w#,p' file.md",
+                "sed -n '/w#/,/W#/p' file.md",
+                "sed -n '/w#/{p;d}' file.md",
+                "sed -n -e '/w#/p' -e '$p' file.md",
+            ],
+            &root,
+        );
+    }
+
+    #[test]
+    fn a_w_in_an_s_pattern_or_replacement_is_allowed() {
+        let (_dir, root) = project();
+        assert_allowed(
+            &[
+                "sed 's/w#/W/g' file.md",
+                "sed 's/what #1/where/' file.md",
+                "sed -e 's/a/with w#/' file.md",
+                "sed -i '' 's/w#/W/' RELEASE-PLAN.md",
+                "sed -i.bak 's/w#/W/' RELEASE-PLAN.md",
+                "sed -i 's/w#/W/' RELEASE-PLAN.md",
+            ],
+            &root,
+        );
+    }
+
+    #[test]
+    fn a_w_in_y_text_label_or_file_name_it_reads_is_allowed() {
+        let (_dir, root) = project();
+        assert_allowed(
+            &[
+                "sed 'y/w#/W#/' file.md",
+                "sed '1a\\\nwrite #1' file.md",
+                "sed '1i\\\nwrite #1' file.md",
+                "sed '$c\\\nwritten #1' file.md",
+                "sed '1a write #1' file.md",
+                "sed ':swap#;N;b swap#' file.md",
+                "sed 'r network#.txt' file.md",
+                "sed 'R network#.txt' file.md",
+            ],
+            &root,
+        );
+    }
+
+    #[test]
+    fn a_write_to_an_enforcement_path_stays_refused() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                "sed -n 'w .codeflow/policy.json' file.md",
+                "sed -n 'W .codeflow/policy.json' file.md",
+                "sed -n '1w .codeflow/policy.json' file.md",
+                "sed -n '/x/w .codeflow/policy.json' file.md",
+                "sed -n '/x/!w .codeflow/policy.json' file.md",
+                "sed -n '1,3 w .codeflow/policy.json' file.md",
+                "sed -n 'p;w .codeflow/policy.json' file.md",
+                "sed -n '/w/{p;w .codeflow/policy.json\n}' file.md",
+                "sed -n '/w/w .codeflow/policy.json' file.md",
+                "sed -n 's/a/b/w .codeflow/policy.json' file.md",
+                "sed -n 's/w/w/gw .codeflow/policy.json' file.md",
+                "sed -n -e p -e 'w .codeflow/policy.json' file.md",
+                "sed -n --expression='w .codeflow/policy.json' file.md",
+                "sed -n '1a text\nw .codeflow/policy.json' file.md",
+                "sed -n 'y/a/b/;w .codeflow/policy.json' file.md",
+                "sed -n '1{w .codeflow/policy.json\n}' file.md",
+            ],
+            &root,
+        );
+    }
+
+    #[test]
+    fn an_in_place_edit_of_an_enforcement_file_stays_refused() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                "sed -i 's/a/b/' .codeflow/policy.json",
+                "sed -i '' 's/w/W/' .codeflow/policy.json",
+                "sed -i.bak 's/a/b/' .codeflow/policy.json",
+                "sed --in-place 's/a/b/' .codeflow/policy.json",
+            ],
+            &root,
+        );
+    }
+
+    #[test]
+    fn a_script_file_that_writes_an_enforcement_path_stays_refused() {
+        let (_dir, root) = project();
+        std::fs::write(root.join("bad.sed"), "p\nw .codeflow/policy.json\n").unwrap();
+        std::fs::write(root.join("good.sed"), "/swap/p\ns/w/W/\n1a\\\nwrite it\n").unwrap();
+        assert_refused(
+            &["sed -n -f bad.sed file.md", "sed -nf bad.sed file.md"],
+            &root,
+        );
+        assert_allowed(
+            &["sed -n -f good.sed file.md", "sed -f good.sed file.md"],
+            &root,
+        );
+    }
+
+    #[test]
+    fn a_form_the_reader_does_not_model_is_unproven() {
+        let (_dir, root) = project();
+        // The reader cannot parse `zz`, so the old text reading applies to
+        // that script: refused when a name it finds reaches an integrity
+        // path, allowed otherwise.
+        assert_refused(&["sed -n 'zz w .codeflow/policy.json' file.md"], &root);
+        assert_allowed(&["sed -n 'zz w notes.md' file.md"], &root);
+        assert!(crate::security::sed_script::read_script("zz w notes.md")
+            .unmodelled
+            .is_some());
+    }
+
+    #[test]
+    fn a_script_run_from_an_unknown_directory_is_not_read_as_a_path() {
+        let (_dir, root) = project();
+        assert_allowed(
+            &[
+                &format!("cd \"$d\" && {ISSUE_PRINT}"),
+                "cd \"$d\" && sed -n '/w#/p' file.md",
+                "cd \"$d\" && sed 's/(a)/w#/' file.md",
+                "cd \"$d\" && sed -n '$p' file.md",
+                "cd \"$d\" && sed -n 'p' policy.json",
+            ],
+            &root,
+        );
+        assert_refused(
+            &[
+                "cd \"$d\" && sed -n 'w policy.json' file.md",
+                "cd \"$d\" && sed -n '/x/w .codeflow/policy.json' file.md",
+                "cd \"$d\" && sed -n 's/a/b/w policy.json' file.md",
+                "cd \"$d\" && sed -i 's/a/b/' policy.json",
+                "cd \"$d\" && sed -i '' 's/a/b/' policy.json",
+            ],
+            &root,
+        );
+    }
+
+    /// Issue 147's second refusal named a path made of the script text. A
+    /// script word is read as a pattern for paths when the guard looks for
+    /// what a shell-filled word could name, and a directory the guard cannot
+    /// list under the first component made it unreadable.
+    #[cfg(unix)]
+    #[test]
+    fn a_script_is_not_read_as_a_pattern_for_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, root) = project();
+        let locked = root.join("s");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read_dir(&locked).is_ok();
+        let commands = [
+            "sed 's/x*$//' file.md",
+            "sed -n -e 's/x*$//' -e p file.md",
+            "sed -n 's/x*$//' \"$f\"",
+            "sed -e 's/x*$//' < file.md",
+        ];
+        let wrong: Vec<String> = commands
+            .iter()
+            .filter(|c| !judged(c, &root).is_empty())
+            .map(|c| format!("{c}: {:?}", judged(c, &root)))
+            .collect();
+        // A variable's value can come from the line, so a script text in
+        // double quotes with a variable still counts as a word to read.
+        let named = judged("p='w .codeflow/policy.json'; sed -n \"$p\" file.md", &root);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return; // a user that reads any directory cannot make one unreadable
+        }
+        assert!(wrong.is_empty(), "should allow:\n{}", wrong.join("\n"));
+        assert!(
+            named.iter().any(|v| v.rule == "git.hook_integrity"),
+            "{named:?}"
+        );
+    }
+
+    #[test]
+    fn the_backup_an_in_place_edit_writes_is_still_judged() {
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                "sed -i.json 's/a/b/' .codeflow/policy",
+                "sed -i '*.json' 's/a/b/' .codeflow/policy",
+            ],
+            &root,
+        );
     }
 }
