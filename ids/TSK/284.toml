@@ -1,0 +1,11 @@
+id = "TSK-284"
+uid = "6d2f83cd-c060-4e87-8fbe-75cfa26c9241"
+kind = "TSK"
+title = "Files that run code in a later shell or login are protected"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
