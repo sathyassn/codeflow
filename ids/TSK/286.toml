@@ -1,0 +1,11 @@
+id = "TSK-286"
+uid = "403c4f06-9ebb-451e-be9f-6c19358f60e9"
+kind = "TSK"
+title = "The deletion guard is proven against the native tools"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
