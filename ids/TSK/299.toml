@@ -1,0 +1,11 @@
+id = "TSK-299"
+uid = "a6bc0230-b527-4bc0-9f4e-cd4e72755242"
+kind = "TSK"
+title = "The git guard judges every writing program's output option"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T15:59:22Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
