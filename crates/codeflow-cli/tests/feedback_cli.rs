@@ -68,8 +68,10 @@ fn refused(out: &Output, what: &str) -> String {
 }
 
 fn state(tier: &str) -> String {
+    // The binary's own version, so status never reports the fixture behind.
+    let version = env!("CARGO_PKG_VERSION");
     format!(
-        "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"3.1.0\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
+        "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"{version}\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
     )
 }
 
