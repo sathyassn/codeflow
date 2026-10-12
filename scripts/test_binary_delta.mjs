@@ -41,6 +41,23 @@ test('archive includes source outside crates and passes revision to repeat build
   });
 });
 
+test('a version stamp of the workspace packages keeps the target directory', async () => {
+  await fixture(async (root, git) => {
+    const run = () => {
+      const done = spawnSync(process.execPath, ['scripts/check-present-binary-delta.mjs'], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+      assert.equal(done.status, 0, done.stderr);
+      return JSON.parse(done.stdout).target_directory;
+    };
+    const before = run();
+    for (const path of ['Cargo.lock', 'crates/codeflow-cli/Cargo.toml', 'crates/codeflow-present/Cargo.toml']) {
+      const text = await readFile(join(root, path), 'utf8');
+      await writeFile(join(root, path), text.replaceAll('0.1.0', '0.1.1'));
+    }
+    git('commit', '-qam', 'chore: stamp 0.1.1');
+    assert.equal(run(), before);
+  });
+});
+
 test('an absent included source fails the archive build', async () => {
   await fixture(async (root, git) => {
     git('rm', 'support/included.txt'); git('commit', '-qm', 'test: absent include');

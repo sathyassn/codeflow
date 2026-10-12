@@ -3512,6 +3512,57 @@ fn the_pre_push_candidate_authority_carries_a_target_merge() {
     assert_passes(&run(Some(&tip)), "with the candidate authority");
 }
 
+/// Issue 153: a task planned on an integration line that has diverged from
+/// `main`, which does not hold the task, completes on its task branch. The
+/// pre-push judges the range from the line's tip with `main`'s tip as the
+/// candidate authority (`--policy-from` and `--commits-from`). `main`
+/// holding no record of the task is no version, so the line's criteria are
+/// the authority and the completion passes, with and without the authority.
+#[test]
+fn a_task_on_a_diverged_line_completes_before_main_holds_it() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    git(root, &["switch", "-q", "-c", LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &line_task("TSK-001", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): plan the task on the line");
+    git(root, &["switch", "-q", "main"]);
+    write(root, "src/main_only.rs", "pub fn main_only() {}\n");
+    let tip = commit(root, "feat: work on main alone");
+    let reviewed = build(root, BRANCH, "src/reviewed.rs");
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs(records): complete the task");
+    let line_tip = git_out(root, &["rev-parse", LINE]);
+    let run = |authority: Option<&str>| {
+        let mut args = vec![
+            "ci", "--base", &line_tip, "--head", "HEAD", "--branch", BRANCH,
+        ];
+        if let Some(tip) = authority {
+            args.extend(["--policy-from", tip, "--commits-from", tip]);
+        }
+        let out = codeflow().args(&args).current_dir(root).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    assert_passes(&run(None), "the line alone");
+    let pushed = run(Some(&tip));
+    assert_passes(&pushed, "with main's tip as the candidate authority");
+    assert!(
+        !pushed.1.contains("work.criteria_frozen"),
+        "the completion is judged a criteria change: {}",
+        pushed.1
+    );
+}
+
 /// Round 2 of the TSK-220 review: a line range's own line carries a merge
 /// after the review only for a task whose target is that line. A task
 /// bound for `main` that merges the line after its review still refuses

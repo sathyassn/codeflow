@@ -34,16 +34,21 @@ jobs:
   #
   # The full gate runs as parallel parts on separate runners. Each part runs
   # `codeflow test --mode full --strict --all --only <targets>`, which also
-  # runs the named targets' prerequisites. Together the parts name every
-  # full-mode target in .codeflow/test-config.json; scripts/gate-parity.py
-  # refuses a target no part names. The `codeflow gates` job below is the one
-  # verdict that branch rules and the release authority read.
+  # runs the named targets' prerequisites. The instrumented suite and the
+  # journeys that read its results run as the coverage shards and their
+  # report job instead (TSK-270). Together the parts and the coverage jobs
+  # run every full-mode target in .codeflow/test-config.json;
+  # scripts/gate-parity.py refuses a target none of them runs. The
+  # `codeflow gates` job below is the one verdict that branch rules and the
+  # release authority read.
   #
   # Every job carries a timeout, so a stalled step frees its runner instead
   # of holding one of the account's concurrent job slots for GitHub's default
   # six hours (TSK-254). Each is sized from the job's observed p95 and maximum
   # with headroom. A gate part peaked at 20.6 minutes outside the Playwright
-  # step over 2026-10-04 to 2026-10-07 and gets 45. The Windows build and each
+  # step over 2026-10-04 to 2026-10-07 and gets 45. Each coverage shard gets
+  # 30 and the coverage report 10 (TSK-270; the coverage jobs' comment below
+  # gives their basis). The Windows build and each
   # Windows partition get 30, the Windows checks 25, the release journey 15,
   # the journeys job 10, and the reuse job and both verdicts 5 (TSK-265; the
   # Windows jobs' comment below gives their basis). The secret scan and the
@@ -103,10 +108,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The instrumented suite is the longest part; the journey gate
-          # reads its results, so it runs on the same runner.
-          - part: coverage
-            only: rust-coverage,journey-gate
           # Exclusive: the benchmark times reads, so it runs alone.
           # visual-eval-controls sits here to balance the parts. Both portal
           # targets require docs-portal-deps, the one target that runs
@@ -122,8 +123,11 @@ jobs:
             only: prose-exhaustive
           - part: present
             only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
+          # The journey gate's Python journeys need no test results, so they
+          # run here; the coverage report job reads the Rust journeys from
+          # the shards' results (TSK-270).
           - part: checks
-            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,journey-python
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -136,11 +140,13 @@ jobs:
       # floating stable clippy cannot break CI out from under a green local run.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Each part builds different things (instrumented, release, debug), so
-      # each keeps its own cache.
+      # Each part builds different things (release, debug), so each keeps its
+      # own cache. A cache is saved only under a new key, so the key changes
+      # when what a part keeps in target/ changes: v1 holds the binary-delta
+      # check's build, now named by the locked dependencies (TSK-270).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.part }}
+          key: ${{ matrix.part }}-v1
       # Each Node target pins its version in a version file, and the full
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
@@ -225,12 +231,6 @@ jobs:
           echo "::error::the Playwright install failed twice; see the attempts above"
           exit 1
 
-      # One instrumented suite owns Linux test and coverage evidence.
-      - name: Install nextest and llvm-cov
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
-
       - name: Build codeflow from source
         run: |
           cargo build --release -p codeflow-cli
@@ -255,26 +255,167 @@ jobs:
         if: matrix.part == 'prose'
         run: sudo apt-get update && sudo apt-get install -y zsh
 
-      # The Linux candidate has one full gate, split into the parts above.
-      # Windows independently runs raw Rust checks; Unix-only journeys and the
-      # read benchmark remain Linux-only.
-      # The coverage run starts about 31,000 instrumented processes.
-      # One profile per process filled 27.5 GB on Linux, more than the
-      # runner's free disk; a merge pool of four per binary keeps under 100 MB
-      # with the same counters. cargo-llvm-cov reads this name.
+      # The Linux candidate has one full gate, split into the parts above and
+      # the coverage jobs below. Windows independently runs raw Rust checks;
+      # Unix-only journeys and the read benchmark remain Linux-only. No part
+      # runs the instrumented suite now; the profile name would keep its
+      # profiles small if one did (see the coverage shards).
       - name: codeflow test --mode full --strict
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
         run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
 
+  # The instrumented suite owns Linux test and coverage evidence and was the
+  # longest part of the gate (13.8 to 19.8 minutes), so it runs as shards on
+  # separate runners (TSK-270). Each shard builds the instrumented workspace
+  # and runs the tests scripts/coverage-shards.py gives it from measured
+  # durations, so together the shards run every test once. The report job
+  # adds up the shards' counters, applies the line floor that the
+  # rust-coverage target names, reads the Rust journeys from the shards'
+  # results and checks that each listed test ran in exactly its one shard.
+  # Locally, `codeflow test` still runs the one rust-coverage command.
+  # Both shards build the same thing, so only the first saves the cache.
+  # Timeouts: a shard is planned at about 5 minutes of tests after a build of
+  # 1 to 2 minutes, and gets the Windows partitions' 30; the report job only
+  # reads files.
+  gates-coverage:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push') }}
+    name: codeflow gates (coverage ${{ matrix.shard }} of 2)
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # The key the single coverage part saved under, so the shards restore
+      # main's instrumented dependencies instead of building them cold.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: coverage-gates
+          save-if: ${{ matrix.shard == 1 }}
+      # The rust-coverage target requires present-web-build, which runs on
+      # this Node pin, as in the gate parts.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+      - name: Install nextest and llvm-cov
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129,cargo-llvm-cov@0.8.4
+      - name: present-web-build
+        shell: bash
+        run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
+      # A --no-report run adds to the profiles already in the target
+      # directory, so any the cache restored are removed first.
+      - name: Remove old coverage profiles
+        run: cargo llvm-cov clean --workspace
+      # The rust-coverage command with --no-report, on this shard's tests.
+      # The run starts about 31,000 instrumented processes. One profile per
+      # process filled 27.5 GB, more than the runner's free disk; a merge
+      # pool of four per binary keeps under 100 MB with the same counters.
+      # cargo-llvm-cov reads this name.
+      - name: cargo llvm-cov nextest (one shard)
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"
+      # The full report keeps each function's counters, which the report job
+      # adds up. The test list for the partition check comes from these same
+      # binaries: under the llvm-cov environment and in the llvm-cov target
+      # directory the run built, listing builds nothing.
+      - name: Export this shard's coverage and list its tests
+        shell: bash
+        run: |
+          mkdir -p target/coverage-data
+          cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+          eval "$(cargo llvm-cov show-env --sh)"
+          CARGO_TARGET_DIR=target/llvm-cov-target cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
+      - name: Keep this shard's coverage for the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.shard }}
+          path: target/coverage-data/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep this shard's results for the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            target/nextest/codeflow/junit.xml
+            target/nextest/codeflow/tests.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # It runs when a shard fails, so the journeys and the partition check
+  # still report; it only reads the shards' files.
+  gates-coverage-report:
+    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    name: codeflow gates (coverage report)
+    needs: gates-coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/coverage
+          echo "CODEFLOW_GATE_STARTED_AT=$(python3 -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+
+      - name: Fetch every shard's coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-data-*
+          path: target/coverage/data
+
+      - name: Fetch every shard's results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-shard-*
+          path: target/coverage/results
+
+      # Counts lines as llvm-cov does and fails under the floor of the
+      # rust-coverage target's --fail-under-lines.
+      - name: Line coverage of the whole suite
+        shell: bash
+        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 2 target/coverage/data
+
+      # The journey-gate target's command, on the shards' results.
+      - name: journey gate
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CODEFLOW_GATE_RESULTS: target/coverage/results
+        run: python3 -B scripts/test_journey_gate.py && python3 -B scripts/journey-gate.py --part results --results "$CODEFLOW_GATE_RESULTS"
+
+      # Fails when a listed test ran in no shard, in two, or outside the
+      # shard the plan gives it, and prints each shard's test time.
+      - name: Every test ran in exactly one shard
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
+
   # The required check. It runs even when a part fails or is cancelled, so
-  # the check is never skipped, and it passes only when every part passed,
-  # or when the reuse decision named a run and every part was skipped.
+  # the check is never skipped, and it passes only when every part, every
+  # coverage shard and the coverage report passed, or when the reuse
+  # decision named a run and all of them were skipped.
   gates-verdict:
     if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
     name: codeflow gates
-    needs: [reuse, gates]
+    needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -282,15 +423,17 @@ jobs:
         shell: bash
         env:
           PARTS: ${{ needs.gates.result }}
+          SHARDS: ${{ needs.gates-coverage.result }}
+          REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS" = skipped ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
           fi
-          if [ "$PARTS" != success ]; then
-            echo "::error::the full gate's parts concluded ${PARTS}; see the codeflow gates (part) jobs"
+          if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
+            echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
             exit 1
           fi
           echo "every part of the full gate passed"

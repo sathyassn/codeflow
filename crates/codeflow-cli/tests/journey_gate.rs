@@ -272,6 +272,8 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     let condition = "github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push'";
     for id in [
         "gates",
+        "gates-coverage",
+        "gates-coverage-report",
         "gates-verdict",
         "windows-tests",
         "windows",
