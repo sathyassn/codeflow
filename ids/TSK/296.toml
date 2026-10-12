@@ -1,0 +1,11 @@
+id = "TSK-296"
+uid = "0d07f0df-49c8-4268-8541-7575947938f3"
+kind = "TSK"
+title = "The managed workflows pin every action by commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T06:21:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
