@@ -74,7 +74,7 @@ jobs:
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           filter: blob:none
@@ -125,7 +125,7 @@ jobs:
           - part: checks
             only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -145,12 +145,12 @@ jobs:
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
       # the version files. The later setup is first on PATH.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.18.0
           cache: npm
           cache-dependency-path: docs-portal/package-lock.json
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 26.4.0
           cache: npm
@@ -175,7 +175,7 @@ jobs:
           test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
           echo "version=$present" >> "$GITHUB_OUTPUT"
           echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: matrix.part == 'present'
         with:
           path: ~/.cache/ms-playwright
@@ -190,7 +190,7 @@ jobs:
       # older entry; the key names the runner image and the Playwright
       # version. apt verifies the archives it downloads against the signed
       # package lists, and the lists are always fetched fresh.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: matrix.part == 'present'
         with:
           path: ~/.cache/playwright-apt
@@ -315,7 +315,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       # Saved even when the build fails, so a red run does not force the next
@@ -377,7 +377,7 @@ jobs:
       matrix:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       # The tests run git, and a cargo they find on PATH resolves the pinned
       # toolchain; nothing is compiled here.
       - name: Install Rust (rust-toolchain.toml)
@@ -431,7 +431,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -451,7 +451,7 @@ jobs:
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.18.0
           cache: npm
@@ -481,7 +481,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: journey gate (Python journeys)
         shell: bash
@@ -498,7 +498,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Begin journey check
         shell: bash
@@ -567,7 +567,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -1035,7 +1035,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: gitleaks allowlist canary
         run: |
@@ -1052,7 +1052,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
