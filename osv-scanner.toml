@@ -1,0 +1,18 @@
+# osv-scanner reads this file for Cargo.lock in this directory only. The
+# dependency audit in .github/workflows/codeflow-ci.yml takes it from the
+# trusted commit, so a change here takes effect once its pull request lands.
+# Each entry names one advisory, why it is accepted here, and when it must be
+# triaged again.
+
+# unsafe-libyaml 0.2.11 comes in through serde_yaml_ng 0.10.0, which reads and
+# writes the front matter of every CodeFlow record. The advisory reports that
+# the crate is unmaintained and its repository is archived. It names no
+# vulnerability and no fixed version, and no exploit is known. The parser
+# reads record files in the repository it runs in, which are the project's own
+# records, and takes no input from a network service. Replacing it with a YAML
+# parser written in safe Rust is tracked as TSK-298 for 3.2.0. Triage again by
+# 2026-12-31, or when that task lands, whichever is first.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+ignoreUntil = 2026-12-31
+reason = "unsafe-libyaml is unmaintained, not a vulnerability: the advisory has no fixed version and no known exploit. Its inputs are the project's own records. Migrating to a YAML parser in safe Rust is tracked for 3.2.0 as TSK-298."
