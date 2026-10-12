@@ -1,0 +1,11 @@
+id = "TSK-295"
+uid = "4117dc50-3df5-4ad9-8b07-96705aebe2b6"
+kind = "TSK"
+title = "A task on a diverged integration line can complete before main holds it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T06:20:02Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
