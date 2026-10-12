@@ -1,0 +1,11 @@
+id = "TSK-285"
+uid = "c1345388-02c0-4e28-a19d-d97d75433c61"
+kind = "TSK"
+title = "Package-manager script shell settings are guarded"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:25Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
