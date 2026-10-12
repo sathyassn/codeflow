@@ -17226,7 +17226,12 @@ mod sed_grammar_tests {
     /// A repository with enforcement files and ordinary notes.
     fn project() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        // The disk case of a verbatim `\\?\` path cannot be read on Windows.
+        let root = if cfg!(windows) {
+            dir.path().to_path_buf()
+        } else {
+            dir.path().canonicalize().unwrap()
+        };
         git2::Repository::init(&root).unwrap();
         std::fs::create_dir_all(root.join(".codeflow")).unwrap();
         std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
