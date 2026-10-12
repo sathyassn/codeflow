@@ -138,7 +138,7 @@ jobs:
         run: rustup toolchain install
       # Each part builds different things (instrumented, release, debug), so
       # each keeps its own cache.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.part }}
       # Each Node target pins its version in a version file, and the full
@@ -322,7 +322,7 @@ jobs:
       # one to rebuild the dependencies from scratch. The cache holds
       # dependencies only, never workspace crates. The key is the one the
       # partitions used when each compiled the suite, so the cache carries over.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: windows-tests
           cache-on-failure: true
@@ -434,7 +434,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
 
@@ -1072,7 +1072,7 @@ jobs:
       # or the pushed commit on a push, so a pull request cannot lower the
       # level that judges it. A missing policy file, a missing or unreadable
       # key, or a value other than block, warn or off fails the job;
-      # `codeflow update` adds missing keys with their defaults.
+      # add a missing key by hand: `codeflow update` keeps a deletion.
       # Suppressions also come from the trusted commit: the step replaces every
       # osv-scanner.toml in the checkout with the trusted commit's copies, so a
       # new suppression takes effect once its own pull request lands.
@@ -1096,7 +1096,7 @@ jobs:
             if [ "$key" = security_review ]; then value=$sr; else value=$da; fi
             case $value in
               block|warn|off) ;;
-              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Run \`codeflow update\` to add a missing key, or set block, warn or off."
+              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Set it to block, warn or off and land that before this workflow; \`codeflow update\` does not restore a deleted key."
                  exit 1 ;;
             esac
           done

@@ -817,7 +817,7 @@ jobs:
       # or the pushed commit on a push, so a pull request cannot lower the
       # level that judges it. A missing policy file, a missing or unreadable
       # key, or a value other than block, warn or off fails the job;
-      # `codeflow update` adds missing keys with their defaults.
+      # add a missing key by hand: `codeflow update` keeps a deletion.
       # Record a justified suppression for an accepted or unreachable advisory in
       # an osv-scanner.toml in the same directory as the lockfile it covers
       # (with no --config, as here, osv-scanner reads no other name and no
@@ -845,7 +845,7 @@ jobs:
             if [ "$key" = security_review ]; then value=$sr; else value=$da; fi
             case $value in
               block|warn|off) ;;
-              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Run \`codeflow update\` to add a missing key, or set block, warn or off."
+              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Set it to block, warn or off and land that before this workflow; \`codeflow update\` does not restore a deleted key."
                  exit 1 ;;
             esac
           done
