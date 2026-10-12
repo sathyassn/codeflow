@@ -81,7 +81,7 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Build codeflow from the target's source
         run: |

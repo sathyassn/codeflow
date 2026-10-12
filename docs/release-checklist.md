@@ -97,7 +97,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration). Details: [distribution and platform details](#distribution-and-platform-details).
 
-- [ ] 3.1 The pinned cargo-dist version regenerates the committed release workflow without drift. Evidence: an empty regeneration diff.
+- [ ] 3.1 Pinned cargo-dist regenerates the workflow except job timeouts. Evidence: `generate --check` on a `git archive` export without `allow-dirty`.
 - [ ] 3.2 The dispatched authority job enforces every check in the runbook's [Dispatch and authority rows](releasing.md#architecture) and fails closed. Evidence: the authority job log.
 - [ ] 3.3 Generated host dependencies reject a failed or cancelled authority or main-recheck job, so publishing cannot skip either. Evidence: the generated workflow and a run log.
 - [ ] 3.4 The post-announce verifier binds the public tag and release to the selected main source and matches every asset exactly. Evidence: the verifier log.

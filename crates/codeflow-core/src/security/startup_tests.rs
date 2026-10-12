@@ -11,7 +11,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // The folder name ends in `H` on purpose: `spell` rewrites `H/`,
+        // so a home spelling it does not protect is corrupted on every run
+        // instead of the one in about sixty whose random name ends in `H`.
+        let dir = tempfile::Builder::new().suffix("H").tempdir().unwrap();
         // Resolve the temporary directory's own links (`/var` on macOS)
         // and Windows short names, so a spelled path and its resolution
         // agree.
@@ -44,9 +47,10 @@ impl Fixture {
 
     /// The command with `H` replaced by the fixture home, spelled with
     /// `/` as a shell command spells a path on every platform. A command
-    /// that already spells the home keeps it: the temporary directory's
-    /// random name can end in `H` (`.tmpCeqjnH/home`), which a plain
-    /// replace rewrote one run in about sixty.
+    /// that already spells the home this way keeps it, because the
+    /// fixture's folder name always ends in `H` (`.tmpCeqjnH/home`). Any
+    /// other spelling of the home (an MSYS `/c/...` form, for one) is not
+    /// protected and must go to `evaluate` directly, not through `judge`.
     fn spell(&self, command: &str) -> String {
         let home = slashed(&self.home);
         command
@@ -456,7 +460,10 @@ fn windows_drive_spellings_reach_the_class() {
         "echo x > 'C:/Program Files/Git/etc/profile.d/x.sh'".to_string(),
         "tar -xf a.tar -C 'C:/Program Files/Git/etc'".to_string(),
     ] {
-        assert!(refused(&f.judge(&command)), "{command}");
+        assert!(
+            refused(&evaluate(&command, &f.project, &f.startup_env())),
+            "{command}"
+        );
     }
     assert!(class_target(
         Path::new(r"C:\Program Files\Git\etc\profile"),
