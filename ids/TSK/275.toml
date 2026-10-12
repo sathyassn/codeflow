@@ -1,0 +1,11 @@
+id = "TSK-275"
+uid = "1f7cfbf5-ceea-4415-962a-a12f80bb222f"
+kind = "TSK"
+title = "codeflow ci gives one verdict for a range however it is spelled"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:50:54Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
