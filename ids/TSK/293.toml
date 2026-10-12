@@ -1,0 +1,11 @@
+id = "TSK-293"
+uid = "68b661bc-4f56-41d0-8f05-b2475140d159"
+kind = "TSK"
+title = "codeflow integrate can land a reviewed head with a merge commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T06:19:32Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
