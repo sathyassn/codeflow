@@ -1,0 +1,11 @@
+id = "TSK-283"
+uid = "80ce09fd-a2b9-4f9c-9102-d378f60bcc45"
+kind = "TSK"
+title = "Guards read the git configuration a command will use"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
