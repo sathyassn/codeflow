@@ -1,0 +1,11 @@
+id = "TSK-294"
+uid = "63199de4-5071-40b0-a813-475c4449060c"
+kind = "TSK"
+title = "A project can route dependency-audit exceptions through its own reviewed check"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T06:19:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
