@@ -4490,15 +4490,26 @@ fn direct_write_violation(
     if cmd == "sed" {
         match sed_script_writes(args, cwd) {
             SedRead::Read(paths) => {
-                if let Some(p) = paths
-                    .iter()
-                    .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
-                {
+                if let Some((path, p)) = paths.iter().find_map(|path| {
+                    token_integrity_path(path, cwd, payload_cwd).map(|p| (path, p))
+                }) {
+                    // Name what runs: a word of a command that `e` or the
+                    // `e` flag of `s` runs, or a file a `w` command, the
+                    // `w` flag or an in-place backup writes.
+                    let runs = match sed_script_split(args, Some(cwd)) {
+                        SedRead::Read((writes, run)) => {
+                            run.contains(path) && !writes.contains(path)
+                        }
+                        SedRead::Unreadable { .. } => false,
+                    };
+                    let what = if runs {
+                        "a command a `sed` script runs (`e` or the `e` flag of `s`) can write"
+                    } else {
+                        "a `sed` script `w` command or backup writes"
+                    };
                     return Some(hook_integrity_violation(
                         level,
-                        format!(
-                            "a `sed` script `w` command or backup writes the integrity path `{p}`"
-                        ),
+                        format!("{what} the integrity path `{p}`"),
                     ));
                 }
             }
@@ -9569,6 +9580,22 @@ fn sed_script_flags(args: &[String]) -> Vec<bool> {
 /// each shell command the script runs (GNU `e`, the `e` flag of `s`). `cwd` is where a
 /// `-f` script file is read; without it the files are skipped.
 fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>> {
+    match sed_script_split(args, cwd) {
+        SedRead::Read((mut names, commands)) => {
+            for word in commands {
+                if !names.contains(&word) {
+                    names.push(word);
+                }
+            }
+            SedRead::Read(names)
+        }
+        SedRead::Unreadable { file, why } => SedRead::Unreadable { file, why },
+    }
+}
+
+/// [`sed_script_names`] in two lists: the names the script writes, and the
+/// words of the shell commands it runs.
+fn sed_script_split(args: &[String], cwd: Option<&Path>) -> SedRead<(Vec<String>, Vec<String>)> {
     let mut scripts: Vec<String> = Vec::new();
     for spec in SED_GRAMMARS {
         let mut joined: Vec<String> = Vec::new();
@@ -9592,18 +9619,18 @@ fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>>
         }
     }
     let mut names: Vec<String> = Vec::new();
-    let mut add = |name: &str| {
-        if !names.iter().any(|seen| seen == name) {
-            names.push(name.to_string());
-        }
-    };
+    let mut run: Vec<String> = Vec::new();
     for script in &scripts {
         let reading = crate::security::sed_script::read_script(script);
-        reading.candidates().for_each(&mut add);
+        for name in reading.candidates() {
+            if !names.iter().any(|seen| seen == name) {
+                names.push(name.to_string());
+            }
+        }
         // GNU `e` and the `e` flag of `s` run a shell command, which can
-        // write a file by a short name: its words are names too.
-        // They are read as the shell reads them: split at blanks and
-        // operators, and again with quotes and escapes removed.
+        // write a file by a short name: its words are names too. They are
+        // read as the shell reads them: split at blanks and operators, and
+        // again with quotes and escapes removed.
         for command in &reading.commands {
             let split = words_of(std::iter::once(command));
             let unquoted = expand_commands(command)
@@ -9611,11 +9638,13 @@ fn sed_script_names(args: &[String], cwd: Option<&Path>) -> SedRead<Vec<String>>
                 .flat_map(|segment| shell_tokens(segment))
                 .collect::<Vec<_>>();
             for word in split.iter().chain(&unquoted) {
-                add(word);
+                if !run.contains(word) {
+                    run.push(word.clone());
+                }
             }
         }
     }
-    SedRead::Read(names)
+    SedRead::Read((names, run))
 }
 
 /// The paths a `sed` command may write, whether or not it edits in place:
@@ -17419,6 +17448,57 @@ mod sed_grammar_tests {
         assert!(crate::security::sed_script::read_script("zz w notes.md")
             .unmodelled
             .is_some());
+    }
+
+    #[test]
+    fn the_refusal_names_the_command_that_ran() {
+        let (_dir, root) = project();
+        let message = |command: &str| {
+            judged(command, &root)
+                .iter()
+                .map(|v| v.message.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let ran = message("cd .codeflow && sed -n 'e printf x > policy.json' file.md");
+        assert!(ran.contains("a command a `sed` script runs"), "{ran}");
+        assert!(!ran.contains("`w` command"), "{ran}");
+        let ran = message("cd .codeflow && sed -n 's/a/printf x > policy.json/e' file.md");
+        assert!(ran.contains("a command a `sed` script runs"), "{ran}");
+        let wrote = message("cd .codeflow && sed -n 'w policy.json' file.md");
+        assert!(wrote.contains("`w` command or backup writes"), "{wrote}");
+    }
+
+    /// GNU `sed` decodes escapes in that command text before it runs it
+    /// (TSK-290 review round 2).
+    #[test]
+    fn a_command_sed_runs_is_read_after_gnu_decodes_its_escapes() {
+        // GNU `sed` turns `\x70`, `\o160` and `\d112` into the byte `p`
+        // in the text of `e` and in an `s` replacement before it runs the
+        // command, so each spelling below writes `policy.json`.
+        let (_dir, root) = project();
+        assert_refused(
+            &[
+                r"cd .codeflow && sed -n 'e printf x > \x70olicy.json' file.md",
+                r"cd .codeflow && sed -n 's/a/printf x > \x70olicy.json/e' file.md",
+                r#"cd "$d" && sed -n 'e printf x > \x70olicy.json' file.md"#,
+                r"cd .codeflow && sed -n 'e printf x > \o160olicy.json' file.md",
+                r"cd .codeflow && sed -n 'e printf x > \d112olicy.json' file.md",
+                r"cd .codeflow && sed -n 's/a/printf x > \d112olicy.json/e' file.md",
+                r#"cd "$d" && sed -n 's/a/printf x > \d112olicy.json/e' file.md"#,
+                r"cd .codeflow && sed -n 's/a/printf x > \x70olicy.json/ge' file.md",
+            ],
+            &root,
+        );
+        assert_allowed(
+            &[
+                r#"cd "$d" && sed -n 'e echo hi' file.md"#,
+                r"cd .codeflow && sed -n 'e echo hi' file.md",
+                r"cd .codeflow && sed -n 'e printf x > \x6eotes.md' file.md",
+                r#"cd "$d" && sed -n 's/a/echo \x68i/e' file.md"#,
+            ],
+            &root,
+        );
     }
 
     /// GNU `e` and the `e` flag of `s` run a shell command, so the words of

@@ -142,6 +142,73 @@ pub(crate) fn crude_candidates(text: &str) -> Vec<String> {
     out
 }
 
+/// The text of an `e` command or an `s` replacement after GNU `sed` 4.9
+/// decodes it (`normalize_text`): `\a \f \n \r \t \v`, `\cX`, a byte
+/// written `\dNNN` (decimal), `\oNNN` (octal) or `\xHH` (hexadecimal), and a
+/// backslash before a newline, which becomes the newline. `\x70olicy.json`
+/// is `policy.json` to the shell `sed` runs. Any other escape is left as
+/// written.
+pub(crate) fn decode_escapes(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        if c != '\\' || at + 1 >= chars.len() {
+            out.push(c);
+            at += 1;
+            continue;
+        }
+        let escape = chars[at + 1];
+        if escape == '\\' {
+            out.push_str("\\\\");
+            at += 2;
+            continue;
+        }
+        let (radix, width) = match escape {
+            'd' => (10, 3),
+            'o' => (8, 3),
+            'x' => (16, 2),
+            _ => (0, 0),
+        };
+        if radix != 0 {
+            let digits: String = chars[at + 2..]
+                .iter()
+                .take(width)
+                .take_while(|d| d.is_digit(radix))
+                .collect();
+            if let Ok(value) = u32::from_str_radix(&digits, radix) {
+                // `sed` keeps the low byte.
+                out.push(char::from((value & 0xff) as u8));
+                at += 2 + digits.len();
+                continue;
+            }
+        }
+        let decoded = match escape {
+            'a' => Some('\u{7}'),
+            'f' => Some('\u{c}'),
+            'n' | '\n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            'v' => Some('\u{b}'),
+            _ => None,
+        };
+        if let Some(decoded) = decoded {
+            out.push(decoded);
+            at += 2;
+        } else if escape == 'c' && at + 2 < chars.len() {
+            // `\cX` is the control character `X ^ 0x40`, after upper-casing.
+            let x = chars[at + 2].to_ascii_uppercase();
+            out.push(char::from((x as u32 & 0xff) as u8 ^ 0x40));
+            at += 3;
+        } else {
+            out.push(c);
+            at += 1;
+        }
+    }
+    out
+}
+
 /// The blanks `sed` skips between the parts of a command.
 fn is_blank(c: char) -> bool {
     c == ' ' || c == '\t'
@@ -273,11 +340,15 @@ impl Parser<'_> {
         }
     }
 
-    /// Records the text of a shell command a script runs.
+    /// Records the text of a shell command a script runs, as written and as
+    /// GNU `sed` decodes it before it runs it ([`decode_escapes`]).
     fn note_command(&mut self, command: String) {
-        if !command.is_empty() {
-            self.commands.insert(command);
+        if command.is_empty() {
+            return;
         }
+        let decoded = decode_escapes(&command);
+        self.commands.insert(command);
+        self.commands.insert(decoded);
     }
 
     /// What may follow a command: blanks, then a separator, the end of the
@@ -706,6 +777,33 @@ mod tests {
         // A script the reader does not model is reported whole.
         let reading = read_script("zzz e echo");
         assert_eq!(reading.commands, ["zzz e echo"]);
+    }
+
+    #[test]
+    fn gnu_escapes_in_a_command_are_decoded() {
+        assert_eq!(
+            decode_escapes(r"printf x > \x70olicy.json"),
+            "printf x > policy.json"
+        );
+        assert_eq!(decode_escapes(r"\o160\d112\x70"), "ppp");
+        // An escaped backslash stays, and does not start an escape.
+        assert_eq!(decode_escapes(r"a\tb\nc\\d"), "a\tb\nc\\\\d");
+        assert_eq!(decode_escapes(r"\\x70"), r"\\x70");
+        assert_eq!(decode_escapes("a\\\nb"), "a\nb");
+        assert_eq!(decode_escapes(r"\cA"), "\u{1}");
+        // No digits, or another escape: left as written.
+        assert_eq!(decode_escapes(r"\xZZ \q \"), r"\xZZ \q \");
+        // The decoded text is a command word the reader reports.
+        let reading = read_script(r"e printf x > \x70olicy.json");
+        assert!(reading
+            .commands
+            .iter()
+            .any(|c| c == "printf x > policy.json"));
+        let reading = read_script(r"s/a/printf x > \d112olicy.json/e");
+        assert!(reading
+            .commands
+            .iter()
+            .any(|c| c == "printf x > policy.json"));
     }
 
     #[test]

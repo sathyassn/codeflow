@@ -7464,6 +7464,8 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
             "cd \"$d\" && sed -n 's/.*/printf x > policy.json/e' file.md",
             "cd .codeflow && sed -n 'e printf x > policy.json' file.md",
             "cd .codeflow && sed -n 's/.*/printf x > policy.json/e' file.md",
+            r"cd .codeflow && sed -n 'e printf x > \x70olicy.json' file.md",
+            r#"cd "$d" && sed -n 's/a/printf x > \d112olicy.json/e' file.md"#,
         ],
         &[
             "cd \"$d\" && sed -n 'e echo hi' file.md",
