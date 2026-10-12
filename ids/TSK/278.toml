@@ -1,0 +1,11 @@
+id = "TSK-278"
+uid = "8a518885-1d8b-472d-8dbe-18b2f3cc2828"
+kind = "TSK"
+title = "A closed record can be redacted without losing its results"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-12T05:51:04Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
