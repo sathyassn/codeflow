@@ -298,13 +298,220 @@ pub(crate) enum DirChange {
     Unknown,
 }
 
-/// The directory changes the words of one simple command make: `cd`,
-/// `chdir` and `pushd` with any options, also behind `!`, `command` and
-/// `builtin`; `env -C` and `--chdir` in every spelling; and `git -C`.
-/// `cd` alone goes to `home`; `cd -`, a stack index, `~user` and a value
-/// filled in at run time are unknown. `popd` returns to a directory
-/// already listed.
+/// The directory changes the words of one simple command make (TSK-302
+/// review round 3). Within the modeled grammar the answer is exact;
+/// anything outside it is [`DirChange::Unknown`], never "no change":
+///
+/// - `cd`, `chdir` and `pushd` with any options; `cd` alone goes to
+///   `home`; `cd -`, a stack index, `~user` and a value filled in at run
+///   time are unknown. `popd` and `dirs` return to directories already
+///   listed.
+/// - `source` and `.` can move the shell to anywhere: unknown.
+/// - The launchers `command`, `builtin`, `exec`, `nohup`, `nice`,
+///   `timeout`, `stdbuf`, `time`, `env` and `xargs` are unwrapped through
+///   their option grammar, values included, attached or separate, and
+///   the command they run is read in turn. `env -C`, `-CDIR`, `--chdir`
+///   and `--chdir=` change directory. An option the grammar does not list,
+///   `env -S`, and `sudo` are unknown.
+/// - `git -C DIR` counts as a change.
+/// - Any other program cannot move the shell, so it makes no change.
 pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
+    let mut found = Vec::new();
+    launcher_changes(words, home, 0, &mut found);
+    found
+}
+
+/// How an option of a launcher reads: a flag, or one that takes a value.
+fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
+    // `Some(true)`: takes a value; `Some(false)`: a flag; `None`: unknown.
+    let valued = |names: &[&str]| names.contains(&option);
+    match launcher {
+        "command" | "time" => matches!(option, "-p").then_some(false),
+        "exec" => {
+            if valued(&["-a"]) {
+                Some(true)
+            } else {
+                matches!(option, "-c" | "-l" | "-cl" | "-lc").then_some(false)
+            }
+        }
+        "nice" => valued(&["-n", "--adjustment"]).then_some(true),
+        "timeout" => {
+            if valued(&["-s", "--signal", "-k", "--kill-after"]) {
+                Some(true)
+            } else {
+                matches!(
+                    option,
+                    "--foreground" | "--preserve-status" | "-v" | "--verbose"
+                )
+                .then_some(false)
+            }
+        }
+        "stdbuf" => valued(&["-i", "-o", "-e", "--input", "--output", "--error"]).then_some(true),
+        "xargs" => {
+            if valued(&[
+                "-I",
+                "-L",
+                "-n",
+                "-P",
+                "-s",
+                "-d",
+                "-E",
+                "-a",
+                "--arg-file",
+                "--delimiter",
+                "--eof",
+                "--max-lines",
+                "--max-args",
+                "--max-procs",
+                "--max-chars",
+                "--replace",
+                "--process-slot-var",
+            ]) {
+                Some(true)
+            } else {
+                matches!(
+                    option,
+                    "-0" | "-r"
+                        | "-t"
+                        | "-p"
+                        | "-x"
+                        | "--null"
+                        | "--no-run-if-empty"
+                        | "--verbose"
+                        | "--interactive"
+                        | "--exit"
+                        | "--open-tty"
+                )
+                .then_some(false)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Read one launcher's options from `rest`, returning where its command
+/// starts, or `None` for an option the grammar does not know. A long
+/// option's value may follow `=`; a short one's may be attached
+/// (`-n5`, `-oL`), or be the next word.
+fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        if word == "--" {
+            return Some(at + 1);
+        }
+        if !word.starts_with('-') || word == "-" {
+            return Some(at);
+        }
+        // `nice -5`: a legacy numeric adjustment.
+        if launcher == "nice" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+            at += 1;
+            continue;
+        }
+        if let Some((name, _)) = word.split_once('=').filter(|_| word.starts_with("--")) {
+            launcher_option(launcher, name)?;
+            at += 1;
+            continue;
+        }
+        if let Some(valued) = launcher_option(launcher, word) {
+            at += if valued { 2 } else { 1 };
+            continue;
+        }
+        // A short option with its value attached: `-n5`, `-oL`, `-I{}`.
+        let short = word.get(..2).filter(|_| !word.starts_with("--"))?;
+        if launcher_option(launcher, short)? {
+            at += 1;
+            continue;
+        }
+        return None;
+    }
+    Some(at)
+}
+
+/// Read env's options: flags, `-u NAME`, `-C DIR` in every spelling and
+/// clusters such as `-iC.claude`; `NAME=value` settings follow them.
+/// Returns where the command starts, or `None` for an option it does not
+/// know (and for `-S`, whose string can hold more options).
+fn env_options(
+    rest: &[String],
+    target: &dyn Fn(&str) -> DirChange,
+    found: &mut Vec<DirChange>,
+) -> Option<usize> {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            break;
+        }
+        if word == "-" {
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "ignore-environment"
+                | "null"
+                | "debug"
+                | "block-signal"
+                | "default-signal"
+                | "ignore-signal"
+                | "list-signal-handling" => {}
+                "unset" | "chdir" => {
+                    let value = if let Some(value) = value {
+                        value.to_string()
+                    } else {
+                        at += 1;
+                        rest.get(at - 1)?.clone()
+                    };
+                    if name == "chdir" {
+                        found.push(target(&value));
+                    }
+                }
+                _ => return None,
+            }
+            continue;
+        }
+        if let Some(letters) = word.strip_prefix('-') {
+            for (i, letter) in letters.char_indices() {
+                let tail = &letters[i + letter.len_utf8()..];
+                match letter {
+                    'i' | '0' | 'v' => {}
+                    'u' | 'C' => {
+                        let value = if tail.is_empty() {
+                            at += 1;
+                            rest.get(at - 1)?.clone()
+                        } else {
+                            tail.to_string()
+                        };
+                        if letter == 'C' {
+                            found.push(target(&value));
+                        }
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+            continue;
+        }
+        if word.contains('=') {
+            continue;
+        }
+        return Some(at - 1);
+    }
+    Some(at)
+}
+
+fn launcher_changes(
+    words: &[String],
+    home: Option<&Path>,
+    depth: usize,
+    found: &mut Vec<DirChange>,
+) {
+    if depth > 8 {
+        found.push(DirChange::Unknown);
+        return;
+    }
     let mut at = 0;
     while let Some(word) = words.get(at) {
         let assignment = word.split_once('=').is_some_and(|(name, _)| {
@@ -312,20 +519,12 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
         });
         if word == "!" || assignment {
             at += 1;
-        } else if matches!(word.as_str(), "command" | "builtin") {
-            at += 1;
-            while words
-                .get(at)
-                .is_some_and(|w| w.starts_with('-') && w.len() > 1)
-            {
-                at += 1;
-            }
         } else {
             break;
         }
     }
     let Some(program) = words.get(at) else {
-        return Vec::new();
+        return;
     };
     let rest = &words[at + 1..];
     let target = |operand: &str| -> DirChange {
@@ -344,6 +543,10 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
         DirChange::To(PathBuf::from(operand))
     };
     let name = program.rsplit('/').next().unwrap_or(program);
+    let inner = |from: Option<usize>, found: &mut Vec<DirChange>| match from {
+        Some(from) => launcher_changes(&rest[from.min(rest.len())..], home, depth + 1, found),
+        None => found.push(DirChange::Unknown),
+    };
     match name {
         "cd" | "chdir" | "pushd" => {
             let mut operands = rest.iter();
@@ -358,7 +561,7 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
                 // stack index (`-1`) rotates to one already listed.
                 if word.starts_with('-') && word.len() > 1 {
                     if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
-                        return Vec::new();
+                        return;
                     }
                     continue;
                 }
@@ -366,32 +569,35 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
                 break;
             }
             match operand {
-                Some(operand) if name == "pushd" && operand.starts_with('+') => Vec::new(),
-                Some(operand) => vec![target(operand)],
-                None if name == "pushd" => Vec::new(),
-                None => {
-                    vec![home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf()))]
-                }
+                Some(operand) if name == "pushd" && operand.starts_with('+') => {}
+                Some(operand) => found.push(target(operand)),
+                None if name == "pushd" => {}
+                None => found.push(
+                    home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf())),
+                ),
             }
+        }
+        "source" | "." | "sudo" | "doas" => found.push(DirChange::Unknown),
+        "builtin" => inner(Some(0), found),
+        // `command -v` and `-V` only print what a name is.
+        "command"
+            if rest
+                .first()
+                .is_some_and(|w| matches!(w.as_str(), "-v" | "-V")) => {}
+        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" => {
+            let from = skip_launcher_options(name, rest);
+            inner(from, found);
+        }
+        "timeout" => {
+            // The duration follows the options.
+            let from = skip_launcher_options(name, rest).map(|from| from + 1);
+            inner(from, found);
         }
         "env" => {
-            let mut found = Vec::new();
-            let mut words = rest.iter();
-            while let Some(word) = words.next() {
-                if word == "-C" || word == "--chdir" {
-                    found.extend(words.next().map(|dir| target(dir)));
-                } else if let Some(dir) = word.strip_prefix("--chdir=") {
-                    found.push(target(dir));
-                } else if let Some(dir) = word.strip_prefix("-C").filter(|d| !d.is_empty()) {
-                    found.push(target(dir));
-                } else if !word.starts_with('-') && !word.contains('=') {
-                    break;
-                }
-            }
-            found
+            let from = env_options(rest, &target, found);
+            inner(from, found);
         }
         "git" => {
-            let mut found = Vec::new();
             let mut words = rest.iter();
             while let Some(word) = words.next() {
                 if word == "-C" {
@@ -400,9 +606,8 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
                     break;
                 }
             }
-            found
         }
-        _ => Vec::new(),
+        _ => {}
     }
 }
 
@@ -414,7 +619,8 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         unknown: false,
     };
     for segment in expand_commands(command) {
-        let words = command_argv(&segment);
+        let mut words = command_argv(&segment);
+        strip_reserved_words(&mut words);
         for change in dir_changes(&words, home) {
             set.change(&change);
         }
@@ -2004,6 +2210,7 @@ mod r22_tests {
     /// that shell is installed; it is skipped, with a printed note, on a
     /// host that has neither.
     #[test]
+    #[allow(clippy::too_many_lines)] // One corpus, read under each shell.
     fn directory_prefixes_match_the_native_shell() {
         use std::process::Command;
         let temp = tempfile::tempdir().unwrap();
@@ -2051,16 +2258,44 @@ mod r22_tests {
             eprintln!("skipped: neither bash nor zsh is installed");
             return;
         }
+        // Launcher lines whose child reports its own directory (Codex R3-1):
+        // the line itself prints, so the directory compared is the child's.
+        let children = [
+            "env -C sub /bin/pwd -P",
+            "env -Csub /bin/pwd -P",
+            "env --chdir=sub /bin/pwd -P",
+            "env -u FOO -C sub /bin/pwd -P",
+            "env -u FOO -Csub /bin/pwd -P",
+            "env -iCsub /bin/pwd -P",
+            "nice env -C sub /bin/pwd -P",
+            "nice -n 5 env -Csub /bin/pwd -P",
+            "nohup env -C sub /bin/pwd -P",
+            "command env -C sub /bin/pwd -P",
+            "time -p env -C sub /bin/pwd -P",
+            "stdbuf -oL env -C sub /bin/pwd -P",
+            "timeout 5 env -C sub /bin/pwd -P",
+            "command cd sub && /bin/pwd -P",
+            "cd .claude && command cd .. && /bin/pwd -P",
+        ];
+        let mut skipped = Vec::new();
         for shell in shells {
-            for prefix in prefixes {
+            let runs = prefixes
+                .iter()
+                .map(|prefix| (*prefix, format!("{prefix} 2>/dev/null; pwd -P")))
+                .chain(
+                    children
+                        .iter()
+                        .map(|line| (*line, format!("{line} 2>/dev/null"))),
+                );
+            for (line, script) in runs {
                 // `chdir` is a zsh builtin, not a bash one.
-                if prefix == "chdir" && shell == "bash" {
+                if line.starts_with("chdir") && shell == "bash" {
                     continue;
                 }
-                let set = line_directories(prefix, &root, Some(&home));
+                let set = line_directories(line, &root, Some(&home));
                 let output = Command::new(shell)
                     .arg("-c")
-                    .arg(format!("{prefix} 2>/dev/null; pwd -P"))
+                    .arg(&script)
                     .current_dir(&root)
                     .env("HOME", &home)
                     .env_remove("CDPATH")
@@ -2069,6 +2304,9 @@ mod r22_tests {
                     .unwrap();
                 let printed = String::from_utf8(output.stdout).unwrap();
                 let Some(reported) = printed.lines().next_back() else {
+                    // The launcher is not installed here (`timeout`,
+                    // `stdbuf` on macOS): nothing ran, so nothing to compare.
+                    skipped.push(format!("{shell}: {line}"));
                     continue;
                 };
                 let reported = std::fs::canonicalize(reported).unwrap_or_else(|_| reported.into());
@@ -2078,10 +2316,13 @@ mod r22_tests {
                     });
                 assert!(
                     covered,
-                    "{shell}: `{prefix}` ran in {reported:?}, not in {:?} (unknown={})",
+                    "{shell}: `{line}` ran in {reported:?}, not in {:?} (unknown={})",
                     set.dirs, set.unknown
                 );
             }
+        }
+        if !skipped.is_empty() {
+            eprintln!("skipped, launcher not installed: {skipped:?}");
         }
     }
 }

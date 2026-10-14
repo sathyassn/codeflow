@@ -3225,7 +3225,7 @@ fn worktree_text(text: &str) -> Option<&'static str> {
 /// word that reaches one from `cwd` once expanded and resolved
 /// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
 pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    line_names_where(line, cwd, payload_cwd, &|_| true)
+    line_names_where(line, cwd, payload_cwd, &|_| true, false)
 }
 
 /// Each word of `line` as [`line_names`] reads it: as split at blanks and
@@ -3259,12 +3259,16 @@ pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
 /// [`line_names`] that resolves a plain word only when `worth` says its
 /// path may be an enforcement path, so a caller with a cheap test of its
 /// own skips the file system reads for the rest (TSK-302 review F4). The
-/// text and glob checks are unchanged.
+/// text check is unchanged. With `quoted_literal`, a word holding a blank
+/// or a shell operator, which the shell only passes when it was quoted and
+/// therefore never globs, is read as a plain path rather than a glob
+/// (TSK-302 review round 3); git-guard's own reading keeps it off.
 pub(crate) fn line_names_where(
     line: &str,
     cwd: &Path,
     payload_cwd: &Path,
     worth: &dyn Fn(&Path) -> bool,
+    quoted_literal: bool,
 ) -> Option<String> {
     if let Some(p) = enforcement_text(line) {
         return Some(p.to_string());
@@ -3278,8 +3282,15 @@ pub(crate) fn line_names_where(
         let Some(words) = word_readings(word) else {
             return Some(BRACE_UNREAD.to_string());
         };
+        let quoted = quoted_literal
+            && word.contains(|c: char| {
+                matches!(
+                    c,
+                    ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
+                )
+            });
         words.iter().find_map(|w| {
-            if has_glob(w) {
+            if has_glob(w) && !quoted {
                 glob_reach(w, cwd, payload_cwd)
             } else {
                 let path = integrity_shell_path(w, cwd);

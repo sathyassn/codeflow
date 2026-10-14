@@ -935,4 +935,159 @@ mod tests {
             ],
         );
     }
+
+    /// TSK-302 review round 3: within the modeled grammar the directory set
+    /// is exact, and anything outside it makes the set unknown, so known
+    /// words are judged by their trailing components; it never fails open.
+    #[test]
+    fn launchers_and_unmodeled_grammar_never_fail_open() {
+        let repo = repo();
+        let go = repo.root.join("go.sh");
+        std::fs::write(&go, "cd .claude\n").unwrap();
+        let go = go.display().to_string();
+        let source = |rest: &str| format!("source {go} && {rest}");
+        let dot = |rest: &str| format!(". {go} && {rest}");
+        let owned = [
+            source("python3 tool.py settings.json"),
+            source("python3 -c 'open(\"settings.json\",\"w\").write(\"\")'"),
+            dot("python3 tool.py settings.json"),
+        ];
+        let owned: Vec<&str> = owned.iter().map(String::as_str).collect();
+        assert_public_refused(&repo, &owned, false);
+        let authority = source("python3 tool.py config");
+        assert_public_refused(&repo, &[authority.as_str()], true);
+        assert_public_allowed(&repo, &[source("python3 tool.py notes.txt").as_str()]);
+        // Codex R3-1: options that consume values, attached spellings,
+        // clusters and outer launchers.
+        assert_public_refused(
+            &repo,
+            &[
+                "env -u FOO -C.claude python3 -c 'import sys; open(sys.argv[1],\"w\")' settings.json",
+                "nice env -C.claude python3 -c 'import sys; open(sys.argv[1],\"w\")' settings.json",
+                "env -iC.claude python3 tool.py settings.json",
+                "timeout 5 env -C.claude python3 tool.py settings.json",
+                "nohup env --chdir .claude python3 tool.py settings.json",
+                "stdbuf -oL env -C .claude python3 tool.py settings.json",
+                "env -S 'python3 tool.py' settings.json",
+                "env --frobnicate -C.claude python3 tool.py settings.json",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &["env -u FOO -C.git python3 -c 'import sys; open(sys.argv[1],\"w\")' config"],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "nice python3 tool.py data.json",
+                "nice -n 5 python3 tool.py data.json",
+                "timeout 5 node x.js out.json",
+                "timeout -s KILL 5 python3 app.py",
+                "env FOO=1 python3 app.py",
+                "env -u FOO python3 app.py data.json",
+                "stdbuf -oL python3 app.py out.txt",
+                "nohup python3 worker.py",
+                "command python3 app.py out.json",
+                "time python3 app.py",
+            ],
+        );
+    }
+
+    /// Codex R3-2: a code literal whose directory is unknown is judged by
+    /// its trailing components; authority keeps its fixed level.
+    #[test]
+    fn code_literals_in_an_unknown_directory_are_judged() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "D=.claude; cd \"$D\" && python3 -c 'open(\"settings.json\",\"w\")'",
+                "D=.claude; cd \"$D\" && python3 tool.py settings.json",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "D=.git; cd \"$D\" && python3 -c 'open(\"config\",\"w\")'",
+                "D=.git; cd \"$D\" && python3 tool.py config",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "D=src; cd \"$D\" && python3 -c 'print(1)'",
+                "D=src; cd \"$D\" && python3 -c 'open(\"out.txt\",\"w\")'",
+                "cd \"$D\" && python3 -c 'import sys; open(sys.argv[1])' \"$IN\"",
+            ],
+        );
+    }
+
+    /// Codex R3-3 and Grok F1: `find -execdir` starts from every directory
+    /// in the line's set, a file start runs in its parent, and `-path`
+    /// sees find's own spelling.
+    #[test]
+    fn execdir_follows_the_line_set_and_find_spelling() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "find . -path '*cla*json' -execdir python3 -c 'import sys; open(sys.argv[1],\"w\")' settings.json \\;",
+                "find . -ipath '*CLA*JSON' -execdir python3 tool.py settings.json \\;",
+                "find .claude/settings.json -execdir python3 tool.py settings.json \\;",
+                "command cd .claude && find settings.json -execdir python3 tool.py settings.json \\;",
+                "builtin cd .claude && find settings.json -execdir python3 tool.py settings.json \\;",
+                "pushd .claude >/dev/null && find settings.json -execdir python3 tool.py settings.json \\;",
+                "chdir .claude && find settings.json -execdir python3 tool.py settings.json \\;",
+                "cd -q .claude && find settings.json -execdir python3 tool.py settings.json \\;",
+                "env -C.claude find settings.json -execdir python3 tool.py settings.json \\;",
+                "bash -c 'command cd .claude && find settings.json -execdir python3 tool.py settings.json \\;'",
+                "command cd .codeflow && find policy.json -execdir python3 tool.py policy.json \\;",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "find . -path '*git*config' -execdir python3 -c 'import sys; open(sys.argv[1],\"w\")' config \\;",
+                "command cd .git && find config -execdir python3 tool.py config \\;",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "command cd .claude && find settings.json -execdir python3 tool.py notes.txt \\;",
+                "find src -execdir python3 lint.py notes.txt \\;",
+                "find . -name '*.py' -execdir python3 -m py_compile {} +",
+                "find . -path './src/*' -execdir python3 lint.py notes.txt \\;",
+            ],
+        );
+    }
+
+    /// Codex R3-4: only string literals in code are read as file names, so
+    /// identifiers and numbers in a directory-wide protected path pass.
+    #[test]
+    fn code_identifiers_are_not_file_names() {
+        let repo = repo();
+        assert_public_allowed(
+            &repo,
+            &[
+                "cd .codex && python3 -c 'print(1)'",
+                "cd .codeflow/git-hooks && python3 -c 'print(1)'",
+                "cd .codeflow/git-hooks && node -e 'console.log(process.version)'",
+            ],
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "cd .codeflow/git-hooks && python3 -c 'open(\"pre-commit\",\"w\")'",
+                "cd .claude && python3 -c 'open(\"settings.json\",\"w\")'",
+            ],
+            false,
+        );
+    }
 }

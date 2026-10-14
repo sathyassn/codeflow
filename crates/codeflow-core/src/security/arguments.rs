@@ -11,6 +11,19 @@
 //! files its starting points reach. Authority metadata refuses in every
 //! one of these forms, whatever the integrity level. A program that builds
 //! a path internally is past this reading; the OS sandbox is the backstop.
+//!
+//! The governing rule for directories (TSK-302 review round 3): within the
+//! modeled grammar the directory set is exact; anything outside it makes
+//! the set unknown, and an unknown set judges every known word, argument
+//! or code string literal, by its trailing components, at the same levels.
+//! The guard never fails open on grammar it does not understand. The
+//! modeled grammar is `cd`, `chdir`, `pushd` and `popd`; the launchers
+//! `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`,
+//! `time`, `env` and `xargs` with their options; `git -C`; composed
+//! `ruby -C`; and `find -execdir` started from every directory in the set.
+//! `source`, `.`, `sudo`, `env -S` and any option or launcher outside that
+//! list make the set unknown. Only string literals in code are read as
+//! file names, never identifiers or numbers.
 use super::{actions, outward};
 use crate::hooks::{edit_guard, git_guard, PolicyLevel, Violation};
 use std::collections::HashMap;
@@ -58,7 +71,7 @@ pub(crate) fn evaluate(
     // line's writer rule.
     let code_dirs = dir_options(&line_dirs);
     for code in outward::interpreter_bodies(line) {
-        for word in outward::literal_words(&code) {
+        for word in code_literal_words(&code) {
             for dir in &code_dirs {
                 reaches.extend(code_reach(&word, dir.as_deref(), &mut facts));
             }
@@ -110,9 +123,13 @@ impl Facts<'_> {
         }
         let from = dir.unwrap_or(self.payload_cwd);
         let names = &self.names;
-        let found = git_guard::line_names_where(self.line, from, self.payload_cwd, &|path| {
-            names.may_reach(path)
-        });
+        let found = git_guard::line_names_where(
+            self.line,
+            from,
+            self.payload_cwd,
+            &|path| names.may_reach(path),
+            true,
+        );
         self.line_enforcement.insert(key, found.clone());
         found
     }
@@ -148,6 +165,16 @@ impl Facts<'_> {
 /// The paths a word names from `dir` once the shell expands its braces and
 /// globs, or `None` when the guard cannot list them.
 fn literal_paths(word: &str, dir: &Path, home: Option<&Path>) -> Option<Vec<PathBuf>> {
+    // A word holding a blank or a shell operator was quoted, and the shell
+    // expands no glob or brace in a quoted word: it is one literal path.
+    if word.contains(|c: char| {
+        matches!(
+            c,
+            ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
+        )
+    }) {
+        return Some(vec![literal_target(word, dir, home)]);
+    }
     let mut paths = Vec::new();
     for reading in git_guard::word_readings(word)? {
         if reading.is_empty() {
@@ -357,11 +384,14 @@ fn passes(tests: &[FindTest], path: &Path, shown: &str, kind: Option<std::fs::Fi
     })
 }
 
-/// Every directory `find -execdir` can run its command in: the parent of
-/// each entry under a start that the expression's tests let through, as a
-/// real directory (Option A of TSK-302 review round 2). A start the guard
-/// cannot read, an expression it cannot apply, or a walk past its limit
-/// reads as unknown.
+/// Every directory `find -execdir` can run its command in (TSK-302 review
+/// round 3): the run directories of the line itself, and for each start,
+/// read from every directory in the line's set, the parent of each entry
+/// the expression's tests let through among the protected paths under it,
+/// the start itself included (a file start runs in its parent). `-path`
+/// tests see find's own spelling (`./.claude/settings.json`). A start the
+/// guard cannot read, an expression it cannot apply, or a walk past its
+/// limit reads as unknown.
 fn execdir_dirs(
     starts: &[String],
     before: &[String],
@@ -369,36 +399,38 @@ fn execdir_dirs(
     line_dirs: &outward::DirSet,
     payload_cwd: &Path,
 ) -> outward::DirSet {
-    // The command still runs from the normal run directories (so an
-    // argument that names a protected path by its own spelling refuses);
-    // `-execdir` adds, for each start, the protected directories under it
-    // that `find` can run the command in.
-    let mut set = match cwd {
-        Some(cwd) => outward::DirSet {
-            dirs: vec![cwd.to_path_buf()],
-            unknown: false,
-        },
-        None => line_dirs.clone(),
-    };
+    let mut set = line_dirs.clone();
+    if let Some(cwd) = cwd {
+        if !set.dirs.contains(&cwd.to_path_buf()) {
+            set.dirs.push(cwd.to_path_buf());
+        }
+    }
+    let froms = set.dirs.clone();
     let tests = find_tests(before);
-    let froms: Vec<PathBuf> = match cwd {
-        Some(cwd) => vec![cwd.to_path_buf()],
-        None => line_dirs.dirs.clone(),
-    };
     for start in starts {
         if git_guard::unresolved_word(start) {
             set.unknown = true;
             continue;
         }
+        let spelled = start.trim_end_matches('/');
+        let spelled = if spelled.is_empty() { "/" } else { spelled };
         for from in &froms {
+            let begin = from.join(start);
+            let Ok(base) = edit_guard::normalized(&begin, true) else {
+                set.unknown = true;
+                continue;
+            };
             // `find_candidates` is bounded; it returns the enforcement paths
             // and registered checkouts under the start and the directories
             // leading to them, never a full tree walk (TSK-302 review round
             // 2 R2-4, Grok F3).
-            let Ok(candidates) = edit_guard::find_candidates(&from.join(start), payload_cwd) else {
+            let Ok(mut candidates) = edit_guard::find_candidates(&begin, payload_cwd) else {
                 set.unknown = true;
                 continue;
             };
+            if !candidates.contains(&base) {
+                candidates.push(base.clone());
+            }
             for candidate in candidates {
                 // A candidate too large to walk is reported as `<dir>/*`;
                 // the command may run anywhere under it.
@@ -406,7 +438,31 @@ fn execdir_dirs(
                     set.unknown = true;
                     continue;
                 }
-                if candidate.is_dir() && dir_runs_execdir(&candidate, tests.as_deref()) {
+                let shown = match candidate.strip_prefix(&base) {
+                    Ok(rest) if rest.as_os_str().is_empty() => spelled.to_string(),
+                    Ok(rest) => {
+                        let Some(rest) = rest.to_str() else {
+                            set.unknown = true;
+                            continue;
+                        };
+                        format!("{}/{rest}", spelled.trim_end_matches('/'))
+                    }
+                    Err(_) => spelled.to_string(),
+                };
+                let kind = std::fs::symlink_metadata(&candidate)
+                    .ok()
+                    .map(|m| m.file_type());
+                // An entry `find` matches runs the command in its parent.
+                if tests
+                    .as_deref()
+                    .is_none_or(|tests| passes(tests, &candidate, &shown, kind))
+                {
+                    if let Some(parent) = candidate.parent() {
+                        set.dirs.push(parent.to_path_buf());
+                    }
+                }
+                // A directory runs it when an entry directly in it matches.
+                if candidate.is_dir() && dir_runs_execdir(&candidate, &shown, tests.as_deref()) {
                     set.dirs.push(candidate);
                 }
             }
@@ -415,25 +471,27 @@ fn execdir_dirs(
     dedup(set)
 }
 
-/// Whether `find -execdir` can run its command in directory `dir`: it does
-/// when an entry directly in `dir` passes the expression's tests. With no
-/// resolvable test every entry passes, so a non-empty directory qualifies.
-/// A directory it cannot read is taken to qualify (fail closed).
-fn dir_runs_execdir(dir: &Path, tests: Option<&[FindTest]>) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+/// Whether `find -execdir` can run its command in directory `dir`, which
+/// find spells `shown`: it does when an entry directly in `dir` passes the
+/// expression's tests. With no resolvable test every entry passes, so any
+/// directory qualifies. A directory it cannot read is taken to qualify
+/// (fail closed).
+fn dir_runs_execdir(dir: &Path, shown: &str, tests: Option<&[FindTest]>) -> bool {
+    let Some(tests) = tests else {
         return true;
     };
-    let Some(tests) = tests else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return true;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         // A name that is not UTF-8 cannot be shown to a glob, so the entry
         // is taken to match (the directory stays a run location).
-        let Some(shown) = path.file_name().and_then(|name| name.to_str()) else {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             return true;
         };
-        if passes(tests, &path, shown, entry.file_type().ok()) {
+        let child = format!("{}/{name}", shown.trim_end_matches('/'));
+        if passes(tests, &path, &child, entry.file_type().ok()) {
             return true;
         }
     }
@@ -504,7 +562,7 @@ fn call_reaches(
     }
     // The call's own code is judged from the same directories.
     for code in &call.code {
-        for word in outward::literal_words(code) {
+        for word in code_literal_words(code) {
             found.extend(strongest_over_dirs(&word, &dirs, |dir| {
                 code_reach(&word, dir, facts)
             }));
@@ -545,6 +603,56 @@ fn value_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option
     value_reach_at(value, dir, false, facts)
 }
 
+/// The words of the string literals in interpreter code: the text between
+/// single, double or back quotes, escapes read past, split into path-like
+/// words. Identifiers, keywords and numbers outside a literal are never
+/// read as file names (TSK-302 review round 3, R3-4).
+fn code_literal_words(code: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut chars = code.chars();
+    while let Some(ch) = chars.next() {
+        if !matches!(ch, '\'' | '"' | '`') {
+            continue;
+        }
+        let mut literal = String::new();
+        let mut closed = false;
+        while let Some(next) = chars.next() {
+            if next == '\\' {
+                literal.extend(chars.next());
+            } else if next == ch {
+                closed = true;
+                break;
+            } else {
+                literal.push(next);
+            }
+        }
+        words.extend(outward::literal_words(&literal));
+        if !closed {
+            break;
+        }
+    }
+    words
+}
+
+/// A known word read from a directory the guard cannot follow: by its
+/// trailing components, authority first at its fixed level.
+fn unknown_dir_literal(value: &str) -> Option<Reach> {
+    if let Some(name) = tail_names_authority(value) {
+        return Some(Reach::Authority(format!(
+            "an interpreter's code literal `{value}` could be policy authority metadata `{name}`: it runs from a directory the guard cannot follow"
+        )));
+    }
+    let reached = git_guard::word_could_name(value)?;
+    let message = format!(
+        "an interpreter's code literal `{value}` could be `{reached}`: it runs from a directory the guard cannot follow"
+    );
+    Some(if names_authority(reached) {
+        Reach::Authority(message)
+    } else {
+        Reach::Enforcement(message)
+    })
+}
+
 /// [`value_reach`] for a code literal: a word inside the interpreter's own
 /// source, not a shell operand, so an unresolved one is not read by the
 /// line's writer rule (TSK-302 review round 2, Grok F1).
@@ -564,6 +672,10 @@ fn value_reach_at(
     let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
     match (unresolved, dir.or(absolute.then_some(facts.payload_cwd))) {
         (false, Some(dir)) => literal_reach(value, dir, facts),
+        // A code literal whose directory is unknown is judged by its
+        // trailing components, as an argument is; an unresolved expression
+        // inside code stays exempt (TSK-302 review round 3, R3-2).
+        (false, None) if code => unknown_dir_literal(value),
         _ if code => None,
         _ => unreadable_reach(value, dir, unresolved, facts),
     }
@@ -992,5 +1104,95 @@ impl ProtectedNames {
                 _ => false,
             }) || folded(path.as_os_str()).is_none_or(|path| self.configs.contains(&path))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TSK-302 review round 3 (Codex R3-3): the directories `-execdir`
+    /// can run in, compared with native `find START EXPR -print`. Every
+    /// matched entry whose parent leads to a protected path must have that
+    /// parent in the guard's set, or the set must be unknown. Skipped on a
+    /// host with no `find`.
+    #[test]
+    fn execdir_directories_match_native_find() {
+        use std::process::Command;
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        git2::Repository::init(&root).unwrap();
+        for (path, body) in [
+            (".claude/settings.json", "{}\n"),
+            (".claude/notes.txt", "\n"),
+            (".codeflow/policy.json", "{}\n"),
+            ("src/app.py", "\n"),
+            ("src/notes.txt", "\n"),
+        ] {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, body).unwrap();
+        }
+        let relevant = edit_guard::find_candidates(&root, &root).unwrap();
+        let cases: &[(&str, &[&str])] = &[
+            (".", &["-name", "settings.json"]),
+            (".", &["-path", "*cla*json"]),
+            (".", &["-path", "*git*config"]),
+            (".", &["-ipath", "*CLA*JSON"]),
+            (".", &["-path", "./.claude/*"]),
+            (".", &["-type", "f", "-name", "*.json"]),
+            (".", &["-name", "*.py"]),
+            (".", &["-newer", "src/app.py"]),
+            (".claude", &["-name", "notes.txt"]),
+            (".claude/settings.json", &[]),
+            (".git/config", &[]),
+        ];
+        let probe = Command::new("/usr/bin/find")
+            .arg(".")
+            .arg("-prune")
+            .current_dir(&root)
+            .output();
+        if !probe.is_ok_and(|out| out.status.success()) {
+            eprintln!("skipped: /usr/bin/find is not available");
+            return;
+        }
+        let mut compared = 0;
+        for (start, expr) in cases {
+            let output = Command::new("/usr/bin/find")
+                .arg(start)
+                .args(*expr)
+                .arg("-print")
+                .current_dir(&root)
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            let mut before: Vec<String> = vec![(*start).to_string()];
+            before.extend(expr.iter().map(|w| (*w).to_string()));
+            let line = outward::DirSet {
+                dirs: vec![root.clone()],
+                unknown: false,
+            };
+            let set = execdir_dirs(&[(*start).to_string()], &before, Some(&root), &line, &root);
+            for entry in String::from_utf8(output.stdout).unwrap().lines() {
+                let Ok(path) = std::fs::canonicalize(root.join(entry)) else {
+                    continue;
+                };
+                let Some(parent) = path.parent().map(Path::to_path_buf) else {
+                    continue;
+                };
+                if !relevant.contains(&parent) {
+                    continue;
+                }
+                compared += 1;
+                assert!(
+                    set.unknown || set.dirs.contains(&parent),
+                    "find {start} {expr:?}: `{entry}` runs in {parent:?}, not in {:?}",
+                    set.dirs
+                );
+            }
+        }
+        // The match sets reach `.claude`, `.codeflow` and `.git`, so the
+        // comparison is not vacuous.
+        assert!(compared >= 6, "{compared}");
     }
 }
