@@ -42,6 +42,12 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-core/src/security/outward.rs",
+        "shell",
+        2,
+        "the directory-prefix differential test runs `<prefix>; pwd` under the installed bash and zsh in a disposable fixture, never git (TSK-302)",
+    ),
+    (
         "codeflow-core/src/ids/git.rs",
         "std::env::current_exe().unwrap()",
         2,
