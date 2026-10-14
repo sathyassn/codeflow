@@ -296,6 +296,33 @@ fn clears_hook_integrity() {
     run_printed(&root, &step, &[], &[]);
 }
 
+/// TSK-302: the interpreter argument refusal names the read route, which
+/// passes, and the update step, which runs.
+#[test]
+fn clears_interpreter_argument() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let printed = refused(
+        &root,
+        "exec-guard",
+        "python3 tool.py .codeflow/policy.json",
+        "git.hook_integrity",
+        "INTERPRETER_ARGUMENT",
+    );
+    assert!(
+        printed.contains("redirect it into the interpreter's stdin"),
+        "{printed}"
+    );
+    assert_passes(
+        &root,
+        "exec-guard",
+        "python3 tool.py < .codeflow/policy.json",
+    );
+    let step = printed_command(&printed, "INTERPRETER_ARGUMENT", None);
+    assert_passes(&root, "exec-guard", &step);
+    run_printed(&root, &step, &[], &[]);
+}
+
 #[test]
 fn clears_worktree_delete() {
     let dir = ci_repo(DEFAULTS);
