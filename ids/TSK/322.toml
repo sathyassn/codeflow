@@ -1,0 +1,11 @@
+id = "TSK-322"
+uid = "0555e9f4-569d-44f7-81f6-e5f8b6868210"
+kind = "TSK"
+title = "Blocked names and protected prefixes are refused at any depth"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:49Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
