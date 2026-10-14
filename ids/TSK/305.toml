@@ -1,0 +1,11 @@
+id = "TSK-305"
+uid = "68d16b41-f934-4448-a39e-cb249c951b8c"
+kind = "TSK"
+title = "An unanswered default-branch lookup is reported as a network failure"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:11:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
