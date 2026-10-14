@@ -239,13 +239,11 @@ fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
 
 /// A name as compared here: Unicode NFC, lower case, so a spelling a
 /// case-insensitive or normalizing file system reads as the same name
-/// matches.
-fn folded(name: &std::ffi::OsStr) -> String {
+/// matches. `None` for a name that is not valid UTF-8, which the caller
+/// sends to the full checks.
+fn folded(name: &std::ffi::OsStr) -> Option<String> {
     use unicode_normalization::UnicodeNormalization as _;
-    name.to_string_lossy()
-        .nfc()
-        .collect::<String>()
-        .to_lowercase()
+    Some(name.to_str()?.nfc().collect::<String>().to_lowercase())
 }
 
 /// `path` with the symbolic links on its existing part resolved: the
@@ -294,20 +292,23 @@ impl ProtectedNames {
                 .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix('/')))
                 .and_then(|s| s.split('/').next())
                 .filter(|s| !s.is_empty() && !git_guard::has_glob(s));
-            match first {
-                Some(first) => names.push(folded(std::ffi::OsStr::new(first))),
+            match first.and_then(|first| folded(std::ffi::OsStr::new(first))) {
+                Some(first) => names.push(first),
                 None => unknown = true,
             }
         }
         for name in [".git", ".gitconfig", "gitconfig"] {
             names.push(name.to_string());
         }
-        match git2::Repository::discover(root) {
-            Ok(repo) => match repo.commondir().components().next_back() {
-                Some(std::path::Component::Normal(name)) => names.push(folded(name)),
+        match crate::hooks::repo::open(root) {
+            Ok(Some(repo)) => match repo.commondir().components().next_back() {
+                Some(std::path::Component::Normal(name)) => match folded(name) {
+                    Some(name) => names.push(name),
+                    None => unknown = true,
+                },
                 _ => unknown = true,
             },
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Ok(None) => {}
             Err(_) => unknown = true,
         }
         let mut configs: Vec<PathBuf> = crate::portable_path::user_homes()
@@ -323,20 +324,23 @@ impl ProtectedNames {
                 configs.push(root.join(path));
             }
         }
-        let configs = configs
-            .iter()
-            .flat_map(|path| {
-                [
-                    edit_guard::normalized(path, false).ok(),
-                    resolved_existing(path),
-                ]
-            })
-            .flatten()
-            .map(|path| folded(path.as_os_str()))
-            .collect();
+        let mut folded_configs = Vec::new();
+        for path in configs.iter().flat_map(|path| {
+            [
+                edit_guard::normalized(path, false).ok(),
+                resolved_existing(path),
+            ]
+        }) {
+            match path.as_deref().map(Path::as_os_str).map(folded) {
+                Some(Some(path)) => folded_configs.push(path),
+                // A configuration path that cannot be read sends every
+                // path to the full checks.
+                _ => unknown = true,
+            }
+        }
         Self {
             names,
-            configs,
+            configs: folded_configs,
             unknown,
         }
     }
@@ -360,10 +364,12 @@ impl ProtectedNames {
             return true;
         };
         [lexical, resolved].iter().any(|path| {
-            path.components().any(|component| {
-                matches!(component, std::path::Component::Normal(name)
-                    if self.names.contains(&folded(name)))
-            }) || self.configs.contains(&folded(path.as_os_str()))
+            path.components().any(|component| match component {
+                std::path::Component::Normal(name) => {
+                    folded(name).is_none_or(|name| self.names.contains(&name))
+                }
+                _ => false,
+            }) || folded(path.as_os_str()).is_none_or(|path| self.configs.contains(&path))
         })
     }
 }

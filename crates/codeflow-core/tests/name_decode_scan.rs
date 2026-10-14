@@ -1571,6 +1571,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-config-int",
     ),
+    // A name that is not valid UTF-8 folds to None, and the interpreter argument prefilter sends that path to the full enforcement checks, never clears it (TSK-302).
+    (
+        "crates/codeflow-core/src/security/interpreter.rs",
+        "folded",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
+    ),
     // Space and tab, the blanks sed skips around an address and its command; another whitespace character stays and makes the command not a print command.
     (
         "crates/codeflow-core/src/security/startup.rs",
