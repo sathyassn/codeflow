@@ -1,0 +1,11 @@
+id = "TSK-321"
+uid = "9518f37c-a5ab-4cdd-a924-ed97ffdfe813"
+kind = "TSK"
+title = "A person applies an agent's proposed enforcement change"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:45Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
