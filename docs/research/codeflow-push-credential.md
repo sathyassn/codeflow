@@ -537,6 +537,10 @@ key classification exists, and the rule's limits are stated.
 
 ## Review disposition
 
+| Reviewer | Scope | Verdict | Evidence |
+|---|---|---|---|
+| Codex, independent interactive design review | whole design at `50ea1174fdf2a3b6054f4999a454d0422685da7d` | changes_requested | `target/review-design-TSK-291-codex-02.md`: effective redirect settings, remaining ambient authentication sources, contradictory journey fixtures and unpopulated authority fallback remain unresolved. No implementation approval. |
+
 Codex design review at `2ffa0ad75`, `changes_requested`.
 
 | Finding | Disposition |
