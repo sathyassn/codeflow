@@ -445,6 +445,39 @@ fn dedup(mut set: outward::DirSet) -> outward::DirSet {
 }
 
 /// What every argument of one call, and what its supplier gives it, reach.
+/// The reach of one word over every directory it may run in: the first
+/// authority reach if any (always blocking, so order never hides it),
+/// else the first enforcement reach. Stops reading directories at the
+/// first authority hit, so a bare name over many protected directories
+/// costs one full check, not one per directory (TSK-302 review round 2).
+fn strongest_over_dirs(
+    value: &str,
+    dirs: &[Option<PathBuf>],
+    mut reach: impl FnMut(Option<&Path>) -> Option<Reach>,
+) -> Option<Reach> {
+    // Authority is only reachable when the word could name git metadata by
+    // its tail, or is filled in at run time; otherwise the first reach is
+    // the answer, so a bare name over many protected directories costs one
+    // check rather than one per directory (TSK-302 review round 2 F4).
+    let authority_possible = git_guard::unresolved_word(value)
+        || value.contains(".git")
+        || tail_names_authority(value).is_some();
+    let mut enforcement = None;
+    for dir in dirs {
+        match reach(dir.as_deref()) {
+            Some(Reach::Authority(message)) => return Some(Reach::Authority(message)),
+            Some(Reach::Enforcement(message)) => {
+                enforcement.get_or_insert(Reach::Enforcement(message));
+                if !authority_possible {
+                    return enforcement;
+                }
+            }
+            None => {}
+        }
+    }
+    enforcement
+}
+
 fn call_reaches(
     call: &outward::InterpreterCall,
     line_dirs: &outward::DirSet,
@@ -459,17 +492,20 @@ fn call_reaches(
             continue;
         }
         for value in argument_values(word) {
-            for dir in &dirs {
-                found.extend(value_reach(value, dir.as_deref(), facts));
-            }
+            // One finding per value is enough; its strongest is kept on
+            // merge, and a fixed authority finding is never hidden because
+            // every authority reach is judged before any enforcement one.
+            found.extend(strongest_over_dirs(value, &dirs, |dir| {
+                value_reach(value, dir, facts)
+            }));
         }
     }
     // The call's own code is judged from the same directories.
     for code in &call.code {
         for word in outward::literal_words(code) {
-            for dir in &dirs {
-                found.extend(code_reach(&word, dir.as_deref(), facts));
-            }
+            found.extend(strongest_over_dirs(&word, &dirs, |dir| {
+                code_reach(&word, dir, facts)
+            }));
         }
     }
     found.extend(supplied_reach(call, facts));
