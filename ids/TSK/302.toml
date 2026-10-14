@@ -1,0 +1,11 @@
+id = "TSK-302"
+uid = "268e183d-00b4-489f-94c8-d17256bb0fec"
+kind = "TSK"
+title = "The exec guard judges the paths an interpreter is given"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T00:22:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
