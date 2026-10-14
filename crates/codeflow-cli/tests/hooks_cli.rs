@@ -7546,6 +7546,17 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "command cd .git && python3 tool.py config".to_string(),
         "cd .claude && cd .. && python3 tool.py settings.json".to_string(),
         "find . -execdir python3 lint.py notes.txt \\;".to_string(),
+        // Round 3: launcher grammar, source, execdir from the line set and
+        // find's own spelling, and code literals in an unknown directory.
+        "env -u FOO -C.claude python3 tool.py settings.json".to_string(),
+        "nice env -C.claude python3 tool.py settings.json".to_string(),
+        "env -iC.claude python3 tool.py settings.json".to_string(),
+        "source go.sh && python3 tool.py settings.json".to_string(),
+        "command cd .claude && find settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "find . -path '*cla*json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "find .claude/settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "D=.claude; cd \"$D\" && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "command cd .git && find config -execdir python3 tool.py config \\;".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7558,6 +7569,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "cd src && python3 app.py settings.json",
         "find . -name '*.rs' -execdir python3 lint.py {} +",
         "find src -execdir python3 lint.py notes.txt \\;",
+        "cd .codex && python3 -c 'print(1)'",
+        "cd .codeflow/git-hooks && python3 -c 'print(1)'",
+        "source go.sh && python3 tool.py notes.txt",
+        "nice python3 tool.py data.json",
+        "timeout 5 node x.js out.json",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
