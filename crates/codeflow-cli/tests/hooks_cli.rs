@@ -7490,3 +7490,80 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         "git.hook_integrity",
     );
 }
+
+/// TSK-302 AC-6 (issue 173): in a fresh project with a linked worktree,
+/// the built binary's exec-guard refuses an interpreter whose arguments
+/// name an enforcement path, the issue's commands included, through the
+/// wrappers it reads, and still allows ordinary arguments and reads.
+#[test]
+fn exec_guard_judges_the_paths_an_interpreter_is_given() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    let linked = root.join(".worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&linked)],
+    );
+    let repo = shell_path(&root);
+    let tree = shell_path(&linked);
+    let refused = [
+        format!("W={repo}; python3 -I -B - \"$W/.claude/settings.json\" <<'PY'\nimport json, sys\np = sys.argv[1]\nopen(p, 'w').write('')\nPY"),
+        format!("python3 - \"{repo}/.codeflow/policy.json\" <<'PY'\nimport sys\nPY"),
+        format!("W={tree}; python3 - \"$W/.claude/settings.json\" <<'PY'\nimport sys\nPY"),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+        format!("python3 edit.py \"{tree}/.claude/settings.json\""),
+        "python3 -c 'import sys' .claude/settings.json".to_string(),
+        "node -e 'x' .codeflow/policy.json".to_string(),
+        "perl -i -pe 's/a/b/' .claude/settings.json".to_string(),
+        "ruby script.rb .codeflow/policy.json".to_string(),
+        "python3 -c 'import sys' .git/config".to_string(),
+        "env -S 'python3 edit.py .claude/settings.json'".to_string(),
+        "bash -c 'python3 edit.py .claude/settings.json'".to_string(),
+        "echo .claude/settings.json | xargs python3 edit.py".to_string(),
+        "find . -name settings.json -exec python3 edit.py {} +".to_string(),
+        "cd .claude && python3 edit.py settings.json".to_string(),
+        "P=.codeflow/policy.json; python3 edit.py \"$P\"".to_string(),
+    ];
+    let allowed = [
+        "python3 edit.py notes.txt out.json",
+        "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
+        "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+        "python3 tool.py \"$INPUT\"",
+        "find . -name '*.py' -exec python3 -m py_compile {} +",
+        "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
+    ];
+    let mut wrong = Vec::new();
+    for command in &refused {
+        let out = exec_guard_tool(&root, "Bash", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        // Refused for what the interpreter is given, not for its code.
+        if out.status.code() != Some(2)
+            || !err.contains("git.hook_integrity")
+            || !err.contains("interpreter")
+            || err.contains("interpreter code")
+        {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // From inside the linked worktree, its own enforcement files and the
+    // main checkout's are refused too.
+    for command in [
+        "python3 edit.py .codeflow/policy.json".to_string(),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+    ] {
+        let out = exec_guard_tool(&linked, "Bash", &command);
+        if out.status.code() != Some(2) {
+            wrong.push(format!("should refuse in the worktree: {command}"));
+        }
+    }
+    for command in allowed {
+        let out = exec_guard_tool(&root, "Bash", command);
+        if out.status.code() != Some(0) {
+            let err = String::from_utf8_lossy(&out.stderr);
+            wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
