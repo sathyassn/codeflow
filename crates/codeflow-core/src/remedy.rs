@@ -482,9 +482,12 @@ catalog! {
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
         "run `codeflow ci` and `codeflow validate --docs` by hand";
-    /// A pushed ref whose tree checks ran on another checkout.
+    /// A pushed ref whose tree checks did not run at a nonblocking level.
     PUSH_TREE_UNCHECKED = Step::Codeflow("codeflow validate"),
-        "push from a clean checkout of the pushed commit (commit or discard tracked edits first), or run `codeflow validate --docs` and `codeflow test --mode quick` on it by hand";
+        "run `codeflow validate --docs` and `codeflow test --mode quick` in a clean, complete checkout of the pushed commit";
+    /// A pushed ref whose unchecked tree must refuse at block level.
+    PUSH_TREE_REQUIRED = Step::Git("git switch"),
+        "push from a clean, complete checkout of each pushed commit: preserve tracked edits by committing or saving them first, disable sparse checkout, initialize submodules at their recorded commits, and push different commits separately";
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";

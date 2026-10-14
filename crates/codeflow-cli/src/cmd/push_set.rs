@@ -6,10 +6,11 @@
 //!   with a `quick` mode) read the working tree, so they run only when a
 //!   pushed sha is the checked-out commit, no tracked file differs from it,
 //!   and the checkout is complete (no sparse checkout, every submodule
-//!   initialized at its recorded commit). Otherwise the hook notes that they
-//!   did not run and CI runs them; they are never reported as passed for a
-//!   tree they did not see. Untracked files are part of the working checkout
-//!   and can influence a quick target, which the pass line says.
+//!   initialized at its recorded commit). Otherwise the hook refuses at
+//!   `block` and notes the unchecked tree at lower levels; checks are never
+//!   reported as passed for a tree they did not see. Untracked files are part
+//!   of the working checkout and can influence a quick target, which the pass
+//!   line says.
 //! - The hook blocks on what it can see and never claims more: the range
 //!   leaves out only history known to be on the destination: the branch and
 //!   tag tips the push location advertises now (one `git ls-remote`, never
@@ -169,10 +170,8 @@ fn run_checked_with_binary(
 
     run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps)?;
 
-    if !policy.test_gate_on_push.is_active() {
-        return Ok(());
-    }
-    if release_adopted(root)? {
+    let active = policy.test_gate_on_push.is_active();
+    if active && release_adopted(root)? {
         let remote = remote.unwrap_or("origin");
         for r in &pushed {
             release_preflight(&exe, root, r, remote, policy, report, &mut steps);
@@ -183,7 +182,7 @@ fn run_checked_with_binary(
     let incomplete = incomplete_checkout(root)?;
     let clean = incomplete.is_none() && tracked_tree_clean(root)?;
     let at_head = |r: &&&PushRef| clean && head.as_deref() == Some(r.local_sha.as_str());
-    if pushed.iter().any(|r| at_head(&r)) {
+    if active && pushed.iter().any(|r| at_head(&r)) {
         run_check(
             &exe,
             root,
@@ -202,14 +201,21 @@ fn run_checked_with_binary(
         } else {
             "tracked files differ from the checked-out commit".to_string()
         };
-        report.notes.push(Finding::new(
-            format!(
-                "tree checks (`codeflow validate --docs`, quick targets) did not run for '{}': \
-                 {why}; CI runs them",
-                r.remote_branch().unwrap_or_default()
-            ),
-            remedy::PUSH_TREE_UNCHECKED.remedy(),
-        ));
+        let message = format!(
+            "tree checks (`codeflow validate --docs`, quick targets) did not run for '{}': {why}",
+            r.remote_branch().unwrap_or_default()
+        );
+        if policy.test_gate_on_push == codeflow_core::hooks::PolicyLevel::Block {
+            report.violations.push(violation(
+                policy,
+                message,
+                remedy::PUSH_TREE_REQUIRED.remedy(),
+            ));
+        } else {
+            report
+                .notes
+                .push(Finding::new(message, remedy::PUSH_TREE_UNCHECKED.remedy()));
+        }
     }
 
     let total = started.elapsed();

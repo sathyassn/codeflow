@@ -572,7 +572,13 @@ pub const SCHEMA: [KeySpec; 68] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Run the test gate before a push (pre-push hook).",
-        notes: "",
+        notes: "At block, every pushed branch must be checked from a clean, complete \
+                checkout at its pushed commit or the push is refused. Dirty tracked \
+                files, other commits in a multi-ref push, sparse checkouts and \
+                missing or mismatched submodules require fixing the checkout and \
+                pushing different commits separately. Warn and off retain a note \
+                naming unchecked trees and the checks to run. Untracked files can \
+                influence quick targets; a pass describes the working checkout.",
     },
     KeySpec {
         path: "git.security_review",
