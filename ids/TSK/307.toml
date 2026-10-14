@@ -1,0 +1,11 @@
+id = "TSK-307"
+uid = "2b84113f-1e76-4d01-97b2-eacbb028723d"
+kind = "TSK"
+title = "A misshapen acceptance file is refused by name"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:12:05Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
