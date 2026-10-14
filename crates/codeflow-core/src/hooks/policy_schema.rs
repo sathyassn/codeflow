@@ -197,9 +197,22 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `rm` or a `chmod` or `chown` of a directory holding enforcement \
                 files, and a recursive `rm`, `trash`, `find -delete` or `git \
                 clean -ff` of a registered worktree, a directory holding one, or \
-                a target it cannot resolve where worktrees live. A path built at \
-                run time is past the guard; the OS sandbox's write denies are \
-                the backstop.",
+                a target it cannot resolve where worktrees live. exec-guard \
+                refuses an interpreter (`python`, `python3`, `node`, `nodejs`, \
+                `perl`, `ruby`, a version suffix included) whose inline code or \
+                arguments name an enforcement path: a script's arguments, \
+                arguments after inline code or stdin `-`, a `--name=value` \
+                option, through `env`, `env -S`, `command`, a shell `-c` string \
+                or a `cd`, and the paths `xargs` or `find -exec` supply. It \
+                reads an enforcement file passed as an argument as a possible \
+                write, so read one with `cat`, `jq` or `grep`, or redirect it \
+                into the interpreter's stdin. An argument it cannot read (a \
+                variable, a substitution, a directory after a `cd` it cannot \
+                follow) refuses when its spelled part could name an enforcement \
+                path or the line names one, as git-guard judges a writer's \
+                operands. A path built at run time, such as one a script \
+                assembles internally, is past the guard; the OS sandbox's write \
+                denies are the backstop.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
