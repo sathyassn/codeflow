@@ -203,15 +203,21 @@ pub const SCHEMA: [KeySpec; 68] = [
                 arguments name an enforcement path: a script's arguments, \
                 every word after inline code or stdin `-`, a `--name=value` \
                 option or an attached short value in a cluster (`-oFILE`, \
-                `-voFILE`). It judges every directory the line may run the \
-                interpreter in: the session directory and every one any \
-                directory change may reach (`cd`, `command cd`, `builtin cd`, \
-                `pushd`, `chdir`, every `env -C` and `--chdir` spelling, \
-                `git -C`, composed `ruby -C`), success or not, and for \
-                `find -execdir` each directory under the start its name, path \
-                and type tests let through. A change it cannot resolve makes \
-                the directory unknown, and a word is judged by its trailing \
-                components. The model is conservative, so an odd shape like \
+                `-voFILE`), and string literals in its code. It judges every \
+                directory the line may run the interpreter in: the session \
+                directory and every one any directory change may reach, \
+                success or not. Within the modeled grammar (`cd`, `chdir`, \
+                `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, \
+                `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env` and \
+                `xargs` with their options, every `env -C` spelling \
+                included; `git -C`; composed `ruby -C`; `find -execdir` from \
+                every directory in the set, a file start in its parent, \
+                `-path` against find's own spelling) the set is exact. \
+                Anything outside it (`source`, `.`, `sudo`, `env -S`, an \
+                option or launcher it does not list) makes the directory \
+                unknown, and every known word is then judged by its trailing \
+                components at the same levels: it never fails open on grammar \
+                it does not understand. The model is conservative, so an odd shape like \
                 `cd .claude && cd .. && python3 tool.py settings.json`, and a \
                 repo-root `find . -execdir python3 lint.py notes.txt`, which \
                 can really run in a hook directory, are refused. An operand \
