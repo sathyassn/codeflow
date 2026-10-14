@@ -43,12 +43,15 @@
 //! to: the code default already applies when a file omits the key.
 //!
 //! The check is `tests/policy_key_placement.rs`. It fails when the template
-//! or the installed policy names a key that the last release's list
-//! (`tests/fixtures/policy-keys-last-release.txt`) does not hold, and it
-//! updates a fixture project at the last release to prove the result still
-//! loads there. The list is refreshed from the release tag, in the change
-//! that first needs the newer list; a stale list is the safe side, because
-//! it only keeps a newer key out of the template. The reader-facing copy of
+//! or the installed policy names a key that the last release's pinned schema
+//! (`tests/fixtures/policy-schema-last-release.tsv`: each key with its kind
+//! and valid values) does not hold, or gives a known key a value of the wrong
+//! kind. It also updates a fixture project at the last release and runs the
+//! same check on the result. The pinned schema stands in for the released
+//! validator: it does not repeat that validator's key-specific checks, and no
+//! released binary is run. It is refreshed from the release tag, in the
+//! change that first needs the newer schema; a stale one is the safe side,
+//! because it only keeps a newer key out of the template. The reader-facing copy of
 //! this rule is "Where a new key goes" in `docs/policy-reference.md`.
 
 use std::fmt;
