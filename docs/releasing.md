@@ -418,20 +418,12 @@ note in the `## Errata` block before the first version section, written as
 
 ### Releases ship from `main`
 
-Releases ship from `main`. There is no release integration branch and no
-workflow that merges epic lines into one. An epic line reaches `main` through
-its own reviewed pull request, merged by a human as the Merge row of
-Architecture describes, and the release is prepared and dispatched from `main`
-as the sections below describe.
-
-The repository once ran `codeflow-release-integration.yml`, which merged
-verified epic lines into the `integration/release-3-0-0-r3` branch. The
-operator retired it on 2026-10-13 and it is removed from the repository, so no
-workflow runs on a schedule or on `workflow_run` against a release branch.
-
-A future release branch would bring the workflow back through a reviewed
-change that restores the workflow, names the branch and its owner task, and
-updates this section. Nothing in the release process requires one.
+Releases ship from `main`. An epic line reaches `main` through its own
+reviewed pull request, merged by a human, and the release is dispatched from
+`main` as the sections below describe. The release-integration workflow, which
+merged epic lines into `integration/release-3-0-0-r3`, was retired on
+2026-10-13. A future release branch would bring it back through a reviewed
+change.
 
 ### Same-PR preparation and deliberate publication
 
