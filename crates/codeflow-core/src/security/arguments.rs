@@ -428,10 +428,12 @@ fn dir_runs_execdir(dir: &Path, tests: Option<&[FindTest]>) -> bool {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let shown = path
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        if passes(tests, &path, &shown, entry.file_type().ok()) {
+        // A name that is not UTF-8 cannot be shown to a glob, so the entry
+        // is taken to match (the directory stays a run location).
+        let Some(shown) = path.file_name().and_then(|name| name.to_str()) else {
+            return true;
+        };
+        if passes(tests, &path, shown, entry.file_type().ok()) {
             return true;
         }
     }
