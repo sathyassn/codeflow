@@ -48,8 +48,11 @@
 //! and valid values) does not hold, or gives a known key a value of the wrong
 //! kind. It also updates a fixture project at the last release and runs the
 //! same check on the result. The pinned schema stands in for the released
-//! validator: it does not repeat that validator's key-specific checks, and no
-//! released binary is run. It is refreshed from the release tag, in the
+//! validator: it does not repeat that validator's key-specific checks, so these
+//! are fast unit checks only. The authority for "a project at the last
+//! release still loads after `codeflow update`" is
+//! `crates/codeflow-cli/tests/policy_last_release_journey.rs`, which runs a
+//! binary built from the release tag. The pinned schema is refreshed from the release tag, in the
 //! change that first needs the newer schema; a stale one is the safe side,
 //! because it only keeps a newer key out of the template. The reader-facing copy of
 //! this rule is "Where a new key goes" in `docs/policy-reference.md`.

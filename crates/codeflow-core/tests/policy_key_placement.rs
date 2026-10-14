@@ -23,7 +23,9 @@
 //! The pinned schema stands in for the released validator. It does not repeat
 //! that validator's key-specific checks (a regular expression, a remote name,
 //! a non-empty `git.required_checks`, the shape inside a profile entry) or its
-//! final whole-file deserialize, and a real v3.1.1 binary is not run.
+//! final whole-file deserialize, and a real v3.1.1 binary is not run, so these
+//! are fast unit checks. The authority for AC-4 is the released-binary journey
+//! in `crates/codeflow-cli/tests/policy_last_release_journey.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
