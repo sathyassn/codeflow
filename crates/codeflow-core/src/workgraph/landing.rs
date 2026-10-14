@@ -28,6 +28,7 @@
 //! it reads the current status at the execution base (D3a).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 use std::rc::Rc;
 
 use git2::{Oid, Repository};
@@ -99,6 +100,8 @@ pub(super) enum Authority {
 pub(super) struct TaskJudgement {
     pub(super) landing: Landing,
     pub(super) criteria: Authority,
+    /// The source of the criteria, kept apart from the run's policy authority.
+    pub(super) criteria_source: String,
 }
 
 impl TaskJudgement {
@@ -106,6 +109,7 @@ impl TaskJudgement {
     pub(super) fn unreadable(reason: String) -> Self {
         Self {
             landing: Landing::Unreadable(reason.clone()),
+            criteria_source: format!("criteria authority unreadable: {reason}"),
             criteria: Authority::Unknown(reason),
         }
     }
@@ -491,18 +495,24 @@ impl<'r> RecordStore<'r> {
                 Err(reason) => Authority::Unknown(reason),
             },
         };
+        let criteria_source = criteria_source(&points, &criteria, newest.is_none());
         let history = self.walk(task, judged, &[]);
         if let Some(witness) = history.witness {
             return TaskJudgement {
                 landing: Landing::Landed { witness },
                 criteria,
+                criteria_source,
             };
         }
         let landing = match history.doubt {
             Some(doubt) => Landing::Unreadable(doubt),
             None => self.outside(task, judged, outside),
         };
-        TaskJudgement { landing, criteria }
+        TaskJudgement {
+            landing,
+            criteria,
+            criteria_source,
+        }
     }
 
     /// The version the judged `points` agree on when none of them is newer
@@ -511,8 +521,9 @@ impl<'r> RecordStore<'r> {
     /// disagrees (issue 153): a default branch that never held a task
     /// planned on a diverged integration line leaves the line's version as
     /// the authority. Such a point still disagrees when its own history
-    /// holds a version with other criteria, which it no longer holds. The
-    /// versions the other points hold must all agree.
+    /// holds a version with other criteria, which it no longer holds.
+    /// Held versions inherited unchanged from a point that replaced them
+    /// do not compete. The remaining held criteria must agree.
     ///
     /// # Errors
     ///
@@ -525,32 +536,63 @@ impl<'r> RecordStore<'r> {
         task: &Identity,
         points: &[(Oid, Held)],
     ) -> Result<Option<RecordView>, String> {
+        let context = held_context(points);
         let differ = || {
-            "the judged points hold different versions of this task, and none of them is newer than the others".to_string()
+            format!("the judged points hold different versions of this task, and none of them is newer than the others: {context}")
         };
-        let mut versions: Vec<&RecordView> = Vec::new();
+        let mut versions: Vec<(Oid, Oid, &RecordView)> = Vec::new();
         let mut absent: Vec<Oid> = Vec::new();
         for (point, held) in points {
             if let Some(doubt) = &held.doubt {
-                return Err(doubt.clone());
+                return Err(format!("{doubt}; judged points: {context}"));
             }
             match held.records.first() {
-                Some((_, record)) => versions.push(record),
+                Some((blob, record)) => versions.push((*point, *blob, record)),
                 None => absent.push(*point),
             }
         }
         let Some((first, rest)) = versions.split_first() else {
             return Ok(None);
         };
-        let signature = first.criteria.signature();
+        let signature = first.2.criteria.signature();
         if rest
             .iter()
-            .any(|record| record.criteria.signature() != signature)
+            .any(|(_, _, record)| record.criteria.signature() != signature)
+        {
+            let mut remaining = Vec::new();
+            for &(point, blob, record) in &versions {
+                let mut older = false;
+                for &(other, other_blob, version) in &versions {
+                    if record.criteria.signature() != version.criteria.signature()
+                        && self
+                            .yields(task, point, blob, other, other_blob)
+                            .map_err(|reason| format!("{reason}; judged points: {context}"))?
+                    {
+                        older = true;
+                        break;
+                    }
+                }
+                if !older {
+                    remaining.push((point, blob, record));
+                }
+            }
+            versions = remaining;
+        }
+        let Some((_, _, first)) = versions.first() else {
+            return Err(differ());
+        };
+        let signature = first.criteria.signature();
+        if versions
+            .iter()
+            .any(|(_, _, record)| record.criteria.signature() != signature)
         {
             return Err(differ());
         }
         if !absent.is_empty() {
-            if let Some(earlier) = self.recovered(task, &absent)? {
+            if let Some(earlier) = self
+                .recovered(task, &absent)
+                .map_err(|reason| format!("{reason}; judged points: {context}"))?
+            {
                 if earlier.criteria.signature() != signature {
                     return Err(differ());
                 }
@@ -563,8 +605,8 @@ impl<'r> RecordStore<'r> {
     /// for a task the judged points no longer hold: the newest version on
     /// every line of that history. A line's version is older than another
     /// line's only when that line inherited it unchanged: every commit that
-    /// introduced it on the line is an ancestor of the other line's newest
-    /// version. Lines that hold different versions otherwise give no answer.
+    /// introduced it is a proper ancestor of every introduction of the other
+    /// line's version. Lines that hold different versions otherwise give no answer.
     ///
     /// # Errors
     ///
@@ -593,10 +635,10 @@ impl<'r> RecordStore<'r> {
         let mut newest: Vec<usize> = Vec::new();
         for (index, (commit, blob, record)) in holders.iter().enumerate() {
             let mut older = false;
-            for (other, _, version) in &holders {
+            for (other, other_blob, version) in &holders {
                 if other != commit
                     && !same_version(record, version)
-                    && self.inherited(task, *commit, *blob, *other)?
+                    && self.yields(task, *commit, *blob, *other, *other_blob)?
                 {
                     older = true;
                     break;
@@ -626,32 +668,58 @@ impl<'r> RecordStore<'r> {
         Ok(Some(kept.clone()))
     }
 
-    /// Whether the line ending at `holder` inherited its version (`blob`)
-    /// unchanged from the line of `newer`: every commit in its history that
-    /// introduced `blob` (holds it while no parent does) is an ancestor of
-    /// `newer`, which holds a later version.
-    fn inherited(
+    /// Whether every introduction of `blob` precedes every introduction of
+    /// `newer_blob`. Comparing decisions, rather than tips, keeps a restored
+    /// version competing even after its line merged the other version.
+    fn yields(
         &mut self,
         task: &Identity,
         holder: Oid,
         blob: Oid,
         newer: Oid,
+        newer_blob: Oid,
     ) -> Result<bool, String> {
+        let earlier = self.introductions(task, holder, blob).map_err(|reason| {
+            format!("reading the history of {holder:.9} ({blob:.9}): {reason}")
+        })?;
+        let later = self
+            .introductions(task, newer, newer_blob)
+            .map_err(|reason| {
+                format!("reading the history of {newer:.9} ({newer_blob:.9}): {reason}")
+            })?;
+        for before in earlier {
+            for &after in &later {
+                if before == after
+                    || !super::acceptance::is_ancestor_or_same(self.repo, before, after)?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Read every introduction of a blob in a complete, unambiguous history.
+    /// A merge resolution is a new decision even when its bytes match a parent.
+    fn introductions(
+        &mut self,
+        task: &Identity,
+        holder: Oid,
+        blob: Oid,
+    ) -> Result<Vec<Oid>, String> {
+        if let Some(overlay) = &self.overlay {
+            return Err(overlay.clone());
+        }
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let holds = |store: &mut Self, commit: Oid| -> Result<bool, String> {
-            Ok(store
-                .held_at(commit, task)?
-                .records
-                .iter()
-                .any(|(held, _)| *held == blob))
-        };
         let mut walk = self.repo.revwalk().map_err(unreadable)?;
         walk.push(holder).map_err(unreadable)?;
-        let mut introduced = false;
+        let mut introduced = Vec::new();
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
         for commit in walk {
             let commit = commit.map_err(unreadable)?;
-            if !holds(self, commit)? {
+            let held = self.history_at(task, commit, &mut uids)?;
+            if !held.records.iter().any(|(held, _)| *held == blob) {
                 continue;
             }
             let parents: Vec<Oid> = self
@@ -662,7 +730,12 @@ impl<'r> RecordStore<'r> {
                 .collect();
             let mut from_parent = false;
             for parent in &parents {
-                if holds(self, *parent)? {
+                if self
+                    .history_at(task, *parent, &mut uids)?
+                    .records
+                    .iter()
+                    .any(|(held, _)| *held == blob)
+                {
                     from_parent = true;
                     break;
                 }
@@ -686,22 +759,41 @@ impl<'r> RecordStore<'r> {
                     super::acceptance::MergeReading::Changed(paths) => {
                         !paths.iter().any(|name| name.as_slice() == path.as_bytes())
                     }
-                    super::acceptance::MergeReading::Unknown(_) => false,
+                    super::acceptance::MergeReading::Unknown(reason) => return Err(reason),
                 };
             }
             if from_parent {
                 continue;
             }
-            introduced = true;
-            if !self
-                .repo
-                .graph_descendant_of(newer, commit)
-                .map_err(unreadable)?
-            {
-                return Ok(false);
-            }
+            introduced.push(commit);
+        }
+        if introduced.is_empty() {
+            return Err(format!("no introduction of {blob:.9} could be proved"));
         }
         Ok(introduced)
+    }
+
+    /// A historical tree must be readable before it can prove inheritance.
+    fn history_at(
+        &mut self,
+        task: &Identity,
+        commit: Oid,
+        uids: &mut BTreeSet<String>,
+    ) -> Result<Held, String> {
+        if self.boundary.contains(&commit) {
+            return Err(format!(
+                "this clone is shallow at {commit}, so the history before it cannot be read; fetch it in full (`git fetch --unshallow`)"
+            ));
+        }
+        let held = self.held_at(commit, task)?;
+        if let Some(doubt) = &held.doubt {
+            return Err(doubt.clone());
+        }
+        uids.extend(held.uids.iter().cloned());
+        if let Some(doubt) = two_uids(task, uids) {
+            return Err(doubt);
+        }
+        Ok(held)
     }
 
     /// The first commit, newest first, that `judged` reaches and `hide`
@@ -727,19 +819,7 @@ impl<'r> RecordStore<'r> {
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
         for commit in walk {
             let commit = commit.map_err(unreadable)?;
-            if self.boundary.contains(&commit) {
-                return Err(format!(
-                    "this clone is shallow at {commit}, so the history before it cannot be read; fetch it in full (`git fetch --unshallow`)"
-                ));
-            }
-            let held = self.held_at(commit, task)?;
-            if let Some(doubt) = held.doubt {
-                return Err(doubt);
-            }
-            uids.extend(held.uids);
-            if let Some(doubt) = two_uids(task, &uids) {
-                return Err(doubt);
-            }
+            let held = self.history_at(task, commit, &mut uids)?;
             if let Some((blob, record)) = held.records.into_iter().next() {
                 return Ok(Some((commit, blob, record)));
             }
@@ -919,6 +999,75 @@ fn may_spell(content: &str, task: &Identity) -> bool {
     let literal = content.contains(task.id.as_str())
         || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
     literal || crate::validate::frontmatter_scope(content).contains('\\')
+}
+
+/// Describe the versions read at the fixed points, including missing or
+/// ambiguous records, without substituting a landing witness for authority.
+fn held_context(points: &[(Oid, Held)]) -> String {
+    points
+        .iter()
+        .map(|(point, held)| {
+            if held.records.is_empty() {
+                format!(
+                    "{point:.9} holds {}",
+                    if held.doubt.is_some() {
+                        "an unreadable version"
+                    } else {
+                        "no record"
+                    }
+                )
+            } else {
+                let blobs = held
+                    .records
+                    .iter()
+                    .map(|(blob, _)| format!("{blob:.9}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{point:.9} holds {blobs}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn criteria_source(points: &[(Oid, Held)], authority: &Authority, unordered: bool) -> String {
+    let Authority::Held(kept) = authority else {
+        let state = if matches!(authority, Authority::Absent) {
+            "absent"
+        } else {
+            "unknown"
+        };
+        return format!(
+            "criteria authority {state}; judged points: {}",
+            held_context(points)
+        );
+    };
+    for (point, held) in points {
+        if let Some((blob, _)) = held
+            .records
+            .iter()
+            .find(|(_, record)| record.content == kept.content)
+        {
+            let mut source = format!("criteria authority: {point:.9} holds {blob:.9}");
+            if unordered {
+                for (other, version) in points {
+                    if let Some((old_blob, old)) = version.records.first() {
+                        if old.criteria.signature() != kept.criteria.signature() {
+                            let _ = write!(
+                                source,
+                                "; {other:.9} holds older inherited version {old_blob:.9}"
+                            );
+                        }
+                    }
+                }
+            }
+            return source;
+        }
+    }
+    format!(
+        "criteria authority recovered from the judged history; judged points: {}",
+        held_context(points)
+    )
 }
 
 /// Whether two versions of a task's record keep the same authority: the
@@ -1348,23 +1497,339 @@ mod tests {
         }
     }
 
-    /// Two points that are not ordered by ancestry and hold versions with
-    /// different criteria still give no answer.
+    /// Issue 176: main inherited v1, and the diverged line replaced it.
+    /// This was the refusing shape before held inheritance was considered.
+    #[test]
+    fn a_version_the_line_replaced_does_not_compete() {
+        let newer = with_criterion("When run, the system shall work fast.");
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Note],
+            vec![Step::File(RECORD, newer.clone())],
+        );
+        let signature = RecordView::parse(RecordKind::Task, RECORD, &newer)
+            .unwrap()
+            .criteria
+            .signature();
+        for points in [[LINE, "main"], ["main", LINE]] {
+            match judge_at(dir.path(), &points).criteria {
+                Authority::Held(held) => assert_eq!(held.criteria.signature(), signature),
+                Authority::Unknown(reason) => panic!("{points:?}: {reason}"),
+                Authority::Absent => panic!("{points:?}: absent"),
+            }
+        }
+    }
+
+    /// Concurrent amendments still compete. The unchanged-main shape now
+    /// belongs to `a_version_the_line_replaced_does_not_compete`.
     #[test]
     fn held_versions_that_differ_still_give_no_answer() {
         let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall stop."),
+            )],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        for points in [[LINE, "main"], ["main", LINE]] {
+            match judge_at(dir.path(), &points).criteria {
+                Authority::Unknown(reason) => {
+                    assert!(reason.contains("different versions"), "{reason}");
+                }
+                _ => panic!("two different held versions gave an answer"),
+            }
+        }
+    }
+
+    fn positive_shape() -> tempfile::TempDir {
+        diverged(
             Step::File(RECORD, record(UID)),
             vec![Step::Note],
             vec![Step::File(
                 RECORD,
                 with_criterion("When run, the system shall work fast."),
             )],
-        );
-        match judge_at(dir.path(), &[LINE, "main"]).criteria {
-            Authority::Unknown(reason) => {
-                assert!(reason.contains("different versions"), "{reason}");
+        )
+    }
+
+    fn refuses_both_orders(root: &std::path::Path, reason: &str) {
+        for points in [[LINE, "main"], ["main", LINE]] {
+            match judge_at(root, &points).criteria {
+                Authority::Unknown(why) => assert!(why.contains(reason), "{points:?}: {why}"),
+                _ => panic!("{points:?}: uncertain history selected authority"),
             }
-            _ => panic!("two different held versions gave an answer"),
+        }
+    }
+
+    fn save(root: &std::path::Path, path: &str, text: &str) {
+        std::fs::write(root.join(path), text).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "fixture change"]);
+    }
+
+    /// Merge the amended line into main, then deliberately choose v1.
+    /// Advancing the line afterwards keeps the judged tips unordered.
+    fn main_chooses_old_version(in_merge: bool) -> tempfile::TempDir {
+        let dir = positive_shape();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        if in_merge {
+            git(root, &["merge", "--no-ff", "--no-commit", LINE]);
+            save(root, RECORD, &record(UID));
+        } else {
+            git(root, &["merge", "--no-ff", "-m", "take v2", LINE]);
+            save(root, RECORD, &record(UID));
+        }
+        git(root, &["switch", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        let repo = Repository::open(root).unwrap();
+        let main = repo.revparse_single("main").unwrap().id();
+        let line = repo.revparse_single(LINE).unwrap().id();
+        assert!(!repo.graph_descendant_of(main, line).unwrap());
+        assert!(!repo.graph_descendant_of(line, main).unwrap());
+        dir
+    }
+
+    #[test]
+    fn a_revert_to_the_inherited_bytes_still_competes() {
+        let dir = main_chooses_old_version(false);
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_merge_resolution_to_the_inherited_bytes_still_competes() {
+        let dir = main_chooses_old_version(true);
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_fresh_main_version_replaces_the_lines_inherited_version() {
+        let dir = positive_shape();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        git(root, &["merge", "--no-ff", "-m", "take v2", LINE]);
+        save(
+            root,
+            RECORD,
+            &with_criterion("When run, the system shall work safely."),
+        );
+        git(root, &["switch", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        for points in [[LINE, "main"], ["main", LINE]] {
+            let Authority::Held(held) = judge_at(root, &points).criteria else {
+                panic!("{points:?}: inherited v2 competed with fresh v3");
+            };
+            assert!(held.content.contains("work safely"));
+        }
+    }
+
+    #[test]
+    fn a_merge_resolution_on_the_line_still_competes() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall stop."),
+            )],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        let root = dir.path();
+        let merge = crate::git::command()
+            .args(["merge", "--no-ff", "--no-commit", "main"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(!merge.status.success(), "the record must conflict");
+        assert!(Repository::open(root)
+            .unwrap()
+            .path()
+            .join("MERGE_HEAD")
+            .exists());
+        save(
+            root,
+            RECORD,
+            &with_criterion("When run, the system shall work fast."),
+        );
+        git(root, &["switch", "main"]);
+        save(root, "later.txt", "main advanced\n");
+        refuses_both_orders(root, "different versions");
+    }
+
+    #[test]
+    fn an_independent_reintroduction_of_the_same_bytes_still_competes() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::Delete, Step::File(RECORD, record(UID))],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_noncriteria_record_edit_on_main_is_not_unchanged_inheritance() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                RECORD,
+                format!("{}\nA main-side note.\n", record(UID)),
+            )],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn shallow_history_cannot_prove_held_inheritance() {
+        let dir = positive_shape();
+        let clone = tempfile::tempdir().unwrap();
+        codeflow_fixture::clone(
+            clone.path(),
+            format!("file://{}", dir.path().display()),
+            "copy",
+        )
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
+        let root = clone.path().join("copy");
+        git(
+            &root,
+            &["fetch", "--depth=1", "origin", "main:refs/heads/main"],
+        );
+        refuses_both_orders(&root, "shallow");
+    }
+
+    #[test]
+    fn grafted_history_cannot_prove_held_inheritance() {
+        let dir = positive_shape();
+        let repo = Repository::open(dir.path()).unwrap();
+        let main = repo.revparse_single("main").unwrap().id();
+        std::fs::create_dir_all(repo.path().join("info")).unwrap();
+        std::fs::write(repo.path().join("info/grafts"), format!("{main}\n")).unwrap();
+        refuses_both_orders(dir.path(), "graft");
+    }
+
+    #[test]
+    fn replaced_history_cannot_prove_held_inheritance() {
+        let dir = positive_shape();
+        let repo = Repository::open(dir.path()).unwrap();
+        let main = repo
+            .revparse_single("main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap();
+        let parent = main.parent_id(0).unwrap();
+        repo.reference(
+            &format!("refs/replace/{}", main.id()),
+            parent,
+            false,
+            "fixture",
+        )
+        .unwrap();
+        refuses_both_orders(dir.path(), "replace");
+    }
+
+    #[test]
+    fn a_duplicate_identity_at_a_point_refuses_held_inheritance() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                "project-management/tasks/TSK-999.md",
+                record(OTHER),
+            )],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        refuses_both_orders(dir.path(), "another uid");
+    }
+
+    #[test]
+    fn a_deleted_duplicate_identity_refuses_held_inheritance() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                "project-management/tasks/TSK-999.md",
+                record(OTHER),
+            )],
+            vec![Step::File(
+                RECORD,
+                with_criterion("When run, the system shall work fast."),
+            )],
+        );
+        git(dir.path(), &["switch", "main"]);
+        git(dir.path(), &["rm", "project-management/tasks/TSK-999.md"]);
+        git(dir.path(), &["commit", "-m", "delete duplicate"]);
+        refuses_both_orders(dir.path(), "another uid");
+    }
+
+    #[test]
+    fn recovered_inheritance_refuses_doubt_below_the_first_holder() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![
+                Step::File(RECORD, "---\nid: TSK-001\nstatus: [broken\n---\n".into()),
+                Step::File(RECORD, record(UID)),
+                Step::Delete,
+            ],
+            vec![
+                Step::File(
+                    RECORD,
+                    with_criterion("When run, the system shall work fast."),
+                ),
+                Step::Delete,
+            ],
+        );
+        refuses_both_orders(dir.path(), "does not parse");
+    }
+
+    #[test]
+    fn equal_held_criteria_still_agree_across_status_and_epic_changes() {
+        let dir = diverged(
+            Step::File(RECORD, record(UID)),
+            vec![Step::File(
+                RECORD,
+                record(UID).replace("status: todo", "status: complete"),
+            )],
+            vec![Step::File(
+                RECORD,
+                record(UID).replace("status: todo", "epic_id: EPC-001\nstatus: todo"),
+            )],
+        );
+        for points in [[LINE, "main"], ["main", LINE]] {
+            assert!(matches!(
+                judge_at(dir.path(), &points).criteria,
+                Authority::Held(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn held_inheritance_handles_more_than_two_points() {
+        let dir = positive_shape();
+        git(dir.path(), &["switch", "-c", "another", "main"]);
+        save(dir.path(), "another.txt", "another unrelated commit\n");
+        for points in [[LINE, "main", "another"], ["another", "main", LINE]] {
+            let Authority::Held(held) = judge_at(dir.path(), &points).criteria else {
+                panic!("{points:?}: inherited versions competed");
+            };
+            assert!(held.content.contains("work fast"));
         }
     }
 

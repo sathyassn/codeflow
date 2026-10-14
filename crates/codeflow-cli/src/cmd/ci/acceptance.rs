@@ -13,7 +13,8 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    is_correction, pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
+    is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
+    SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -70,6 +71,10 @@ pub(super) fn dispatch(
         Ok(found) => {
             for found in found {
                 if found.note {
+                    if found.rule == AUTHORITY_NOTE {
+                        println!("codeflow ci: note: {}: {}", found.rule, found.message);
+                        continue;
+                    }
                     let remedy = if is_correction(&found) {
                         codeflow_core::remedy::CRITERIA_CORRECTION.remedy()
                     } else if found.rule == FROZEN_RULE {

@@ -3563,6 +3563,95 @@ fn a_task_on_a_diverged_line_completes_before_main_holds_it() {
     );
 }
 
+/// Issue 176, with both held records present and the hook's fixed main
+/// authority. Only the line replaces the criteria unless `competing`.
+fn held_version_push(competing: bool) -> ((i32, String), String, String, String, String) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    git(root, &["switch", LINE]);
+    let newer = line_task("TSK-001", "todo", "Pending.\n")
+        .replace("the system shall work.", "the system shall work fast.");
+    write(root, &path, &newer);
+    let line = commit(root, "docs: amend the line criterion");
+    let line_blob = git_out(root, &["rev-parse", &format!("HEAD:{path}")]);
+    git(root, &["switch", "main"]);
+    if competing {
+        write(root, &path, &newer.replace("work fast.", "stop."));
+    } else {
+        write(root, "unrelated.txt", "unrelated\n");
+    }
+    let main = commit(root, "docs: change main after the fork");
+    let main_blob = git_out(root, &["rev-parse", &format!("HEAD:{path}")]);
+    git(root, &["switch", "-c", BRANCH, LINE]);
+    write(root, &path, &format!("{newer}\nA description note.\n"));
+    commit(root, "docs: describe the task");
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            &line,
+            "--head",
+            "HEAD",
+            "--branch",
+            BRANCH,
+            "--policy-from",
+            &main,
+            "--commits-from",
+            &main,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        ),
+        line,
+        line_blob,
+        main,
+        main_blob,
+    )
+}
+
+#[test]
+fn a_task_on_a_diverged_line_uses_its_newer_held_version() {
+    let (result, line, blob, main, _) = held_version_push(false);
+    assert_passes(&result, "main inherited the version the line replaced");
+    for text in [
+        "criteria authority",
+        &line[..9],
+        &blob[..9],
+        &main[..9],
+        "inherited",
+    ] {
+        assert!(result.1.contains(text), "missing {text}: {}", result.1);
+    }
+    assert!(!result.1.contains("work.criteria_frozen"), "{}", result.1);
+}
+
+#[test]
+fn competing_held_versions_name_the_points_and_blobs() {
+    let (result, line, blob, main, main_blob) = held_version_push(true);
+    assert_blocks(
+        &result,
+        "independent amendments compete",
+        &[
+            "work.criteria_frozen",
+            "different versions",
+            &line[..9],
+            &blob[..9],
+            &main[..9],
+            &main_blob[..9],
+        ],
+    );
+}
+
 /// Round 2 of the TSK-220 review: a line range's own line carries a merge
 /// after the review only for a task whose target is that line. A task
 /// bound for `main` that merges the line after its review still refuses
