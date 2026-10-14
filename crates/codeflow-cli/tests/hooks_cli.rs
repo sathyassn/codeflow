@@ -7496,6 +7496,7 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
 /// name an enforcement path, the issue's commands included, through the
 /// wrappers it reads, and still allows ordinary arguments and reads.
 #[test]
+#[allow(clippy::too_many_lines)] // One journey: refusal payloads, then controls.
 fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");
