@@ -84,6 +84,7 @@ pub(crate) fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
 }
 
 fn is_first_parent_ancestor(repo: &Repository, ancestor: Oid, mut tip: Oid) -> bool {
+    let _judgment = history::judgment();
     loop {
         if tip == ancestor {
             return true;
@@ -1058,6 +1059,7 @@ fn task_landing(
     landing: Landing<'_>,
     reviewed: Oid,
 ) -> Landed {
+    let _judgment = history::judgment();
     if let Err(error) = history::check(repo) {
         return Landed::Refused(error.to_string());
     }
@@ -1200,6 +1202,7 @@ const STAGE: u16 = 0x3000;
 
 /// Read `merge` against the clean automatic remerge of its two parents.
 pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeReading {
+    let _judgment = history::judgment();
     let id = merge.id();
     let parents = match history::parents(repo, merge) {
         Ok(parents) => parents,
@@ -1297,6 +1300,7 @@ pub fn owned_paths(
     head: &str,
     hide: &[&str],
 ) -> Result<Vec<String>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -2724,6 +2728,7 @@ fn reopened_judged(
     ),
     String,
 > {
+    let _judgment = history::judgment();
     let target = Graph::from_revision(repo, base)?;
     let oid = |rev: &str| {
         repo.revparse_single(rev)
@@ -2864,6 +2869,7 @@ pub fn completions_in_range(
     line: Option<&str>,
     stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
+    let _judgment = history::judgment();
     let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
     // record-only amendment in its own range (TSK-184); no other record may.
@@ -2998,6 +3004,7 @@ pub(super) fn source_landing_base(
     source: Oid,
     introduced: Oid,
 ) -> Result<Option<Oid>, String> {
+    let _judgment = history::judgment();
     let mut at = source;
     while at != introduced {
         let commit = repo
@@ -3040,6 +3047,7 @@ pub(super) fn introduced_at(
     block: &AcceptanceBlock,
     head: Oid,
 ) -> Result<Oid, String> {
+    let _judgment = history::judgment();
     let mut at = head;
     loop {
         let commit = repo

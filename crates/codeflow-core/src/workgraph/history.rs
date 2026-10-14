@@ -3,7 +3,85 @@
 //! Every read refuses grafts and replace refs. Walks refuse a shallow
 //! boundary when they reach it; a boundary hidden by the range's base does
 //! not truncate that range. Errors retain the caller's ordinary refusal path.
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::rc::Rc;
+
+type Snapshot = Result<Rc<HashSet<Oid>>, String>;
+thread_local! {
+    static JUDGMENT: RefCell<Option<HashMap<PathBuf, Snapshot>>> = const { RefCell::new(None) };
+}
+
+/// Reuse one overlay and shallow-boundary snapshot during a read-only judgment.
+/// Nested scopes share their caller's snapshot. Dropping the outer scope clears
+/// it, so later judgments see metadata changes. This guard stays on its thread.
+#[must_use]
+pub struct Judgment {
+    owner: bool,
+    _thread: std::marker::PhantomData<Rc<()>>,
+}
+
+/// Begin a read-only judgment. Do not retain this scope across Git mutations.
+pub fn judgment() -> Judgment {
+    let owner = JUDGMENT.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.is_some() {
+            false
+        } else {
+            *memo = Some(HashMap::new());
+            true
+        }
+    });
+    Judgment {
+        owner,
+        _thread: std::marker::PhantomData,
+    }
+}
+
+impl Drop for Judgment {
+    fn drop(&mut self) {
+        if self.owner {
+            JUDGMENT.with(|memo| *memo.borrow_mut() = None);
+        }
+    }
+}
+
+/// Discard a snapshot after an object fetch may have updated shallow metadata.
+pub(super) fn refresh(repo: &Repository) {
+    JUDGMENT.with(|memo| {
+        if let Some(memo) = memo.borrow_mut().as_mut() {
+            memo.remove(repo.path());
+        }
+    });
+}
+
+fn snapshot(repo: &Repository) -> Snapshot {
+    JUDGMENT.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if let Some(memo) = memo.as_mut() {
+            memo.entry(repo.path().to_path_buf())
+                .or_insert_with(|| read_snapshot(repo))
+                .clone()
+        } else {
+            read_snapshot(repo)
+        }
+    })
+}
+
+#[cfg(test)]
+thread_local! { static SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn read_snapshot(repo: &Repository) -> Snapshot {
+    #[cfg(test)]
+    SNAPSHOT_READS.with(|reads| reads.set(reads.get() + 1));
+    if let Some(overlay) = super::release_line::history_overlay(repo)? {
+        return Err(format!(
+            "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
+        ));
+    }
+    super::release_line::shallow_boundary(repo).map(Rc::new)
+}
 
 use git2::{Commit, Error, ErrorCode, Oid, Repository, Sort};
 
@@ -16,16 +94,11 @@ fn unverified(why: impl std::fmt::Display) -> Error {
 /// # Errors
 /// Returns `cannot verify` for a graft, replacement or unreadable overlay.
 pub fn check(repo: &Repository) -> Result<(), Error> {
-    match super::release_line::history_overlay(repo).map_err(unverified)? {
-        None => Ok(()),
-        Some(overlay) => Err(unverified(format!(
-            "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
-        ))),
-    }
+    snapshot(repo).map(|_| ()).map_err(unverified)
 }
 
-fn boundary(repo: &Repository) -> Result<HashSet<Oid>, Error> {
-    super::release_line::shallow_boundary(repo).map_err(unverified)
+fn boundary(repo: &Repository) -> Result<Rc<HashSet<Oid>>, Error> {
+    snapshot(repo).map_err(unverified)
 }
 
 fn complete(boundary: &HashSet<Oid>, oid: Oid) -> Result<(), Error> {
@@ -42,8 +115,7 @@ fn complete(boundary: &HashSet<Oid>, oid: Oid) -> Result<(), Error> {
 /// # Errors
 /// Refuses overlays and a shallow boundary at this commit.
 pub fn parents(repo: &Repository, commit: &Commit<'_>) -> Result<Vec<Oid>, Error> {
-    check(repo)?;
-    complete(&boundary(repo)?, commit.id())?;
+    complete(boundary(repo)?.as_ref(), commit.id())?;
     Ok(commit.parent_ids().collect())
 }
 
@@ -76,7 +148,7 @@ pub fn parent<'r>(
 /// A walk whose yielded commits cannot conceal a shallow boundary.
 pub struct Walk<'r> {
     inner: git2::Revwalk<'r>,
-    boundary: HashSet<Oid>,
+    boundary: Rc<HashSet<Oid>>,
 }
 
 /// Begin a guarded walk. Push and hide retain libgit2's range semantics.
@@ -84,7 +156,6 @@ pub struct Walk<'r> {
 /// # Errors
 /// Refuses overlays or an unreadable shallow boundary.
 pub fn revwalk(repo: &Repository) -> Result<Walk<'_>, Error> {
-    check(repo)?;
     Ok(Walk {
         inner: repo.revwalk()?,
         boundary: boundary(repo)?,
@@ -216,45 +287,62 @@ pub fn check_command(root: &std::path::Path) -> Result<(), String> {
     let repo = Repository::discover(root).map_err(|error| unverified(error).to_string())?;
     check(&repo).map_err(|error| error.to_string())?;
     if let Some(file) = std::env::var_os("GIT_SHALLOW_FILE") {
+        // Git treats an empty override as an explicitly complete history.
+        if file.is_empty() {
+            return Ok(());
+        }
+        // These Git queries run with `current_dir(root)` or `git -C root`.
+        // Git resolves a relative override after that directory change.
         let file = root.join(file);
-        let bytes = std::fs::read(&file).map_err(|error| {
-            unverified(format!(
-                "cannot read the shallow file {}: {error}",
-                file.display()
-            ))
-            .to_string()
-        })?;
+        let bytes = match std::fs::read(&file) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(unverified(format!(
+                    "cannot read the shallow file {}: {error}",
+                    file.display()
+                ))
+                .to_string())
+            }
+        };
         if !bytes.is_empty() {
-            return Err(unverified(format!(
-                "Git uses the shallow file {}; fetch the full history",
-                file.display()
-            ))
+            return Err(crate::remedy::Finding::new(
+                unverified(format!("Git uses the shallow file {}", file.display())).to_string(),
+                crate::remedy::CI_RANGE_UNREADABLE.remedy(),
+            )
             .to_string());
         }
+        return Ok(());
     }
     if !boundary(&repo)
         .map_err(|error| error.to_string())?
         .is_empty()
     {
-        return Err(unverified("this clone is shallow; fetch its full history").to_string());
+        return Err(crate::remedy::Finding::new(
+            unverified("this clone is shallow").to_string(),
+            crate::remedy::CI_RANGE_UNREADABLE.remedy(),
+        )
+        .to_string());
     }
     Ok(())
 }
 
-/// A commit's first parent as its object records it, read from the object
-/// database: grafts, replace refs and shallow boundaries never apply.
+/// Read the first parent recorded in a commit object after checking the
+/// judgment's overlay snapshot and this commit's shallow boundary.
 ///
 /// # Errors
 ///
-/// Returns a message when the object is missing or is not a commit.
+/// Refuses overlays, a reached shallow boundary, a missing object or a non-commit.
 pub(super) fn recorded_first_parent(
     repo: &Repository,
     odb: &git2::Odb<'_>,
     commit: Oid,
 ) -> Result<Option<Oid>, String> {
-    check(repo).map_err(|error| error.to_string())?;
-    complete(&boundary(repo).map_err(|error| error.to_string())?, commit)
-        .map_err(|error| error.to_string())?;
+    complete(
+        boundary(repo).map_err(|error| error.to_string())?.as_ref(),
+        commit,
+    )
+    .map_err(|error| error.to_string())?;
     let object = odb.read(commit).map_err(|error| {
         format!(
             "commit {commit} is not in this clone ({}); fetch the default target's full history, then retry (SPC-013 R-120)",
@@ -294,4 +382,62 @@ pub fn merge_commits(
         Err(error) => return Err(error),
     }
     repo.merge_commits(ours, theirs, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_judgment_reads_metadata_once_and_the_next_judgment_refreshes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(dir.path(), &[(b"source.rs", b"source")]);
+        let commit = repo.find_commit(head).unwrap();
+        SNAPSHOT_READS.with(|reads| reads.set(0));
+        {
+            let _judgment = judgment();
+            for _ in 0..100 {
+                let _nested = judgment();
+                assert!(parents(&repo, &commit).unwrap().is_empty());
+                check(&repo).unwrap();
+                assert!(boundary(&repo).unwrap().is_empty());
+            }
+            SNAPSHOT_READS.with(|reads| assert_eq!(reads.get(), 1));
+        }
+        std::fs::create_dir_all(repo.path().join("info")).unwrap();
+        std::fs::write(repo.path().join("info/grafts"), format!("{head}\n")).unwrap();
+        let _judgment = judgment();
+        assert!(check(&repo)
+            .unwrap_err()
+            .message()
+            .contains("cannot verify"));
+        assert!(parents(&repo, &commit).is_err());
+        SNAPSHOT_READS.with(|reads| assert_eq!(reads.get(), 2));
+        std::fs::remove_file(repo.path().join("info/grafts")).unwrap();
+        refresh(&repo);
+        check(&repo).unwrap();
+        SNAPSHOT_READS.with(|reads| assert_eq!(reads.get(), 3));
+    }
+
+    #[test]
+    fn a_judgment_keeps_repository_boundaries_separate() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (first_repo, first_head) = crate::git::repo_with_tree(first.path(), &[]);
+        let (second_repo, second_head) = crate::git::repo_with_tree(second.path(), &[]);
+        std::fs::write(
+            second_repo.path().join("shallow"),
+            format!("{second_head}\n"),
+        )
+        .unwrap();
+        let second_repo = Repository::open(second.path()).unwrap();
+        let _judgment = judgment();
+        assert!(parents(&first_repo, &first_repo.find_commit(first_head).unwrap()).is_ok());
+        assert!(
+            parents(&second_repo, &second_repo.find_commit(second_head).unwrap())
+                .unwrap_err()
+                .message()
+                .contains("cannot verify")
+        );
+    }
 }

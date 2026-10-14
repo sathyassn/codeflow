@@ -146,13 +146,15 @@ Records follow the Markdown-truth design.
 
 Judging parent and ancestry reads use `workgraph::history` (TSK-287).
 The reader refuses graft files and replace refs with `cannot verify`.
-A walk refuses a shallow boundary it reaches; a boundary hidden by its
+A read-only judgment checks overlays and loads the shallow boundary once,
+then clears that snapshot on return. Each parent step and walk refuses a
+shallow boundary it reaches; a boundary hidden by its
 base does not cut that range. Spawned Git history queries require a full
 clone because their command arguments do not expose a bounded walk to the
 reader. Landing inventory retains unproven branches when history cannot
 be checked. Display-only metrics and session summaries keep their direct
 reads, with counted exceptions in `history_read_scan.rs`.
-The [history-read sweep](verification/tsk-287-history-reads.md) records the
+The [history-read sweep](https://github.com/sathyassn/codeflow/blob/main/docs/verification/tsk-287-history-reads.md) records the
 callers and the limits of the checks.
 
 Three areas outgrew this file and are graduated, with the pointer left behind:

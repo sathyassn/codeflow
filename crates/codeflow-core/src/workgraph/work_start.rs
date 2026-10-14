@@ -1407,6 +1407,7 @@ pub fn check_work_start_on(
     target: &str,
     pins: &[ReviewedPin],
 ) -> Result<WorkStartReport, WorkStartError> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(root).map_err(|e| WorkStartError::Repository(e.to_string()))?;
     let head = repo
         .head()
@@ -1571,6 +1572,7 @@ pub fn check_work_admission_on(
     head: &str,
     pins: &[ReviewedPin],
 ) -> Result<WorkStartReport, WorkStartError> {
+    let _judgment = history::judgment();
     check_task_anchor(repo_root, task_id, target, branch, true, pins, Some(head))
 }
 
@@ -2797,6 +2799,7 @@ fn blocker_reason(content: &str) -> Option<String> {
 /// # Errors
 /// Refuses missing or ambiguous hosted repository identity.
 pub fn review_repository(root: &std::path::Path, branch: &str) -> Result<String, String> {
+    let _judgment = history::judgment();
     ReviewRepositories::open(root)?.repository(branch)
 }
 

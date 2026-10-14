@@ -1433,4 +1433,35 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn landed_evidence_refuses_grafts_and_replace_refs() {
+        for replace in [false, true] {
+            let dir = history(UID, UID);
+            let repo = Repository::open(dir.path()).unwrap();
+            let base = repo.head().unwrap().peel_to_commit().unwrap().id();
+            let completed = record(UID).replace("status: todo", "status: complete");
+            let head = crate::git::add_commit(
+                &repo,
+                &[(b"project-management/tasks/TSK-001.md", completed.as_bytes())],
+            );
+            assert!(matches!(
+                judge(dir.path(), UID).landing,
+                Landing::Landed { .. }
+            ));
+            if replace {
+                repo.reference(&format!("refs/replace/{head}"), base, false, "test")
+                    .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(repo.path().join("info/grafts"), format!("{head} {base}\n"))
+                    .unwrap();
+            }
+            match judge(dir.path(), UID).landing {
+                Landing::Unreadable(reason) => {
+                    assert!(reason.contains("cannot verify"), "{reason}");
+                }
+                _ => panic!("overlaid history proved a landing answer"),
+            }
+        }
+    }
 }

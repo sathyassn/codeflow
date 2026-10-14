@@ -597,6 +597,7 @@ fn patch_id_path(path: &[u8]) -> Vec<u8> {
 /// alone (commit dates need not follow ancestry). `None` when the walk
 /// cannot be completed, which proves nothing.
 fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let _judgment = history::judgment();
     let mut current = repo.find_commit(target).ok()?;
     loop {
         if current.id() == tip {
@@ -749,6 +750,7 @@ fn read_tips(
 ///
 /// Returns the reason when the repository or a target tip cannot be read.
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;

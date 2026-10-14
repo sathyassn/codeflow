@@ -532,6 +532,7 @@ fn ensure_objects(
         || Err("no destination to fetch from".to_string()),
         |url| crate::git::remote_query::fetch_objects(repo_root, url, &refs),
     );
+    history::refresh(repo);
     let still = missing(wanted);
     if still.is_empty() {
         return Ok(());
@@ -753,6 +754,7 @@ impl<'a> Lines<'a> {
     }
 
     fn chain(&mut self, tip: Oid) -> &HashSet<Oid> {
+        let _judgment = history::judgment();
         let repo = self.repo;
         self.chains.entry(tip).or_insert_with(|| {
             let mut chain = HashSet::new();
@@ -1032,6 +1034,7 @@ pub fn release_owner(
     base: &str,
     head: &str,
 ) -> Result<Option<String>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1174,6 +1177,7 @@ fn judge(
     head: &str,
     approved: &[(&str, &str)],
 ) -> Result<Judgement, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1702,6 +1706,7 @@ fn landing_on_line(
     source: Oid,
     holds: &dyn Fn(Oid) -> Result<bool, String>,
 ) -> Result<Oid, String> {
+    let _judgment = history::judgment();
     let mut at = source;
     loop {
         let commit = repo.find_commit(at).map_err(|error| error.to_string())?;

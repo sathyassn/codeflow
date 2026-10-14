@@ -251,6 +251,7 @@ fn ci_environment(
 
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
     }
@@ -348,6 +349,12 @@ pub fn run(args: &CiArgs) -> i32 {
             return 2;
         }
     };
+    // Every range reader below, including body-less, task-less CI, shares
+    // this refusal. A history error is never a skipped check or clean range.
+    if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
+        eprintln!("codeflow ci: {error}");
+        return 2;
+    }
     let split = match split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
         Ok(value) => value,
         Err(error) => {

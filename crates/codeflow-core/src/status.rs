@@ -140,6 +140,7 @@ pub struct StatusView {
 /// tier — absent layers are reported in `notes`.
 #[must_use]
 pub fn collect_status(repo_root: &Path) -> StatusView {
+    let _judgment = history::judgment();
     let mut notes = Vec::new();
 
     let (branch, worktrees, cleanup_target, cleanup) =

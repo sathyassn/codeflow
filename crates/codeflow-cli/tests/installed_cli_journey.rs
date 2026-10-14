@@ -519,3 +519,90 @@ fn history_overlay_is_refused_by_installed_hook_work_start_and_ci() {
         "clean clone after overlay was planted elsewhere",
     );
 }
+
+#[test]
+fn taskless_ci_without_a_body_refuses_a_grafted_range() {
+    let (_dir, root) = project("--standard");
+    git(&root, &["switch", "-qc", "feat/plain"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("source.rs"), "unreviewed source\n").unwrap();
+    commit(&root, "fix: change source");
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    let head = commit(&root, "fix: restore source");
+    ok(&ci(&root, &base, "feat/plain", None), "clean taskless ci");
+    std::fs::create_dir_all(root.join(".git/info")).unwrap();
+    std::fs::write(root.join(".git/info/grafts"), format!("{head} {base}\n")).unwrap();
+    refused(
+        &ci(&root, &base, "feat/plain", None),
+        "grafted taskless ci without a body",
+        "cannot verify",
+    );
+}
+
+#[test]
+fn ci_resolves_the_shallow_override_in_the_git_query_directory() {
+    let (_dir, root) = project("--standard");
+    git(&root, &["switch", "-qc", "feat/plain"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("source.rs"), "source\n").unwrap();
+    let head = commit(&root, "fix: change source");
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let query = |file: &str| {
+        with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .current_dir(&nested)
+            .env("GIT_SHALLOW_FILE", file)
+            .args([
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/plain",
+            ])
+            .output()
+            .unwrap()
+    };
+    let git_shallow = |file: &str| {
+        let out = with_env(&mut Command::new("git"))
+            .current_dir(&nested)
+            .env("GIT_SHALLOW_FILE", file)
+            .arg("-C")
+            .arg(&root)
+            .args(["rev-parse", "--is-shallow-repository"])
+            .output()
+            .unwrap();
+        ok(&out, "native shallow query").trim().to_string()
+    };
+    assert_eq!(git_shallow("boundary"), "false");
+    ok(&query("boundary"), "absent shallow override");
+    std::fs::write(nested.join("boundary"), format!("{head}\n")).unwrap();
+    assert_eq!(git_shallow("boundary"), "false");
+    ok(
+        &query("boundary"),
+        "override is relative to Git's directory",
+    );
+    std::fs::write(root.join("boundary"), format!("{head}\n")).unwrap();
+    assert_eq!(git_shallow("boundary"), "true");
+    refused(
+        &query("boundary"),
+        "reachable override boundary",
+        "cannot verify",
+    );
+    assert_eq!(git_shallow(""), "false");
+    ok(&query(""), "empty shallow override value");
+    std::fs::write(root.join("boundary"), "").unwrap();
+    // Git reports the file's existence as shallow, but an empty file cuts
+    // no parents and the complete range remains readable.
+    let count = with_env(&mut Command::new("git"))
+        .current_dir(&nested)
+        .env("GIT_SHALLOW_FILE", "boundary")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-list", "--count", &format!("{base}..HEAD")])
+        .output()
+        .unwrap();
+    assert_eq!(ok(&count, "empty boundary range").trim(), "1");
+    ok(&query("boundary"), "empty override");
+}
