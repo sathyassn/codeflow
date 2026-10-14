@@ -398,8 +398,10 @@ fn interpreter_family(name: &str) -> Option<&'static str> {
     let name = name.strip_suffix(".exe").unwrap_or(name);
     // The name without its version suffix: the digits and dots it ends with.
     let end = name
-        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .map_or(0, |at| at + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map_or(0, |(at, c)| at + c.len_utf8());
     match &name[..end] {
         "python" => Some("python"),
         "node" => Some("node"),

@@ -937,5 +937,9 @@ mod tests {
             .collect();
         assert!(dirs.contains(&None), "{dirs:?}");
         assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
+        // A version suffix is read past; a multi-byte name ending is not cut
+        // inside a character.
+        assert_eq!(outward::interpreter_calls("ruby3.3 x", cwd).len(), 1);
+        assert!(outward::interpreter_calls("gre\u{a0}1 x", cwd).is_empty());
     }
 }
