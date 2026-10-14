@@ -53,12 +53,14 @@ pub(crate) fn evaluate(
         reaches.extend(call_reaches(call, &line_dirs, &mut facts));
     }
     // Code text is judged as its arguments are, from every directory the
-    // line may run it in, bare names included (TSK-302 review round 2).
+    // line may run it in, bare names included (TSK-302 review round 2); an
+    // unresolved code word is not a shell operand, so it does not take the
+    // line's writer rule.
     let code_dirs = dir_options(&line_dirs);
     for code in outward::interpreter_bodies(line) {
         for word in outward::literal_words(&code) {
             for dir in &code_dirs {
-                reaches.extend(value_reach(&word, dir.as_deref(), &mut facts));
+                reaches.extend(code_reach(&word, dir.as_deref(), &mut facts));
             }
         }
     }
@@ -466,7 +468,7 @@ fn call_reaches(
     for code in &call.code {
         for word in outward::literal_words(code) {
             for dir in &dirs {
-                found.extend(value_reach(&word, dir.as_deref(), facts));
+                found.extend(code_reach(&word, dir.as_deref(), facts));
             }
         }
     }
@@ -502,12 +504,29 @@ fn names_authority(reached: &str) -> bool {
 }
 
 fn value_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
+    value_reach_at(value, dir, false, facts)
+}
+
+/// [`value_reach`] for a code literal: a word inside the interpreter's own
+/// source, not a shell operand, so an unresolved one is not read by the
+/// line's writer rule (TSK-302 review round 2, Grok F1).
+fn code_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
+    value_reach_at(value, dir, true, facts)
+}
+
+fn value_reach_at(
+    value: &str,
+    dir: Option<&Path>,
+    code: bool,
+    facts: &mut Facts<'_>,
+) -> Option<Reach> {
     // `~user` and `~-` are filled in by the shell too.
     let unresolved = git_guard::unresolved_word(value)
         || (value.starts_with('~') && !value.starts_with("~/") && value != "~");
     let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
     match (unresolved, dir.or(absolute.then_some(facts.payload_cwd))) {
         (false, Some(dir)) => literal_reach(value, dir, facts),
+        _ if code => None,
         _ => unreadable_reach(value, dir, unresolved, facts),
     }
 }
