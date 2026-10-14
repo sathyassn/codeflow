@@ -202,12 +202,21 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `perl`, `ruby`, a version suffix included) whose inline code or \
                 arguments name an enforcement path: a script's arguments, \
                 every word after inline code or stdin `-`, a `--name=value` \
-                option or an attached short value (`-oFILE`), through `env`, \
-                `env -S`, `command`, a shell `-c` string, a `cd` (its options \
-                read past; an `&&` chain judged from the directory it reaches) \
-                or `ruby -C`, and the paths `xargs`, `find -exec` and \
-                `find -execdir` supply. An argument naming policy authority \
-                metadata refuses in each of these forms whatever the level. It \
+                option or an attached short value in a cluster (`-oFILE`, \
+                `-voFILE`). It judges every directory the line may run the \
+                interpreter in: the session directory and every one any \
+                directory change may reach (`cd`, `command cd`, `builtin cd`, \
+                `pushd`, `chdir`, every `env -C` and `--chdir` spelling, \
+                `git -C`, composed `ruby -C`), success or not, and for \
+                `find -execdir` each directory under the start its name, path \
+                and type tests let through. A change it cannot resolve makes \
+                the directory unknown, and a word is judged by its trailing \
+                components. The model is conservative, so an odd shape like \
+                `cd .claude && cd .. && python3 tool.py settings.json`, and a \
+                repo-root `find . -execdir python3 lint.py notes.txt`, which \
+                can really run in a hook directory, are refused. An operand \
+                naming policy authority metadata refuses in every form \
+                whatever the level. It \
                 reads an enforcement file passed as an argument as a possible \
                 write, so read one with `cat`, `jq` or `grep`, or redirect it \
                 into the interpreter's stdin. An argument it cannot read (a \
