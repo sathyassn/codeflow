@@ -1,0 +1,11 @@
+id = "TSK-312"
+uid = "1ad3cc6d-a214-4413-a852-fb59dc2f1985"
+kind = "TSK"
+title = "codeflow status --json gives the shared fact model"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:10Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
