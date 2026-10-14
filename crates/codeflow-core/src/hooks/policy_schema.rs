@@ -11,6 +11,45 @@
 //! quietly discard a consumer's hardened configuration). Defaults are rendered
 //! live from the real [`Policy::default`], never hand-maintained literals, and
 //! a drift-guard test pins the registry to the serde fields both ways.
+//!
+//! # Where a new key goes
+//!
+//! One rule decides, and a test holds it (TSK-280, issue 118).
+//!
+//! **A new key lives in this registry and in the code default
+//! ([`Policy::default`]) only.** It is not written to the shipped template
+//! (`assets/base/policy.json`) or to this repository's installed policy
+//! (`.codeflow/policy.json`). Give the key a note that ends with the
+//! sentence "The shipped policy file does not list it, so an older binary
+//! never meets the key." (`git.pr_summary` and `git.claim_remotes` carry it).
+//!
+//! Why: `codeflow update` inserts every template key into an adopter's
+//! policy file, and a binary that does not know a key rejects the whole file
+//! as unknown, which blocks every commit. The binary on `PATH` and the
+//! binary a CI job pins can both be older than the one that ran `update`.
+//! The two-step upgrade in `docs/adoption.md` (first raise and land the
+//! pin, then run `codeflow update` on a new branch) protects an adopter who
+//! follows it. This rule keeps the release that introduces a key from
+//! depending on that: its template never carries the key, so `update`
+//! never writes it for an older binary to reject. A key placed in the
+//! template and the installed policy together also passes the
+//! `repository_update_noop` test, so that test does not catch it.
+//!
+//! **A key may join the template and the installed policy only when the last
+//! released binary already lists it**, which is after the release that
+//! introduced it has published, and only when the file must carry a value
+//! that differs from the code default. An adopter on an older release then
+//! reaches the key through the same two-step upgrade. Most keys never need
+//! to: the code default already applies when a file omits the key.
+//!
+//! The check is `tests/policy_key_placement.rs`. It fails when the template
+//! or the installed policy names a key that the last release's list
+//! (`tests/fixtures/policy-keys-last-release.txt`) does not hold, and it
+//! updates a fixture project at the last release to prove the result still
+//! loads there. The list is refreshed from the release tag, in the change
+//! that first needs the newer list; a stale list is the safe side, because
+//! it only keeps a newer key out of the template. The reader-facing copy of
+//! this rule is "Where a new key goes" in `docs/policy-reference.md`.
 
 use std::fmt;
 use std::path::Path;
@@ -1505,28 +1544,6 @@ mod tests {
             assert!(
                 !errors.is_empty() && errors.iter().all(|e| e.key == "git.required_checks"),
                 "{list}: {errors:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn no_shipped_or_installed_policy_file_names_required_checks() {
-        // Issue 118: a key added after 3.0.0 lives in the schema and the code
-        // default only, so an older pinned binary never meets it.
-        for (path, text) in [
-            (
-                "assets/base/policy.json",
-                include_str!("../../../../assets/base/policy.json"),
-            ),
-            (
-                ".codeflow/policy.json",
-                include_str!("../../../../.codeflow/policy.json"),
-            ),
-        ] {
-            let value: Value = serde_json::from_str(text).unwrap();
-            assert!(
-                lookup(&value, "git.required_checks").is_none(),
-                "{path} names git.required_checks"
             );
         }
     }
