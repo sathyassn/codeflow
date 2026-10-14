@@ -1,0 +1,11 @@
+id = "TSK-306"
+uid = "4bc2e80f-5f43-4ac3-97e5-1d3719cfd88b"
+kind = "TSK"
+title = "A line's newer task version wins over a copy main inherited"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:12:01Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
