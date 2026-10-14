@@ -58,6 +58,7 @@ pub(super) fn range_inventory(
     base: &str,
     head: &str,
 ) -> Result<Vec<RangeEntry>, String> {
+    codeflow_core::workgraph::history::check_command(root)?;
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)

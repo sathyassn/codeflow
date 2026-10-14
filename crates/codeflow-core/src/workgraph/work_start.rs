@@ -6,6 +6,8 @@
 //! dependencies to exist in that anchored snapshot. It never creates or
 //! updates files, refs, branches, worktrees, or record status.
 
+use crate::workgraph::history;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -403,8 +405,7 @@ fn local_or_upstream(
     // The exact ref compared is the ref anchored on: a shortened name such
     // as `origin/main` could resolve to a different ref.
     let upstream = upstream_ref;
-    let (ahead, behind) = repo
-        .graph_ahead_behind(local_id, upstream_id)
+    let (ahead, behind) = history::ahead_behind(repo, local_id, upstream_id)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     match (ahead, behind) {
         (_, 0) => keep(),
@@ -670,8 +671,7 @@ pub fn epic_line_proof(
     };
     let head_commit = commit(head)?;
     let target_tip = commit(base)?.id();
-    let merge_base = repo
-        .merge_base(target_tip, head_commit.id())
+    let merge_base = history::merge_base(&repo, target_tip, head_commit.id())
         .map_err(|error| error.to_string())?;
     let records_at = |oid: git2::Oid| {
         repo.find_commit(oid)
@@ -1325,37 +1325,26 @@ pub(crate) fn review_covers_pin(
     if review == pin.revision {
         return Ok(true);
     }
-    if let Some(overlay) = super::release_line::history_overlay(repo)? {
-        return Err(format!(
-            "this clone overlays its recorded history with {overlay}, so the parents from the review to the pin cannot be trusted; remove it, or judge from a clone without it"
-        ));
-    }
-    let shallow = super::release_line::shallow_boundary(repo)?;
-    if !repo
-        .graph_descendant_of(pin.revision, review)
-        .map_err(|e| e.to_string())?
-    {
+    if !history::descendant_of(repo, pin.revision, review).map_err(|e| e.to_string())? {
         return Ok(false);
     }
-    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|e| e.to_string())?;
     walk.push(pin.revision).map_err(|e| e.to_string())?;
     walk.hide(review).map_err(|e| e.to_string())?;
     for revision in walk {
         let revision = revision.map_err(|e| e.to_string())?;
-        if shallow.contains(&revision) {
-            return Err(format!(
-                "this clone is shallow at {revision}, so the history to the reviewed commit is cut; fetch it in full"
-            ));
-        }
         let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
         // An unreadable record is an error, never a covered revision.
         let Some(content) = super::acceptance::blob_at(repo, revision, path)? else {
             return Ok(false);
         };
-        let Ok(parent) = commit.parent_id(0) else {
+        let Ok(parent) = history::parent_id(repo, &commit, 0) else {
             return Ok(false);
         };
-        if commit.parent_count() != 1
+        if history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .len()
+            != 1
             || super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
         {
             return Ok(false);
@@ -1383,23 +1372,29 @@ pub(crate) fn stack_base_in(
     branches: &mut Option<PinBranches>,
     pins: &[ReviewedPin],
 ) -> Result<Option<git2::Oid>, String> {
+    history::check(repo).map_err(|error| error.to_string())?;
     for pin in pins {
         PinBranches::once(branches, repo)?.pin_branch(repo, pin)?;
     }
     if pins.is_empty() {
         return Ok(None);
     }
-    pins.iter()
-        .find(|candidate| {
-            pins.iter().all(|pin| {
-                candidate.revision == pin.revision
-                    || repo
-                        .graph_descendant_of(candidate.revision, pin.revision)
-                        .unwrap_or(false)
-            })
-        })
-        .map(|pin| Some(pin.revision))
-        .ok_or_else(|| "no reviewed base contains all pins; land or stack one first".into())
+    for candidate in pins {
+        let mut contains_all = true;
+        for pin in pins {
+            if candidate.revision != pin.revision
+                && !history::descendant_of(repo, candidate.revision, pin.revision)
+                    .map_err(|error| error.to_string())?
+            {
+                contains_all = false;
+                break;
+            }
+        }
+        if contains_all {
+            return Ok(Some(candidate.revision));
+        }
+    }
+    Err("no reviewed base contains all pins; land or stack one first".into())
 }
 
 /// Start a branch already stacked on the supplied reviewed predecessors.
@@ -1430,9 +1425,8 @@ pub fn check_work_start_on(
     for pin in pins {
         pin_branch(&repo, pin).map_err(WorkStartError::InvalidGraph)?;
         if pin.revision != head
-            && !repo
-                .graph_descendant_of(head, pin.revision)
-                .unwrap_or(false)
+            && !history::descendant_of(&repo, head, pin.revision)
+                .map_err(|error| WorkStartError::Repository(error.to_string()))?
         {
             return Err(WorkStartError::InvalidGraph(format!(
                 "{} pin is not an ancestor of HEAD",
@@ -1634,7 +1628,7 @@ pub fn stacked_pins(
         // A tip the head contains and the target does not. An ancestry
         // that cannot be read refuses (issue 79), never reads as "no".
         let descends = |of: Oid, ancestor: Oid| {
-            repo.graph_descendant_of(of, ancestor).map_err(|error| {
+            history::descendant_of(&repo, of, ancestor).map_err(|error| {
                 format!("cannot read the ancestry of {ancestor} from {of}: {error}")
             })
         };
@@ -1927,13 +1921,7 @@ fn refuse_retarget(
 ) -> Result<(), String> {
     let unreadable =
         |reason: String| format!("the history of task {task_id} cannot be read: {reason}");
-    if repo.is_shallow() {
-        return Err(unreadable("this clone is shallow".into()));
-    }
-    if let Some(overlay) = super::release_line::history_overlay(repo).map_err(unreadable)? {
-        return Err(unreadable(format!("this clone has {overlay}")));
-    }
-    let mut walk = repo.revwalk().map_err(|e| unreadable(e.to_string()))?;
+    let mut walk = history::revwalk(repo).map_err(|e| unreadable(e.to_string()))?;
     walk.push(head).map_err(|e| unreadable(e.to_string()))?;
     let mut seen = std::collections::HashSet::new();
     for commit in walk {
@@ -2000,7 +1988,7 @@ fn anchored_records(
         .ok_or_else(|| WorkStartError::Target(target.to_string()))?;
     // Only git's "not found" means the two have no common ancestor; any
     // other error is a history that could not be read.
-    let merge_base = match repo.merge_base(head_id, target_commit.id()) {
+    let merge_base = match history::merge_base(repo, head_id, target_commit.id()) {
         Ok(merge_base) => merge_base,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Err(WorkStartError::MergeBase(target.to_string()))
@@ -2397,9 +2385,8 @@ fn pinned_dependency(
         });
     };
     if tip.id() != commit.id()
-        && !repo
-            .graph_descendant_of(tip.id(), commit.id())
-            .unwrap_or(false)
+        && !history::descendant_of(repo, tip.id(), commit.id())
+            .map_err(|error| refuse(error.to_string()))?
     {
         return Err(refuse(format!("not on '{line}'")));
     }
@@ -4238,6 +4225,70 @@ permission_preset = "strict"
                 check_epic_line(root, line, "main", "main", "HEAD"),
                 Ok("EPC-001".into())
             );
+        }
+    }
+    #[test]
+    fn pin_containment_refuses_grafts_and_replace_refs() {
+        for replace in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let record = |id| {
+                format!("---\nid: {id}\nepic_id: null\nstandalone_reason: bounded\nintegration_target: main\nstatus: todo\ndepends_on: []\n---\n")
+            };
+            let first_record = record("TSK-001");
+            let second_record = record("TSK-002");
+            let records_dir = dir.path().join("project-management/tasks");
+            std::fs::create_dir_all(&records_dir).unwrap();
+            std::fs::write(records_dir.join("TSK-001.md"), &first_record).unwrap();
+            std::fs::write(records_dir.join("TSK-002.md"), &second_record).unwrap();
+            let (repo, base) = crate::git::repo_with_tree(
+                dir.path(),
+                &[
+                    (
+                        b"project-management/tasks/TSK-001.md",
+                        first_record.as_bytes(),
+                    ),
+                    (
+                        b"project-management/tasks/TSK-002.md",
+                        second_record.as_bytes(),
+                    ),
+                    (b"source.rs", b"original"),
+                ],
+            );
+            crate::git::add_commit(&repo, &[(b"source.rs", b"unreviewed")]);
+            let head = crate::git::add_commit(&repo, &[(b"source.rs", b"original")]);
+            repo.branch(
+                "task/TSK-001-first",
+                &repo.find_commit(base).unwrap(),
+                false,
+            )
+            .unwrap();
+            repo.branch(
+                "task/TSK-002-second",
+                &repo.find_commit(head).unwrap(),
+                false,
+            )
+            .unwrap();
+            let pins = [
+                ReviewedPin {
+                    task_id: "TSK-001".into(),
+                    revision: base,
+                },
+                ReviewedPin {
+                    task_id: "TSK-002".into(),
+                    revision: head,
+                },
+            ];
+            assert_eq!(stack_base(dir.path(), &pins).unwrap(), Some(head));
+            if replace {
+                repo.reference(&format!("refs/replace/{head}"), base, false, "test")
+                    .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(repo.path().join("info/grafts"), format!("{head} {base}\n"))
+                    .unwrap();
+            }
+            let error = stack_base(dir.path(), &pins).unwrap_err();
+            assert!(error.contains("cannot verify"), "{error}");
         }
     }
 }

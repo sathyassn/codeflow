@@ -144,6 +144,17 @@ Records follow the Markdown-truth design.
 | `work start` preflight | read-only; it proves the task and its applicable graph at the merge-base with the declared target, or at HEAD for a standalone task whose record arrives in its own PR (ADR-0076); a code predecessor that is reviewed but not complete is accepted only through a tip pin (`--on TSK-NNN@<sha>`), reviewed directly or followed only by changes to its own record's status and Closeout, and CI still requires it complete at the merge-base when the task lands. The CLI and detached CI share the structural core of that check; only `work start` applies the start gate (status, Blocker, awaiting selection), so CI admits a standalone record that arrives complete with a valid acceptance block |
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
+Judging parent and ancestry reads use `workgraph::history` (TSK-287).
+The reader refuses graft files and replace refs with `cannot verify`.
+A walk refuses a shallow boundary it reaches; a boundary hidden by its
+base does not cut that range. Spawned Git history queries require a full
+clone because their command arguments do not expose a bounded walk to the
+reader. Landing inventory retains unproven branches when history cannot
+be checked. Display-only metrics and session summaries keep their direct
+reads, with counted exceptions in `history_read_scan.rs`.
+The [history-read sweep](verification/tsk-287-history-reads.md) records the
+callers and the limits of the checks.
+
 Three areas outgrew this file and are graduated, with the pointer left behind:
 
 - Interactive presentation (`codeflow-present`, ADR-0049, ADR-0050,

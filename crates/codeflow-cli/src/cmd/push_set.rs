@@ -420,6 +420,7 @@ fn commits_from(
     base: &str,
     report: &mut StageReport,
 ) -> Result<String, String> {
+    codeflow_core::workgraph::history::check_command(root)?;
     let keep = tip.to_string();
     if base == tip {
         return Ok(keep);
@@ -1641,6 +1642,9 @@ fn incomplete_checkout(root: &Path) -> Result<Option<String>, String> {
 /// not valid UTF-8 returns an error through `run_checked` to `run`, which refuses.
 /// Lookup/predicate exit 1, and `remote get-url` exit 2, mean an absent answer.
 fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
+    if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
+        codeflow_core::workgraph::history::check_command(root)?;
+    }
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -1653,6 +1657,9 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
 
 /// [`git`] with `input` on stdin.
 fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, String> {
+    if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
+        codeflow_core::workgraph::history::check_command(root)?;
+    }
     let out = codeflow_core::git::output_with_input(
         codeflow_core::git::command()
             .arg("-C")

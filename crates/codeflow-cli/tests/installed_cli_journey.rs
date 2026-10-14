@@ -402,3 +402,120 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
         rows.join("\n")
     }
 }
+
+/// TSK-287: the installed shim and both local judging commands refuse a
+/// graft hiding a source change and its revert. A clone carries the same
+/// commits without the local overlay and passes all three checks.
+#[test]
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)] // Keep the clean and overlaid installed journey together.
+fn history_overlay_is_refused_by_installed_hook_work_start_and_ci() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let (dir, root) = project("--standard");
+    let default = git(&root, &["branch", "--show-current"]);
+    let default_tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "-qc", "feat/history"]);
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "new",
+                "--standalone-reason",
+                "bounded history fix",
+                "--into",
+                &default,
+                "History",
+            ],
+        ),
+        "allocate task",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-001.md",
+        "- AC-1\n",
+        "- AC-1 History reads shall refuse an overlay.\n",
+    );
+    commit(&root, "docs: record history criteria");
+    ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
+    let branch = git(&root, &["branch", "--show-current"]);
+    let base = git(&root, &["rev-parse", "HEAD"]);
+    let remote = dir.path().join("destination.git");
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), "destination.git")
+        .bare()
+        .run();
+    let url = remote.to_str().unwrap();
+    git(&root, &["remote", "add", "origin", url]);
+    git(&root, &["fetch", "origin"]);
+    ok(
+        &codeflow(&root, &["ids", "seed"]),
+        "seed destination registry",
+    );
+    std::fs::write(root.join("source.rs"), "unreviewed source\n").unwrap();
+    commit(&root, "fix: change source");
+    std::fs::remove_file(root.join("source.rs")).unwrap();
+    let head = commit(&root, "fix: restore source");
+    let pre_push = |root: &Path| {
+        let mut child = with_env(&mut Command::new("sh"))
+            .arg(root.join(".codeflow/git-hooks/pre-push"))
+            .args(["origin", url])
+            .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                format!("refs/heads/{branch} {head} refs/heads/{branch} {base}\n").as_bytes(),
+            )
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    // The clean clone has identical objects and no local graft file.
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), "clean").run();
+    let clean = dir.path().join("clean");
+    git(&clean, &["remote", "set-url", "origin", url]);
+    for location in [&root, &clean] {
+        git(
+            location,
+            &[
+                "fetch",
+                "origin",
+                "codeflow/registry:refs/remotes/origin/codeflow/registry",
+            ],
+        );
+        ok(
+            &codeflow(location, &["work", "start", "TSK-001"]),
+            "clean work start",
+        );
+        ok(&ci(location, &default_tip, &branch, None), "clean local ci");
+        ok(&pre_push(location), "clean installed pre-push");
+    }
+    std::fs::create_dir_all(root.join(".git/info")).unwrap();
+    std::fs::write(root.join(".git/info/grafts"), format!("{head} {base}\n")).unwrap();
+    refused(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "overlaid work start",
+        "cannot verify",
+    );
+    refused(
+        &ci(&root, &default_tip, &branch, None),
+        "overlaid local ci",
+        "cannot verify",
+    );
+    refused(
+        &pre_push(&root),
+        "overlaid installed pre-push",
+        "cannot verify",
+    );
+    ok(
+        &pre_push(&clean),
+        "clean clone after overlay was planted elsewhere",
+    );
+}

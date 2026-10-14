@@ -85,6 +85,7 @@ const OBTAIN: &[&str] = &[
     "find_reference",
     "head",
     "graph_descendant_of",
+    "descendant_of",
     "merge_base",
     "get_path",
     "into_string",
@@ -3115,14 +3116,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-porcelain-status",
     ),
-    // An ancestry error gives is_fast_forward false, which restores the checkout and returns MergeFailed; an unreadable ancestry refuses the landing.
-    (
-        "crates/codeflow-core/src/integrate.rs",
-        "integrate",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
         "crates/codeflow-core/src/integrate.rs",
@@ -3690,7 +3683,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/status.rs",
         "classify_cleanup",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4370,7 +4363,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
         "has_active_branch",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "display",
     ),
@@ -4466,7 +4459,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "landed",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4483,14 +4476,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "remote_claims",
         "obtain-absent:find_commit",
-        1,
-        "unproven",
-    ),
-    // An ancestry read failure gives Err(the standalone branch must contain its current target), so claim_on refuses.
-    (
-        "crates/codeflow-core/src/workgraph/readiness.rs",
-        "standalone_claim_base",
-        "obtain-absent:graph_descendant_of",
         1,
         "unproven",
     ),
@@ -4610,7 +4595,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/release_line.rs",
         "Lines::position",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4747,30 +4732,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/work_start.rs",
         "check_work_start_anchored",
         "obtain-absent:head",
-        1,
-        "unproven",
-    ),
-    // unwrap_or(false) makes the pin not an ancestor, and check_work_start_on returns InvalidGraph (pin is not an ancestor of HEAD), so work start refuses.
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "check_work_start_on",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
-    // unwrap_or(false) leads to a DependencyPin refusal (not on line).
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "pinned_dependency",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
-    // A failed check rejects that candidate; only a proven container of all pins is chosen, so a failure gives the right base or the no reviewed base refusal.
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "stack_base_in",
-        "obtain-absent:graph_descendant_of",
         1,
         "unproven",
     ),

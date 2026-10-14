@@ -5,6 +5,8 @@
 //! The shims in `.git/hooks/` exec `codeflow git-hook <stage>`; ALL levels
 //! and lists come from `.codeflow/policy.json` (D7/D8 — nothing hardcoded).
 
+use crate::workgraph::history;
+
 use std::path::Path;
 
 use git2::Repository;
@@ -1124,7 +1126,7 @@ fn epic_line_push(
                     .map(|commit| commit.id())
                     .map_err(|e| format!("{revision}: {e}"))
             };
-            repo.merge_base(commit(&target)?, commit(&pushed.local_sha)?)
+            history::merge_base(repo, commit(&target)?, commit(&pushed.local_sha)?)
                 .map_err(|e| e.to_string())?
                 .to_string()
         } else {
@@ -1236,7 +1238,7 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
     if local == remote {
         return Ok(false);
     }
-    repo.graph_descendant_of(local, remote)
+    history::descendant_of(repo, local, remote)
         .map(|descends| !descends)
         .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
