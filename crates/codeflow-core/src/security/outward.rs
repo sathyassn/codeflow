@@ -108,6 +108,49 @@ struct Parsed {
     stdin_interpreter: usize,
     commands: Vec<Vec<String>>,
     created_tags: Vec<(PathBuf, String)>,
+    calls: Vec<InterpreterCall>,
+    /// What gives the command being read more arguments, while the
+    /// command an `xargs` or `find -exec` runs is read.
+    supplier: Option<Supplier>,
+    /// Whether a `cd` the guard cannot follow makes the directory unknown
+    /// for the commands after it. Only [`interpreter_calls`] sets it; the
+    /// action families keep their reading.
+    unknown_cd: bool,
+}
+
+/// One interpreter call (TSK-302, issue 173): the words it receives other
+/// than its inline code, the directory it runs in, and what else gives it
+/// arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InterpreterCall {
+    /// The words after the interpreter's name, without inline code: its
+    /// options, a script and the script's arguments. Any of them can name
+    /// a file the program writes.
+    pub(crate) args: Vec<String>,
+    /// The directory the call runs in; `None` after a `cd` the guard
+    /// cannot follow.
+    pub(crate) cwd: Option<PathBuf>,
+    /// The `xargs` or `find -exec` that runs the interpreter, if one does.
+    pub(crate) supplier: Option<Supplier>,
+}
+
+/// A command that runs an interpreter with arguments the line does not
+/// spell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Supplier {
+    /// `xargs` adds words read from its input or an argument file.
+    Xargs,
+    /// `find -exec` puts each path it visits in place of `{}`.
+    Find {
+        /// The starting points, as written.
+        starts: Vec<String>,
+        /// The expression before the `-exec`, whose `-name` tests decide
+        /// which paths reach it.
+        before: Vec<String>,
+        /// The directory `find` runs in; `None` when the guard cannot
+        /// follow it.
+        cwd: Option<PathBuf>,
+    },
 }
 
 pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
@@ -120,6 +163,23 @@ pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
     let mut parsed = Parsed::default();
     visit(command, None, 0, &mut parsed);
     parsed.code
+}
+
+/// Every interpreter call on the line, read through the launchers,
+/// wrappers and `cd` changes this parser follows, starting in `cwd`.
+pub(crate) fn interpreter_calls(command: &str, cwd: &Path) -> Vec<InterpreterCall> {
+    let mut parsed = Parsed {
+        unknown_cd: true,
+        ..Parsed::default()
+    };
+    visit(command, Some(cwd), 0, &mut parsed);
+    let mut calls = Vec::new();
+    for call in parsed.calls {
+        if !calls.contains(&call) {
+            calls.push(call);
+        }
+    }
+    calls
 }
 
 pub(crate) fn literal_words(code: &str) -> Vec<String> {
@@ -170,6 +230,14 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                 directories.sort();
                 directories.dedup();
             }
+            // `cd` alone, `cd -`, `cd ~user` and a value filled in at run
+            // time lead where the guard cannot follow.
+            let unknown = args
+                .get(1)
+                .is_none_or(|p| p.contains(['$', '`']) || p == "-" || p.starts_with('~'));
+            if out.unknown_cd && unknown && !directories.contains(&None) {
+                directories.push(None);
+            }
         }
     }
 }
@@ -198,7 +266,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
     }
-    record_interpreter(name, rest, out);
+    record_interpreter(name, rest, cwd, out);
     if let Err(reason) = direct_family(name, rest, cwd, out) {
         out.unreadable.push(reason);
     }
@@ -269,7 +337,14 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                         .iter()
                         .position(|s| s == ";" || s == "+")
                         .unwrap_or(tail.len());
+                    let supplier = Supplier::Find {
+                        starts: find_starts(rest),
+                        before: rest[..at].to_vec(),
+                        cwd: cwd.map(Path::to_path_buf),
+                    };
+                    let outer = out.supplier.replace(supplier);
                     argv(&tail[..end], cwd, depth + 1, out);
+                    out.supplier = outer;
                 }
             }
             None
@@ -287,21 +362,60 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         _ => None,
     };
     if let Some(inner) = inner {
+        let outer = if name == "xargs" {
+            out.supplier.replace(Supplier::Xargs)
+        } else {
+            out.supplier.clone()
+        };
         argv(inner, cwd, depth + 1, out);
+        out.supplier = outer;
     }
 }
 
-fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
-    if matches!(
-        name,
-        "python" | "python3" | "node" | "nodejs" | "perl" | "ruby"
-    ) {
+/// The starting points of a `find` call: the words before its expression,
+/// after the `-H`, `-L` and `-P` options, or `.` when there are none.
+fn find_starts(args: &[String]) -> Vec<String> {
+    let rest = &args[args
+        .iter()
+        .take_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
+        .count()..];
+    let starts: Vec<String> = rest
+        .iter()
+        .take_while(|a| !a.starts_with('-') && !matches!(a.as_str(), "!" | "("))
+        .cloned()
+        .collect();
+    if starts.is_empty() {
+        vec![".".to_string()]
+    } else {
+        starts
+    }
+}
+
+/// The interpreter a program name runs, by its family name: a version
+/// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
+/// interpreter they name.
+fn interpreter_family(name: &str) -> Option<&'static str> {
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    match name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.') {
+        "python" => Some("python"),
+        "node" => Some("node"),
+        "nodejs" => Some("nodejs"),
+        "perl" => Some("perl"),
+        "ruby" => Some("ruby"),
+        _ => None,
+    }
+}
+
+fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
+    if let Some(name) = interpreter_family(name) {
         let flag = if name.starts_with("python") {
             "-c"
         } else {
             "-e"
         };
         let mut found = false;
+        // The indices of the words that are inline code, not arguments.
+        let mut code_at = Vec::new();
         for (at, arg) in rest.iter().enumerate() {
             let cluster = arg
                 .strip_prefix('-')
@@ -319,6 +433,7 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
                 });
             if let Some(code) = (name == "perl").then(|| perl_attached_code(arg)).flatten() {
                 out.code.push(code.to_string());
+                code_at.push(at);
                 found = true;
             } else if cluster
                 || arg == flag
@@ -326,19 +441,32 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
             {
                 if let Some(code) = rest.get(at + 1) {
                     out.code.push(code.clone());
+                    code_at.push(at + 1);
                     found = true;
                 }
             } else if let Some(code) = arg.strip_prefix(flag).filter(|code| !code.is_empty()) {
                 out.code.push(code.to_string());
+                code_at.push(at);
                 found = true;
             } else if let Some(code) = arg.strip_prefix("--eval=") {
                 out.code.push(code.to_string());
+                code_at.push(at);
                 found = true;
             }
         }
         if !found {
             out.stdin_interpreter += 1;
         }
+        out.calls.push(InterpreterCall {
+            args: rest
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| !code_at.contains(at))
+                .map(|(_, arg)| arg.clone())
+                .collect(),
+            cwd: cwd.map(Path::to_path_buf),
+            supplier: out.supplier.clone(),
+        });
     }
 }
 

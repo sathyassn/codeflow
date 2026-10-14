@@ -334,6 +334,10 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// An interpreter given an argument that names, or may name, an
+    /// enforcement path (TSK-302).
+    INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
+        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";

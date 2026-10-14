@@ -3,8 +3,9 @@
 //! Catastrophic commands always block. Privilege, outward actions, secret
 //! reads and headless peer runs use their existing policy levels. The family
 //! classifier unwraps supported launchers; interpreter literals use the same
-//! rule as the action they name. Enforcement-path references use
-//! `git.hook_integrity`. Writes to shell startup files refuse under
+//! rule as the action they name. Enforcement-path references, in an
+//! interpreter's code or in its arguments, use `git.hook_integrity`
+//! (TSK-302). Writes to shell startup files refuse under
 //! `security.shell_startup`, which no policy relaxes (TSK-242), and writes
 //! to the default user and system git configuration files under
 //! `git.hook_integrity`. Opaque

@@ -1113,7 +1113,7 @@ const WRITING_PROGRAMS: &[&str] = &[
 
 /// A word as the guard shows it in a message: a command substitution the
 /// tokenizer cut out reads as `$(...)`.
-fn shown_word(word: &str) -> String {
+pub(crate) fn shown_word(word: &str) -> String {
     word.replace([git_target::SUBSTITUTED, SUBSTITUTED_BARE], "$(...)")
 }
 
@@ -1336,7 +1336,11 @@ fn unknown_dir_name_violation(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
-fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+pub(crate) fn token_integrity_path(
+    token: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<&'static str> {
     if token.is_empty() {
         return None;
     }
@@ -2220,7 +2224,7 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
 /// (`hooks/pre-commit` under `.git/hooks`). An absolute word, or one from
 /// the home directory, does not depend on the directory and is judged as
 /// written; an option's value after `=` is read as a word.
-fn word_could_name(word: &str) -> Option<&'static str> {
+pub(crate) fn word_could_name(word: &str) -> Option<&'static str> {
     // A word is read whole, and by the value an option or an assignment
     // gives it: `--output=FILE`, `of=FILE` and, for a short option, its
     // attached operand (`-oFILE`, `-OFILE`), since a program writes there.
@@ -3220,7 +3224,7 @@ fn worktree_text(text: &str) -> Option<&'static str> {
 /// The enforcement path a command line names, as text or through a glob
 /// word that reaches one from `cwd` once expanded and resolved
 /// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
-fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
+pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if let Some(p) = enforcement_text(line) {
         return Some(p.to_string());
     }
@@ -3784,7 +3788,7 @@ fn sed_text_violation(
 /// `None` when that part can select a path in a way the guard does not
 /// model (`-o`, `!`, `-not`, `(`, path or regex tests), so every path may
 /// reach it.
-fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
+pub(crate) fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     let mut names = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -3807,7 +3811,7 @@ fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     (!names.is_empty()).then_some(names)
 }
 
-fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
+pub(crate) fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     let Some(filter) = filter else {
         return true;
     };
