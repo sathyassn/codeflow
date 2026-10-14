@@ -1,0 +1,11 @@
+id = "TSK-316"
+uid = "b3c9bfde-2024-4079-ad72-ca590e2e8882"
+kind = "TSK"
+title = "The planning rule is reworded and scope drift is reported"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:27Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
