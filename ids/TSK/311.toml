@@ -1,0 +1,11 @@
+id = "TSK-311"
+uid = "3dc40371-f5d5-4eec-92cf-a0b8473caf2d"
+kind = "TSK"
+title = "The program report shows every record on every fetched line"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:06Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
