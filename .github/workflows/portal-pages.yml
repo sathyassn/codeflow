@@ -24,9 +24,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Both jobs pin the runner image (ubuntu-24.04), so a move of the
+  # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
+  # under them without a commit here (TSK-097). Move the label deliberately,
+  # after a green run on the new image.
   build:
     name: build portal
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # The portal reads the commit history for its last-updated dates.
@@ -51,7 +55,7 @@ jobs:
     name: deploy to GitHub Pages
     needs: build
     if: github.repository == 'sathyassn/codeflow' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       pages: write
