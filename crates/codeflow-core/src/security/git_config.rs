@@ -6,28 +6,56 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) type Environment = BTreeMap<String, String>;
+type ConfigValue<'a> = (&'a str, &'a str, &'a [u8]);
+
+#[derive(Debug)]
+struct Entry {
+    scope: String,
+    origin: String,
+    key: Vec<u8>,
+    value: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct Include {
+    pub(crate) path: PathBuf,
+    pub(crate) missing: bool,
+}
 
 #[derive(Debug)]
 pub(crate) struct EffectiveConfig {
-    entries: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    entries: Vec<Entry>,
     /// Includes named by the files Git read, including inactive conditions.
-    pub(crate) includes: Vec<PathBuf>,
+    pub(crate) includes: Vec<Include>,
 }
 
 impl EffectiveConfig {
     pub(crate) fn get(&self, key: &str) -> Result<Option<&str>, String> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|(name, _)| name == key.as_bytes())
-            .map(|(_, value)| {
-                std::str::from_utf8(value.as_deref().unwrap_or(b"true"))
+        self.get_all(key)
+            .last()
+            .map(|(_, _, value)| {
+                std::str::from_utf8(value)
                     .map_err(|_| format!("cannot verify Git configuration: {key} is not UTF-8"))
             })
             .transpose()
+    }
+
+    /// All raw values in Git's precedence order, with their scope and origin.
+    pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.key == key.as_bytes())
+            .map(|entry| {
+                (
+                    entry.scope.as_str(),
+                    entry.origin.as_str(),
+                    entry.value.as_deref().unwrap_or(b"true"),
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn boolean(&self, key: &str) -> Result<bool, String> {
@@ -39,15 +67,38 @@ impl EffectiveConfig {
     }
 }
 
+fn validate_environment(environment: &Environment) -> Result<(), String> {
+    for name in environment.keys() {
+        if !(name.starts_with("GIT_CONFIG_")
+            || matches!(
+                name.as_str(),
+                "GIT_DIR"
+                    | "GIT_WORK_TREE"
+                    | "GIT_COMMON_DIR"
+                    | "HOME"
+                    | "XDG_CONFIG_HOME"
+                    | "GIT_CEILING_DIRECTORIES"
+            ))
+        {
+            return Err(format!(
+                "cannot verify Git configuration: unsupported environment variable {name}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `globals` contains only the options before the Git subcommand. Environment
-/// entries are literal command-local assignments; inherited native bytes stay
-/// in the child environment. Unresolved shell expressions must be refused by
-/// the caller before reaching this reader.
+/// entries are allowlisted literal command-local assignments; inherited native
+/// bytes stay in the child environment. Unresolved shell expressions must be
+/// refused by the caller before reaching this reader.
 pub(crate) fn read(
     cwd: &Path,
     globals: &[String],
     environment: &Environment,
 ) -> Result<EffectiveConfig, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    validate_environment(environment)?;
     let mut command = crate::git::command();
     command
         .current_dir(cwd)
@@ -108,15 +159,33 @@ pub(crate) fn read(
             ));
         }
     }
+    // Git reports relative file origins from its discovered repository root,
+    // not necessarily the caller's directory. Probe with the identical globals
+    // and environment. Outside a repository config still works from cwd.
+    let mut location = crate::git::command();
+    location
+        .current_dir(cwd)
+        .envs(environment)
+        .env_remove("GIT_CONFIG")
+        .stdin(Stdio::null())
+        .args(command.get_args())
+        .args(["rev-parse", "--show-prefix"]);
+    directory = directory.canonicalize().unwrap_or(directory);
+    if let Ok(prefix) = bounded_output(&mut location, deadline) {
+        for _ in prefix.split(|byte| *byte == b'/').skip(1) {
+            directory.pop();
+        }
+    }
     command.args([
         "--no-pager",
         "config",
         "--null",
         "--list",
         "--show-origin",
+        "--show-scope",
         "--includes",
     ]);
-    let bytes = bounded_output(&mut command)?;
+    let bytes = bounded_output(&mut command, deadline)?;
     parse(&bytes, &directory, environment)
 }
 
@@ -134,10 +203,17 @@ fn parse(
         .split(|byte| *byte == 0);
     let mut entries = Vec::new();
     let mut includes = Vec::new();
-    while let Some(origin) = fields.next() {
-        if origin.is_empty() && bytes.is_empty() {
+    while let Some(scope) = fields.next() {
+        if scope.is_empty() && bytes.is_empty() {
             break;
         }
+        let origin = fields
+            .next()
+            .ok_or("cannot verify Git configuration: missing origin")?;
+        let scope = std::str::from_utf8(scope)
+            .map_err(|_| "cannot verify Git configuration: scope is not UTF-8")?;
+        let origin = std::str::from_utf8(origin)
+            .map_err(|_| "cannot verify Git configuration: origin is not UTF-8")?;
         let entry = fields
             .next()
             .ok_or("cannot verify Git configuration: incomplete output")?;
@@ -151,29 +227,37 @@ fn parse(
             let value = value.ok_or("cannot verify Git configuration: include has no path")?;
             let value = std::str::from_utf8(value)
                 .map_err(|_| "cannot verify Git configuration: include path is not UTF-8")?;
-            let origin = std::str::from_utf8(origin)
-                .map_err(|_| "cannot verify Git configuration: include origin is not UTF-8")?;
             let path = include_path(value, origin, directory, environment)?;
             // Git silently skips missing includes. Keep absence explicit, even
             // for an inactive condition: a later branch may activate it.
-            let metadata = std::fs::metadata(&path).map_err(|error| {
-                format!(
-                    "cannot verify Git configuration include {}: {error}",
-                    path.display()
-                )
-            })?;
-            if !metadata.is_file() {
-                return Err(format!(
-                    "cannot verify Git configuration include {}: not a regular file",
-                    path.display()
-                ));
-            }
-            includes.push(path);
+            let missing = match std::fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Ok(_) => {
+                    return Err(format!(
+                        "cannot verify Git configuration include {}: not a regular file",
+                        path.display()
+                    ))
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "cannot verify Git configuration include {}: {error}",
+                        path.display()
+                    ))
+                }
+            };
+            let path = path.canonicalize().unwrap_or(path);
+            includes.push(Include { path, missing });
             if includes.len() > 128 {
                 return Err("cannot verify Git configuration: more than 128 includes".into());
             }
         }
-        entries.push((key.to_vec(), value.map(<[u8]>::to_vec)));
+        entries.push(Entry {
+            scope: scope.into(),
+            origin: origin.into(),
+            key: key.to_vec(),
+            value: value.map(<[u8]>::to_vec),
+        });
     }
     includes.sort();
     includes.dedup();
@@ -195,9 +279,9 @@ fn include_path(
         return Ok(PathBuf::from(home).join(rest));
     }
     if value.starts_with('~') || value.starts_with("%(") {
-        return Err(
-            "cannot verify Git configuration: include path interpolation is unsupported".into(),
-        );
+        return Err(format!(
+            "cannot verify Git configuration: include path {value} uses unsupported interpolation"
+        ));
     }
     let path = Path::new(value);
     if path.is_absolute() {
@@ -213,8 +297,14 @@ fn include_path(
         .join(path))
 }
 
-fn bounded_output(command: &mut std::process::Command) -> Result<Vec<u8>, String> {
+fn bounded_output(
+    command: &mut std::process::Command,
+    deadline: Instant,
+) -> Result<Vec<u8>, String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
+    if Instant::now() >= deadline {
+        return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -233,20 +323,31 @@ fn bounded_output(command: &mut std::process::Command) -> Result<Vec<u8>, String
             .map(|_| bytes);
         let _ = sender.send(result);
     });
-    let result = receiver.recv_timeout(Duration::from_secs(3));
+    let result = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     let bytes = match result {
         Ok(Ok(bytes)) if bytes.len() as u64 <= LIMIT => bytes,
         _ => {
             let _ = child.kill();
-            let _ = child.wait();
+            std::thread::spawn(move || child.wait());
             return Err(
                 "cannot verify Git configuration: read failed or exceeded 3 seconds / 4 MiB".into(),
             );
         }
     };
-    let status = child
-        .wait()
-        .map_err(|error| format!("cannot verify Git configuration: {error}"))?;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("cannot verify Git configuration: {error}"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            std::thread::spawn(move || child.wait());
+            return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
     if !status.success() {
         return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
     }
@@ -272,6 +373,50 @@ mod tests {
             ("GIT_WORK_TREE".into(), dir.path().to_str().unwrap().into()),
         ]);
         (dir, environment)
+    }
+
+    #[test]
+    fn missing_inactive_include_does_not_hide_aliases() {
+        let (dir, mut env) = fixture();
+        let global = dir.path().join("global");
+        std::fs::write(
+            &global,
+            "[includeIf \"gitdir:/nowhere/work/\"]\n path = missing\n[alias]\n st = status\n",
+        )
+        .unwrap();
+        env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
+        let config = read(dir.path(), &[], &env).unwrap();
+        assert_eq!(config.get("alias.st").unwrap(), Some("status"));
+        assert_eq!(config.includes.len(), 1);
+        assert!(config.includes[0].missing);
+        assert_eq!(config.includes[0].path, dir.path().join("missing"));
+    }
+
+    #[test]
+    fn relative_origins_from_subdirectories_match_repository_root() {
+        let (dir, mut env) = fixture();
+        env.remove("GIT_DIR");
+        env.remove("GIT_WORK_TREE");
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("extra"), "[alias]\n st = status\n").unwrap();
+        git2::Repository::open(dir.path())
+            .unwrap()
+            .config()
+            .unwrap()
+            .set_str("include.path", "../extra")
+            .unwrap();
+        for (cwd, args) in [
+            (dir.path().join("sub"), vec![]),
+            (dir.path().to_path_buf(), vec!["-C".into(), "sub".into()]),
+        ] {
+            let config = read(&cwd, &args, &env).unwrap();
+            assert_eq!(config.get("alias.st").unwrap(), Some("status"));
+            assert_eq!(
+                config.includes[0].path,
+                dir.path().join("extra").canonicalize().unwrap()
+            );
+            assert!(!config.includes[0].missing);
+        }
     }
 
     #[test]
@@ -331,11 +476,11 @@ mod tests {
                 .unwrap(),
             Some("option")
         );
-        env.insert("SHIP".into(), "config-env".into());
+        env.insert("GIT_CONFIG_VALUE_0".into(), "config-env".into());
         let args = vec![
             "-c".into(),
             "alias.ship=earlier".into(),
-            "--config-env=alias.ship=SHIP".into(),
+            "--config-env=alias.ship=GIT_CONFIG_VALUE_0".into(),
         ];
         assert_eq!(
             read(dir.path(), &args, &env)
@@ -374,19 +519,14 @@ mod tests {
     }
 
     #[test]
-    fn include_loops_missing_files_and_invalid_environment_cannot_be_verified() {
+    fn include_loops_and_invalid_environment_cannot_be_verified() {
         let (dir, mut env) = fixture();
         let global = dir.path().join("global");
         env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
-        for contents in [
-            "[include]\n path = global\n",
-            "[include]\n path = missing\n",
-        ] {
-            std::fs::write(&global, contents).unwrap();
-            assert!(read(dir.path(), &[], &env)
-                .unwrap_err()
-                .contains("cannot verify"));
-        }
+        std::fs::write(&global, "[include]\n path = global\n").unwrap();
+        assert!(read(dir.path(), &[], &env)
+            .unwrap_err()
+            .contains("cannot verify"));
         std::fs::write(&global, "").unwrap();
         env.insert("GIT_CONFIG_COUNT".into(), "1".into());
         env.insert("GIT_CONFIG_KEY_0".into(), String::new());
@@ -398,6 +538,128 @@ mod tests {
             &env
         )
         .is_err());
+    }
+
+    #[test]
+    fn values_retain_scope_origin_and_order() {
+        let (dir, mut env) = fixture();
+        let global = dir.path().join("global");
+        std::fs::write(&global, "[credential]\n helper = fixture-global\n").unwrap();
+        env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("credential.helper", "fixture-local")
+            .unwrap();
+        let config = read(dir.path(), &[], &env).unwrap();
+        let values = config.get_all("credential.helper");
+        assert_eq!(values.len(), 2);
+        for ((scope, origin, value), (expected_scope, path, expected_value)) in values.iter().zip([
+            ("global", global, b"fixture-global".as_slice()),
+            (
+                "local",
+                dir.path().join(".git/config"),
+                b"fixture-local".as_slice(),
+            ),
+        ]) {
+            assert_eq!(*scope, expected_scope);
+            assert_eq!(*value, expected_value);
+            assert_eq!(
+                Path::new(origin.strip_prefix("file:").unwrap())
+                    .canonicalize()
+                    .unwrap(),
+                path.canonicalize().unwrap()
+            );
+        }
+        assert_eq!(
+            config.get("credential.helper").unwrap(),
+            Some("fixture-local")
+        );
+    }
+
+    #[test]
+    fn single_value_reads_decode_only_the_effective_value() {
+        let config = parse(
+            b"global\0file:/unused\0alias.st\n\xff\0local\0file:.git/config\0alias.st\nstatus\0",
+            Path::new("/unused"),
+            &Environment::new(),
+        )
+        .unwrap();
+        assert_eq!(config.get("alias.st").unwrap(), Some("status"));
+        assert_eq!(config.get_all("alias.st")[0].2, &[0xff]);
+    }
+
+    #[test]
+    fn child_environment_rejects_unapproved_names_before_spawn() {
+        let (dir, base) = fixture();
+        for name in [
+            "PATH",
+            "GIT_EXEC_PATH",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "UNRELATED",
+        ] {
+            let mut env = base.clone();
+            env.insert(name.into(), "unused".into());
+            let error = read(dir.path(), &[], &env).unwrap_err();
+            assert!(
+                error.contains(name) && error.contains("cannot verify"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_configuration_is_bounded() {
+        let (dir, mut env) = fixture();
+        let global = dir.path().join("oversized");
+        std::fs::write(
+            &global,
+            format!("[alias]\n large = {}\n", "x".repeat(4 * 1024 * 1024)),
+        )
+        .unwrap();
+        env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
+        let start = Instant::now();
+        assert!(read(dir.path(), &[], &env).unwrap_err().contains("4 MiB"));
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn missing_unconditional_includes_are_empty_and_inventory_is_bounded() {
+        let (dir, mut env) = fixture();
+        let global = dir.path().join("global");
+        env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
+        std::fs::write(&global, "[include]\n path = missing\n").unwrap();
+        assert!(read(dir.path(), &[], &env).unwrap().includes[0].missing);
+        std::fs::write(&global, "[include]\n path = missing\n".repeat(129)).unwrap();
+        assert!(read(dir.path(), &[], &env)
+            .unwrap_err()
+            .contains("128 includes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_configuration_and_child_exit_share_the_deadline() {
+        let (dir, mut env) = fixture();
+        let fifo = dir.path().join("blocked-config");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        env.insert("GIT_CONFIG_GLOBAL".into(), fifo.to_str().unwrap().into());
+        let start = Instant::now();
+        assert!(read(dir.path(), &[], &env)
+            .unwrap_err()
+            .contains("3 seconds"));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let mut child = std::process::Command::new("sh");
+        child.args(["-c", "exec 1>&-; exec sleep 10"]);
+        let start = Instant::now();
+        assert!(bounded_output(&mut child, start + Duration::from_secs(3))
+            .unwrap_err()
+            .contains("3 seconds"));
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

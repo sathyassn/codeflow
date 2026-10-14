@@ -32,6 +32,8 @@ pub(crate) fn evaluate_at(
     }
     let mut families = parsed.families;
     families.extend(embedded.families);
+    let mut config_reasons = parsed.config_reasons;
+    config_reasons.extend(embedded.config_reasons);
     families.sort_unstable();
     families.dedup();
     let release_roots: Vec<_> = families
@@ -79,8 +81,8 @@ pub(crate) fn evaluate_at(
                 if id == "unverified_git_config" {
                     return Violation::new(
                         "security.outward_actions", level,
-                        "cannot verify Git configuration after shell environment changes; the alias or push may publish a release".into(),
-                        crate::remedy::GUARD_ALIAS.remedy(),
+                        format!("{}; the alias or push may publish a release", config_reasons.iter().filter(|(at, _)| at == &root).map(|(_, reason)| reason.as_str()).collect::<Vec<_>>().join(", ")),
+                        crate::remedy::GUARD_GIT_CONFIGURATION.remedy(),
                     );
                 }
                 Violation::new(
@@ -108,7 +110,8 @@ pub(crate) fn evaluate_at(
 
 #[derive(Default)]
 struct Parsed {
-    config_unknown: bool,
+    config_trigger: Option<String>,
+    config_reasons: Vec<(Option<PathBuf>, String)>,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -145,14 +148,24 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         return;
     }
     shell_inputs(command, out);
-    // A shell environment change may persist across segments or be hidden in
-    // a launcher. Until that state is reproduced, no config-dependent Git
-    // action is proved safe. The git guard uses the same conservative test.
-    out.config_unknown |= crate::hooks::git_guard::mentions_config_env(command);
+    let inherited = out.config_trigger.clone();
+    let mut persistent = inherited.clone();
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
+        let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
+        if skip_assignments(&words).is_empty()
+            || words.first().is_some_and(|word| {
+                matches!(
+                    word.as_str(),
+                    "export" | "unset" | "declare" | "typeset" | "readonly"
+                )
+            })
+        {
+            persistent = trigger.clone().or(persistent);
+        }
+        out.config_trigger = trigger.or_else(|| persistent.clone());
         let mut assigned = skip_assignments(&words).to_vec();
         if let Some(setting) = words
             .iter()
@@ -183,6 +196,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
     }
+    out.config_trigger = inherited;
 }
 
 #[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
@@ -200,20 +214,35 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         let sub = global_args("git", rest);
         let config_env = rest[..rest.len() - sub.len()]
             .iter()
-            .any(|arg| arg.starts_with("--config-env"));
-        if (out.config_unknown || config_env)
-            && sub.first().is_some_and(|name| {
+            .find(|arg| arg.starts_with("--config-env"));
+        let trigger = out
+            .config_trigger
+            .clone()
+            .or_else(|| config_env.map(|option| format!("unsupported option {option}")));
+        if let Some(trigger) = trigger.filter(|_| {
+            sub.first().is_some_and(|name| {
                 name == "push" || !crate::hooks::git_guard::GIT_BUILTINS.contains(&name.as_str())
             })
-        {
+        }) {
             match has_explicit_git_directory(rest)
                 .then(|| git_policy_root(cwd, rest))
                 .transpose()
             {
-                Ok(source) => out
-                    .families
-                    .push(("unverified_git_config", source.flatten())),
+                Ok(source) => {
+                    let source = source.flatten();
+                    out.config_reasons.push((
+                        source.clone(),
+                        format!("cannot verify Git configuration after changing {trigger}"),
+                    ));
+                    out.families.push(("unverified_git_config", source));
+                }
                 Err(reason) => out.unreadable.push(reason),
+            }
+            // Configuration uncertainty must not hide syntactically proven
+            // actions such as --mirror or --tags. Do not read configuration
+            // or refs through the unreproduced environment for this pass.
+            if let Err(reason) = direct_family(name, rest, cwd, out, false) {
+                out.unreadable.push(reason);
             }
             return;
         }
@@ -232,7 +261,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
     }
     record_interpreter(name, rest, out);
-    if let Err(reason) = direct_family(name, rest, cwd, out) {
+    if let Err(reason) = direct_family(name, rest, cwd, out, true) {
         out.unreadable.push(reason);
     }
     if name == "git" {
@@ -394,6 +423,7 @@ fn direct_family(
     rest: &[String],
     cwd: Option<&Path>,
     out: &mut Parsed,
+    config_known: bool,
 ) -> Result<(), String> {
     let source = || {
         if name == "git" && has_explicit_git_directory(rest) {
@@ -448,10 +478,10 @@ fn direct_family(
         }
         if body.iter().any(|a| {
             matches!(a.as_str(), "--tags" | "--follow-tags" | "tag") || a.contains("refs/tags/")
-        }) || tag_push(body, cwd, rest, &out.created_tags)?
+        }) || (config_known && tag_push(body, cwd, rest, &out.created_tags)?)
         {
             out.families.push(("release", source()?));
-        } else if follow_tags(cwd, rest)? {
+        } else if config_known && follow_tags(cwd, rest)? {
             out.families.push(("configured_tag_push", source()?));
         }
     }
@@ -781,7 +811,12 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         // Neither an unreadable byte string nor shell code can prove its ref
         // operands safe. Do not inspect replacement characters or guess from
         // top-level words: a shell alias can hide another git invocation.
-        AliasAnswer::Expansion(_) | AliasAnswer::Unreadable(_) => None,
+        AliasAnswer::Expansion(_) => None,
+        AliasAnswer::Unreadable(reason) => {
+            out.config_reasons.push((source.clone(), reason));
+            out.families.push(("unverified_git_config", source));
+            return;
+        }
     };
     if let Some(words) = value {
         let mut args = vec!["git".to_string()];
@@ -1392,6 +1427,14 @@ mod tests {
         ] {
             for wrapper in &WRAPPERS[..11] {
                 let command = wrapper.replace("{}", command);
+                if command == "env -i git push origin task/x" {
+                    let findings = evaluate(&command, &SecuritySection::default());
+                    assert!(
+                        findings.iter().any(|v| v.message.contains("env -i")),
+                        "{findings:?}"
+                    );
+                    continue;
+                }
                 assert!(
                     evaluate(&command, &SecuritySection::default()).is_empty(),
                     "{command}"

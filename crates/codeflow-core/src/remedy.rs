@@ -683,6 +683,9 @@ catalog! {
     /// A git alias the guard cannot resolve.
     GUARD_ALIAS = Step::Git("git config"),
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
+    /// Effective configuration cannot be reproduced for an outward action.
+    GUARD_GIT_CONFIGURATION = Step::Git("git config"),
+        "inspect the named input with git config --show-origin --includes --list, then run with readable configuration and without environment overrides; the operator repairs the named input";
     /// A headless peer run.
     HEADLESS_PEER_RUN = Step::Codeflow("codeflow delegate"),
         "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md). Text that only mentions a peer, such as a brief, a commit message or a pull request body, goes in a file written with the editor tool and passed by path (`git commit -F <file>`, `gh pr create --body-file <file>`, `gh api … -F body=@<file>`); a heredoc or inline string that names a peer with a headless flag is flagged by design whenever the line cannot be fully parsed, and the policy level decides whether it is refused; {enforcement} (policy security.headless_peer_runs)";

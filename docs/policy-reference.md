@@ -402,18 +402,28 @@ where that path is outside the writable root (review rounds 17 and 18).
 The alias and follow-tags checks use one bounded effective-configuration
 reader. Git resolves files, includes, conditional includes, command options
 and inherited configuration environment variables. The reader preserves
-configuration values as bytes until a decision needs text. A malformed
-configuration, include loop, missing include, unsupported include-path
+configuration values as bytes until a decision needs text, retaining scope,
+origin and all values for multi-valued keys. Relative file origins resolve
+from Git's repository base, including invocations from subdirectories. A malformed
+configuration, include loop, unsupported include-path
 interpolation, or read beyond three seconds or 4 MiB is reported as
-"cannot verify". The include inventory is limited to 128 entries. The guards
+"cannot verify". Missing includes contribute nothing, as in Git, and remain
+in the diagnostic inventory. The include inventory is limited to 128 entries. The guards
 refuse configuration-dependent actions when shell environment changes cannot
 be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
 `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
-`GIT_CONFIG_NOSYSTEM`. `--config-env` alias invocations remain conservative
+`GIT_CONFIG_NOSYSTEM`. Refusals name the parsed assignment, exported variable
+or unsupported option; configuration words inside commit messages and paths
+do not count as environment changes. Clearing the environment with `env -i`
+or `--ignore-environment` also leaves these decisions unverifiable. The alias expansion check retains its
+existing conservative text check. Command-local reader environment entries
+are limited to `GIT_CONFIG_*`, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+`HOME`, `XDG_CONFIG_HOME` and `GIT_CEILING_DIRECTORIES`; other names are
+unverifiable. `--config-env` alias invocations remain conservative
 refusals because a shell assignment can supply the named variable.
 
 `codeflow doctor --check git-config-includes` names include files that may
-be writable and reports when their discovery cannot be verified. Include-file
+be writable, distinguishes missing files, and reports when discovery cannot be verified. Include-file
 writes are not guarded, and the check does not certify filesystem permissions.
 The operator inspects or repairs the configuration and secures its include
 paths. This is the diagnostic mitigation for issue 88; it avoids starting Git

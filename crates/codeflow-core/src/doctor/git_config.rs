@@ -17,11 +17,21 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Ok(paths) => {
             let paths = paths
                 .iter()
-                .map(|path| path.display().to_string())
+                .map(|include| {
+                    format!(
+                        "{} ({})",
+                        include.path.display(),
+                        if include.missing {
+                            "missing; contributes no configuration"
+                        } else {
+                            "present; writability not verified"
+                        }
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             (Status::Warn(crate::remedy::DOCTOR_GIT_CONFIG_INCLUDES.remedy()),
-                format!("Git configuration includes: {paths}. These files may be writable; include-file writes are not guarded. Files behind inactive nested conditions and concurrent configuration changes are not verified"))
+                format!("Git configuration includes: {paths}. Present files may be writable; include-file writes are not guarded. Files behind inactive nested conditions and concurrent configuration changes are not verified"))
         }
         Err(reason) => (
             Status::Warn(crate::remedy::DOCTOR_GIT_CONFIG_INCLUDES.remedy()),

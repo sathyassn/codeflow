@@ -1846,6 +1846,100 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
 }
 
 #[test]
+fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let work = dir.path().join("work");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/config",
+            work.to_str().unwrap(),
+        ],
+    );
+    let global = dir.path().join("fixture-global");
+    std::fs::write(
+        &global,
+        "[includeIf \"gitdir:/nowhere/work/\"]\n path = missing\n[alias]\n st = status\n",
+    )
+    .unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git commit -m 'docs: explain gitconfig includes'",
+            "git commit -m 'move to HOME page'",
+            "git checkout -- .git/config-notes.md",
+            "git log -1 -- docs/gitconfig.md && git push origin feat/x",
+            "git push origin task/x",
+            "git st",
+        ] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", hook])
+                    .env("GIT_CONFIG_GLOBAL", &global)
+                    .current_dir(&work),
+                &guard_payload(command, &work),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    let out = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        output.contains("missing; contributes no configuration"),
+        "{output}"
+    );
+    assert!(
+        output.contains(dir.path().join("missing").to_str().unwrap()),
+        "{output}"
+    );
+}
+
+#[test]
+fn relative_configuration_includes_work_from_subdirectories() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.path().join("extra"), "[alias]\n st = status\n").unwrap();
+    git(dir.path(), &["config", "include.path", "../extra"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (cwd, command) in [
+            (&sub, "git st"),
+            (&dir.path().to_path_buf(), "git -C sub st"),
+            (&dir.path().to_path_buf(), "cd sub && git st"),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(cwd),
+                &guard_payload(command, cwd),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn exec_guard_alone_refuses_environment_release_aliases() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");

@@ -904,12 +904,73 @@ fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
 
 /// Inspect assignments before launchers are stripped, including prior exports.
 pub(super) fn transport_config_environment(command: &str) -> bool {
-    expand_commands(command).iter().any(|segment| {
-        let tokens = shell_tokens(segment);
-        leading_env_assignments(&tokens).iter().any(|(name, _)| {
-            name.starts_with("GIT_CONFIG") || matches!(*name, "HOME" | "XDG_CONFIG_HOME")
-        })
+    configuration_environment_change(command).is_some()
+}
+
+fn configuration_variable(name: &str) -> bool {
+    name.starts_with("GIT_CONFIG") || matches!(name, "HOME" | "XDG_CONFIG_HOME")
+}
+
+fn configuration_environment_change(command: &str) -> Option<String> {
+    expand_commands(command).iter().find_map(|segment| {
+        let mut tokens = command_argv(segment);
+        strip_reserved_words(&mut tokens);
+        configuration_environment_trigger(&tokens)
     })
+}
+
+/// Inspect only assignments and launcher/builtin operands, never Git data.
+pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<String> {
+    let variable = |word: &str| {
+        let name = word.split_once('=').map_or(word, |(name, _)| name);
+        configuration_variable(name).then(|| format!("environment variable {name}"))
+    };
+    let mut at = 0;
+    loop {
+        while let Some(word) = tokens.get(at).filter(|word| assignment(word).is_some()) {
+            if let Some(reason) = variable(word) {
+                return Some(reason);
+            }
+            at += 1;
+        }
+        let program = tokens.get(at)?;
+        let name = launcher_name(program);
+        if name == "env" {
+            let end = env_options(tokens, at + 1, &mut Vec::new()).ok()?;
+            let mut index = at + 1;
+            while index < end {
+                let word = &tokens[index];
+                if matches!(word.as_str(), "-i" | "-" | "--ignore-environment") {
+                    return Some(format!("unsupported environment option env {word}"));
+                }
+                if matches!(word.as_str(), "-u" | "--unset") {
+                    if let Some(reason) = tokens.get(index + 1).and_then(|word| variable(word)) {
+                        return Some(reason);
+                    }
+                    index += 2;
+                } else if matches!(word.as_str(), "-C" | "--chdir" | "-P" | "-a" | "--argv0") {
+                    index += 2;
+                } else {
+                    if let Some(reason) = word
+                        .strip_prefix("--unset=")
+                        .or_else(|| word.strip_prefix("-u"))
+                        .and_then(variable)
+                        .or_else(|| assignment(word).and_then(|_| variable(word)))
+                    {
+                        return Some(reason);
+                    }
+                    index += 1;
+                }
+            }
+            at = end;
+        } else if matches!(name, "export" | "unset") || is_declare_builtin(program) {
+            return tokens[at + 1..].iter().find_map(|word| variable(word));
+        } else if is_prefix_launcher(program) {
+            at = skip_launcher_options(program, tokens, at + 1)?;
+        } else {
+            return None;
+        }
+    }
 }
 
 /// Env vars whose in-session assignment disables the client hooks. `HUSKY`
@@ -6353,7 +6414,7 @@ struct Mentions {
     /// cannot see.
     config_env: bool,
     /// Transport cannot trust config supplied by the command being judged.
-    transport_env: bool,
+    transport_env: Option<String>,
     /// `GIT_CONFIG` itself, not one of the `GIT_CONFIG_*` variables.
     git_config_var: bool,
     /// A `git config` write whose order the guard does not model: anywhere
@@ -6370,7 +6431,7 @@ impl LineFacts {
             mentions: Mentions {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 config_env: mentions_config_env(command),
-                transport_env: transport_config_environment(command),
+                transport_env: configuration_environment_change(command),
                 git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
                     !command[at + word.len()..]
                         .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
@@ -6430,7 +6491,24 @@ impl LineFacts {
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
             config_unknown: self.mentions.config_env || self.mentions.config_write,
-            transport_env: self.mentions.transport_env,
+            transport_env: configuration_environment_trigger(tokens)
+                .or_else(|| {
+                    tracked
+                        .then(|| {
+                            shell
+                                .vars
+                                .keys()
+                                .filter(|name| configuration_variable(name))
+                                .min()
+                                .map(|name| format!("environment variable {name}"))
+                        })
+                        .flatten()
+                })
+                .or_else(|| {
+                    (!tracked)
+                        .then(|| self.mentions.transport_env.clone())
+                        .flatten()
+                }),
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
@@ -6449,7 +6527,7 @@ struct Moves<'r> {
     location_unknown: bool,
     /// The line may change where git reads its configuration from.
     config_unknown: bool,
-    transport_env: bool,
+    transport_env: Option<String>,
     /// The line mentions `GIT_CONFIG`, the file `git config` writes when
     /// no scope option names one.
     git_config_var: bool,
@@ -6470,10 +6548,10 @@ fn check_authority(
         matches!(sub, "fetch" | "pull" | "push")
             || super::ref_authority::remote_transport_args(sub, rest).is_some()
     });
-    if (moved.transport_env || moved.config_unknown) && transport {
+    if let Some(trigger) = moved.transport_env.as_ref().filter(|_| transport) {
         violations.push(Violation::always_blocking(
             "git.policy_authority",
-            "command-local configuration can redirect the configured remote".into(),
+            format!("cannot verify the configured remote after changing {trigger}"),
             "use the configured remote without configuration environment overrides",
         ));
         return;
@@ -6555,11 +6633,21 @@ fn check_git(
     let head_moved_before = branches.head_may_move;
     branches.head_may_move |= !discard_readonly_git(sub, rest);
     let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
-    if (moved.config_unknown || config_env) && JUDGED_SUBCOMMANDS.contains(&sub) && sub != "config"
+    let trigger = moved.transport_env.clone().or_else(|| {
+        config_env.then(|| {
+            let globals = &args[..args.len() - rest.len() - 1];
+            let option = globals
+                .iter()
+                .find(|arg| arg.starts_with("--config-env"))
+                .map_or("--config-env", String::as_str);
+            format!("unsupported option {option}")
+        })
+    });
+    if let Some(trigger) = trigger.filter(|_| JUDGED_SUBCOMMANDS.contains(&sub) && sub != "config")
     {
         out.push(Violation::always_blocking(
             "git.policy_authority",
-            "cannot verify Git configuration after command-local environment changes".into(),
+            format!("cannot verify Git configuration after {trigger}"),
             "run the Git operation with the configured environment; the operator changes configuration",
         ));
     }
@@ -11305,6 +11393,23 @@ mod tests {
     }
 
     #[test]
+    fn configuration_words_in_operands_are_not_environment_changes() {
+        for command in [
+            "git commit -m 'docs: explain gitconfig includes'",
+            "git commit -m 'move to HOME page'",
+            "git checkout -- .git/config-notes.md",
+            "git log -1 -- docs/gitconfig.md && git push origin feat/x",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                !blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
+        }
+    }
+
+    #[test]
     fn configuration_environment_changes_refuse_branch_and_discard_decisions() {
         for command in [
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true git commit -m fix",
@@ -11312,9 +11417,13 @@ mod tests {
             "GIT_CONFIG_GLOBAL=/tmp/config git branch -D feature",
             "env -u GIT_CONFIG_SYSTEM git reset --hard",
             "GIT_CONFIG_NOSYSTEM=1 git push origin task/work",
+            "export HOME=/tmp/config; git push origin task/work",
+            "env --unset=XDG_CONFIG_HOME git push origin task/work",
+            "command env HOME=/tmp/config git commit -m fix",
         ] {
             let result = report(command, "task/work");
             assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
+            assert!(result.violations.iter().any(|v| v.message.contains("GIT_CONFIG") || v.message.contains("HOME") || v.message.contains("--config-env")), "{command}: {:?}", result.violations);
         }
     }
 
@@ -13202,7 +13311,7 @@ mod tests {
                 vars: None,
                 location_unknown: false,
                 config_unknown: mentions,
-                transport_env: false,
+                transport_env: None,
                 git_config_var: mentions,
                 narrows: false,
                 tokens,
@@ -17003,19 +17112,20 @@ fn check_discard(
             Err(why)
         } else if prior_mutation {
             Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
-        } else if moved.config_unknown
-            || args
-                .iter()
-                .take(args.len().saturating_sub(rest.len() + 1))
-                .any(|a| {
-                    a == "--work-tree"
-                        || a.starts_with("--work-tree=")
-                        || a == "--bare"
-                        || a.contains("core.worktree=")
-                        || a.contains("core.bare=")
-                        || a.contains("include.path=")
-                        || a.contains("includeIf.")
-                })
+        } else if let Some(trigger) = &moved.transport_env {
+            Err(format!("cannot verify Git configuration after {trigger}"))
+        } else if args
+            .iter()
+            .take(args.len().saturating_sub(rest.len() + 1))
+            .any(|a| {
+                a == "--work-tree"
+                    || a.starts_with("--work-tree=")
+                    || a == "--bare"
+                    || a.contains("core.worktree=")
+                    || a.contains("core.bare=")
+                    || a.contains("include.path=")
+                    || a.contains("includeIf.")
+            })
         {
             Err("explicit work-tree or bare repository overrides need an unambiguous git -C invocation".into())
         } else {
