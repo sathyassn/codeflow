@@ -1,0 +1,11 @@
+id = "TSK-309"
+uid = "02076c79-0ae8-45dc-82a7-f28196879593"
+kind = "TSK"
+title = "codeflow update never lowers the project's pinned version"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:12:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
