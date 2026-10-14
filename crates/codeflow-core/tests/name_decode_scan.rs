@@ -1573,7 +1573,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     // A name that is not valid UTF-8 folds to None, and the interpreter argument prefilter sends that path to the full enforcement checks, never clears it (TSK-302).
     (
-        "crates/codeflow-core/src/security/interpreter.rs",
+        "crates/codeflow-core/src/security/arguments.rs",
         "folded",
         "obtain-absent:to_str",
         1,

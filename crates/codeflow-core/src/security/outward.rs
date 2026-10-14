@@ -123,13 +123,17 @@ struct Parsed {
 /// arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterpreterCall {
-    /// The words after the interpreter's name, without inline code: its
-    /// options, a script and the script's arguments. Any of them can name
-    /// a file the program writes.
+    /// The words the interpreter hands its program, read by the family's
+    /// own option grammar: the values of its options, a script, and every
+    /// word after the code or script boundary. Inline code is left out.
+    /// Any of them can name a file the program writes.
     pub(crate) args: Vec<String>,
     /// The directory the call runs in; `None` after a `cd` the guard
     /// cannot follow.
     pub(crate) cwd: Option<PathBuf>,
+    /// A directory the interpreter changes to before it runs the program
+    /// (`ruby -C dir`), relative to `cwd`.
+    pub(crate) chdir: Option<String>,
     /// The `xargs` or `find -exec` that runs the interpreter, if one does.
     pub(crate) supplier: Option<Supplier>,
 }
@@ -150,6 +154,9 @@ pub(crate) enum Supplier {
         /// The directory `find` runs in; `None` when the guard cannot
         /// follow it.
         cwd: Option<PathBuf>,
+        /// `-execdir` or `-okdir`: the command runs in the directory of
+        /// each path `find` visits.
+        in_dir: bool,
     },
 }
 
@@ -199,6 +206,11 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     }
     shell_inputs(command, out);
     let mut directories = vec![cwd.map(Path::to_path_buf)];
+    // In a line of simple commands joined only by `&&`, a later command runs
+    // only after every `cd` before it succeeded, so it runs in the one
+    // directory they lead to. Any other shape keeps every directory a `cd`
+    // may or may not have reached (TSK-302 review F2).
+    let chained = out.unknown_cd && and_chain(command);
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
@@ -221,22 +233,31 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
         if args.first().is_some_and(|s| s == "cd") {
-            if let Some(path) = args.get(1).filter(|p| !p.contains(['$', '`'])) {
+            let operand = cd_operand(&args[1..]);
+            if let Some(path) = operand.filter(|p| !p.contains(['$', '`'])) {
                 let next: Vec<_> = directories
                     .iter()
-                    .filter_map(|dir| dir.as_ref().map(|dir| Some(dir.join(path))))
+                    .map(|dir| dir.as_ref().map(|dir| dir.join(path)))
                     .collect();
-                directories.extend(next);
+                if chained {
+                    directories = next;
+                } else {
+                    // A directory the guard cannot follow stays unknown.
+                    directories.extend(next.into_iter().flatten().map(Some));
+                }
                 directories.sort();
                 directories.dedup();
             }
             // `cd` alone, `cd -`, `cd ~user` and a value filled in at run
             // time lead where the guard cannot follow.
-            let unknown = args
-                .get(1)
-                .is_none_or(|p| p.contains(['$', '`']) || p == "-" || p.starts_with('~'));
-            if out.unknown_cd && unknown && !directories.contains(&None) {
-                directories.push(None);
+            let unknown =
+                operand.is_none_or(|p| p.contains(['$', '`']) || p == "-" || p.starts_with('~'));
+            if out.unknown_cd && unknown {
+                if chained {
+                    directories = vec![None];
+                } else if !directories.contains(&None) {
+                    directories.push(None);
+                }
             }
         }
     }
@@ -341,6 +362,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                         starts: find_starts(rest),
                         before: rest[..at].to_vec(),
                         cwd: cwd.map(Path::to_path_buf),
+                        in_dir: matches!(word.as_str(), "-execdir" | "-okdir"),
                     };
                     let outer = out.supplier.replace(supplier);
                     argv(&tail[..end], cwd, depth + 1, out);
@@ -391,6 +413,86 @@ fn find_starts(args: &[String]) -> Vec<String> {
     }
 }
 
+/// The directory operand of a `cd`, after its options (`-L`, `-P`, `-e`,
+/// `-@`) and an ending `--`; `None` for `cd` alone, which goes home.
+fn cd_operand(args: &[String]) -> Option<&str> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            return words.next().map(String::as_str);
+        }
+        let options = word.strip_prefix('-').filter(|letters| {
+            !letters.is_empty() && letters.chars().all(|c| matches!(c, 'L' | 'P' | 'e' | '@'))
+        });
+        if options.is_none() {
+            return Some(word);
+        }
+    }
+    None
+}
+
+/// Whether `command` is simple commands joined only by `&&`: outside
+/// quotes it has no `;`, `||`, single `|` or `&`, newline, grouping,
+/// substitution, heredoc or compound command. Anything else, or text the
+/// scan cannot read, is not a chain.
+fn and_chain(command: &str) -> bool {
+    let chars: Vec<char> = command.chars().collect();
+    let mut quote: Option<char> = None;
+    let mut at = 0;
+    let mut word_start = true;
+    while let Some(&ch) = chars.get(at) {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else if q == '"' && (ch == '`' || (ch == '$' && chars.get(at + 1) == Some(&'('))) {
+                return false;
+            } else if q == '"' && ch == '\\' {
+                at += 1;
+            }
+            at += 1;
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '\\' => at += 1,
+            '&' if chars.get(at + 1) == Some(&'&') => at += 1,
+            ';' | '|' | '&' | '\n' | '(' | ')' | '{' | '}' | '`' => return false,
+            '<' if chars.get(at + 1) == Some(&'<') => return false,
+            _ => {}
+        }
+        if word_start && ch.is_ascii_alphabetic() {
+            let word: String = chars[at..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                .collect();
+            if matches!(
+                word.as_str(),
+                "if" | "then"
+                    | "else"
+                    | "elif"
+                    | "fi"
+                    | "for"
+                    | "while"
+                    | "until"
+                    | "do"
+                    | "done"
+                    | "case"
+                    | "esac"
+                    | "select"
+                    | "function"
+                    | "eval"
+                    | "source"
+            ) {
+                return false;
+            }
+        }
+        // Space and tab are the blanks left here; a newline ended the scan.
+        word_start = matches!(ch, ' ' | '\t' | '&');
+        at += 1;
+    }
+    quote.is_none()
+}
+
 /// The interpreter a program name runs, by its family name: a version
 /// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
 /// interpreter they name.
@@ -420,8 +522,6 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
             "-e"
         };
         let mut found = false;
-        // The indices of the words that are inline code, not arguments.
-        let mut code_at = Vec::new();
         for (at, arg) in rest.iter().enumerate() {
             let cluster = arg
                 .strip_prefix('-')
@@ -439,7 +539,6 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
                 });
             if let Some(code) = (name == "perl").then(|| perl_attached_code(arg)).flatten() {
                 out.code.push(code.to_string());
-                code_at.push(at);
                 found = true;
             } else if cluster
                 || arg == flag
@@ -447,33 +546,175 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
             {
                 if let Some(code) = rest.get(at + 1) {
                     out.code.push(code.clone());
-                    code_at.push(at + 1);
                     found = true;
                 }
             } else if let Some(code) = arg.strip_prefix(flag).filter(|code| !code.is_empty()) {
                 out.code.push(code.to_string());
-                code_at.push(at);
                 found = true;
             } else if let Some(code) = arg.strip_prefix("--eval=") {
                 out.code.push(code.to_string());
-                code_at.push(at);
                 found = true;
             }
         }
         if !found {
             out.stdin_interpreter += 1;
         }
+        // The code collected above is read conservatively, from any word
+        // that may be code; the arguments come from the family's own option
+        // grammar, so a word after the code or script boundary is never
+        // dropped as code (TSK-302 review F1).
+        let (args, chdir) = interpreter_arguments(name, rest);
         out.calls.push(InterpreterCall {
-            args: rest
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| !code_at.contains(at))
-                .map(|(_, arg)| arg.clone())
-                .collect(),
+            args,
             cwd: cwd.map(Path::to_path_buf),
+            chdir,
             supplier: out.supplier.clone(),
         });
     }
+}
+
+/// How a short option of an interpreter family reads.
+enum Short {
+    /// Takes no value.
+    Flag,
+    /// Takes inline code, attached or as the next word.
+    Code,
+    /// Takes a value, attached or as the next word.
+    Value,
+    /// Takes the next word as a module and ends the options (`python -m`).
+    Module,
+    /// Changes directory to its value, attached or the next word (`ruby -C`).
+    Chdir,
+    /// Takes an optional value attached to it, which is the rest of the word.
+    Attached,
+}
+
+fn short_option(family: &str, letter: char) -> Short {
+    match (family, letter) {
+        ("python", 'c')
+        | ("perl" | "ruby", 'e')
+        | ("perl", 'E')
+        | ("node" | "nodejs", 'e' | 'p') => Short::Code,
+        ("python", 'm') => Short::Module,
+        ("python", 'W' | 'X')
+        | ("perl", 'I' | 'M' | 'm')
+        | ("ruby", 'I' | 'r' | 'E')
+        | ("node" | "nodejs", 'r' | 'C') => Short::Value,
+        ("ruby", 'C') => Short::Chdir,
+        ("perl", 'i' | 'x' | '0' | 'l' | 'F' | 'd' | 'D' | 'C' | 'V')
+        | ("ruby", 'i' | 'x' | '0' | 'F' | 'K' | 'T' | 'W') => Short::Attached,
+        _ => Short::Flag,
+    }
+}
+
+/// Long options that take the next word as their value when written
+/// without `=`.
+fn long_takes_value(family: &str, name: &str) -> bool {
+    match family {
+        "python" => name == "check-hash-based-pycs",
+        "ruby" => matches!(
+            name,
+            "encoding" | "external-encoding" | "internal-encoding" | "enable" | "disable"
+        ),
+        "node" | "nodejs" => matches!(
+            name,
+            "require"
+                | "import"
+                | "conditions"
+                | "input-type"
+                | "loader"
+                | "experimental-loader"
+                | "env-file"
+                | "title"
+                | "redirect-warnings"
+                | "diagnostic-dir"
+                | "report-directory"
+                | "cpu-prof-dir"
+                | "heap-prof-dir"
+        ),
+        _ => false,
+    }
+}
+
+/// The words an interpreter hands its program, read by the family's
+/// option grammar, and a `ruby -C` directory. Its own options' values are
+/// kept, inline code is left out, and the script and every word after the
+/// boundary are kept whole: `python -c CODE`, `-m MODULE`, `-`, `--` or a
+/// script ends the options, and so does node's eval code; perl and ruby
+/// read options until the first other word. An option the table does not
+/// know is a flag, so a word after it stays an argument either way.
+fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Option<String>) {
+    let mut args = Vec::new();
+    let mut chdir = None;
+    let mut at = 0;
+    let after = |at: usize| rest.get(at..).unwrap_or_default().to_vec();
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            args.extend(after(at));
+            return (args, chdir);
+        }
+        if word == "-" || !word.starts_with('-') {
+            args.extend(after(at - 1));
+            return (args, chdir);
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                at += usize::from(value.is_none());
+                args.extend(after(at));
+                return (args, chdir);
+            }
+            if value.is_none() && long_takes_value(family, name) {
+                args.extend(rest.get(at).cloned());
+                at += 1;
+            } else {
+                args.push(word.clone());
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        for (i, letter) in letters.char_indices() {
+            let tail = &letters[i + letter.len_utf8()..];
+            // Node never attaches a value to a short option (`-pe CODE`).
+            let attached = !tail.is_empty() && !matches!(family, "node" | "nodejs");
+            let value = |at: &mut usize| {
+                if attached {
+                    Some(tail.to_string())
+                } else {
+                    *at += 1;
+                    rest.get(*at - 1).cloned()
+                }
+            };
+            match short_option(family, letter) {
+                Short::Flag => continue,
+                Short::Attached => {}
+                Short::Code => {
+                    if matches!(family, "node" | "nodejs") && !tail.is_empty() {
+                        // `-pe`: the code is the next word.
+                        at += 1;
+                    } else {
+                        value(&mut at);
+                    }
+                    if !matches!(family, "perl" | "ruby") {
+                        args.extend(after(at));
+                        return (args, chdir);
+                    }
+                }
+                Short::Value => args.extend(value(&mut at)),
+                Short::Chdir => chdir = value(&mut at).or(chdir),
+                Short::Module => {
+                    args.extend(value(&mut at));
+                    args.extend(after(at));
+                    return (args, chdir);
+                }
+            }
+            break;
+        }
+    }
+    (args, chdir)
 }
 
 // Only cross flags that do not consume a value. In particular, the `e` in

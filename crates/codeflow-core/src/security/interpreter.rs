@@ -1,8 +1,8 @@
 //! Conservative literal inspection inside interpreter code, never ordinary
 //! data, and of the arguments an interpreter is given (TSK-302).
 use super::{actions, outward, pattern::matches_extended_glob};
-use crate::hooks::{edit_guard, git_guard, PolicyLevel, SecuritySection, Violation};
-use std::path::{Path, PathBuf};
+use crate::hooks::{PolicyLevel, SecuritySection, Violation};
+use std::path::Path;
 
 pub(crate) fn evaluate(
     command: &str,
@@ -96,402 +96,10 @@ pub(crate) fn evaluate(
             }
         }
     }
-    for call in outward::interpreter_calls(command, cwd) {
-        violations.extend(argument_violations(
-            command, &call, integrity, cwd, root, home,
-        ));
-    }
+    violations.extend(super::arguments::evaluate(
+        command, integrity, cwd, root, home,
+    ));
     violations
-}
-
-/// The words of one interpreter argument that can name a file: the word
-/// itself, or the value of an option written `--name=value`. A bare option,
-/// stdin's `-` and `--` name none.
-fn argument_value(word: &str) -> Option<&str> {
-    if word.is_empty() || word == "-" || word == "--" {
-        return None;
-    }
-    if word.starts_with('-') {
-        return word
-            .split_once('=')
-            .map(|(_, value)| value)
-            .filter(|v| !v.is_empty());
-    }
-    Some(word)
-}
-
-fn argument_violation(level: PolicyLevel, message: String) -> Violation {
-    Violation::new(
-        "git.hook_integrity",
-        level,
-        message,
-        crate::remedy::INTERPRETER_ARGUMENT.remedy(),
-    )
-}
-
-/// Judge the words an interpreter call is given as its code words are
-/// judged (issue 173): an argument naming policy authority metadata always
-/// refuses, and one naming an enforcement path refuses under
-/// `git.hook_integrity`. An argument the guard cannot read, filled in at
-/// run time or used from a directory it cannot follow, takes git-guard's
-/// rule for writer operands: it refuses when its spelled part could name an
-/// enforcement path or when the line names one. Arguments `xargs` or
-/// `find -exec` supplies are judged the same way, `find`'s by the
-/// enforcement files its starting points reach. A program that builds a
-/// path internally is past this reading; the OS sandbox is the backstop.
-fn argument_violations(
-    line: &str,
-    call: &outward::InterpreterCall,
-    integrity: PolicyLevel,
-    payload_cwd: &Path,
-    root: &Path,
-    home: Option<&Path>,
-) -> Vec<Violation> {
-    let mut found = Vec::new();
-    // Literal values, with the directory they are read from.
-    let mut literal: Vec<(&Path, &str)> = Vec::new();
-    for word in &call.args {
-        // `find` and `xargs -I {}` fill in `{}`; what they supply is
-        // judged below.
-        if call.supplier.is_some() && word.contains("{}") {
-            continue;
-        }
-        let Some(value) = argument_value(word) else {
-            continue;
-        };
-        // `~user` and `~-` are filled in by the shell too.
-        let unresolved = git_guard::unresolved_word(value)
-            || (value.starts_with('~') && !value.starts_with("~/") && value != "~");
-        let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
-        match (
-            unresolved,
-            call.cwd.as_deref().or(absolute.then_some(payload_cwd)),
-        ) {
-            (false, Some(dir)) => literal.push((dir, value)),
-            _ if integrity.is_active() => found.extend(unreadable_argument(
-                line,
-                value,
-                call.cwd.as_deref(),
-                unresolved,
-                integrity,
-                payload_cwd,
-            )),
-            _ => {}
-        }
-    }
-    let mut names = None;
-    for (dir, value) in literal {
-        if integrity.is_active() && (git_guard::has_glob(value) || value.contains('{')) {
-            if let Some(p) = git_guard::token_integrity_path(value, dir, payload_cwd) {
-                found.push(argument_violation(
-                    integrity,
-                    format!("an interpreter argument `{value}` reaches the enforcement path `{p}`"),
-                ));
-                continue;
-            }
-        }
-        // The full checks read every directory on the path; a value that
-        // passes through no protected name is cleared first.
-        let names = names.get_or_insert_with(|| ProtectedNames::load(root, home));
-        let target = literal_target(value, dir, home);
-        if !names.may_reach(&target) {
-            continue;
-        }
-        if edit_guard::repository_authority_target(&target, root, false) {
-            found.push(Violation::always_blocking(
-                "git.hook_integrity",
-                format!("an interpreter argument names policy authority metadata `{value}`"),
-                "the operator manages remote-tracking authority; use the configured remote's ordinary fetch",
-            ));
-            continue;
-        }
-        if !integrity.is_active() {
-            continue;
-        }
-        match edit_guard::enforcement_path(value, dir, root, home) {
-            Ok(false) => {}
-            Ok(true) => found.push(argument_violation(
-                integrity,
-                format!("an interpreter argument names the enforcement path `{value}`"),
-            )),
-            Err(why) => found.push(argument_violation(
-                integrity,
-                format!("cannot inspect interpreter argument `{value}`: {why}"),
-            )),
-        }
-    }
-    if integrity.is_active() {
-        found.extend(supplied_violation(line, call, integrity, payload_cwd));
-    }
-    found
-}
-
-/// The file a literal argument names from `dir`.
-fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
-    match (
-        value.strip_prefix("~/").or((value == "~").then_some("")),
-        home,
-    ) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => dir.join(value),
-    }
-}
-
-/// A name as compared here: Unicode NFC, lower case, so a spelling a
-/// case-insensitive or normalizing file system reads as the same name
-/// matches. `None` for a name that is not valid UTF-8, which the caller
-/// sends to the full checks.
-fn folded(name: &std::ffi::OsStr) -> Option<String> {
-    use unicode_normalization::UnicodeNormalization as _;
-    Some(name.to_str()?.nfc().collect::<String>().to_lowercase())
-}
-
-/// `path` with the symbolic links on its existing part resolved: the
-/// longest prefix that exists, canonicalized, then the rest as spelled.
-/// `None` when that cannot be read.
-fn resolved_existing(path: &Path) -> Option<PathBuf> {
-    let mut existing = path.to_path_buf();
-    let mut rest = Vec::new();
-    while std::fs::symlink_metadata(&existing).is_err() {
-        rest.push(existing.file_name()?.to_owned());
-        if !existing.pop() {
-            return None;
-        }
-    }
-    let mut resolved = std::fs::canonicalize(&existing).ok()?;
-    resolved.extend(rest.iter().rev());
-    Some(resolved)
-}
-
-/// The names a path passes through when it is an enforcement path or
-/// policy authority metadata: the first component of every protected
-/// pattern in the action table, the repository's common directory, and
-/// the git configuration files. A path that passes through none of them,
-/// read as spelled and with its symbolic links resolved, is neither, so
-/// the full checks, which read every directory on the path, are skipped
-/// for it. An argument list is judged in about the time one path takes
-/// (TSK-302).
-struct ProtectedNames {
-    names: Vec<String>,
-    /// Git configuration files named by full path (`XDG_CONFIG_HOME`,
-    /// `GIT_CONFIG_GLOBAL`), each folded, as spelled and resolved.
-    configs: Vec<String>,
-    /// A protected pattern this reading does not know: every path takes
-    /// the full checks.
-    unknown: bool,
-}
-
-impl ProtectedNames {
-    fn load(root: &Path, home: Option<&Path>) -> Self {
-        let mut unknown = false;
-        let mut names: Vec<String> = Vec::new();
-        for rule in &actions::table().claude_edit_denies {
-            let first = rule
-                .strip_prefix("Edit(")
-                .and_then(|s| s.strip_suffix(')'))
-                .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix('/')))
-                .and_then(|s| s.split('/').next())
-                .filter(|s| !s.is_empty() && !git_guard::has_glob(s));
-            match first.and_then(|first| folded(std::ffi::OsStr::new(first))) {
-                Some(first) => names.push(first),
-                None => unknown = true,
-            }
-        }
-        for name in [".git", ".gitconfig", "gitconfig"] {
-            names.push(name.to_string());
-        }
-        match crate::hooks::repo::open(root) {
-            Ok(Some(repo)) => match repo.commondir().components().next_back() {
-                Some(std::path::Component::Normal(name)) => match folded(name) {
-                    Some(name) => names.push(name),
-                    None => unknown = true,
-                },
-                _ => unknown = true,
-            },
-            Ok(None) => {}
-            Err(_) => unknown = true,
-        }
-        let mut configs: Vec<PathBuf> = crate::portable_path::user_homes()
-            .into_iter()
-            .chain(home.map(Path::to_path_buf))
-            .map(|home| home.join(".config/git/config"))
-            .collect();
-        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-            configs.push(PathBuf::from(xdg).join("git/config"));
-        }
-        for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
-            if let Some(path) = std::env::var_os(name).filter(|s| !s.is_empty()) {
-                configs.push(root.join(path));
-            }
-        }
-        let mut folded_configs = Vec::new();
-        for path in configs.iter().flat_map(|path| {
-            [
-                edit_guard::normalized(path, false).ok(),
-                resolved_existing(path),
-            ]
-        }) {
-            match path.as_deref().map(Path::as_os_str).map(folded) {
-                Some(Some(path)) => folded_configs.push(path),
-                // A configuration path that cannot be read sends every
-                // path to the full checks.
-                _ => unknown = true,
-            }
-        }
-        Self {
-            names,
-            configs: folded_configs,
-            unknown,
-        }
-    }
-
-    /// Whether `target` may be an enforcement path or authority metadata,
-    /// so the full checks must judge it.
-    fn may_reach(&self, target: &Path) -> bool {
-        // `..` after a symbolic link leaves where the spelling says; the
-        // full checks read it.
-        if self.unknown
-            || target
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        {
-            return true;
-        }
-        let Some((lexical, resolved)) = edit_guard::normalized(target, false)
-            .ok()
-            .and_then(|lexical| resolved_existing(&lexical).map(|resolved| (lexical, resolved)))
-        else {
-            return true;
-        };
-        [lexical, resolved].iter().any(|path| {
-            path.components().any(|component| match component {
-                std::path::Component::Normal(name) => {
-                    folded(name).is_none_or(|name| self.names.contains(&name))
-                }
-                _ => false,
-            }) || folded(path.as_os_str()).is_none_or(|path| self.configs.contains(&path))
-        })
-    }
-}
-
-/// An argument the guard cannot read: part of the value, or the directory
-/// it is read from, is filled in at run time. Its spelled part is read by
-/// its names, then the line is read for an enforcement path, as git-guard
-/// reads a writer's operand.
-fn unreadable_argument(
-    line: &str,
-    value: &str,
-    dir: Option<&Path>,
-    unresolved: bool,
-    integrity: PolicyLevel,
-    payload_cwd: &Path,
-) -> Option<Violation> {
-    let shown = git_guard::shown_word(value);
-    let reach = match dir {
-        Some(dir) => git_guard::token_integrity_path(value, dir, payload_cwd),
-        None => git_guard::word_could_name(value),
-    };
-    if let Some(p) = reach {
-        let why = if unresolved {
-            "part of it is filled in at run time"
-        } else {
-            "it is used from a directory the guard cannot follow"
-        };
-        return Some(argument_violation(
-            integrity,
-            format!(
-                "an interpreter argument `{shown}` could name the enforcement path `{p}`: {why}"
-            ),
-        ));
-    }
-    if !unresolved {
-        return None;
-    }
-    let p = git_guard::line_names(line, dir.unwrap_or(payload_cwd), payload_cwd)?;
-    Some(argument_violation(
-        integrity,
-        format!(
-            "an interpreter argument `{shown}` is filled in at run time on a line that names the enforcement path `{p}`"
-        ),
-    ))
-}
-
-/// The arguments `xargs` or `find -exec` gives an interpreter: `xargs`
-/// reads them at run time, so they refuse on a line that names an
-/// enforcement path; `find` gives each path its starting points reach and
-/// its `-name` tests let through, so they refuse when one is an
-/// enforcement path.
-fn supplied_violation(
-    line: &str,
-    call: &outward::InterpreterCall,
-    integrity: PolicyLevel,
-    payload_cwd: &Path,
-) -> Option<Violation> {
-    match call.supplier.as_ref()? {
-        outward::Supplier::Xargs => {
-            let dir = call.cwd.as_deref().unwrap_or(payload_cwd);
-            let p = git_guard::line_names(line, dir, payload_cwd)?;
-            Some(argument_violation(
-                integrity,
-                format!("`xargs` gives an interpreter arguments it reads at run time, on a line that names the enforcement path `{p}`"),
-            ))
-        }
-        outward::Supplier::Find {
-            starts,
-            before,
-            cwd,
-        } => {
-            // `find` hands its paths over as `{}`, or to a shell `-c`
-            // string that passes them on as its positional parameters.
-            if !call
-                .args
-                .iter()
-                .any(|word| word.contains("{}") || git_guard::unresolved_word(word))
-            {
-                return None;
-            }
-            let dir = cwd.as_deref().unwrap_or(payload_cwd);
-            if let Some(p) = git_guard::line_names(line, dir, payload_cwd) {
-                return Some(argument_violation(
-                    integrity,
-                    format!("`find` gives an interpreter paths on a line that names the enforcement path `{p}`"),
-                ));
-            }
-            let filter = git_guard::find_name_filter(before);
-            for start in starts {
-                let path = match cwd {
-                    Some(dir) if !git_guard::unresolved_word(start) => dir.join(start),
-                    // The line check above covers a start the guard cannot read.
-                    _ => continue,
-                };
-                let candidates = match edit_guard::find_candidates(&path, payload_cwd) {
-                    Ok(candidates) => candidates,
-                    Err(error) => {
-                        return Some(argument_violation(
-                            integrity,
-                            format!("cannot read the paths `find` gives an interpreter: {error}"),
-                        ))
-                    }
-                };
-                // The candidates are the enforcement paths and checkouts
-                // under the start, and the directories leading to them.
-                if let Some(candidate) = candidates.iter().find(|candidate| {
-                    git_guard::find_name_matches(filter.as_deref(), candidate)
-                        && edit_guard::repository_enforcement_target(candidate, payload_cwd, false)
-                            .unwrap_or(true)
-                }) {
-                    return Some(argument_violation(
-                        integrity,
-                        format!(
-                            "`find` can give an interpreter the enforcement path `{}`",
-                            candidate.display()
-                        ),
-                    ));
-                }
-            }
-            None
-        }
-    }
 }
 
 fn secret_path(word: &str, home: Option<&Path>) -> bool {
@@ -534,6 +142,7 @@ fn secret_path(word: &str, home: Option<&Path>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     fn check(code: &str, levels: &SecuritySection) -> Vec<Violation> {
         evaluate(
             code,
@@ -921,7 +530,35 @@ mod tests {
         let cwd = Path::new("/w");
         let calls = outward::interpreter_calls("python3 -c 'x = 1' a.py b", cwd);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].args, ["-c", "a.py", "b"]);
+        assert_eq!(calls[0].args, ["a.py", "b"]);
+        // Every word after the code or script boundary is an argument, a
+        // second `-c` included; option values are kept, flags are not.
+        let args = |line: &str| outward::interpreter_calls(line, cwd)[0].args.clone();
+        assert_eq!(args("python3 -c 'x' -c s.json"), ["-c", "s.json"]);
+        assert_eq!(args("python3 -Ic'x' a"), ["a"]);
+        assert_eq!(
+            args("python3 -W ignore -m json.tool a b"),
+            ["ignore", "json.tool", "a", "b"]
+        );
+        assert_eq!(args("python3 -B - a"), ["-", "a"]);
+        assert_eq!(args("python3 -- s.py -o"), ["s.py", "-o"]);
+        assert_eq!(args("node -pe 'x' a -e b"), ["a", "-e", "b"]);
+        assert_eq!(
+            args("node --require ./r.js app.js a"),
+            ["./r.js", "app.js", "a"]
+        );
+        assert_eq!(args("perl -i.bak -pe 's/a/b/' -e 'c' f"), ["f"]);
+        assert_eq!(
+            args("perl -I lib -Mstrict -e 'x' f"),
+            ["lib", "strict", "f"]
+        );
+        assert_eq!(args("ruby -C d -e 'x' f")[..], ["f"]);
+        assert_eq!(
+            outward::interpreter_calls("ruby -C d -e 'x' f", cwd)[0]
+                .chdir
+                .as_deref(),
+            Some("d")
+        );
         assert_eq!(
             outward::interpreter_calls("node --eval=code x", cwd)[0].args,
             ["x"]
@@ -936,10 +573,172 @@ mod tests {
             .map(|c| c.cwd)
             .collect();
         assert!(dirs.contains(&None), "{dirs:?}");
+        // `cd` options are read past, and an `&&` chain runs a command in
+        // the one directory its changes lead to.
+        let dirs = |line: &str| -> Vec<Option<PathBuf>> {
+            outward::interpreter_calls(line, cwd)
+                .into_iter()
+                .map(|c| c.cwd)
+                .collect()
+        };
+        assert_eq!(
+            dirs("cd -- sub && python3 x"),
+            [Some(PathBuf::from("/w/sub"))]
+        );
+        assert_eq!(
+            dirs("cd -P -L sub && python3 x"),
+            [Some(PathBuf::from("/w/sub"))]
+        );
+        assert_eq!(
+            dirs("cd a && cd b && python3 x"),
+            [Some(PathBuf::from("/w/a/b"))]
+        );
+        assert_eq!(
+            dirs("cd a; python3 x"),
+            [Some(PathBuf::from("/w")), Some(PathBuf::from("/w/a"))]
+        );
         assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
         // A version suffix is read past; a multi-byte name ending is not cut
         // inside a character.
         assert_eq!(outward::interpreter_calls("ruby3.3 x", cwd).len(), 1);
         assert!(outward::interpreter_calls("gre\u{a0}1 x", cwd).is_empty());
+    }
+
+    /// Every command refuses with a finding about an interpreter argument
+    /// that keeps its level fixed (authority metadata) at `level`.
+    fn assert_authority(repo: &Repo, commands: &[&str], level: PolicyLevel) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = judge_in(repo, &repo.root, &repo.root, command, level);
+            if !findings
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.level_fixed)
+            {
+                wrong.push(format!(
+                    "should refuse at {level:?}: {command}: {findings:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// TSK-302 review F1: a word after the interpreter's code or script
+    /// boundary is an argument, a second `-c` included, and a short
+    /// option's attached value is read as a path; ordinary options pass.
+    #[test]
+    fn arguments_after_code_and_attached_values_refuse() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd .claude && python3 -c 'import sys; open(sys.argv[2], \"a\").write(\"\")' -c settings.json",
+                "python3 -c 'import argparse; p=argparse.ArgumentParser(); p.add_argument(\"-o\"); open(p.parse_args().o,\"a\").write(\"\")' -o.claude/settings.json",
+                "python3 -c 'x' -- .claude/settings.json",
+                "python3 - -o.codeflow/policy.json <<'PY'\nimport sys\nPY",
+                "python3 tool.py -o.claude/settings.json",
+                "python3 -m tool .codeflow/policy.json",
+                "node app.js -o.claude/settings.json",
+                "perl -e 'x' -- -o.claude/settings.json",
+                "ruby -C .claude -e 'x' settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "python3 -c 'x' -c data.json",
+                "python3 tool.py -v -n3 --level=2 -o out.json",
+                "python3 -W ignore -X dev tool.py data.json",
+                "node --require ./setup.js app.js data.json",
+                "perl -I lib -e 'x' notes.txt",
+                "ruby -C src -e 'x' app.rb",
+            ],
+        );
+    }
+
+    /// TSK-302 review F2: `cd` options are read past, an `&&` chain runs in
+    /// the directory its changes lead to, and `find -execdir` runs its
+    /// command in each directory it visits.
+    #[test]
+    fn the_directory_an_interpreter_runs_in_is_followed() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd -- .claude && python3 -c 'import sys; open(sys.argv[1], \"a\").write(\"\")' settings.json",
+                "cd -P .claude && python3 -c 'import sys; open(sys.argv[1], \"a\").write(\"\")' settings.json",
+                "cd -L -- .claude && python3 tool.py settings.json",
+                "cd .claude || true; python3 tool.py settings.json",
+                "find . -name '*.json' -execdir python3 tool.py settings.json \\;",
+                "cd \"$D\" && python3 tool.py policy.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "cd .claude && cd .. && python3 tool.py settings.json",
+                "cd src && python3 tool.py out.json",
+                "find src -name '*.py' -execdir python3 -m py_compile {} +",
+                "find src -name '*.py' -execdir python3 lint.py out.txt \\;",
+            ],
+        );
+    }
+
+    /// TSK-302 review F3: authority metadata refuses in every operand form,
+    /// supplied, filled in at run time or globbed, whatever the integrity
+    /// level; ordinary unresolved input stays allowed.
+    #[test]
+    fn authority_refuses_in_every_operand_form_at_every_level() {
+        let repo = repo();
+        for level in [
+            PolicyLevel::Block,
+            PolicyLevel::Warn,
+            PolicyLevel::Allow,
+            PolicyLevel::Off,
+        ] {
+            assert_authority(
+                &repo,
+                &[
+                    "python3 tool.py .git/config",
+                    "echo .git/config | xargs python3 tool.py",
+                    "find .git -name config -exec python3 tool.py {} \\;",
+                    "P=.git/config; python3 tool.py \"$P\"",
+                    "python3 tool.py .git/con*",
+                    "python3 tool.py \"$(echo .git/config)\"",
+                ],
+                level,
+            );
+            for command in [
+                "python3 tool.py \"$INPUT\"",
+                "ls | xargs python3 tool.py",
+                "find src -exec python3 tool.py {} \\;",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
+            ] {
+                let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
+                assert!(findings.is_empty(), "{level:?}: {command}: {findings:?}");
+            }
+        }
+    }
+
+    /// TSK-302 review F4: a line with several suppliers reads what the line
+    /// names once, so five `xargs` interpreters stay within the hook's
+    /// 10-second budget with a wide margin.
+    #[test]
+    fn several_suppliers_read_the_line_once() {
+        let repo = repo();
+        let line = (0..5)
+            .map(|n| format!("ls | xargs python3 check{n}.py"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let started = std::time::Instant::now();
+        assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

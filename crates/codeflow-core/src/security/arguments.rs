@@ -1,0 +1,662 @@
+//! The paths an interpreter is given as arguments (TSK-302, issue 173).
+//!
+//! exec-guard judges an interpreter's arguments as it judges the words of
+//! its inline code: one that names policy authority metadata always
+//! refuses, and one that names an enforcement path refuses under
+//! `git.hook_integrity`. An argument the guard cannot read, filled in at
+//! run time or used from a directory it cannot follow, takes git-guard's
+//! rule for writer operands: it refuses when its spelled part could name a
+//! protected path or when the line names one. The arguments `xargs` and
+//! `find -exec` supply are judged the same way, `find`'s by the protected
+//! files its starting points reach. Authority metadata refuses in every
+//! one of these forms, whatever the integrity level. A program that builds
+//! a path internally is past this reading; the OS sandbox is the backstop.
+use super::{actions, outward};
+use crate::hooks::{edit_guard, git_guard, PolicyLevel, Violation};
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
+
+/// The sanctioned route of an authority refusal, as the code check gives it.
+const AUTHORITY_ROUTE: &str =
+    "the operator manages remote-tracking authority; use the configured remote's ordinary fetch";
+
+/// What an argument reaches: authority metadata, which always refuses, or
+/// an enforcement path, which refuses at the integrity level.
+enum Reach {
+    Authority(String),
+    Enforcement(String),
+}
+
+pub(crate) fn evaluate(
+    line: &str,
+    integrity: PolicyLevel,
+    payload_cwd: &Path,
+    root: &Path,
+    home: Option<&Path>,
+) -> Vec<Violation> {
+    let calls = outward::interpreter_calls(line, payload_cwd);
+    if calls.is_empty() {
+        return Vec::new();
+    }
+    let mut facts = Facts {
+        line,
+        payload_cwd,
+        root,
+        home,
+        names: ProtectedNames::load(root, home),
+        line_enforcement: HashMap::new(),
+        line_authority: HashMap::new(),
+    };
+    let mut found = Vec::new();
+    for call in &calls {
+        for reach in call_reaches(call, &mut facts) {
+            let violation = match reach {
+                Reach::Authority(message) => Some(Violation::always_blocking(
+                    "git.hook_integrity",
+                    message,
+                    AUTHORITY_ROUTE,
+                )),
+                Reach::Enforcement(message) => integrity.is_active().then(|| {
+                    Violation::new(
+                        "git.hook_integrity",
+                        integrity,
+                        message,
+                        crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+                    )
+                }),
+            };
+            found.extend(violation);
+        }
+    }
+    found
+}
+
+/// What one evaluation reads once and reuses for every call on the line
+/// (TSK-302 review F4): the protected names, and what the whole line names
+/// from each directory a call runs in.
+struct Facts<'a> {
+    line: &'a str,
+    payload_cwd: &'a Path,
+    root: &'a Path,
+    home: Option<&'a Path>,
+    names: ProtectedNames,
+    line_enforcement: HashMap<Option<PathBuf>, Option<String>>,
+    line_authority: HashMap<Option<PathBuf>, Option<String>>,
+}
+
+impl Facts<'_> {
+    /// The enforcement path the line names from `dir`, read once per
+    /// directory; a word whose path passes through no protected name is
+    /// not resolved.
+    fn line_enforcement(&mut self, dir: Option<&Path>) -> Option<String> {
+        let key = dir.map(Path::to_path_buf);
+        if let Some(found) = self.line_enforcement.get(&key) {
+            return found.clone();
+        }
+        let from = dir.unwrap_or(self.payload_cwd);
+        let names = &self.names;
+        let found = git_guard::line_names_where(self.line, from, self.payload_cwd, &|path| {
+            names.may_reach(path)
+        });
+        self.line_enforcement.insert(key, found.clone());
+        found
+    }
+
+    /// The word of the line that names policy authority metadata from
+    /// `dir`, read once per directory.
+    fn line_authority(&mut self, dir: Option<&Path>) -> Option<String> {
+        let key = dir.map(Path::to_path_buf);
+        if let Some(found) = self.line_authority.get(&key) {
+            return found.clone();
+        }
+        let from = dir.unwrap_or(self.payload_cwd);
+        let found = git_guard::line_path_words(self.line)
+            .into_iter()
+            .find(|word| {
+                // A glob the guard cannot list is left to the enforcement
+                // reading of the line, which refuses it near protected paths.
+                literal_paths(word, from, self.home)
+                    .is_some_and(|paths| paths.iter().any(|path| self.authority(path)))
+            })
+            .map(|word| git_guard::shown_word(&word));
+        self.line_authority.insert(key, found.clone());
+        found
+    }
+
+    /// Whether `path` is policy authority metadata.
+    fn authority(&self, path: &Path) -> bool {
+        self.names.may_reach(path)
+            && edit_guard::repository_authority_target(path, self.root, false)
+    }
+}
+
+/// The paths a word names from `dir` once the shell expands its braces and
+/// globs, or `None` when the guard cannot list them.
+fn literal_paths(word: &str, dir: &Path, home: Option<&Path>) -> Option<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for reading in git_guard::word_readings(word)? {
+        if reading.is_empty() {
+            continue;
+        }
+        if git_guard::has_glob(&reading) {
+            paths.extend(git_guard::glob_paths(&reading, dir)?);
+        } else {
+            paths.push(literal_target(&reading, dir, home));
+        }
+    }
+    Some(paths)
+}
+
+/// The words of one interpreter argument that can name a file: the word
+/// itself, or for an option the value written after `=` and a short
+/// option's attached value (`-o.claude/settings.json`). Stdin's `-` and
+/// `--` name none.
+fn argument_values(word: &str) -> Vec<&str> {
+    if word.is_empty() || word == "-" || word == "--" {
+        return Vec::new();
+    }
+    if !word.starts_with('-') {
+        return vec![word];
+    }
+    let mut values: Vec<&str> = word
+        .split_once('=')
+        .map(|(_, value)| value)
+        .into_iter()
+        .collect();
+    if !word.starts_with("--") {
+        if let Some((at, _)) = word.char_indices().nth(2) {
+            values.push(&word[at..]);
+        }
+    }
+    values.retain(|value| !value.is_empty());
+    values
+}
+
+/// The directories a call's relative arguments are read from: where it
+/// runs, after a `ruby -C`, and for `find -execdir` each directory `find`
+/// can run it in. `None` stands for a directory the guard cannot follow.
+fn call_dirs(call: &outward::InterpreterCall, facts: &Facts<'_>) -> Vec<Option<PathBuf>> {
+    let base = match (&call.cwd, &call.chdir) {
+        (Some(cwd), Some(chdir)) if !git_guard::unresolved_word(chdir) => Some(cwd.join(chdir)),
+        (_, Some(_)) => None,
+        (cwd, None) => cwd.clone(),
+    };
+    let Some(outward::Supplier::Find {
+        starts,
+        cwd,
+        in_dir: true,
+        ..
+    }) = &call.supplier
+    else {
+        return vec![base];
+    };
+    // `-execdir` runs the command in the directory of each path it visits:
+    // every directory that leads to a protected path under a start, and the
+    // start itself. The `-name` tests are not applied here, so any match in
+    // such a directory counts.
+    let mut dirs = Vec::new();
+    for start in starts {
+        let Some(start) = cwd
+            .as_ref()
+            .filter(|_| !git_guard::unresolved_word(start))
+            .map(|cwd| cwd.join(start))
+        else {
+            dirs.push(None);
+            continue;
+        };
+        let Ok(mut reached) = edit_guard::find_candidates(&start, facts.payload_cwd) else {
+            // What it cannot list may run anywhere under the start.
+            dirs.push(None);
+            continue;
+        };
+        reached.extend(authority_files(facts.root));
+        for path in reached {
+            if !path.starts_with(&start) {
+                continue;
+            }
+            // The path itself counts too: a directory among them is one
+            // `find` visits, and a file joined with a name reaches nothing.
+            if let Some(parent) = path.parent() {
+                dirs.push(Some(parent.to_path_buf()));
+            }
+            dirs.push(Some(path));
+        }
+        dirs.push(Some(start));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// What every argument of one call, and what its supplier gives it, reach.
+fn call_reaches(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Vec<Reach> {
+    let dirs = call_dirs(call, facts);
+    let mut found = Vec::new();
+    for word in &call.args {
+        // `find` and `xargs -I {}` fill in `{}`; what they supply is judged
+        // below.
+        if call.supplier.is_some() && word.contains("{}") {
+            continue;
+        }
+        for value in argument_values(word) {
+            for dir in &dirs {
+                found.extend(value_reach(value, dir.as_deref(), facts));
+            }
+        }
+    }
+    found.extend(supplied_reach(call, facts));
+    found
+}
+
+/// The file a literal argument names from `dir`.
+fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
+    match (
+        value.strip_prefix("~/").or((value == "~").then_some("")),
+        home,
+    ) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => dir.join(value),
+    }
+}
+
+/// Whether a reached-path description from git-guard names authority
+/// metadata rather than an enforcement file.
+fn names_authority(reached: &str) -> bool {
+    reached == edit_guard::AUTHORITY_PATH
+        || reached == edit_guard::GIT_CONFIG_AUTHORITY
+        || [
+            ".git/config",
+            "packed-refs",
+            "refs/remotes",
+            "config.worktree",
+            "gitconfig",
+        ]
+        .iter()
+        .any(|name| reached.contains(name))
+}
+
+fn value_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
+    // `~user` and `~-` are filled in by the shell too.
+    let unresolved = git_guard::unresolved_word(value)
+        || (value.starts_with('~') && !value.starts_with("~/") && value != "~");
+    let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
+    match (unresolved, dir.or(absolute.then_some(facts.payload_cwd))) {
+        (false, Some(dir)) => literal_reach(value, dir, facts),
+        _ => unreadable_reach(value, dir, unresolved, facts),
+    }
+}
+
+/// A literal argument, its braces and globs expanded: authority metadata
+/// first, then an enforcement path. Only a path that passes through a
+/// protected name takes the full checks.
+fn literal_reach(value: &str, dir: &Path, facts: &Facts<'_>) -> Option<Reach> {
+    let Some(paths) = literal_paths(value, dir, facts.home) else {
+        // The guard cannot list what the word reaches; git-guard's reading
+        // decides, and a description naming authority keeps that class.
+        let reached = git_guard::token_integrity_path(value, dir, facts.payload_cwd)?;
+        let message = format!("an interpreter argument `{value}` may reach `{reached}`");
+        return Some(if names_authority(reached) {
+            Reach::Authority(message)
+        } else {
+            Reach::Enforcement(message)
+        });
+    };
+    let reachable: Vec<&PathBuf> = paths
+        .iter()
+        .filter(|path| facts.names.may_reach(path))
+        .collect();
+    if reachable.iter().any(|path| facts.authority(path)) {
+        return Some(Reach::Authority(format!(
+            "an interpreter argument names policy authority metadata `{value}`"
+        )));
+    }
+    for path in reachable {
+        let Some(text) = path.to_str() else {
+            return Some(Reach::Enforcement(format!(
+                "cannot inspect interpreter argument `{value}`: its path is not UTF-8"
+            )));
+        };
+        match edit_guard::enforcement_path(text, dir, facts.root, facts.home) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Some(Reach::Enforcement(format!(
+                    "an interpreter argument names the enforcement path `{value}`"
+                )))
+            }
+            Err(why) => {
+                return Some(Reach::Enforcement(format!(
+                    "cannot inspect interpreter argument `{value}`: {why}"
+                )))
+            }
+        }
+    }
+    None
+}
+
+/// Whether an unreadable value's spelled part is worth git-guard's full
+/// reading: it spells a protected name, a home or configuration variable,
+/// a tilde, a glob or braces. Any other value names nothing by its text,
+/// and the line rule judges what fills it in.
+fn spells_protected(value: &str, names: &ProtectedNames) -> bool {
+    let lower = value.to_lowercase();
+    names.unknown
+        || git_guard::has_glob(value)
+        || value.contains(['{', '~'])
+        || ["home", "xdg_config", "git_config", "gitconfig"]
+            .iter()
+            .any(|name| lower.contains(name))
+        || names.names.iter().any(|name| lower.contains(name.as_str()))
+}
+
+/// An argument the guard cannot read: part of the value, or the directory
+/// it is read from, is filled in at run time. Its spelled part is read by
+/// its names, then the line is read for authority metadata and an
+/// enforcement path, as git-guard reads a writer's operand.
+fn unreadable_reach(
+    value: &str,
+    dir: Option<&Path>,
+    unresolved: bool,
+    facts: &mut Facts<'_>,
+) -> Option<Reach> {
+    let shown = git_guard::shown_word(value);
+    let reached = match dir {
+        Some(dir) if spells_protected(value, &facts.names) => {
+            git_guard::token_integrity_path(value, dir, facts.payload_cwd)
+        }
+        Some(_) => None,
+        None => git_guard::word_could_name(value),
+    };
+    if let Some(reached) = reached {
+        let why = if unresolved {
+            "part of it is filled in at run time"
+        } else {
+            "it is used from a directory the guard cannot follow"
+        };
+        let message = format!("an interpreter argument `{shown}` could name `{reached}`: {why}");
+        return Some(if names_authority(reached) {
+            Reach::Authority(message)
+        } else {
+            Reach::Enforcement(message)
+        });
+    }
+    if !unresolved {
+        return None;
+    }
+    if let Some(word) = facts.line_authority(dir) {
+        return Some(Reach::Authority(format!(
+            "an interpreter argument `{shown}` is filled in at run time on a line that names policy authority metadata `{word}`"
+        )));
+    }
+    let named = facts.line_enforcement(dir)?;
+    Some(Reach::Enforcement(format!(
+        "an interpreter argument `{shown}` is filled in at run time on a line that names the enforcement path `{named}`"
+    )))
+}
+
+/// The authority metadata files of the repository at `root`: its config,
+/// packed refs, worktree configs and remote-tracking refs, as far as a
+/// bounded walk lists them.
+fn authority_files(root: &Path) -> Vec<PathBuf> {
+    const WALK_LIMIT: usize = 4096;
+    let Ok(Some(repo)) = crate::hooks::repo::open(root) else {
+        return Vec::new();
+    };
+    let common = repo.commondir().to_path_buf();
+    let mut files = vec![
+        common.join("config"),
+        common.join("packed-refs"),
+        common.join("config.worktree"),
+    ];
+    if let Ok(entries) = std::fs::read_dir(common.join("worktrees")) {
+        files.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("config.worktree")),
+        );
+    }
+    // Each path under refs/remotes is listed; one that reads as a
+    // directory is walked in turn.
+    let mut stack = vec![common.join("refs/remotes")];
+    while let Some(path) = stack.pop() {
+        if files.len() >= WALK_LIMIT {
+            break;
+        }
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            stack.extend(entries.flatten().map(|entry| entry.path()));
+        }
+        files.push(path);
+    }
+    files
+}
+
+/// The arguments `xargs` or `find -exec` gives an interpreter. `xargs`
+/// reads them at run time, so they refuse on a line that names authority
+/// metadata or an enforcement path. `find` gives each path its starting
+/// points reach and its `-name` tests let through, so they refuse when one
+/// is authority metadata or an enforcement path.
+fn supplied_reach(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Option<Reach> {
+    let supplier = call.supplier.as_ref()?;
+    let dir = call.cwd.as_deref();
+    if let outward::Supplier::Find { .. } = supplier {
+        // `find` hands its paths over as `{}`, or to a shell `-c` string
+        // that passes them on as its positional parameters.
+        if !call
+            .args
+            .iter()
+            .any(|word| word.contains("{}") || git_guard::unresolved_word(word))
+        {
+            return None;
+        }
+    }
+    let what = match supplier {
+        outward::Supplier::Xargs => "`xargs` gives an interpreter arguments it reads at run time,",
+        outward::Supplier::Find { .. } => "`find` gives an interpreter paths",
+    };
+    if let Some(word) = facts.line_authority(dir) {
+        return Some(Reach::Authority(format!(
+            "{what} on a line that names policy authority metadata `{word}`"
+        )));
+    }
+    if let outward::Supplier::Find {
+        starts,
+        before,
+        cwd,
+        ..
+    } = supplier
+    {
+        if let Some(reach) = find_reach(starts, before, cwd.as_deref(), facts) {
+            return Some(reach);
+        }
+    }
+    let named = facts.line_enforcement(dir)?;
+    Some(Reach::Enforcement(format!(
+        "{what} on a line that names the enforcement path `{named}`"
+    )))
+}
+
+/// The protected path a `find` hands its command: authority metadata or an
+/// enforcement path under a start that its `-name` tests let through.
+fn find_reach(
+    starts: &[String],
+    before: &[String],
+    cwd: Option<&Path>,
+    facts: &Facts<'_>,
+) -> Option<Reach> {
+    let filter = git_guard::find_name_filter(before);
+    let authority = authority_files(facts.root);
+    for start in starts {
+        // The line check covers a start the guard cannot read.
+        let Some(start) = cwd
+            .filter(|_| !git_guard::unresolved_word(start))
+            .map(|cwd| cwd.join(start))
+        else {
+            continue;
+        };
+        let resolved = std::fs::canonicalize(&start).unwrap_or_else(|_| start.clone());
+        if let Some(path) = authority.iter().find(|path| {
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| (*path).clone());
+            (real.starts_with(&resolved) || path.starts_with(&start))
+                && git_guard::find_name_matches(filter.as_deref(), path)
+        }) {
+            return Some(Reach::Authority(format!(
+                "`find` can give an interpreter policy authority metadata `{}`",
+                path.display()
+            )));
+        }
+        let candidates = match edit_guard::find_candidates(&start, facts.payload_cwd) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                return Some(Reach::Enforcement(format!(
+                    "cannot read the paths `find` gives an interpreter: {error}"
+                )))
+            }
+        };
+        // The candidates are the enforcement paths and checkouts under the
+        // start, and the directories leading to them.
+        if let Some(candidate) = candidates.iter().find(|candidate| {
+            git_guard::find_name_matches(filter.as_deref(), candidate)
+                && edit_guard::repository_enforcement_target(candidate, facts.payload_cwd, false)
+                    .unwrap_or(true)
+        }) {
+            return Some(Reach::Enforcement(format!(
+                "`find` can give an interpreter the enforcement path `{}`",
+                candidate.display()
+            )));
+        }
+    }
+    None
+}
+
+/// A name as compared here: Unicode NFC, lower case, so a spelling a
+/// case-insensitive or normalizing file system reads as the same name
+/// matches. `None` for a name that is not valid UTF-8, which the caller
+/// sends to the full checks.
+fn folded(name: &std::ffi::OsStr) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization as _;
+    Some(name.to_str()?.nfc().collect::<String>().to_lowercase())
+}
+
+/// `path` with the symbolic links on its existing part resolved: the
+/// longest prefix that exists, canonicalized, then the rest as spelled.
+/// `None` when that cannot be read.
+fn resolved_existing(path: &Path) -> Option<PathBuf> {
+    let mut existing = path.to_path_buf();
+    let mut rest = Vec::new();
+    while std::fs::symlink_metadata(&existing).is_err() {
+        rest.push(existing.file_name()?.to_owned());
+        if !existing.pop() {
+            return None;
+        }
+    }
+    let mut resolved = std::fs::canonicalize(&existing).ok()?;
+    resolved.extend(rest.iter().rev());
+    Some(resolved)
+}
+
+/// The names a path passes through when it is an enforcement path or
+/// policy authority metadata: the first component of every protected
+/// pattern in the action table, the repository's common directory, and
+/// the git configuration files. A path that passes through none of them,
+/// read as spelled and with its symbolic links resolved, is neither, so
+/// the full checks, which read every directory on the path, are skipped
+/// for it.
+struct ProtectedNames {
+    names: Vec<String>,
+    /// Git configuration files named by full path (`XDG_CONFIG_HOME`,
+    /// `GIT_CONFIG_GLOBAL`), each folded, as spelled and resolved.
+    configs: Vec<String>,
+    /// A protected pattern this reading does not know: every path takes
+    /// the full checks.
+    unknown: bool,
+}
+
+impl ProtectedNames {
+    fn load(root: &Path, home: Option<&Path>) -> Self {
+        let mut unknown = false;
+        let mut names: Vec<String> = Vec::new();
+        for rule in &actions::table().claude_edit_denies {
+            let first = rule
+                .strip_prefix("Edit(")
+                .and_then(|s| s.strip_suffix(')'))
+                .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix('/')))
+                .and_then(|s| s.split('/').next())
+                .filter(|s| !s.is_empty() && !git_guard::has_glob(s));
+            match first.and_then(|first| folded(std::ffi::OsStr::new(first))) {
+                Some(first) => names.push(first),
+                None => unknown = true,
+            }
+        }
+        for name in [".git", ".gitconfig", "gitconfig"] {
+            names.push(name.to_string());
+        }
+        match crate::hooks::repo::open(root) {
+            Ok(Some(repo)) => match repo.commondir().components().next_back() {
+                Some(Component::Normal(name)) => match folded(name) {
+                    Some(name) => names.push(name),
+                    None => unknown = true,
+                },
+                _ => unknown = true,
+            },
+            Ok(None) => {}
+            Err(_) => unknown = true,
+        }
+        names.sort();
+        names.dedup();
+        let mut configs: Vec<PathBuf> = crate::portable_path::user_homes()
+            .into_iter()
+            .chain(home.map(Path::to_path_buf))
+            .map(|home| home.join(".config/git/config"))
+            .collect();
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            configs.push(PathBuf::from(xdg).join("git/config"));
+        }
+        for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+            if let Some(path) = std::env::var_os(name).filter(|s| !s.is_empty()) {
+                configs.push(root.join(path));
+            }
+        }
+        let mut folded_configs = Vec::new();
+        for path in configs.iter().flat_map(|path| {
+            [
+                edit_guard::normalized(path, false).ok(),
+                resolved_existing(path),
+            ]
+        }) {
+            match path.as_deref().map(Path::as_os_str).map(folded) {
+                Some(Some(path)) => folded_configs.push(path),
+                // A configuration path that cannot be read sends every
+                // path to the full checks.
+                _ => unknown = true,
+            }
+        }
+        Self {
+            names,
+            configs: folded_configs,
+            unknown,
+        }
+    }
+
+    /// Whether `target` may be an enforcement path or authority metadata,
+    /// so the full checks must judge it.
+    fn may_reach(&self, target: &Path) -> bool {
+        // `..` after a symbolic link leaves where the spelling says; the
+        // full checks read it.
+        if self.unknown || target.components().any(|c| c == Component::ParentDir) {
+            return true;
+        }
+        let Some((lexical, resolved)) = edit_guard::normalized(target, false)
+            .ok()
+            .and_then(|lexical| resolved_existing(&lexical).map(|resolved| (lexical, resolved)))
+        else {
+            return true;
+        };
+        [lexical, resolved].iter().any(|path| {
+            path.components().any(|component| match component {
+                Component::Normal(name) => {
+                    folded(name).is_none_or(|name| self.names.contains(&name))
+                }
+                _ => false,
+            }) || folded(path.as_os_str()).is_none_or(|path| self.configs.contains(&path))
+        })
+    }
+}

@@ -201,9 +201,13 @@ pub const SCHEMA: [KeySpec; 68] = [
                 refuses an interpreter (`python`, `python3`, `node`, `nodejs`, \
                 `perl`, `ruby`, a version suffix included) whose inline code or \
                 arguments name an enforcement path: a script's arguments, \
-                arguments after inline code or stdin `-`, a `--name=value` \
-                option, through `env`, `env -S`, `command`, a shell `-c` string \
-                or a `cd`, and the paths `xargs` or `find -exec` supply. It \
+                every word after inline code or stdin `-`, a `--name=value` \
+                option or an attached short value (`-oFILE`), through `env`, \
+                `env -S`, `command`, a shell `-c` string, a `cd` (its options \
+                read past; an `&&` chain judged from the directory it reaches) \
+                or `ruby -C`, and the paths `xargs`, `find -exec` and \
+                `find -execdir` supply. An argument naming policy authority \
+                metadata refuses in each of these forms whatever the level. It \
                 reads an enforcement file passed as an argument as a possible \
                 write, so read one with `cat`, `jq` or `grep`, or redirect it \
                 into the interpreter's stdin. An argument it cannot read (a \

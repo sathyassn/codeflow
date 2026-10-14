@@ -3225,53 +3225,77 @@ fn worktree_text(text: &str) -> Option<&'static str> {
 /// word that reaches one from `cwd` once expanded and resolved
 /// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
 pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    if let Some(p) = enforcement_text(line) {
-        return Some(p.to_string());
-    }
-    // Each word, as split at blanks and as the shell reads it (quotes and
-    // escapes removed, `policy"".json`), and the value of an assignment
-    // (`x=alias/policy.json`), after brace expansion: a glob is expanded,
-    // and a plain path is resolved through symbolic links (TSK-216 round
-    // 16).
+    line_names_where(line, cwd, payload_cwd, &|_| true)
+}
+
+/// Each word of `line` as [`line_names`] reads it: as split at blanks and
+/// as the shell reads it (quotes and escapes removed, `policy"".json`),
+/// and the value of an assignment (`x=alias/policy.json`), before brace
+/// expansion.
+pub(crate) fn line_path_words(line: &str) -> Vec<String> {
     let tokens: Vec<String> = expand_commands(line)
         .iter()
         .flat_map(|segment| shell_tokens(segment))
         .collect();
-    let found = line_words(line)
-        .chain(tokens.iter().map(String::as_str))
+    line_words(line)
+        .map(str::to_string)
+        .chain(tokens)
         .flat_map(|word| {
             let value = word
                 .split_once('=')
                 .filter(|(name, _)| assignment_name(name))
-                .map(|(_, value)| value);
-            std::iter::once(word).chain(value)
+                .map(|(_, value)| value.to_string());
+            std::iter::once(word.clone()).chain(value)
         })
-        .find_map(|word| {
-            let Some(words) = word_readings(word) else {
-                return Some(BRACE_UNREAD.to_string());
-            };
-            words.iter().find_map(|w| {
-                if has_glob(w) {
-                    glob_reach(w, cwd, payload_cwd)
-                } else {
-                    let path = integrity_shell_path(w, cwd);
-                    if w.is_empty() {
-                        return None;
-                    }
-                    match super::edit_guard::repository_enforcement_target(
-                        &path,
-                        payload_cwd,
-                        false,
-                    ) {
-                        Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
-                        Ok(false) => None,
-                        Err(error) => {
-                            Some(format!("cannot read repository enforcement paths: {error}"))
-                        }
+        .collect()
+}
+
+/// The paths a glob word reaches from `cwd`, or `None` when the guard
+/// cannot list them (an unreadable path, or more entries than it reads).
+pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
+    WordGlob::new(word, cwd).expand().ok()
+}
+
+/// [`line_names`] that resolves a plain word only when `worth` says its
+/// path may be an enforcement path, so a caller with a cheap test of its
+/// own skips the file system reads for the rest (TSK-302 review F4). The
+/// text and glob checks are unchanged.
+pub(crate) fn line_names_where(
+    line: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+    worth: &dyn Fn(&Path) -> bool,
+) -> Option<String> {
+    if let Some(p) = enforcement_text(line) {
+        return Some(p.to_string());
+    }
+    // Each word, as split at blanks and as the shell reads it, and the
+    // value of an assignment, after brace expansion: a glob is expanded,
+    // and a plain path is resolved through symbolic links (TSK-216 round
+    // 16).
+    let words = line_path_words(line);
+    let found = words.iter().find_map(|word| {
+        let Some(words) = word_readings(word) else {
+            return Some(BRACE_UNREAD.to_string());
+        };
+        words.iter().find_map(|w| {
+            if has_glob(w) {
+                glob_reach(w, cwd, payload_cwd)
+            } else {
+                let path = integrity_shell_path(w, cwd);
+                if w.is_empty() || !worth(&path) {
+                    return None;
+                }
+                match super::edit_guard::repository_enforcement_target(&path, payload_cwd, false) {
+                    Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
+                    Ok(false) => None,
+                    Err(error) => {
+                        Some(format!("cannot read repository enforcement paths: {error}"))
                     }
                 }
-            })
-        });
+            }
+        })
+    });
     found
 }
 
