@@ -7533,6 +7533,19 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name '*.json' -execdir python3 tool.py settings.json \\;".to_string(),
         "echo .git/config | xargs python3 tool.py".to_string(),
         "python3 tool.py .git/con*".to_string(),
+        // Round 2: untracked directory changes, composed chdir, clusters,
+        // merged authority, and the known conservative refusals.
+        "command cd .claude && python3 tool.py settings.json".to_string(),
+        "builtin cd .claude && python3 tool.py settings.json".to_string(),
+        "pushd .claude >/dev/null && python3 tool.py settings.json".to_string(),
+        "env -C.claude python3 tool.py settings.json".to_string(),
+        "cd .claude && command cd .. && python3 tool.py .claude/settings.json".to_string(),
+        "cd .claude && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "python3 tool.py .claude/settings.json .git/config".to_string(),
+        "python3 -c 'import argparse' -vo.claude/settings.json".to_string(),
+        "command cd .git && python3 tool.py config".to_string(),
+        "cd .claude && cd .. && python3 tool.py settings.json".to_string(),
+        "find . -execdir python3 lint.py notes.txt \\;".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7541,8 +7554,10 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py \"$INPUT\"",
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
-        "cd .claude && cd .. && python3 tool.py settings.json",
         "python3 tool.py -v -n3 -o out.json",
+        "cd src && python3 app.py settings.json",
+        "find . -name '*.rs' -execdir python3 lint.py {} +",
+        "find src -execdir python3 lint.py notes.txt \\;",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
