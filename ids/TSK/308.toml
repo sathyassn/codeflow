@@ -1,0 +1,11 @@
+id = "TSK-308"
+uid = "32f73d9e-a0f1-4bce-b14a-fa5487a9f58f"
+kind = "TSK"
+title = "The acceptance binding counts a landed line adoption"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:12:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
