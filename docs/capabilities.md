@@ -134,7 +134,7 @@ name: scaffold-update
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
-epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020]
+epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022]
 adrs: [ADR-0011, ADR-0019]
 ```
 
@@ -322,7 +322,7 @@ name: test-gate
 area: engine
 status: shipped
 verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
-epics: [EPC-001]
+epics: [EPC-001, EPC-022]
 adrs: [ADR-0021, ADR-0031]
 ```
 
