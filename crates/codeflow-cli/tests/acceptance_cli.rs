@@ -5340,9 +5340,10 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
     }
 }
 
-/// An acceptance file at `name` beside the repository, with `text`.
-fn acceptance_file(dir: &tempfile::TempDir, name: &str, text: &str) -> std::path::PathBuf {
-    let path = dir.path().join("..").join(name);
+/// An acceptance file at `name` in `inputs`, a directory the test owns and
+/// keeps outside the repository, with `text`.
+fn acceptance_file(inputs: &tempfile::TempDir, name: &str, text: &str) -> std::path::PathBuf {
+    let path = inputs.path().join(name);
     std::fs::write(&path, text).unwrap();
     path
 }
@@ -5366,8 +5367,9 @@ fn status_complete_with(root: &Path, id: &str, file: &Path) -> (i32, String) {
 }
 
 /// A repository with `TSK-001` in progress on its task branch, one code
-/// change in, and the head that change made.
-fn in_progress_repo() -> (tempfile::TempDir, String) {
+/// change in, an owned directory for acceptance files, and the head that
+/// change made.
+fn in_progress_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = repo(&[("TSK-001", NO_JOURNEY)], "");
     let root = dir.path();
     let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
@@ -5377,7 +5379,7 @@ fn in_progress_repo() -> (tempfile::TempDir, String) {
         &task("TSK-001", "in_progress", NO_JOURNEY, "Pending.\n"),
     );
     commit(root, "docs(records): start the work");
-    (dir, reviewed)
+    (dir, tempfile::tempdir().unwrap(), reviewed)
 }
 
 /// TSK-307 AC-1 (issue 175): a file whose top level is the block's fields,
@@ -5385,10 +5387,10 @@ fn in_progress_repo() -> (tempfile::TempDir, String) {
 /// by a message that names the file and the key, not the task record.
 #[test]
 fn an_acceptance_file_without_its_top_level_key_is_refused_by_name() {
-    let (dir, reviewed) = in_progress_repo();
+    let (dir, inputs, reviewed) = in_progress_repo();
     let root = dir.path();
     let file = acceptance_file(
-        &dir,
+        &inputs,
         "fields-only.yaml",
         &format!(
             "reviewed: {reviewed}\nreview: https://example.test/pr/1#review\ncriteria:\n  AC-1: verified | cargo test\njourney: none | no journey criterion\nnot_verified: none\nfollow_ups: none\nverdict: approved\n"
@@ -5425,9 +5427,13 @@ fn an_acceptance_file_without_its_top_level_key_is_refused_by_name() {
 /// is refused with the file name and the parse error.
 #[test]
 fn an_acceptance_file_that_is_not_yaml_is_refused_with_the_parse_error() {
-    let (dir, _) = in_progress_repo();
+    let (dir, inputs, _) = in_progress_repo();
     let root = dir.path();
-    let file = acceptance_file(&dir, "broken.yaml", "reviewed: [unclosed\nreview: x: y\n");
+    let file = acceptance_file(
+        &inputs,
+        "broken.yaml",
+        "reviewed: [unclosed\nreview: x: y\n",
+    );
     let before = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
     let result = status_complete_with(root, "TSK-001", &file);
     assert_eq!(result.0, 1, "{}", result.1);
@@ -5457,10 +5463,10 @@ fn an_acceptance_file_that_is_not_yaml_is_refused_with_the_parse_error() {
 /// is still reported by the field checks.
 #[test]
 fn a_file_with_the_key_reaches_the_field_checks() {
-    let (dir, reviewed) = in_progress_repo();
+    let (dir, inputs, reviewed) = in_progress_repo();
     let root = dir.path();
     let good = acceptance_file(
-        &dir,
+        &inputs,
         "good.yaml",
         &block(
             &reviewed,
@@ -5476,10 +5482,10 @@ fn a_file_with_the_key_reaches_the_field_checks() {
     let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
     assert!(record.contains("status: complete"), "{record}");
 
-    let (dir, _) = in_progress_repo();
+    let (dir, inputs, _) = in_progress_repo();
     let root = dir.path();
     let wrong = acceptance_file(
-        &dir,
+        &inputs,
         "wrong-field.yaml",
         "acceptance:\n  reviewed: not-a-commit\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | cargo test\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n",
     );
@@ -5495,6 +5501,72 @@ fn a_file_with_the_key_reaches_the_field_checks() {
         "field problem named: {}",
         result.1
     );
+}
+
+/// TSK-307 AC-2, AC-3: a malformed file that opens with the `acceptance:`
+/// header is not refused as bad YAML, because the block grammar accepts
+/// values that strict YAML rejects; the block parser reports it, the record
+/// is not written, and the message is the block's own, not a parse error.
+#[test]
+fn a_malformed_file_with_the_header_reaches_the_block_error() {
+    let (dir, inputs, _) = in_progress_repo();
+    let root = dir.path();
+    let file = acceptance_file(
+        &inputs,
+        "malformed.yaml",
+        "acceptance:\n  reviewed: [unclosed\n",
+    );
+    let before = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    let result = status_complete_with(root, "TSK-001", &file);
+    assert_eq!(result.0, 1, "{}", result.1);
+    assert!(
+        result
+            .1
+            .contains("acceptance block line 1: missing `criteria`"),
+        "the block parser's error: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("not valid YAML"),
+        "not a YAML parse refusal: {}",
+        result.1
+    );
+    let after = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert_eq!(before, after, "the record is not written");
+}
+
+/// TSK-307 AC-5: on one repository, otherwise-valid bare fields are refused
+/// by file and key with the record unchanged, and the same fields wrapped
+/// under `acceptance:` complete the record.
+#[test]
+fn the_same_fields_wrapped_under_the_key_complete_the_record() {
+    let (dir, inputs, reviewed) = in_progress_repo();
+    let root = dir.path();
+    let fields = format!(
+        "reviewed: {reviewed}\nreview: https://example.test/pr/1#review\ncriteria:\n  AC-1: verified | cargo test\njourney: none | no journey criterion\nnot_verified: none\nfollow_ups: \"none: nothing deferred\"\nverdict: approved\n"
+    );
+    let bare = acceptance_file(&inputs, "bare.yaml", &fields);
+    let indented = fields.replace('\n', "\n  ");
+    let wrapped_text = format!("acceptance:\n  {}\n", indented.trim_end());
+    let wrapped = acceptance_file(&inputs, "wrapped.yaml", &wrapped_text);
+    let before = std::fs::read(root.join(record_path("TSK-001"))).unwrap();
+    let refused = status_complete_with(root, "TSK-001", &bare);
+    assert_eq!(refused.0, 1, "{}", refused.1);
+    assert!(refused.1.contains("bare.yaml"), "{}", refused.1);
+    assert!(
+        refused.1.contains("top-level `acceptance:` key"),
+        "{}",
+        refused.1
+    );
+    assert_eq!(
+        before,
+        std::fs::read(root.join(record_path("TSK-001"))).unwrap(),
+        "the refusal leaves the record byte-identical"
+    );
+    let done = status_complete_with(root, "TSK-001", &wrapped);
+    assert_eq!(done.0, 0, "{}", done.1);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    assert!(record.contains("status: complete"), "{record}");
 }
 
 /// TSK-307 AC-4: the option's help says the file holds a top-level
