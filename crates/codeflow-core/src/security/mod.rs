@@ -40,6 +40,7 @@ pub mod pattern;
 pub mod policy;
 pub mod privilege;
 pub mod prose;
+pub(crate) mod sed_script;
 pub mod startup;
 pub(crate) mod unresolved;
 

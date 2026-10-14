@@ -105,7 +105,7 @@ def before_scan(path):
     before = job[:job.index("      - name: gitleaks")]
     steps = [line for line in before if line.startswith("      - ")]
     problems = []
-    if steps != ["      - uses: actions/checkout@v6"]:
+    if steps != ["      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0"]:
         problems.append(f"{path}: the secret-scan job runs {steps} before gitleaks, not the checkout alone")
     if any(line.strip().startswith(("run:", "shell:", "env:")) for line in before):
         problems.append(f"{path}: the secret-scan job sets a run, shell or env before gitleaks")

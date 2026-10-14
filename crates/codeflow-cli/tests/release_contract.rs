@@ -505,20 +505,31 @@ fn strict_repository_gate_installs_its_declared_coverage_tool() {
         .expect("release-impact must precede release-state");
     assert!(release_impact.contains("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"));
     let gates = workflow
-        .split("\n  rust:")
+        .split("\n  gates-coverage:\n")
         .next()
-        .expect("codeflow gates job must precede the Rust job");
-    // TSK-184: one pinned install step supplies nextest and llvm-cov.
-    let install = gates
-        .find("cargo-llvm-cov@")
-        .expect("strict gate must install cargo-llvm-cov on a clean runner");
-    let strict = gates
-        .find("run: codeflow test --mode full --strict")
-        .expect("strict aggregate gate must remain enabled");
-
+        .expect("codeflow gates job must precede its coverage shards");
     assert!(
-        install < strict,
-        "cargo-llvm-cov must be available before the strict aggregate gate"
+        gates.contains("run: codeflow test --mode full --strict"),
+        "strict aggregate gate must remain enabled"
+    );
+    // TSK-184, TSK-270: the coverage shards run the instrumented suite, and
+    // one pinned install step supplies nextest and llvm-cov before it.
+    let shards = workflow
+        .split("\n  gates-coverage:\n")
+        .nth(1)
+        .expect("the coverage shards job must exist")
+        .split("\n  gates-coverage-report:\n")
+        .next()
+        .expect("the coverage report must follow its shards");
+    let install = shards
+        .find("cargo-llvm-cov@")
+        .expect("the coverage shards must install cargo-llvm-cov on a clean runner");
+    let run = shards
+        .find("cargo llvm-cov nextest")
+        .expect("the coverage shards must run the instrumented suite");
+    assert!(
+        install < run,
+        "cargo-llvm-cov must be available before the instrumented suite"
     );
 }
 

@@ -1,0 +1,159 @@
+{
+ "_source": "median seconds per test on ubuntu-24.04 under cargo llvm-cov, read from the PASS lines of the single coverage part's logs in codeflow-ci runs 38186204713, 38187003359, 38191092614, 38191618039, 38197948584; regenerate with `scripts/coverage-shards.py measure`",
+ "partitions": 2,
+ "threads": 4,
+ "binaries": {
+  "codeflow-cli::acceptance_cli": [48.996, 0],
+  "codeflow-cli::adopter_fit": [50.554, 0],
+  "codeflow-cli::bin/codeflow": [6.171, 0],
+  "codeflow-cli::ci_pin": [4.934, 0],
+  "codeflow-cli::ci_pin_platforms": [24.33, 0],
+  "codeflow-cli::classification_cli": [12.394, 0],
+  "codeflow-cli::cli_flow": [1.905, 0],
+  "codeflow-cli::codex_config": [0.081, 0],
+  "codeflow-cli::codex_hooks": [6.146, 0],
+  "codeflow-cli::criteria_correction": [10.778, 0],
+  "codeflow-cli::delegate_cli": [2.226, 0],
+  "codeflow-cli::delegate_pty_stress": [13.636, 0],
+  "codeflow-cli::doc_fact_pins": [0.581, 0],
+  "codeflow-cli::estimate_adoption_e2e": [19.939, 0],
+  "codeflow-cli::estimate_cli": [0.094, 0],
+  "codeflow-cli::estimate_outcomes_cli": [3.746, 0],
+  "codeflow-cli::feedback_cli": [3.834, 0],
+  "codeflow-cli::git_maintenance_contract": [1.017, 0],
+  "codeflow-cli::hook_identity_cli": [0.923, 0],
+  "codeflow-cli::hooks_cli": [101.614, 0],
+  "codeflow-cli::id_registry_journey": [40.431, 0],
+  "codeflow-cli::installed_cli_journey": [12.233, 0],
+  "codeflow-cli::journey_gate": [2.473, 0],
+  "codeflow-cli::light_paths_journey": [17.108, 0],
+  "codeflow-cli::live_eval_pack": [0.005, 0],
+  "codeflow-cli::models_cli": [2.162, 0],
+  "codeflow-cli::models_design_authority": [1.254, 0],
+  "codeflow-cli::models_managed_catalog": [0.248, 0],
+  "codeflow-cli::orchestration_contract": [2.75, 0],
+  "codeflow-cli::planning_amendment": [8.429, 0],
+  "codeflow-cli::policy_cli": [0.191, 0],
+  "codeflow-cli::portal_cli": [14.289, 0],
+  "codeflow-cli::present_cli": [54.417, 54.417],
+  "codeflow-cli::prose_oracle": [18.125, 0],
+  "codeflow-cli::read_benchmark": [0.005, 0],
+  "codeflow-cli::recall_remote_cli": [0.587, 0],
+  "codeflow-cli::record_lifecycle_journey": [34.739, 0],
+  "codeflow-cli::record_link_refusal": [3.629, 0],
+  "codeflow-cli::release_contract": [0.617, 0],
+  "codeflow-cli::release_impact_corpus": [4.302, 0],
+  "codeflow-cli::release_journey": [15.599, 0],
+  "codeflow-cli::release_line_cli": [141.238, 0],
+  "codeflow-cli::release_pin": [1.386, 0],
+  "codeflow-cli::report_cli": [1.058, 0],
+  "codeflow-cli::retention_pack": [12.182, 0],
+  "codeflow-cli::settings_presets": [1.503, 0],
+  "codeflow-cli::skill_mirrors": [0.031, 0],
+  "codeflow-cli::test_gate_cli": [11.433, 11.433],
+  "codeflow-cli::test_setup_cli": [0.097, 0],
+  "codeflow-cli::warning_inventory": [0.636, 0],
+  "codeflow-cli::work_cli": [9.881, 0],
+  "codeflow-cli::workspace_mode": [15.799, 0],
+  "codeflow-core::artifact_budget_contract": [4.534, 0],
+  "codeflow-core::catalog_craft_contract": [0.12, 0],
+  "codeflow-core::delegate_doctrine_contract": [0.397, 0],
+  "codeflow-core::design_kit": [4.599, 0],
+  "codeflow-core::doctor_trust_probes": [0.17, 0],
+  "codeflow-core::git_spawn_contract": [5.656, 0],
+  "codeflow-core::guide_altitude_budget": [0.019, 0],
+  "codeflow-core::herdr_host_contract": [0.028, 0],
+  "codeflow-core::id_registry": [23.294, 0],
+  "codeflow-core::integration_testing_setup": [1.206, 0],
+  "codeflow-core::manifest_consistency": [1.102, 0],
+  "codeflow-core::model_catalog_surfaces": [4.186, 0],
+  "codeflow-core::model_eval_contract": [6.754, 0],
+  "codeflow-core::name_decode_scan": [21.189, 0],
+  "codeflow-core::permission_presets_update": [3.147, 0],
+  "codeflow-core::project_baselines_resolve": [0.051, 0],
+  "codeflow-core::release_bridge_contract": [0.538, 0],
+  "codeflow-core::repository_update_noop": [1.228, 0],
+  "codeflow-core::retired_present_blocks": [0.734, 0],
+  "codeflow-core::rule_map_contract": [31.017, 0],
+  "codeflow-core::rule_reinjection_update": [14.39, 0],
+  "codeflow-core::scaffold_test": [6.915, 0],
+  "codeflow-core::stdin_pipe_rule": [5.149, 0],
+  "codeflow-core::wp7_contract": [0.313, 0],
+  "codeflow-fixture::clone": [0.064, 0],
+  "codeflow-present": [13.829, 13.829],
+  "codeflow-present::method_controls": [0.009, 0.009]
+ },
+ "split": {
+  "codeflow-cli::acceptance_journey": {
+   "rest": [40.258, 0.0],
+   "tests": {
+    "a_release_branch_from_two_lines_passes_on_a_fresh_project": 20.981
+   }
+  },
+  "codeflow-cli::ci_cli": {
+   "rest": [35.415, 0.0],
+   "tests": {
+    "ci_adopter_edited_managed_file_is_scanned": 52.584,
+    "ci_non_managed_docs_file_in_a_scaffolded_repo_is_scanned": 50.476,
+    "ci_scaffold_range_skips_unmodified_managed_files": 52.084
+   }
+  },
+  "codeflow-cli::init_e2e": {
+   "rest": [43.128, 43.128],
+   "tests": {
+    "a_fresh_standard_project_prints_steps_that_clear_each_finding": 7.055,
+    "a_refused_push_shows_in_the_ceremony_report_and_a_warned_push_does_not": 4.837,
+    "fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it": 116.281,
+    "fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it": 4.222,
+    "init_standard_completes_in_a_repository_with_many_folders": 4.363,
+    "split_references_install_and_update_replaces_whole_files_at_standard_and_full": 4.869,
+    "update_migrates_the_spec_template_and_keeps_the_pr_mapping": 7.875
+   }
+  },
+  "codeflow-cli::read_commands_offline": {
+   "rest": [18.852, 0.0],
+   "tests": {
+    "read_commands_start_the_same_git_processes_for_three_records_or_thirty": 31.012
+   }
+  },
+  "codeflow-cli::readiness_journey": {
+   "rest": [57.349, 0.0],
+   "tests": {
+    "the_three_contexts_judge_one_task_the_same_way": 25.218
+   }
+  },
+  "codeflow-cli::refusal_journey": {
+   "rest": [37.449, 0.0],
+   "tests": {
+    "startup::installed_hooks_refuse_shell_startup_writes_on_every_harness": 35.368,
+    "startup::installed_hooks_refuse_unresolved_forms_beside_a_named_target": 40.233
+   }
+  },
+  "codeflow-cli::remedy_clearing": {
+   "rest": [374.059, 0.0],
+   "tests": {
+    "push::clears_push_over_budget_builtin": 66.035,
+    "push::clears_push_over_budget_target": 65.162
+   }
+  },
+  "codeflow-cli::tier_floor_e2e": {
+   "rest": [44.342, 0.0],
+   "tests": {
+    "every_harness_wiring_judges_composed_deletions_and_help_at_every_tier": 49.804
+   }
+  },
+  "codeflow-core": {
+   "rest": [132.464, 0.0],
+   "tests": {
+    "scaffold::state::tests::a_crash_with_the_file_on_another_drive_still_installs_the_new_version": 34.519,
+    "scaffold::state::tests::an_update_after_a_crash_at_any_point_installs_the_new_version": 34.451
+   }
+  },
+  "codeflow-core::prose_differential": {
+   "rest": [0.0, 0.0],
+   "tests": {
+    "only_certified_lines_change_and_they_only_lose_the_three_raw_findings": 32.751
+   }
+  }
+ }
+}

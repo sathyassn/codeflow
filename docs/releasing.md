@@ -100,15 +100,16 @@ Local-artifact authority job:
 - It checks the latest exact-source GitHub Actions main-push results of
   `codeflow-ci` and `codeflow-release` (`publication_workflows`) for
   `release state`, `codeflow gates`, `windows`, secret scan and security review.
-  - `codeflow gates` is the one verdict over the gate's parallel parts.
+  - `codeflow gates` is the one verdict over the gate's parallel parts, its
+    coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys.
   - On a main push whose merge commit has exactly the tree of a pull request
     head whose `codeflow-ci` run passed every job, both verdicts pass by
     naming that run and the gate and Windows jobs are skipped
     (`scripts/ci-reuse.py`, TSK-265). A push that changes a build cache
-    input, or for which main lacks the present part's apt cache for the
-    current runner image, runs every job instead.
+    input (the CI workflow included), or for which main lacks the present
+    part's apt cache for the current runner image, runs every job instead.
 - It checks write-visible host collisions. Its write-scoped token can see draft
   releases.
 - It fails closed on a wrong tag, source or public release, a foreign draft, or
@@ -593,7 +594,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the interactive Codex CLI in a Herdr tab (the plugin only as a recorded fallback), and Codex to Claude through task-scoped Herdr (tmux as the last fallback) with the qualified tracked Stop/StopFailure lifecycle, as `cf-model-orchestrator/resources/routing/transport.md` states. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
-| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI billing or availability never substitutes for this evidence |
+| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as two shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
 | Distribution plan | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows |
 | Source archive | `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`). A contract test compares the real archive with the tracked files |
 | Installers | Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |

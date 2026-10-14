@@ -14,7 +14,12 @@ const sandbox = await mkdtemp(join(tmpdir(), `${runId}-`));
 const marker = join(sandbox, ".owned-binary-delta-root");
 const sourceRoot = join(sandbox, "source");
 const sourceRevision = execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-const lockfileHash = createHash("sha256").update(await readFile(join(repoRoot, "Cargo.lock"))).digest("hex").slice(0, 16);
+// The target directory is named by the locked dependencies alone, as the CI
+// Rust cache key is, so a version stamp of the workspace's own packages keeps
+// the cached dependency builds (TSK-270).
+const lockfileHash = createHash("sha256")
+  .update(lockedDependencies(await readFile(join(repoRoot, "Cargo.lock"), "utf8")))
+  .digest("hex").slice(0, 16);
 const targetRoot = resolve(repoRoot, "target", `binary-delta-${lockfileHash}`);
 const withRepeat = process.argv.includes("--with-repeat");
 const savedAssets = join(sandbox, "production-assets");
@@ -79,6 +84,11 @@ try {
   const owned = await readFile(marker, "utf8").catch(() => "");
   if (owned !== `${runId}\n`) throw new Error(`Refusing to clean unowned binary-delta root ${sandbox}`);
   await rm(sandbox, { recursive: true });
+}
+
+// Workspace packages carry no `source`; registry and git packages do.
+function lockedDependencies(lock) {
+  return lock.split(/^\[\[package\]\]\r?$/mu).filter((entry) => /^source = /mu.test(entry)).join("[[package]]");
 }
 
 function rustLimit(name) {

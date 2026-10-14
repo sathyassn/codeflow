@@ -945,6 +945,11 @@ fn review_round_three_forms_refuse() {
         "sed -n -e 1p -e '$p' ~/.zshrc",
         "sed -ne '1,20p;$=' ~/.zshrc",
         "sed -E -n '/^alias/p' ~/.bashrc",
+        // A letter `w` in a pattern or replacement is no write command
+        // (TSK-290, issue 147): this reader takes only print commands.
+        "sed -n '/swap/p' ~/.zshrc",
+        "sed 's/w/with/g' ~/.zshrc",
+        "sed -n '/show w#/p' ~/.zshrc",
     ] {
         let found = f.judge(command);
         if refused(&found) {
