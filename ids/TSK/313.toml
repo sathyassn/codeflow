@@ -1,0 +1,11 @@
+id = "TSK-313"
+uid = "212542b4-a70f-4b8c-a59e-15d66702d912"
+kind = "TSK"
+title = "Tasks carry a class and a lane from the project vocabulary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:15Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
