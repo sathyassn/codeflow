@@ -1090,4 +1090,55 @@ mod tests {
             false,
         );
     }
+
+    /// TSK-302 review round 4 (Grok F1, F2): an unmodeled word followed by
+    /// a directory-change token makes the directory unknown, never
+    /// unchanged; zsh precommands, `builtin --`, `caffeinate`, `xcrun`,
+    /// `ionice` and the GNU-prefixed coreutils names are read as launchers.
+    #[test]
+    fn unmodeled_launcher_words_never_hide_a_directory_change() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "noglob cd .claude && python3 tool.py settings.json",
+                "noglob cd .claude && python3 -c 'open(\"settings.json\",\"w\").write(\"\")'",
+                "nocorrect cd .claude && python3 tool.py settings.json",
+                "bash -c 'builtin -- cd .claude && python3 tool.py settings.json'",
+                "caffeinate env -C.claude python3 tool.py settings.json",
+                "caffeinate env -C .claude python3 tool.py settings.json",
+                "caffeinate env -C.claude python3 -c 'open(\"settings.json\",\"w\").write(\"\")'",
+                "genv -C.claude python3 tool.py settings.json",
+                "gtimeout 5 env -C.claude python3 tool.py settings.json",
+                "ionice -c 3 env -C.claude python3 tool.py settings.json",
+                "frobnicate cd .claude && python3 tool.py settings.json",
+                "frobnicate env -C.claude x && python3 tool.py settings.json",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "noglob cd .git && python3 tool.py config",
+                "true; - cd .git && python3 tool.py config",
+                "bash -c 'builtin -- cd .git && python3 tool.py config'",
+                "caffeinate env -C.git python3 tool.py config",
+                "xcrun env -C.git python3 tool.py config",
+                "genv -C.git python3 tool.py config",
+                "gtimeout 5 env -C.git python3 tool.py config",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "noglob cd .claude && python3 tool.py notes.txt",
+                "caffeinate python3 tool.py data.json",
+                "xcrun python3 tool.py data.json",
+                "gtimeout 5 node x.js out.json",
+                "genv FOO=1 python3 app.py",
+                "echo done && python3 tool.py data.json",
+            ],
+        );
+    }
 }

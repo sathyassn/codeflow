@@ -321,34 +321,51 @@ pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChang
     found
 }
 
-/// How an option of a launcher reads: a flag, or one that takes a value.
-fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
-    // `Some(true)`: takes a value; `Some(false)`: a flag; `None`: unknown.
-    let valued = |names: &[&str]| names.contains(&option);
-    match launcher {
-        "command" | "time" => matches!(option, "-p").then_some(false),
-        "exec" => {
-            if valued(&["-a"]) {
-                Some(true)
-            } else {
-                matches!(option, "-c" | "-l" | "-cl" | "-lc").then_some(false)
-            }
-        }
-        "nice" => valued(&["-n", "--adjustment"]).then_some(true),
-        "timeout" => {
-            if valued(&["-s", "--signal", "-k", "--kill-after"]) {
-                Some(true)
-            } else {
-                matches!(
-                    option,
-                    "--foreground" | "--preserve-status" | "-v" | "--verbose"
-                )
-                .then_some(false)
-            }
-        }
-        "stdbuf" => valued(&["-i", "-o", "-e", "--input", "--output", "--error"]).then_some(true),
-        "xargs" => {
-            if valued(&[
+/// A launcher's option grammar: the options that take a value, and the
+/// flags. `None` for a word with no modeled options.
+fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    Some(match launcher {
+        "command" | "time" => (&[], &["-p"]),
+        "caffeinate" => (&["-t", "-w"], &["-d", "-i", "-m", "-s", "-u"]),
+        "xcrun" => (
+            &["--sdk", "--toolchain"],
+            &[
+                "-v",
+                "--verbose",
+                "-l",
+                "--log",
+                "-n",
+                "--no-cache",
+                "-r",
+                "--run",
+                "-k",
+                "--kill-cache",
+            ],
+        ),
+        "ionice" => (
+            &[
+                "-c",
+                "--class",
+                "-n",
+                "--classdata",
+                "-p",
+                "--pid",
+                "-P",
+                "--pgid",
+                "-u",
+                "--uid",
+            ],
+            &["-t", "--ignore"],
+        ),
+        "exec" => (&["-a"], &["-c", "-l", "-cl", "-lc"]),
+        "nice" => (&["-n", "--adjustment"], &[]),
+        "timeout" => (
+            &["-s", "--signal", "-k", "--kill-after"],
+            &["--foreground", "--preserve-status", "-v", "--verbose"],
+        ),
+        "stdbuf" => (&["-i", "-o", "-e", "--input", "--output", "--error"], &[]),
+        "xargs" => (
+            &[
                 "-I",
                 "-L",
                 "-n",
@@ -366,26 +383,33 @@ fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
                 "--max-chars",
                 "--replace",
                 "--process-slot-var",
-            ]) {
-                Some(true)
-            } else {
-                matches!(
-                    option,
-                    "-0" | "-r"
-                        | "-t"
-                        | "-p"
-                        | "-x"
-                        | "--null"
-                        | "--no-run-if-empty"
-                        | "--verbose"
-                        | "--interactive"
-                        | "--exit"
-                        | "--open-tty"
-                )
-                .then_some(false)
-            }
-        }
-        _ => None,
+            ],
+            &[
+                "-0",
+                "-r",
+                "-t",
+                "-p",
+                "-x",
+                "--null",
+                "--no-run-if-empty",
+                "--verbose",
+                "--interactive",
+                "--exit",
+                "--open-tty",
+            ],
+        ),
+        _ => return None,
+    })
+}
+
+/// How an option of a launcher reads: `Some(true)` takes a value,
+/// `Some(false)` is a flag, `None` is outside the modeled grammar.
+fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
+    let (valued, flags) = launcher_options(launcher)?;
+    if valued.contains(&option) {
+        Some(true)
+    } else {
+        flags.contains(&option).then_some(false)
     }
 }
 
@@ -542,49 +566,37 @@ fn launcher_changes(
         }
         DirChange::To(PathBuf::from(operand))
     };
-    let name = program.rsplit('/').next().unwrap_or(program);
+    // A GNU-prefixed coreutils name (`genv`, `gtimeout`) is the launcher it
+    // names, as git-guard reads it.
+    let name = crate::hooks::git_guard::launcher_name(program);
     let inner = |from: Option<usize>, found: &mut Vec<DirChange>| match from {
         Some(from) => launcher_changes(&rest[from.min(rest.len())..], home, depth + 1, found),
         None => found.push(DirChange::Unknown),
     };
     match name {
         "cd" | "chdir" | "pushd" => {
-            let mut operands = rest.iter();
-            let mut operand = None;
-            while let Some(word) = operands.next() {
-                if word == "--" {
-                    operand = operands.next();
-                    break;
-                }
-                // Every dash word is an option (`-L`, `-P`, `-q`, `-e`,
-                // `-@`); `-` alone is the previous directory, and a `pushd`
-                // stack index (`-1`) rotates to one already listed.
-                if word.starts_with('-') && word.len() > 1 {
-                    if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
-                        return;
-                    }
-                    continue;
-                }
-                operand = Some(word);
-                break;
-            }
-            match operand {
-                Some(operand) if name == "pushd" && operand.starts_with('+') => {}
-                Some(operand) => found.push(target(operand)),
-                None if name == "pushd" => {}
-                None => found.push(
-                    home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf())),
-                ),
-            }
+            found.extend(cd_destination(name, rest, home, &target));
         }
+        "popd" | "dirs" => {}
         "source" | "." | "sudo" | "doas" => found.push(DirChange::Unknown),
-        "builtin" => inner(Some(0), found),
+        // zsh precommands run the command after them in this shell.
+        "noglob" | "nocorrect" | "-" => inner(Some(0), found),
+        "builtin" => inner(
+            Some(usize::from(rest.first().is_some_and(|w| w == "--"))),
+            found,
+        ),
+        // `xcrun -f` and `--find` only print a tool's path.
+        "xcrun"
+            if rest
+                .first()
+                .is_some_and(|w| matches!(w.as_str(), "-f" | "--find")) => {}
         // `command -v` and `-V` only print what a name is.
         "command"
             if rest
                 .first()
                 .is_some_and(|w| matches!(w.as_str(), "-v" | "-V")) => {}
-        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" => {
+        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
+        | "xcrun" | "ionice" => {
             let from = skip_launcher_options(name, rest);
             inner(from, found);
         }
@@ -607,8 +619,71 @@ fn launcher_changes(
                 }
             }
         }
-        _ => {}
+        // Any other word: a program that cannot move this shell, unless a
+        // directory-change token follows it that the grammar above did not
+        // consume. Then the word is an unmodeled launcher, and the
+        // directory is unknown rather than unchanged (TSK-302 review round
+        // 4): the guard never fails open on a word it does not know.
+        _ => {
+            if hides_a_directory_change(rest) {
+                found.push(DirChange::Unknown);
+            }
+        }
     }
+}
+
+/// Where a `cd`, `chdir` or `pushd` moves: its operand, home when it has
+/// none, or `None` for a directory already in the set (a `pushd` with no
+/// operand or a stack index).
+fn cd_destination(
+    name: &str,
+    rest: &[String],
+    home: Option<&Path>,
+    target: &dyn Fn(&str) -> DirChange,
+) -> Option<DirChange> {
+    let mut operands = rest.iter();
+    let mut operand = None;
+    while let Some(word) = operands.next() {
+        if word == "--" {
+            operand = operands.next();
+            break;
+        }
+        // Every dash word is an option (`-L`, `-P`, `-q`, `-e`, `-@`); `-`
+        // alone is the previous directory, and a `pushd` stack index (`-1`)
+        // rotates to one already listed.
+        if word.starts_with('-') && word.len() > 1 {
+            if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            continue;
+        }
+        operand = Some(word);
+        break;
+    }
+    match operand {
+        Some(operand) if name == "pushd" && operand.starts_with('+') => None,
+        Some(operand) => Some(target(operand)),
+        None if name == "pushd" => None,
+        None => Some(home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf()))),
+    }
+}
+
+/// Whether the words after an unmodeled program hold a directory-change
+/// token: `cd`, `chdir`, `pushd` or `popd`, or `-C` or `--chdir` in any
+/// spelling after an env-like word.
+fn hides_a_directory_change(rest: &[String]) -> bool {
+    let mut env_like = false;
+    for word in rest {
+        if matches!(word.as_str(), "cd" | "chdir" | "pushd" | "popd") {
+            return true;
+        }
+        if crate::hooks::git_guard::launcher_name(word) == "env" {
+            env_like = true;
+        } else if env_like && (word.starts_with("-C") || word.starts_with("--chdir")) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The directory set of `command` from `cwd`: every simple command the
@@ -636,7 +711,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     let Some(program) = args.first() else {
         return;
     };
-    let name = program.rsplit('/').next().unwrap_or(program);
+    let name = crate::hooks::git_guard::launcher_name(program);
     out.commands.push(args.to_vec());
     let rest = &args[1..];
     if name == "env" {
@@ -680,7 +755,11 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             skip_env(rest)
         }
         "command" | "builtin" | "exec" | "nohup" | "setsid" | "caffeinate" | "unbuffer"
-        | "time" => Some(skip_options(rest, &["-a"])),
+        | "time" => Some(skip_options(rest, &["-a", "-t", "-w"])),
+        // zsh precommands run the command after them in this shell.
+        "noglob" | "nocorrect" | "-" => Some(rest),
+        "xcrun" => Some(skip_options(rest, &["--sdk", "--toolchain"])),
+        "ionice" => Some(skip_options(rest, &["-c", "-n", "-p", "-P", "-u"])),
         "nice" => Some(skip_options(rest, &["-n", "--adjustment"])),
         "stdbuf" => Some(skip_options(rest, &["-i", "-o", "-e"])),
         "timeout" => Some(
@@ -2243,7 +2322,15 @@ mod r22_tests {
             "cd",
             "cd \"$UNSET\"",
             "cd -",
+            // Round 4: zsh precommands and `builtin --`.
+            "builtin -- cd sub",
+            "noglob cd sub",
+            "nocorrect cd sub",
+            "true; - cd sub",
+            "noglob cd .claude && cd ..",
         ];
+        // Words that only zsh reads as precommands.
+        let zsh_only = ["noglob", "nocorrect", "true; -"];
         let shells: Vec<&str> = ["bash", "zsh"]
             .into_iter()
             .filter(|shell| {
@@ -2276,6 +2363,16 @@ mod r22_tests {
             "timeout 5 env -C sub /bin/pwd -P",
             "command cd sub && /bin/pwd -P",
             "cd .claude && command cd .. && /bin/pwd -P",
+            // Round 4: launchers read by name, installed or not.
+            "caffeinate env -Csub /bin/pwd -P",
+            "caffeinate env -C sub /bin/pwd -P",
+            "caffeinate -i env -Csub /bin/pwd -P",
+            "xcrun env -Csub /bin/pwd -P",
+            "genv -Csub /bin/pwd -P",
+            "gtimeout 5 env -Csub /bin/pwd -P",
+            "ionice -c 3 env -Csub /bin/pwd -P",
+            "noglob env -Csub /bin/pwd -P",
+            "builtin -- cd sub && /bin/pwd -P",
         ];
         let mut skipped = Vec::new();
         for shell in shells {
@@ -2290,6 +2387,10 @@ mod r22_tests {
             for (line, script) in runs {
                 // `chdir` is a zsh builtin, not a bash one.
                 if line.starts_with("chdir") && shell == "bash" {
+                    continue;
+                }
+                if shell == "bash" && zsh_only.iter().any(|word| line.starts_with(word)) {
+                    skipped.push(format!("{shell}: {line} (zsh only)"));
                     continue;
                 }
                 let set = line_directories(line, &root, Some(&home));
@@ -2322,7 +2423,7 @@ mod r22_tests {
             }
         }
         if !skipped.is_empty() {
-            eprintln!("skipped, launcher not installed: {skipped:?}");
+            eprintln!("skipped, launcher not installed or not this shell's: {skipped:?}");
         }
     }
 }

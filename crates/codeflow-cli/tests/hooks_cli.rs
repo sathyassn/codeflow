@@ -7558,6 +7558,15 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find .claude/settings.json -execdir python3 tool.py settings.json \\;".to_string(),
         "D=.claude; cd \"$D\" && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
         "command cd .git && find config -execdir python3 tool.py config \\;".to_string(),
+        // Round 4: unmodeled words before a directory change, zsh
+        // precommands and GNU-prefixed or macOS launchers.
+        "noglob cd .claude && python3 tool.py settings.json".to_string(),
+        "true; - cd .git && python3 tool.py config".to_string(),
+        "bash -c 'builtin -- cd .git && python3 tool.py config'".to_string(),
+        "caffeinate env -C.claude python3 tool.py settings.json".to_string(),
+        "xcrun env -C.git python3 tool.py config".to_string(),
+        "genv -C.git python3 tool.py config".to_string(),
+        "gtimeout 5 env -C.claude python3 tool.py settings.json".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7575,6 +7584,8 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "source go.sh && python3 tool.py notes.txt",
         "nice python3 tool.py data.json",
         "timeout 5 node x.js out.json",
+        "noglob cd .claude && python3 tool.py notes.txt",
+        "caffeinate python3 tool.py data.json",
     ];
     let mut wrong = Vec::new();
     for command in &refused {

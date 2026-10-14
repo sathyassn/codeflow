@@ -18,12 +18,18 @@
 //! or code string literal, by its trailing components, at the same levels.
 //! The guard never fails open on grammar it does not understand. The
 //! modeled grammar is `cd`, `chdir`, `pushd` and `popd`; the launchers
-//! `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`,
-//! `time`, `env` and `xargs` with their options; `git -C`; composed
-//! `ruby -C`; and `find -execdir` started from every directory in the set.
-//! `source`, `.`, `sudo`, `env -S` and any option or launcher outside that
-//! list make the set unknown. Only string literals in code are read as
-//! file names, never identifiers or numbers.
+//! `command`, `builtin` (with `--`), `exec`, `nohup`, `nice`, `timeout`,
+//! `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice`
+//! with their options, read under their GNU-prefixed names too (`genv`,
+//! `gtimeout`); the zsh precommands `noglob`, `nocorrect` and `-`;
+//! `git -C`; composed `ruby -C`; and `find -execdir` started from every
+//! directory in the set. `source`, `.`, `sudo`, `env -S` and any option
+//! outside that list make the set unknown. Any other word followed by a
+//! directory-change token the grammar did not consume (`cd`, `chdir`,
+//! `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) is read
+//! as an unmodeled launcher, and the set becomes unknown (review round 4).
+//! Only string literals in code are read as file names, never identifiers
+//! or numbers.
 use super::{actions, outward};
 use crate::hooks::{edit_guard, git_guard, PolicyLevel, Violation};
 use std::collections::HashMap;

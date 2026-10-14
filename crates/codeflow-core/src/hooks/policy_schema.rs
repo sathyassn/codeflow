@@ -208,13 +208,17 @@ pub const SCHEMA: [KeySpec; 68] = [
                 directory and every one any directory change may reach, \
                 success or not. Within the modeled grammar (`cd`, `chdir`, \
                 `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, \
-                `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env` and \
-                `xargs` with their options, every `env -C` spelling \
-                included; `git -C`; composed `ruby -C`; `find -execdir` from \
-                every directory in the set, a file start in its parent, \
-                `-path` against find's own spelling) the set is exact. \
-                Anything outside it (`source`, `.`, `sudo`, `env -S`, an \
-                option or launcher it does not list) makes the directory \
+                `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, \
+                `xargs`, `caffeinate`, `xcrun` and `ionice` with their \
+                options, GNU-prefixed names such as `genv` and `gtimeout` \
+                and every `env -C` spelling included; the zsh precommands \
+                `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; \
+                `find -execdir` from every directory in the set, a file \
+                start in its parent, `-path` against find's own spelling) \
+                the set is exact. Anything outside it (`source`, `.`, \
+                `sudo`, `env -S`, an option it does not list, or any other \
+                word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or \
+                `--chdir` after an env-like word) makes the directory \
                 unknown, and every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
