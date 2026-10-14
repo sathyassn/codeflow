@@ -1,0 +1,11 @@
+id = "TSK-303"
+uid = "1855e1fd-501c-40db-8fb1-e6e696862594"
+kind = "TSK"
+title = "A sample adopter's gates job runs the scaffolded workflow on GitHub"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T00:52:43Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
