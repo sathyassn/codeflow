@@ -5507,7 +5507,7 @@ fn the_acceptance_help_names_the_key_and_its_fields() {
         let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
         for needle in [
             "top-level `acceptance:` key",
-            "reviewed, review, criteria, journey, not_verified, follow_ups and verdict",
+            "`reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`",
         ] {
             assert!(
                 flat.contains(needle),

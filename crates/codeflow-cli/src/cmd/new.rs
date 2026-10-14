@@ -95,8 +95,8 @@ pub struct StatusDetails {
     pub scope: Option<String>,
     /// A file holding the acceptance block to add to the Closeout on
     /// completion: the YAML between the fences, starting with a top-level
-    /// `acceptance:` key that holds reviewed, review, criteria, journey,
-    /// not_verified, follow_ups and verdict.
+    /// `acceptance:` key that holds `reviewed`, `review`, `criteria`,
+    /// `journey`, `not_verified`, `follow_ups` and `verdict`.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
 }
