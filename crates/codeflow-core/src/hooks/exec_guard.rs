@@ -171,11 +171,21 @@ pub fn evaluate_in(
         root,
         home.as_deref(),
     ) {
-        if !violations.iter().any(|v| v.rule == finding.rule) {
-            violations.push(finding);
-        }
+        merge_strongest(&mut violations, finding);
     }
     violations
+}
+
+/// Keep one finding per rule, the strongest: a fixed level outranks a
+/// configurable one, and a block outranks a warning, so a weaker finding
+/// met first never hides an always-blocking one (TSK-302 review round 2).
+fn merge_strongest(violations: &mut Vec<Violation>, finding: Violation) {
+    let strength = |v: &Violation| (v.level_fixed, v.level == PolicyLevel::Block);
+    match violations.iter_mut().find(|v| v.rule == finding.rule) {
+        Some(existing) if strength(&finding) > strength(existing) => *existing = finding,
+        Some(_) => {}
+        None => violations.push(finding),
+    }
 }
 
 pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {

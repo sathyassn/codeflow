@@ -38,6 +38,7 @@ pub(crate) fn evaluate(
     if calls.is_empty() {
         return Vec::new();
     }
+    let line_dirs = outward::line_directories(line, payload_cwd, home);
     let mut facts = Facts {
         line,
         payload_cwd,
@@ -47,26 +48,38 @@ pub(crate) fn evaluate(
         line_enforcement: HashMap::new(),
         line_authority: HashMap::new(),
     };
-    let mut found = Vec::new();
+    let mut reaches = Vec::new();
     for call in &calls {
-        for reach in call_reaches(call, &mut facts) {
-            let violation = match reach {
-                Reach::Authority(message) => Some(Violation::always_blocking(
-                    "git.hook_integrity",
-                    message,
-                    AUTHORITY_ROUTE,
-                )),
-                Reach::Enforcement(message) => integrity.is_active().then(|| {
-                    Violation::new(
-                        "git.hook_integrity",
-                        integrity,
-                        message,
-                        crate::remedy::INTERPRETER_ARGUMENT.remedy(),
-                    )
-                }),
-            };
-            found.extend(violation);
+        reaches.extend(call_reaches(call, &line_dirs, &mut facts));
+    }
+    // Code text is judged as its arguments are, from every directory the
+    // line may run it in, bare names included (TSK-302 review round 2).
+    let code_dirs = dir_options(&line_dirs);
+    for code in outward::interpreter_bodies(line) {
+        for word in outward::literal_words(&code) {
+            for dir in &code_dirs {
+                reaches.extend(value_reach(&word, dir.as_deref(), &mut facts));
+            }
         }
+    }
+    let mut found = Vec::new();
+    for reach in reaches {
+        let violation = match reach {
+            Reach::Authority(message) => Some(Violation::always_blocking(
+                "git.hook_integrity",
+                message,
+                AUTHORITY_ROUTE,
+            )),
+            Reach::Enforcement(message) => integrity.is_active().then(|| {
+                Violation::new(
+                    "git.hook_integrity",
+                    integrity,
+                    message,
+                    crate::remedy::INTERPRETER_ARGUMENT.remedy(),
+                )
+            }),
+        };
+        found.extend(violation);
     }
     found
 }
@@ -164,73 +177,278 @@ fn argument_values(word: &str) -> Vec<&str> {
         .into_iter()
         .collect();
     if !word.starts_with("--") {
-        if let Some((at, _)) = word.char_indices().nth(2) {
+        // A short-option cluster may end in an option whose value is
+        // attached: `-oFILE`, `-voFILE` (TSK-302 review round 2).
+        for (at, ch) in word.char_indices().skip(2) {
             values.push(&word[at..]);
+            if !word[1..at].chars().all(|c| c.is_ascii_alphabetic()) || !ch.is_ascii_alphabetic() {
+                break;
+            }
         }
     }
     values.retain(|value| !value.is_empty());
     values
 }
 
-/// The directories a call's relative arguments are read from: where it
-/// runs, after a `ruby -C`, and for `find -execdir` each directory `find`
-/// can run it in. `None` stands for a directory the guard cannot follow.
-fn call_dirs(call: &outward::InterpreterCall, facts: &Facts<'_>) -> Vec<Option<PathBuf>> {
-    let base = match (&call.cwd, &call.chdir) {
-        (Some(cwd), Some(chdir)) if !git_guard::unresolved_word(chdir) => Some(cwd.join(chdir)),
-        (_, Some(_)) => None,
-        (cwd, None) => cwd.clone(),
-    };
-    let Some(outward::Supplier::Find {
-        starts,
-        cwd,
-        in_dir: true,
-        ..
-    }) = &call.supplier
-    else {
-        return vec![base];
-    };
-    // `-execdir` runs the command in the directory of each path it visits:
-    // every directory that leads to a protected path under a start, and the
-    // start itself. The `-name` tests are not applied here, so any match in
-    // such a directory counts.
-    let mut dirs = Vec::new();
-    for start in starts {
-        let Some(start) = cwd
-            .as_ref()
-            .filter(|_| !git_guard::unresolved_word(start))
-            .map(|cwd| cwd.join(start))
-        else {
-            dirs.push(None);
-            continue;
-        };
-        let Ok(mut reached) = edit_guard::find_candidates(&start, facts.payload_cwd) else {
-            // What it cannot list may run anywhere under the start.
-            dirs.push(None);
-            continue;
-        };
-        reached.extend(authority_files(facts.root));
-        for path in reached {
-            if !path.starts_with(&start) {
-                continue;
-            }
-            // The path itself counts too: a directory among them is one
-            // `find` visits, and a file joined with a name reaches nothing.
-            if let Some(parent) = path.parent() {
-                dirs.push(Some(parent.to_path_buf()));
-            }
-            dirs.push(Some(path));
-        }
-        dirs.push(Some(start));
+/// The directories of a set as the judgment reads them, `None` standing
+/// for a directory the guard cannot follow.
+fn dir_options(set: &outward::DirSet) -> Vec<Option<PathBuf>> {
+    let mut dirs: Vec<Option<PathBuf>> = set.dirs.iter().cloned().map(Some).collect();
+    if set.unknown {
+        dirs.push(None);
     }
-    dirs.sort();
-    dirs.dedup();
     dirs
 }
 
+/// The directories a call's relative arguments are read from: every one
+/// the line may run it in (and the one its own launcher gives it), or for
+/// `find -execdir` each one `find` can run it in; then each `ruby -C`
+/// applied in order.
+fn call_dirs(
+    call: &outward::InterpreterCall,
+    line_dirs: &outward::DirSet,
+    facts: &Facts<'_>,
+) -> outward::DirSet {
+    let mut set = if let Some(outward::Supplier::Find {
+        starts,
+        before,
+        cwd,
+        in_dir: true,
+    }) = &call.supplier
+    {
+        execdir_dirs(starts, before, cwd.as_deref(), line_dirs, facts.payload_cwd)
+    } else {
+        let mut set = line_dirs.clone();
+        match &call.cwd {
+            Some(cwd) if !set.dirs.contains(cwd) => set.dirs.push(cwd.clone()),
+            Some(_) => {}
+            None => set.unknown = true,
+        }
+        set
+    };
+    for chdir in &call.chdir {
+        if git_guard::unresolved_word(chdir) {
+            set.unknown = true;
+        } else {
+            set.dirs = set
+                .dirs
+                .iter()
+                .map(|dir| outward::lexical_join(dir, Path::new(chdir)))
+                .collect();
+        }
+    }
+    set
+}
+
+/// A `find` test the `-execdir` walk applies: a name or path pattern, or an
+/// entry type.
+enum FindTest {
+    Name(glob::Pattern, bool),
+    Path(glob::Pattern, bool),
+    Type(char),
+}
+
+/// The tests of the expression before an `-execdir` that every matched
+/// entry passes, or `None` when the expression has an operator (`-o`, `!`,
+/// `-not`, a group) under which they need not all hold. Any other test is
+/// read as one every entry passes.
+fn find_tests(before: &[String]) -> Option<Vec<FindTest>> {
+    // Primaries whose value is the next word.
+    const VALUED: &[&str] = &[
+        "-maxdepth",
+        "-mindepth",
+        "-newer",
+        "-anewer",
+        "-cnewer",
+        "-user",
+        "-group",
+        "-uid",
+        "-gid",
+        "-perm",
+        "-size",
+        "-links",
+        "-inum",
+        "-mtime",
+        "-mmin",
+        "-atime",
+        "-amin",
+        "-ctime",
+        "-cmin",
+        "-printf",
+        "-fprint",
+        "-fprint0",
+        "-fls",
+        "-regex",
+        "-iregex",
+        "-lname",
+        "-ilname",
+        "-xtype",
+        "-fstype",
+        "-samefile",
+        "-newermt",
+        "-files0-from",
+        "-context",
+    ];
+    let mut tests = Vec::new();
+    let mut words = before
+        .iter()
+        .skip_while(|w| matches!(w.as_str(), "-H" | "-L" | "-P"));
+    // The starting points come first.
+    let mut words = words
+        .by_ref()
+        .skip_while(|w| !w.starts_with('-') && !matches!(w.as_str(), "!" | "("));
+    while let Some(word) = words.next() {
+        let pattern = |value: Option<&String>| value.and_then(|v| glob::Pattern::new(v).ok());
+        match word.as_str() {
+            "-o" | "-or" | "!" | "-not" | "(" | ")" | "," => return None,
+            "-name" | "-iname" => {
+                tests.push(FindTest::Name(pattern(words.next())?, word == "-iname"));
+            }
+            "-path" | "-ipath" | "-wholename" | "-iwholename" => {
+                tests.push(FindTest::Path(
+                    pattern(words.next())?,
+                    word.starts_with("-i"),
+                ));
+            }
+            "-type" => {
+                let kind = words.next()?;
+                if let [kind] = kind.as_bytes() {
+                    tests.push(FindTest::Type(char::from(*kind)));
+                }
+            }
+            "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                for word in words.by_ref() {
+                    if word == ";" || word == "+" {
+                        break;
+                    }
+                }
+            }
+            other if VALUED.contains(&other) => {
+                words.next();
+            }
+            _ => {}
+        }
+    }
+    Some(tests)
+}
+
+/// Whether the entry at `path`, which `find` prints as `shown`, passes
+/// every test.
+fn passes(tests: &[FindTest], path: &Path, shown: &str, kind: Option<std::fs::FileType>) -> bool {
+    let options = |insensitive: bool| glob::MatchOptions {
+        case_sensitive: !insensitive,
+        require_literal_separator: false,
+        require_literal_leading_dot: false,
+    };
+    tests.iter().all(|test| match test {
+        FindTest::Name(pattern, insensitive) => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_none_or(|name| pattern.matches_with(name, options(*insensitive))),
+        FindTest::Path(pattern, insensitive) => pattern.matches_with(shown, options(*insensitive)),
+        FindTest::Type(want) => kind.is_none_or(|kind| match want {
+            'f' => kind.is_file(),
+            'd' => kind.is_dir(),
+            'l' => kind.is_symlink(),
+            _ => true,
+        }),
+    })
+}
+
+/// Every directory `find -execdir` can run its command in: the parent of
+/// each entry under a start that the expression's tests let through, as a
+/// real directory (Option A of TSK-302 review round 2). A start the guard
+/// cannot read, an expression it cannot apply, or a walk past its limit
+/// reads as unknown.
+fn execdir_dirs(
+    starts: &[String],
+    before: &[String],
+    cwd: Option<&Path>,
+    line_dirs: &outward::DirSet,
+    payload_cwd: &Path,
+) -> outward::DirSet {
+    // The command still runs from the normal run directories (so an
+    // argument that names a protected path by its own spelling refuses);
+    // `-execdir` adds, for each start, the protected directories under it
+    // that `find` can run the command in.
+    let mut set = match cwd {
+        Some(cwd) => outward::DirSet {
+            dirs: vec![cwd.to_path_buf()],
+            unknown: false,
+        },
+        None => line_dirs.clone(),
+    };
+    let tests = find_tests(before);
+    let froms: Vec<PathBuf> = match cwd {
+        Some(cwd) => vec![cwd.to_path_buf()],
+        None => line_dirs.dirs.clone(),
+    };
+    for start in starts {
+        if git_guard::unresolved_word(start) {
+            set.unknown = true;
+            continue;
+        }
+        for from in &froms {
+            // `find_candidates` is bounded; it returns the enforcement paths
+            // and registered checkouts under the start and the directories
+            // leading to them, never a full tree walk (TSK-302 review round
+            // 2 R2-4, Grok F3).
+            let Ok(candidates) = edit_guard::find_candidates(&from.join(start), payload_cwd) else {
+                set.unknown = true;
+                continue;
+            };
+            for candidate in candidates {
+                // A candidate too large to walk is reported as `<dir>/*`;
+                // the command may run anywhere under it.
+                if candidate.file_name().is_some_and(|name| name == "*") {
+                    set.unknown = true;
+                    continue;
+                }
+                if candidate.is_dir() && dir_runs_execdir(&candidate, tests.as_deref()) {
+                    set.dirs.push(candidate);
+                }
+            }
+        }
+    }
+    dedup(set)
+}
+
+/// Whether `find -execdir` can run its command in directory `dir`: it does
+/// when an entry directly in `dir` passes the expression's tests. With no
+/// resolvable test every entry passes, so a non-empty directory qualifies.
+/// A directory it cannot read is taken to qualify (fail closed).
+fn dir_runs_execdir(dir: &Path, tests: Option<&[FindTest]>) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return true;
+    };
+    let Some(tests) = tests else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let shown = path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        if passes(tests, &path, &shown, entry.file_type().ok()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn dedup(mut set: outward::DirSet) -> outward::DirSet {
+    set.dirs.sort();
+    set.dirs.dedup();
+    set
+}
+
 /// What every argument of one call, and what its supplier gives it, reach.
-fn call_reaches(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Vec<Reach> {
-    let dirs = call_dirs(call, facts);
+fn call_reaches(
+    call: &outward::InterpreterCall,
+    line_dirs: &outward::DirSet,
+    facts: &mut Facts<'_>,
+) -> Vec<Reach> {
+    let dirs = dir_options(&call_dirs(call, line_dirs, facts));
     let mut found = Vec::new();
     for word in &call.args {
         // `find` and `xargs -I {}` fill in `{}`; what they supply is judged
@@ -241,6 +459,14 @@ fn call_reaches(call: &outward::InterpreterCall, facts: &mut Facts<'_>) -> Vec<R
         for value in argument_values(word) {
             for dir in &dirs {
                 found.extend(value_reach(value, dir.as_deref(), facts));
+            }
+        }
+    }
+    // The call's own code is judged from the same directories.
+    for code in &call.code {
+        for word in outward::literal_words(code) {
+            for dir in &dirs {
+                found.extend(value_reach(&word, dir.as_deref(), facts));
             }
         }
     }
@@ -359,6 +585,14 @@ fn unreadable_reach(
     facts: &mut Facts<'_>,
 ) -> Option<Reach> {
     let shown = git_guard::shown_word(value);
+    // Authority is decided apart from the first enforcement description:
+    // `"$W/.git/"*` can reach `.git/config` though git-guard first names
+    // `.git/hooks` (TSK-302 review round 2).
+    if let Some(name) = tail_names_authority(value) {
+        return Some(Reach::Authority(format!(
+            "an interpreter argument `{shown}` could name policy authority metadata `{name}`"
+        )));
+    }
     let reached = match dir {
         Some(dir) if spells_protected(value, &facts.names) => {
             git_guard::token_integrity_path(value, dir, facts.payload_cwd)
@@ -391,6 +625,49 @@ fn unreadable_reach(
     Some(Reach::Enforcement(format!(
         "an interpreter argument `{shown}` is filled in at run time on a line that names the enforcement path `{named}`"
     )))
+}
+
+/// Authority metadata as a trailing spelling a word can end in.
+const AUTHORITY_TAILS: &[&str] = &[
+    ".git/config",
+    ".git/config.worktree",
+    ".git/packed-refs",
+    ".git/refs/remotes/x",
+    ".gitconfig",
+    ".config/git/config",
+    "etc/gitconfig",
+];
+
+/// The authority metadata a word's spelled tail can name: the part after
+/// what the shell fills in (or the whole word, read from a directory the
+/// guard cannot follow), read as a pattern against the trailing components
+/// of each authority path.
+fn tail_names_authority(value: &str) -> Option<&'static str> {
+    let cut = value
+        .char_indices()
+        .rev()
+        .find(|(_, c)| matches!(c, '$' | '`' | '\u{1}' | '\u{2}'))
+        .map(|(at, _)| at);
+    let tail = match cut {
+        Some(cut) => value[cut..].split_once('/').map(|(_, tail)| tail)?,
+        None => value,
+    };
+    let tail = tail.trim_start_matches("./");
+    if tail.is_empty() || tail.starts_with('/') {
+        return None;
+    }
+    let pattern = glob::Pattern::new(tail).ok()?;
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let depth = tail.split('/').count();
+    AUTHORITY_TAILS.iter().copied().find(|path| {
+        let parts: Vec<&str> = path.split('/').collect();
+        parts.len() >= depth
+            && pattern.matches_with(&parts[parts.len() - depth..].join("/"), options)
+    })
 }
 
 /// The authority metadata files of the repository at `root`: its config,

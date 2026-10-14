@@ -112,10 +112,6 @@ struct Parsed {
     /// What gives the command being read more arguments, while the
     /// command an `xargs` or `find -exec` runs is read.
     supplier: Option<Supplier>,
-    /// Whether a `cd` the guard cannot follow makes the directory unknown
-    /// for the commands after it. Only [`interpreter_calls`] sets it; the
-    /// action families keep their reading.
-    unknown_cd: bool,
 }
 
 /// One interpreter call (TSK-302, issue 173): the words it receives other
@@ -131,9 +127,11 @@ pub(crate) struct InterpreterCall {
     /// The directory the call runs in; `None` after a `cd` the guard
     /// cannot follow.
     pub(crate) cwd: Option<PathBuf>,
-    /// A directory the interpreter changes to before it runs the program
-    /// (`ruby -C dir`), relative to `cwd`.
-    pub(crate) chdir: Option<String>,
+    /// The directories the interpreter changes to, in order, before it
+    /// runs the program (`ruby -C a -C b`), each relative to the last.
+    pub(crate) chdir: Vec<String>,
+    /// The inline code the call carries, as read for the code checks.
+    pub(crate) code: Vec<String>,
     /// The `xargs` or `find -exec` that runs the interpreter, if one does.
     pub(crate) supplier: Option<Supplier>,
 }
@@ -175,10 +173,7 @@ pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
 /// Every interpreter call on the line, read through the launchers,
 /// wrappers and `cd` changes this parser follows, starting in `cwd`.
 pub(crate) fn interpreter_calls(command: &str, cwd: &Path) -> Vec<InterpreterCall> {
-    let mut parsed = Parsed {
-        unknown_cd: true,
-        ..Parsed::default()
-    };
+    let mut parsed = Parsed::default();
     visit(command, Some(cwd), 0, &mut parsed);
     let mut calls = Vec::new();
     for call in parsed.calls {
@@ -206,11 +201,6 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     }
     shell_inputs(command, out);
     let mut directories = vec![cwd.map(Path::to_path_buf)];
-    // In a line of simple commands joined only by `&&`, a later command runs
-    // only after every `cd` before it succeeded, so it runs in the one
-    // directory they lead to. Any other shape keeps every directory a `cd`
-    // may or may not have reached (TSK-302 review F2).
-    let chained = out.unknown_cd && and_chain(command);
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
@@ -233,34 +223,203 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
         if args.first().is_some_and(|s| s == "cd") {
-            let operand = cd_operand(&args[1..]);
-            if let Some(path) = operand.filter(|p| !p.contains(['$', '`'])) {
+            if let Some(path) = cd_operand(&args[1..]).filter(|p| !p.contains(['$', '`'])) {
                 let next: Vec<_> = directories
                     .iter()
-                    .map(|dir| dir.as_ref().map(|dir| dir.join(path)))
+                    .filter_map(|dir| dir.as_ref().map(|dir| Some(dir.join(path))))
                     .collect();
-                if chained {
-                    directories = next;
-                } else {
-                    // A directory the guard cannot follow stays unknown.
-                    directories.extend(next.into_iter().flatten().map(Some));
-                }
+                directories.extend(next);
                 directories.sort();
                 directories.dedup();
             }
-            // `cd` alone, `cd -`, `cd ~user` and a value filled in at run
-            // time lead where the guard cannot follow.
-            let unknown =
-                operand.is_none_or(|p| p.contains(['$', '`']) || p == "-" || p.starts_with('~'));
-            if out.unknown_cd && unknown {
-                if chained {
-                    directories = vec![None];
-                } else if !directories.contains(&None) {
-                    directories.push(None);
+        }
+    }
+}
+
+/// Every directory a line may run an interpreter in (TSK-302 review round
+/// 2): the session directory and each one a directory change anywhere on
+/// the line may reach, applied in order to every directory listed before
+/// it, whether or not it succeeds. `unknown` is set when a change cannot be
+/// resolved, so a command may run anywhere.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct DirSet {
+    pub(crate) dirs: Vec<PathBuf>,
+    pub(crate) unknown: bool,
+}
+
+/// The most directories a [`DirSet`] lists before it reads as unknown.
+const DIR_SET_LIMIT: usize = 64;
+
+impl DirSet {
+    /// Apply one change: a literal directory joins every listed one, a
+    /// change the guard cannot resolve makes the set unknown.
+    pub(crate) fn change(&mut self, change: &DirChange) {
+        match change {
+            DirChange::To(target) => {
+                let next: Vec<PathBuf> = self
+                    .dirs
+                    .iter()
+                    .map(|dir| lexical_join(dir, target))
+                    .collect();
+                for dir in next {
+                    if !self.dirs.contains(&dir) {
+                        self.dirs.push(dir);
+                    }
+                }
+                if self.dirs.len() > DIR_SET_LIMIT {
+                    self.unknown = true;
+                }
+            }
+            DirChange::Unknown => self.unknown = true,
+        }
+    }
+}
+
+/// `dir` joined with `target`, `.` and `..` removed by spelling, as the
+/// shell's logical `cd` reads them. An absolute target replaces `dir`.
+pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in dir.join(target).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A directory change one simple command makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirChange {
+    To(PathBuf),
+    Unknown,
+}
+
+/// The directory changes the words of one simple command make: `cd`,
+/// `chdir` and `pushd` with any options, also behind `!`, `command` and
+/// `builtin`; `env -C` and `--chdir` in every spelling; and `git -C`.
+/// `cd` alone goes to `home`; `cd -`, a stack index, `~user` and a value
+/// filled in at run time are unknown. `popd` returns to a directory
+/// already listed.
+pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let assignment = word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if word == "!" || assignment {
+            at += 1;
+        } else if matches!(word.as_str(), "command" | "builtin") {
+            at += 1;
+            while words
+                .get(at)
+                .is_some_and(|w| w.starts_with('-') && w.len() > 1)
+            {
+                at += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    let Some(program) = words.get(at) else {
+        return Vec::new();
+    };
+    let rest = &words[at + 1..];
+    let target = |operand: &str| -> DirChange {
+        if crate::hooks::git_guard::unresolved_word(operand) || operand == "-" {
+            return DirChange::Unknown;
+        }
+        if let Some(tail) = operand
+            .strip_prefix("~/")
+            .or((operand == "~").then_some(""))
+        {
+            return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
+        }
+        if operand.starts_with(['~', '+']) {
+            return DirChange::Unknown;
+        }
+        DirChange::To(PathBuf::from(operand))
+    };
+    let name = program.rsplit('/').next().unwrap_or(program);
+    match name {
+        "cd" | "chdir" | "pushd" => {
+            let mut operands = rest.iter();
+            let mut operand = None;
+            while let Some(word) = operands.next() {
+                if word == "--" {
+                    operand = operands.next();
+                    break;
+                }
+                // Every dash word is an option (`-L`, `-P`, `-q`, `-e`,
+                // `-@`); `-` alone is the previous directory, and a `pushd`
+                // stack index (`-1`) rotates to one already listed.
+                if word.starts_with('-') && word.len() > 1 {
+                    if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+                        return Vec::new();
+                    }
+                    continue;
+                }
+                operand = Some(word);
+                break;
+            }
+            match operand {
+                Some(operand) if name == "pushd" && operand.starts_with('+') => Vec::new(),
+                Some(operand) => vec![target(operand)],
+                None if name == "pushd" => Vec::new(),
+                None => {
+                    vec![home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf()))]
                 }
             }
         }
+        "env" => {
+            let mut found = Vec::new();
+            let mut words = rest.iter();
+            while let Some(word) = words.next() {
+                if word == "-C" || word == "--chdir" {
+                    found.extend(words.next().map(|dir| target(dir)));
+                } else if let Some(dir) = word.strip_prefix("--chdir=") {
+                    found.push(target(dir));
+                } else if let Some(dir) = word.strip_prefix("-C").filter(|d| !d.is_empty()) {
+                    found.push(target(dir));
+                } else if !word.starts_with('-') && !word.contains('=') {
+                    break;
+                }
+            }
+            found
+        }
+        "git" => {
+            let mut found = Vec::new();
+            let mut words = rest.iter();
+            while let Some(word) = words.next() {
+                if word == "-C" {
+                    found.extend(words.next().map(|dir| target(dir)));
+                } else if !word.starts_with('-') {
+                    break;
+                }
+            }
+            found
+        }
+        _ => Vec::new(),
     }
+}
+
+/// The directory set of `command` from `cwd`: every simple command the
+/// line runs, nested bodies included, read in order.
+pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
+    let mut set = DirSet {
+        dirs: vec![cwd.to_path_buf()],
+        unknown: false,
+    };
+    for segment in expand_commands(command) {
+        let words = command_argv(&segment);
+        for change in dir_changes(&words, home) {
+            set.change(&change);
+        }
+    }
+    set
 }
 
 #[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
@@ -431,68 +590,6 @@ fn cd_operand(args: &[String]) -> Option<&str> {
     None
 }
 
-/// Whether `command` is simple commands joined only by `&&`: outside
-/// quotes it has no `;`, `||`, single `|` or `&`, newline, grouping,
-/// substitution, heredoc or compound command. Anything else, or text the
-/// scan cannot read, is not a chain.
-fn and_chain(command: &str) -> bool {
-    let chars: Vec<char> = command.chars().collect();
-    let mut quote: Option<char> = None;
-    let mut at = 0;
-    let mut word_start = true;
-    while let Some(&ch) = chars.get(at) {
-        if let Some(q) = quote {
-            if ch == q {
-                quote = None;
-            } else if q == '"' && (ch == '`' || (ch == '$' && chars.get(at + 1) == Some(&'('))) {
-                return false;
-            } else if q == '"' && ch == '\\' {
-                at += 1;
-            }
-            at += 1;
-            continue;
-        }
-        match ch {
-            '\'' | '"' => quote = Some(ch),
-            '\\' => at += 1,
-            '&' if chars.get(at + 1) == Some(&'&') => at += 1,
-            ';' | '|' | '&' | '\n' | '(' | ')' | '{' | '}' | '`' => return false,
-            '<' if chars.get(at + 1) == Some(&'<') => return false,
-            _ => {}
-        }
-        if word_start && ch.is_ascii_alphabetic() {
-            let word: String = chars[at..]
-                .iter()
-                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
-                .collect();
-            if matches!(
-                word.as_str(),
-                "if" | "then"
-                    | "else"
-                    | "elif"
-                    | "fi"
-                    | "for"
-                    | "while"
-                    | "until"
-                    | "do"
-                    | "done"
-                    | "case"
-                    | "esac"
-                    | "select"
-                    | "function"
-                    | "eval"
-                    | "source"
-            ) {
-                return false;
-            }
-        }
-        // Space and tab are the blanks left here; a newline ended the scan.
-        word_start = matches!(ch, ' ' | '\t' | '&');
-        at += 1;
-    }
-    quote.is_none()
-}
-
 /// The interpreter a program name runs, by its family name: a version
 /// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
 /// interpreter they name.
@@ -522,6 +619,7 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
             "-e"
         };
         let mut found = false;
+        let code_from = out.code.len();
         for (at, arg) in rest.iter().enumerate() {
             let cluster = arg
                 .strip_prefix('-')
@@ -568,6 +666,7 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
             args,
             cwd: cwd.map(Path::to_path_buf),
             chdir,
+            code: out.code[code_from..].to_vec(),
             supplier: out.supplier.clone(),
         });
     }
@@ -643,9 +742,9 @@ fn long_takes_value(family: &str, name: &str) -> bool {
 /// script ends the options, and so does node's eval code; perl and ruby
 /// read options until the first other word. An option the table does not
 /// know is a flag, so a word after it stays an argument either way.
-fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Option<String>) {
+fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<String>) {
     let mut args = Vec::new();
-    let mut chdir = None;
+    let mut chdir = Vec::new();
     let mut at = 0;
     let after = |at: usize| rest.get(at..).unwrap_or_default().to_vec();
     while let Some(word) = rest.get(at) {
@@ -704,9 +803,11 @@ fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Option<
                     }
                 }
                 Short::Value => args.extend(value(&mut at)),
-                Short::Chdir => chdir = value(&mut at).or(chdir),
+                Short::Chdir => chdir.extend(value(&mut at)),
                 Short::Module => {
-                    args.extend(value(&mut at));
+                    // `-m MODULE`: a module name, not a path; the words
+                    // after it are the program's argv (TSK-302 R2-4).
+                    value(&mut at);
                     args.extend(after(at));
                     return (args, chdir);
                 }
@@ -1893,5 +1994,94 @@ mod r22_tests {
             Some(dir.path())
         )
         .is_empty());
+    }
+
+    /// Round 2 item 7: a differential test over directory-changing
+    /// prefixes. For each prefix, `<prefix>; pwd` is run natively in a
+    /// disposable fixture, and the directory the shell reports must be in
+    /// `line_directories`'s set, or the set must be unknown. Nothing
+    /// touches an enforcement file. It runs under bash, and under zsh where
+    /// that shell is installed; it is skipped, with a printed note, on a
+    /// host that has neither.
+    #[test]
+    fn directory_prefixes_match_the_native_shell() {
+        use std::process::Command;
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        for dir in ["sub", "a/b", ".claude", ".codeflow", "with space"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // Every reviewer payload's prefix, plus ordinary and unknown ones.
+        let prefixes = [
+            "cd sub",
+            "cd -- sub",
+            "cd -P -L sub",
+            "cd -q sub",
+            "command cd sub",
+            "command -p cd sub",
+            "builtin cd sub",
+            "! cd sub",
+            "pushd sub >/dev/null",
+            "chdir sub",
+            "env -C sub true",
+            "env -Csub true",
+            "env --chdir=sub true",
+            "cd a && cd b",
+            "cd a/b",
+            "cd .claude && cd ..",
+            "cd 'with space'",
+            "cd sub && cd ..",
+            "cd",
+            "cd \"$UNSET\"",
+            "cd -",
+        ];
+        let shells: Vec<&str> = ["bash", "zsh"]
+            .into_iter()
+            .filter(|shell| {
+                Command::new(shell)
+                    .arg("-c")
+                    .arg("exit 0")
+                    .status()
+                    .is_ok_and(|status| status.success())
+            })
+            .collect();
+        if shells.is_empty() {
+            eprintln!("skipped: neither bash nor zsh is installed");
+            return;
+        }
+        for shell in shells {
+            for prefix in prefixes {
+                // `chdir` is a zsh builtin, not a bash one.
+                if prefix == "chdir" && shell == "bash" {
+                    continue;
+                }
+                let set = line_directories(prefix, &root, Some(&home));
+                let output = Command::new(shell)
+                    .arg("-c")
+                    .arg(format!("{prefix} 2>/dev/null; pwd -P"))
+                    .current_dir(&root)
+                    .env("HOME", &home)
+                    .env_remove("CDPATH")
+                    .env_remove("UNSET")
+                    .output()
+                    .unwrap();
+                let printed = String::from_utf8(output.stdout).unwrap();
+                let Some(reported) = printed.lines().next_back() else {
+                    continue;
+                };
+                let reported = std::fs::canonicalize(reported).unwrap_or_else(|_| reported.into());
+                let covered = set.unknown
+                    || set.dirs.iter().any(|dir| {
+                        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()) == reported
+                    });
+                assert!(
+                    covered,
+                    "{shell}: `{prefix}` ran in {reported:?}, not in {:?} (unknown={})",
+                    set.dirs, set.unknown
+                );
+            }
+        }
     }
 }

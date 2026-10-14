@@ -275,6 +275,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(linked.join(".claude/settings.json"), "{}\n").unwrap();
+        // A scaffolded hook directory, which `find -execdir` can run in.
+        std::fs::create_dir_all(root.join(".codeflow/git-hooks")).unwrap();
+        std::fs::write(root.join(".codeflow/git-hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+        std::fs::write(root.join("src/notes.txt"), "\n").unwrap();
         Repo {
             _temp: temp,
             root,
@@ -536,9 +540,10 @@ mod tests {
         let args = |line: &str| outward::interpreter_calls(line, cwd)[0].args.clone();
         assert_eq!(args("python3 -c 'x' -c s.json"), ["-c", "s.json"]);
         assert_eq!(args("python3 -Ic'x' a"), ["a"]);
+        // `-m` is a module name, not a path; the words after it are argv.
         assert_eq!(
             args("python3 -W ignore -m json.tool a b"),
-            ["ignore", "json.tool", "a", "b"]
+            ["ignore", "a", "b"]
         );
         assert_eq!(args("python3 -B - a"), ["-", "a"]);
         assert_eq!(args("python3 -- s.py -o"), ["s.py", "-o"]);
@@ -554,49 +559,46 @@ mod tests {
         );
         assert_eq!(args("ruby -C d -e 'x' f")[..], ["f"]);
         assert_eq!(
-            outward::interpreter_calls("ruby -C d -e 'x' f", cwd)[0]
-                .chdir
-                .as_deref(),
-            Some("d")
+            outward::interpreter_calls("ruby -C d -C e -e 'x' f", cwd)[0].chdir,
+            ["d", "e"]
         );
         assert_eq!(
             outward::interpreter_calls("node --eval=code x", cwd)[0].args,
             ["x"]
         );
-        let dirs: Vec<_> = outward::interpreter_calls("cd sub && python3 x", cwd)
-            .into_iter()
-            .map(|c| c.cwd)
-            .collect();
-        assert!(dirs.contains(&Some(PathBuf::from("/w/sub"))), "{dirs:?}");
-        let dirs: Vec<_> = outward::interpreter_calls("cd \"$D\" && python3 x", cwd)
-            .into_iter()
-            .map(|c| c.cwd)
-            .collect();
-        assert!(dirs.contains(&None), "{dirs:?}");
-        // `cd` options are read past, and an `&&` chain runs a command in
-        // the one directory its changes lead to.
-        let dirs = |line: &str| -> Vec<Option<PathBuf>> {
-            outward::interpreter_calls(line, cwd)
-                .into_iter()
-                .map(|c| c.cwd)
-                .collect()
-        };
-        assert_eq!(
-            dirs("cd -- sub && python3 x"),
-            [Some(PathBuf::from("/w/sub"))]
-        );
-        assert_eq!(
-            dirs("cd -P -L sub && python3 x"),
-            [Some(PathBuf::from("/w/sub"))]
-        );
-        assert_eq!(
-            dirs("cd a && cd b && python3 x"),
-            [Some(PathBuf::from("/w/a/b"))]
-        );
-        assert_eq!(
-            dirs("cd a; python3 x"),
-            [Some(PathBuf::from("/w")), Some(PathBuf::from("/w/a"))]
-        );
+        // The line's directory set: every directory a change may reach,
+        // whether or not it succeeds, through every spelling.
+        let set = |line: &str| outward::line_directories(line, cwd, Some(Path::new("/h")));
+        let has = |line: &str, dir: &str| set(line).dirs.contains(&PathBuf::from(dir));
+        for (line, dir) in [
+            ("cd sub && python3 x", "/w/sub"),
+            ("cd -- sub && python3 x", "/w/sub"),
+            ("cd -P -L sub && python3 x", "/w/sub"),
+            ("cd -q sub; python3 x", "/w/sub"),
+            ("command cd sub && python3 x", "/w/sub"),
+            ("command -p cd sub && python3 x", "/w/sub"),
+            ("builtin cd sub && python3 x", "/w/sub"),
+            ("! cd sub; python3 x", "/w/sub"),
+            ("pushd sub >/dev/null && python3 x", "/w/sub"),
+            ("chdir sub && python3 x", "/w/sub"),
+            ("env -C sub python3 x", "/w/sub"),
+            ("env -Csub python3 x", "/w/sub"),
+            ("env --chdir=sub python3 x", "/w/sub"),
+            ("git -C sub status; python3 x", "/w/sub"),
+            ("cd a && cd b && python3 x", "/w/a/b"),
+            ("cd a && cd .. && python3 x", "/w/a"),
+            ("cd && python3 x", "/h"),
+        ] {
+            assert!(has(line, dir), "{line}: {:?}", set(line));
+            assert!(has(line, "/w"), "{line}: {:?}", set(line));
+        }
+        for line in [
+            "cd \"$D\" && python3 x",
+            "cd - && python3 x",
+            "cd ~u && python3 x",
+        ] {
+            assert!(set(line).unknown, "{line}");
+        }
         assert!(outward::interpreter_calls("rustc x.rs", cwd).is_empty());
         // A version suffix is read past; a multi-byte name ending is not cut
         // inside a character.
@@ -679,7 +681,6 @@ mod tests {
         assert_allowed(
             &repo,
             &[
-                "cd .claude && cd .. && python3 tool.py settings.json",
                 "cd src && python3 tool.py out.json",
                 "find src -name '*.py' -execdir python3 -m py_compile {} +",
                 "find src -name '*.py' -execdir python3 lint.py out.txt \\;",
@@ -739,6 +740,199 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(5),
             "{:?}",
             started.elapsed()
+        );
+    }
+
+    /// The findings the public exec-guard boundary gives `command` from
+    /// `dir` at `level`, after it merges the findings of each rule.
+    fn public(repo: &Repo, dir: &Path, command: &str, level: PolicyLevel) -> Vec<Violation> {
+        let command = command
+            .replace("@ROOT@", &repo.root.display().to_string())
+            .replace("@LINKED@", &repo.linked.display().to_string());
+        crate::hooks::exec_guard::evaluate_in(
+            &command,
+            true,
+            &SecuritySection::default(),
+            level,
+            dir,
+            &repo.root,
+        )
+    }
+
+    fn integrity_finding(findings: &[Violation]) -> Option<&Violation> {
+        findings.iter().find(|v| v.rule == "git.hook_integrity")
+    }
+
+    /// Each command refuses under `git.hook_integrity` through the public
+    /// boundary at block; with `fixed`, it also keeps a fixed block at warn,
+    /// allow and off.
+    fn assert_public_refused(repo: &Repo, commands: &[&str], fixed: bool) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            for level in [
+                PolicyLevel::Block,
+                PolicyLevel::Warn,
+                PolicyLevel::Allow,
+                PolicyLevel::Off,
+            ] {
+                if !fixed && level != PolicyLevel::Block {
+                    continue;
+                }
+                let findings = public(repo, &repo.root, command, level);
+                let ok = integrity_finding(&findings)
+                    .is_some_and(|v| v.level == PolicyLevel::Block && (!fixed || v.level_fixed));
+                if !ok {
+                    wrong.push(format!(
+                        "should refuse at {level:?}: {command}: {findings:?}"
+                    ));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    fn assert_public_allowed(repo: &Repo, commands: &[&str]) {
+        let mut wrong = Vec::new();
+        for command in commands {
+            let findings = public(repo, &repo.root, command, PolicyLevel::Block);
+            if let Some(v) = integrity_finding(&findings) {
+                wrong.push(format!("should allow: {command}: {}", v.message));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// TSK-302 review round 2, Codex R2-1: the fixed authority block
+    /// survives the merge of findings, whatever came first, and a broad
+    /// unresolved glob that can reach `.git/config` is authority too.
+    #[test]
+    fn the_authority_block_survives_merged_findings() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 tool.py .claude/settings.json .git/config",
+                "python3 tool.py .git/config .claude/settings.json",
+                "python3 tool.py .claude/settings.json; python3 tool.py .git/config",
+                "python3 -c 'open(\".claude/settings.json\")' .git/config",
+                "W=.; python3 tool.py \"$W/.git/\"*",
+                "W=.; python3 tool.py \"$W/.git/con\"*",
+            ],
+            true,
+        );
+    }
+
+    /// Codex R2-2 and Grok F2: every directory change a line can make,
+    /// whatever spelling and whether or not it succeeds, is a directory the
+    /// interpreter may run in.
+    #[test]
+    fn every_directory_change_spelling_is_followed() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "cd .claude && ! cd nonexistent && python3 tool.py settings.json",
+                "ruby -C .claude -C . -e 'File.write(ARGV[0], \"\")' settings.json",
+                "find ../repo -name '*.json' -execdir python3 tool.py settings.json \\;",
+                "find .claude -name settings.json -execdir ruby -C ../.codeflow -e 'File.write(ARGV[0], \"\")' policy.json \\;",
+                "command cd .claude && python3 tool.py settings.json",
+                "builtin cd .claude && python3 tool.py settings.json",
+                "command -p cd .claude && python3 tool.py settings.json",
+                "pushd .claude >/dev/null && python3 tool.py settings.json",
+                "chdir .claude && python3 tool.py settings.json",
+                "cd -q .claude && python3 tool.py settings.json",
+                "env -C.claude python3 tool.py settings.json",
+                "cd .claude && command cd .. && python3 tool.py .claude/settings.json",
+                "cd .claude && builtin cd .. && python3 tool.py .claude/settings.json",
+                "cd .claude && pushd .. >/dev/null && python3 tool.py .claude/settings.json",
+                "cd .claude && cd -q .. && python3 tool.py .claude/settings.json",
+                // Known conservative refusals: the set keeps `.claude`.
+                "cd .claude && cd .. && python3 tool.py settings.json",
+                "find . -execdir python3 lint.py notes.txt \\;",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "command cd .git && python3 tool.py config",
+                "builtin cd .git && python3 tool.py config",
+                "pushd .git >/dev/null && python3 tool.py config",
+                "env -C.git python3 tool.py config",
+                "cd \"$D\" && python3 tool.py config",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "cd src && python3 app.py settings.json",
+                "find . -name '*.py' -execdir python3 -m py_compile {} +",
+                "find . -name '*.rs' -execdir python3 lint.py {} +",
+                "find src -execdir python3 lint.py notes.txt \\;",
+                "pushd src >/dev/null && python3 tool.py out.json && popd",
+            ],
+        );
+    }
+
+    /// Grok F1: code text is judged from every directory the line may run
+    /// it in, bare names included.
+    #[test]
+    fn code_text_is_judged_from_every_directory() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "cd .claude && python3 -c 'open(\"settings.json\",\"w\").write(\"\")'",
+                "cd .claude && python3 -c 'open(\"./settings.json\",\"w\").write(\"\")'",
+                "cd -- .claude && python3 -c 'open(\"./settings.json\",\"w\").write(\"\")'",
+                "cd -P .claude && python3 -c 'open(\"./settings.json\",\"w\").write(\"\")'",
+                "cd .codeflow && python3 -c 'open(\"policy.json\",\"w\").write(\"\")'",
+                "cd .claude && python3 -c 'open(\"settings.local.json\",\"w\").write(\"\")'",
+                "cd .claude && node -e 'require(\"fs\").writeFileSync(\"settings.json\",\"\")'",
+                "cd .claude && perl -e 'open F, \">\", \"settings.json\"'",
+                "ruby -C .claude -e 'File.write(\"settings.json\",\"\")'",
+                "ruby -C.claude -e 'File.write(\"./settings.json\",\"\")'",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "cd .git && python3 -c 'open(\"config\",\"w\").write(\"\")'",
+                "cd .git && python3 -c 'open(\"./config\",\"a\").write(\"\")'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "cd .claude && python3 -c 'print(1)'",
+                "cd src && python3 -c 'open(\"out.txt\",\"w\")'",
+                "python3 -c 'import json, sys\\; print(json.dumps({\"a\": 1}))'",
+            ],
+        );
+    }
+
+    /// Codex R2-3: an attached value after a short-option cluster is read.
+    #[test]
+    fn an_attached_value_after_an_option_cluster_is_read() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 -c 'import argparse\\; p=argparse.ArgumentParser(); p.add_argument(\"-v\",action=\"store_true\"); p.add_argument(\"-o\"); open(p.parse_args().o,\"a\").write(\"\")' -vo.claude/settings.json",
+                "python3 tool.py -xvo.codeflow/policy.json",
+            ],
+            false,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "python3 tool.py -vvv -xz out.json",
+                "python3 tool.py -vo out.json",
+                "python3 tool.py -n3",
+            ],
         );
     }
 }
