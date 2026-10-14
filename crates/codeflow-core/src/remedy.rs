@@ -487,7 +487,7 @@ catalog! {
         "run `codeflow validate --docs` and `codeflow test --mode quick` in a clean, complete checkout of the pushed commit";
     /// A pushed ref whose unchecked tree must refuse at block level.
     PUSH_TREE_REQUIRED = Step::Git("git switch"),
-        "push from a clean, complete checkout of each pushed commit: preserve tracked edits by committing or saving them first, disable sparse checkout, initialize submodules at their recorded commits, and push different commits separately";
+        "push from a clean, complete checkout of each pushed commit. Select its branch with `git switch <branch>`";
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";

@@ -572,13 +572,20 @@ pub const SCHEMA: [KeySpec; 68] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Run the test gate before a push (pre-push hook).",
-        notes: "At block, every pushed branch must be checked from a clean, complete \
-                checkout at its pushed commit or the push is refused. Dirty tracked \
-                files, other commits in a multi-ref push, sparse checkouts and \
-                missing or mismatched submodules require fixing the checkout and \
-                pushing different commits separately. Warn and off retain a note \
-                naming unchecked trees and the checks to run. Untracked files can \
-                influence quick targets; a pass describes the working checkout.",
+        notes: "Tree checks use the strictest level from the working copy, HEAD \
+                and the destination authority. At block, every pushed branch with \
+                a commit not already on the destination must be checked from a \
+                clean, complete checkout at that commit or the push is refused. \
+                Dirty tracked files, assume-unchanged or skip-worktree index flags, \
+                sparse checkouts and missing or mismatched submodules prevent \
+                checking that tree. Initialized submodules are included in quick-target \
+                snapshots. Commits already advertised by the destination, or ancestors \
+                of those commits, need no tree checks; this preserves epic new \
+                --integration from a planning branch. Warn notes unchecked trees and \
+                the checks to run; off and allow name the inactive gate, including when \
+                checkout inspection would fail. Untracked files can influence quick \
+                targets; a pass describes the working checkout. Tag and other \
+                non-branch pushes are outside the push set.",
     },
     KeySpec {
         path: "git.security_review",

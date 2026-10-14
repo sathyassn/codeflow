@@ -307,6 +307,24 @@ pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
+/// Whether actual local commit objects prove that a tip contains `sha`.
+/// Replacement refs and grafts do not confer ancestry. Missing or shallow
+/// history cannot prove reachability; this function never fetches objects.
+#[must_use]
+pub fn commit_reachable_from(root: &std::path::Path, sha: &str, tips: &[String]) -> bool {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    let Ok(commit) = git2::Oid::from_str(sha) else {
+        return false;
+    };
+    tips.iter().any(|tip| {
+        tip == sha
+            || git2::Oid::from_str(tip)
+                .is_ok_and(|tip| repo.graph_descendant_of(tip, commit).unwrap_or(false))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{output_with_input, runs_git};

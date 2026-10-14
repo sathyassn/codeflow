@@ -1987,21 +1987,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Reads submodule status LF records; the unmodified status byte decides incompleteness.
+    // Reads NUL-separated index entries and LF-separated submodule status records;
+    // the unchanged leading status byte decides incompleteness in both formats.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "incomplete_checkout",
         "split_terminator",
-        1,
-        "framing:submodule-status-lines",
-    ),
-    // Literal LF separates status rows. Whitespace splitting extracts a displayed path only. The unchanged first status byte decides incompleteness.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-        "split_whitespace",
-        1,
-        "grammar:git-submodule-status",
+        2,
+        "framing:index-and-submodule-status-records",
     ),
     // Formats already-emitted finding text only, without establishing guard verdicts or rewriting operands.
     (
@@ -2330,6 +2323,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "display",
+    ),
+    // An unreadable ancestry graph cannot prove the destination holds a commit;
+    // false keeps that commit on the checked-or-refused path in run_tree_checks.
+    (
+        "crates/codeflow-core/src/git/mod.rs",
+        "commit_reachable_from",
+        "obtain-absent:graph_descendant_of",
+        1,
+        "unproven",
     ),
     // Decodes two ASCII hex digits from the internal storage_key encoding, not arbitrary OS bytes; storage_key emits a complete hex suffix after NUL.
     (
@@ -5706,7 +5708,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "shell_words",
     ),
     (
-        "submodule-status-lines",
+        "index-and-submodule-status-records",
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "incomplete_checkout",
     ),
