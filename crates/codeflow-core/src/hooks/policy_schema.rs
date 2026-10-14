@@ -219,7 +219,10 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `sudo`, `env -S`, an option it does not list, or any other \
                 word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or \
                 `--chdir` after an env-like word) makes the directory \
-                unknown, and every known word is then judged by its trailing \
+                unknown, and so does an unknown program that launches a \
+                modeled launcher or an interpreter later in its words \
+                (never after `--`, a `-m` or `-c` value, or inside a quoted \
+                argument); every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
                 `cd .claude && cd .. && python3 tool.py settings.json`, and a \

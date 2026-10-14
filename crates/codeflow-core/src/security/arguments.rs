@@ -28,6 +28,10 @@
 //! directory-change token the grammar did not consume (`cd`, `chdir`,
 //! `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) is read
 //! as an unmodeled launcher, and the set becomes unknown (review round 4).
+//! An unmodeled program followed, in a command position, by a modeled
+//! launcher or an interpreter name may launch it: the rest of the segment
+//! is read as a call whose directory is unknown. Words after `--`, the
+//! values of `-m` and `-c`, and quoted arguments never start a command.
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
 use super::{actions, outward};

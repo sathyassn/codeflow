@@ -825,7 +825,10 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
             None
         }
-        _ => None,
+        _ => {
+            unmodeled_launch(name, rest, depth, out);
+            None
+        }
     };
     if let Some(inner) = inner {
         let outer = if name == "xargs" {
@@ -835,6 +838,64 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         };
         argv(inner, cwd, depth + 1, out);
         out.supplier = outer;
+    }
+}
+
+/// The launchers `argv` unwraps, read by their bare name.
+const MODELED_LAUNCHERS: &[&str] = &[
+    "env",
+    "command",
+    "builtin",
+    "exec",
+    "nohup",
+    "setsid",
+    "caffeinate",
+    "unbuffer",
+    "time",
+    "noglob",
+    "nocorrect",
+    "xcrun",
+    "ionice",
+    "nice",
+    "stdbuf",
+    "timeout",
+    "xargs",
+];
+
+/// A program the grammar does not model may itself launch what follows it
+/// (`frobnicate env -C.claude python3 tool.py settings.json`). When a
+/// later word in a command position is a modeled launcher or an
+/// interpreter, the rest of the segment from that word is read as a
+/// possible call whose directory is unknown, so its known words are
+/// judged by their trailing components (TSK-302, after review round 4).
+/// A word after `--`, the value of `-m` or `-c`, and a word holding more
+/// than a bare name (a quoted argument) never start a command.
+fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed) {
+    if name == "git" || interpreter_family(name).is_some() {
+        return;
+    }
+    let mut words = rest.iter().enumerate();
+    while let Some((at, word)) = words.next() {
+        match word.as_str() {
+            "--" => return,
+            "-m" | "-c" => {
+                words.next();
+                continue;
+            }
+            _ => {}
+        }
+        let bare = crate::hooks::git_guard::launcher_name(word);
+        if MODELED_LAUNCHERS.contains(&bare) || interpreter_family(bare).is_some() {
+            // Only the calls are kept: the rest of what this reading finds
+            // stays with the checks that read the modeled grammar.
+            let mut inner = Parsed {
+                supplier: out.supplier.clone(),
+                ..Parsed::default()
+            };
+            argv(&rest[at..], None, depth + 1, &mut inner);
+            out.calls.extend(inner.calls);
+            return;
+        }
     }
 }
 

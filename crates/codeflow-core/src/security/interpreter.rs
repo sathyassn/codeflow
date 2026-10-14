@@ -1141,4 +1141,46 @@ mod tests {
             ],
         );
     }
+
+    /// After review round 4: an unmodeled program followed by a modeled
+    /// launcher or an interpreter in a command position may launch it, so
+    /// the rest of the segment is judged as a call whose directory is
+    /// unknown. Quoted arguments, words after `--` and `-m`/`-c` values
+    /// never start a command.
+    #[test]
+    fn an_unknown_program_that_launches_an_interpreter_is_judged() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "frobnicate env -C.claude python3 tool.py settings.json",
+                "frobnicate python3 tool.py settings.json",
+                "cd .claude && frobnicate python3 -c 'open(\"settings.json\",\"w\")'",
+                "frobnicate --flag nice python3 tool.py settings.json",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "frobnicate env -C.git python3 tool.py config",
+                "cd .git && frobnicate python3 -c 'open(\"config\",\"w\")'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "make test",
+                "git commit -m \"python3 x\"",
+                "cargo run -- python3",
+                "cargo run -- python3 tool.py settings.json",
+                "npm run build",
+                "docker run img python3 app.py data.json",
+                "frobnicate -m python3 settings.json",
+                "frobnicate 'python3 tool.py settings.json'",
+                "frobnicate env -C.claude python3 tool.py notes.txt",
+            ],
+        );
+    }
 }

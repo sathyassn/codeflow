@@ -7567,6 +7567,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "xcrun env -C.git python3 tool.py config".to_string(),
         "genv -C.git python3 tool.py config".to_string(),
         "gtimeout 5 env -C.claude python3 tool.py settings.json".to_string(),
+        // An unknown program that launches an interpreter.
+        "frobnicate env -C.claude python3 tool.py settings.json".to_string(),
+        "frobnicate env -C.git python3 tool.py config".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7586,6 +7589,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "timeout 5 node x.js out.json",
         "noglob cd .claude && python3 tool.py notes.txt",
         "caffeinate python3 tool.py data.json",
+        "docker run img python3 app.py data.json",
+        "cargo run -- python3",
+        "git commit -m \"python3 x\"",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
