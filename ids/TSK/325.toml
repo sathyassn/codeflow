@@ -1,0 +1,11 @@
+id = "TSK-325"
+uid = "b14b094f-95e6-4fd2-a993-943aa9088635"
+kind = "TSK"
+title = "Edit denies cover the policy workflow, CI hook, scanners and bootstrap"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:28:03Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
