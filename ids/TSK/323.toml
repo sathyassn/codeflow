@@ -1,0 +1,11 @@
+id = "TSK-323"
+uid = "a9505d9d-e8f3-4eb7-9c29-87103f2e7fcc"
+kind = "TSK"
+title = "Ignored and oversized files are judged by the base revision's rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:54Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
