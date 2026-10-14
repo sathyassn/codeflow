@@ -635,6 +635,7 @@ prefixes on `codeflow` lines (section 5) lands in this task.
 
 | Reviewer | Scope | Verdict | Evidence |
 |---|---|---|---|
+| Codex, independent interactive design review | whole design at `a914137239fc92cd7d2b0717b2fdc8f9a81843fb` | changes_requested | `target/review-design-TSK-291-codex-03.md`: the security corrections and HTTPS fixture direction are accepted at design level, including the need for test TLS dependencies. Section 4 verifies overridden settings, but the test plan still requires those same inputs to refuse. Reconcile that test contract before implementation. TSK-283's reader remains an external build dependency. |
 | Codex, independent interactive design review | whole design at `50ea1174fdf2a3b6054f4999a454d0422685da7d` | changes_requested | `target/review-design-TSK-291-codex-02.md`: effective redirect settings, remaining ambient authentication sources, contradictory journey fixtures and unpopulated authority fallback remain unresolved. No implementation approval. |
 
 Second Codex design review at `50ea1174f`, `changes_requested`:
