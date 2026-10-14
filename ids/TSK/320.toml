@@ -1,0 +1,11 @@
+id = "TSK-320"
+uid = "4be99c4d-1678-4480-a056-d5642d4b0df8"
+kind = "TSK"
+title = "A project declares its own outward commands and an opt-in preset"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:42Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
