@@ -178,19 +178,34 @@ fn run_checked_with_binary(
         }
     }
 
+    run_tree_checks(&exe, root, policy, &pushed, report, &mut steps)?;
+
+    let total = started.elapsed();
+    if let Some(note) = git_hook::over_budget_note(&steps, total, git_hook::PUSH_SET_BUDGET) {
+        report.notes.push(note);
+    }
+    report
+        .status
+        .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
+    Ok(())
+}
+
+/// Check the working checkout only for commits it represents; refuse any
+/// unchecked pushed tree at block and retain an explicit note at lower levels.
+fn run_tree_checks(
+    exe: &Path,
+    root: &Path,
+    policy: &GitPolicy,
+    pushed: &[&PushRef],
+    report: &mut StageReport,
+    steps: &mut Vec<PushStep>,
+) -> Result<(), String> {
     let head = rev_parse(root, "HEAD")?;
     let incomplete = incomplete_checkout(root)?;
     let clean = incomplete.is_none() && tracked_tree_clean(root)?;
     let at_head = |r: &&&PushRef| clean && head.as_deref() == Some(r.local_sha.as_str());
-    if active && pushed.iter().any(|r| at_head(&r)) {
-        run_check(
-            &exe,
-            root,
-            &["validate", "--docs"],
-            policy,
-            report,
-            &mut steps,
-        );
+    if policy.test_gate_on_push.is_active() && pushed.iter().any(|r| at_head(&r)) {
+        run_check(exe, root, &["validate", "--docs"], policy, report, steps);
         steps.extend(git_hook::run_push_targets(root, policy, report));
     }
     for r in pushed.iter().filter(|r| !at_head(r)) {
@@ -218,13 +233,6 @@ fn run_checked_with_binary(
         }
     }
 
-    let total = started.elapsed();
-    if let Some(note) = git_hook::over_budget_note(&steps, total, git_hook::PUSH_SET_BUDGET) {
-        report.notes.push(note);
-    }
-    report
-        .status
-        .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
     Ok(())
 }
 
