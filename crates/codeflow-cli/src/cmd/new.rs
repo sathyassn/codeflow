@@ -93,8 +93,10 @@ pub struct StatusDetails {
     /// Where a cancelled record's scope went.
     #[arg(long)]
     pub scope: Option<String>,
-    /// A file holding the acceptance block (the YAML between the fences) to
-    /// add to the Closeout on completion.
+    /// A file holding the acceptance block to add to the Closeout on
+    /// completion: the YAML between the fences, starting with a top-level
+    /// `acceptance:` key that holds reviewed, review, criteria, journey,
+    /// not_verified, follow_ups and verdict.
     #[arg(long, value_name = "FILE")]
     pub acceptance: Option<PathBuf>,
 }
@@ -731,7 +733,15 @@ fn run_status(
 ) -> i32 {
     let acceptance = match &details.acceptance {
         Some(path) => match std::fs::read_to_string(path) {
-            Ok(text) => Some(text),
+            Ok(text) => {
+                if target == "complete" {
+                    if let Err(problem) = check_acceptance_file(path, &text) {
+                        eprintln!("error: {problem}");
+                        return 1;
+                    }
+                }
+                Some(text)
+            }
             Err(error) => {
                 eprintln!("error: cannot read {}: {error}", path.display());
                 return 1;
@@ -772,6 +782,51 @@ fn run_status(
             eprintln!("error: {id}: {error}");
             1
         }
+    }
+}
+
+/// The fields the acceptance block holds under its `acceptance:` key.
+const ACCEPTANCE_FIELDS: &str =
+    "reviewed, review, criteria, journey, not_verified, follow_ups and verdict";
+
+/// Refuse an `--acceptance` file whose shape is wrong before the record is
+/// touched, naming the file and the missing top-level `acceptance:` key.
+///
+/// The block's own fields are judged later by the lifecycle check, which
+/// reads a stricter line grammar than YAML (a value such as
+/// `none: nothing deferred` is that grammar's, not valid YAML). So a file
+/// that is not valid YAML is refused only when its first line is not the
+/// `acceptance:` header; a file that opens with the header goes on to the
+/// field checks, which report the real problems.
+fn check_acceptance_file(path: &Path, text: &str) -> Result<(), String> {
+    let shown = path.display();
+    let needs = format!(
+        "the acceptance file needs a top-level `acceptance:` key holding {ACCEPTANCE_FIELDS}"
+    );
+    let opens_with_header = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.trim_end() == "acceptance:");
+    match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(serde_yaml::Value::Mapping(map)) => {
+            if map.contains_key("acceptance") {
+                Ok(())
+            } else {
+                let found: Vec<String> = map
+                    .keys()
+                    .filter_map(|key| key.as_str().map(|name| format!("`{name}`")))
+                    .collect();
+                let found = if found.is_empty() {
+                    String::new()
+                } else {
+                    format!("; it has {} at the top level", found.join(", "))
+                };
+                Err(format!("{shown}: {needs}{found}"))
+            }
+        }
+        Ok(_) => Err(format!("{shown}: {needs}; the file is not a YAML mapping")),
+        Err(_) if opens_with_header => Ok(()),
+        Err(error) => Err(format!("{shown}: not valid YAML ({error}); {needs}")),
     }
 }
 
