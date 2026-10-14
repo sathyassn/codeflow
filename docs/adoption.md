@@ -371,6 +371,10 @@ An upgrade therefore takes two pull requests, in order:
 2. On a new branch, run `codeflow update` and land its new keys and files;
    the new binary judges them.
 
+A key that is new in a release stays out of the shipped policy template, so
+`codeflow update` does not write it and a binary that predates it still reads
+the file (see [Where a new key goes](policy-reference.md#where-a-new-key-goes)).
+
 | Case | What happens |
 |---|---|
 | A pull request adds policy keys before step 1 has landed | It fails with a message naming this order: the enforcing job reads the head's policy as data and fails when the pinned binary cannot read it |

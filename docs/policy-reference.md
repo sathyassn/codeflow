@@ -96,6 +96,28 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Where a new key goes
+
+A new policy key lives in the schema registry and the code default only. It
+is not written to the shipped template (`assets/base/policy.json`) or to this
+repository's installed policy (`.codeflow/policy.json`). Its note says so, in
+the words "The shipped policy file does not list it, so an older binary never
+meets the key." The keys `git.pr_summary` and `git.claim_remotes` above follow
+this rule.
+
+| Question | Answer |
+|---|---|
+| Why does the template stay out of it? | `codeflow update` copies every template key into an adopter's policy file. A binary that does not know a key rejects the whole file as unknown, which blocks every commit. The binary on `PATH` and the binary a CI job pins can both be older than the one that ran `update`. |
+| How does this relate to the two-step upgrade? | [The upgrade](adoption.md#update) takes two pull requests: first raise and land the pin, then run `codeflow update` on a new branch. That protects an adopter who follows it. The rule means the release that introduces a key never depends on it, because its template does not carry the key. |
+| When may a key join the template and the installed policy? | Only when the last released binary already lists it, so after the release that introduced it has published, and only when the file must carry a value that differs from the code default. Most keys never need to: the default applies when a file omits the key. |
+| What holds the rule? | `crates/codeflow-core/tests/policy_key_placement.rs` fails when the template or the installed policy names a key that the last release's list does not hold. The list is `crates/codeflow-core/tests/fixtures/policy-keys-last-release.txt`, with the command that regenerates it from a release tag. The test also updates a fixture project at the last release with this build's template and checks that the result still loads in that release. |
+| Does `repository_update_noop` catch it? | No. A key placed in both files passes it, because the installed policy then matches the template. |
+| When is the list refreshed? | In the change that first needs the newer list, from the release tag. A stale list only keeps a newer key out of the template. |
+
+The same rule is in the module documentation of
+`crates/codeflow-core/src/hooks/policy_schema.rs`, where a contributor adds a
+key.
+
 ## Rules with no key
 
 `security.shell_startup` is enforced by exec-guard and edit-guard. It
