@@ -399,6 +399,26 @@ redirect into it and edit-guard a native edit; a write by any other program
 (`curl -o`, `cp`, `tar`) is the residual AC-6 names, held by the sandbox
 where that path is outside the writable root (review rounds 17 and 18).
 
+The alias and follow-tags checks use one bounded effective-configuration
+reader. Git resolves files, includes, conditional includes, command options
+and inherited configuration environment variables. The reader preserves
+configuration values as bytes until a decision needs text. A malformed
+configuration, include loop, missing include, unsupported include-path
+interpolation, or read beyond three seconds or 4 MiB is reported as
+"cannot verify". The include inventory is limited to 128 entries. The guards
+refuse configuration-dependent actions when shell environment changes cannot
+be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
+`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
+`GIT_CONFIG_NOSYSTEM`. `--config-env` alias invocations remain conservative
+refusals because a shell assignment can supply the named variable.
+
+`codeflow doctor --check git-config-includes` names include files that may
+be writable and reports when their discovery cannot be verified. Include-file
+writes are not guarded, and the check does not certify filesystem permissions.
+The operator inspects or repairs the configuration and secures its include
+paths. This is the diagnostic mitigation for issue 88; it avoids starting Git
+for every path a session guard examines.
+
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
 `--git-dir`, `GIT_DIR` on the line or in the environment the hook runs in,
@@ -473,8 +493,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   this page says the guard reads is still a blocker when it slips
   through. The sandbox holds such a write when the resolved path is
   outside the writable root or matches a deny. These stay open: a path
-  inside a writable root; an include file in the workspace that a user
-  configuration pulls in (issue 88); a code-running key set at repository
+  inside a writable root; writes to include files (doctor names potentially
+  writable includes, but cannot discover nested includes behind inactive
+  conditions or concurrent changes, issue 88); a code-running key set at repository
   scope, which an allowed `git status` then runs; a workspace symbolic
   link to a protected file, which no sandbox was tested against; a seat
   with no sandbox; Claude's unsandboxed retry, since the presets set

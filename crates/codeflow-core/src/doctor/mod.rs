@@ -23,6 +23,7 @@ use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
+mod git_config;
 mod grok_hooks;
 mod remote_perimeter;
 mod startup_files;
@@ -289,6 +290,7 @@ const CHECK_NAMES: &[&str] = &[
     "codex",
     "grok",
     "startup-files",
+    "git-config-includes",
     "config",
     "permissions",
     "policy-source",
@@ -326,6 +328,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("startup-files", startup_files::check);
+    m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -3964,7 +3967,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 22);
+        assert_eq!(check_names().len(), 23);
     }
 
     #[test]

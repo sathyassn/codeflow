@@ -642,6 +642,9 @@ catalog! {
     /// Harness settings without the shell startup class (TSK-242).
     DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
         "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Git include paths that need operator inspection.
+    DOCTOR_GIT_CONFIG_INCLUDES = Step::Git("git config"),
+        "The operator inspects git config --show-origin --includes --list and secures or removes its include paths; rerun codeflow doctor --check git-config-includes after repair.";
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
         "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";

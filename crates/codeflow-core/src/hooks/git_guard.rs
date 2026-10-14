@@ -153,43 +153,30 @@ pub fn read_branch_name(
     }
 }
 
-/// Read `alias.<name>` for the guard by running `git config --get` where the
-/// command would run (`query.target`, relative to `cwd`), with the command's
-/// own `-c` settings. Exit 1 means the key is not set; any other failure is
-/// [`AliasAnswer::Unreadable`].
+/// Read `alias.<name>` through the shared effective-configuration reader.
+/// Missing keys are distinct from configuration the reader cannot verify.
 #[must_use]
 pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer {
-    let mut cmd = crate::git::command();
-    cmd.current_dir(cwd).stdin(std::process::Stdio::null());
+    let mut globals = Vec::new();
     match query.target {
         Some(t) if t.git_dir => {
-            cmd.arg(format!("--git-dir={}", t.path));
+            globals.push(format!("--git-dir={}", t.path));
         }
         Some(t) => {
-            cmd.arg("-C").arg(t.path);
+            globals.extend(["-C".into(), t.path.into()]);
         }
         None => {}
     }
     for setting in query.config {
-        cmd.arg("-c").arg(setting);
+        globals.extend(["-c".into(), setting.clone()]);
     }
-    cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
-    match cmd.output() {
-        // OS text rule (issue 79): the expansion is judged as command words,
-        // so one that is not valid UTF-8 is unreadable, which the guard
-        // treats as uncertainty and stops, never as a lossy spelling.
-        Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
-            Ok(text) => {
-                AliasAnswer::Expansion(text.strip_suffix('\n').unwrap_or(&text).to_string())
-            }
-            Err(_) => AliasAnswer::Unreadable("the alias is not valid UTF-8".to_string()),
+    match crate::security::git_config::read(cwd, &globals, &BTreeMap::new()) {
+        Ok(config) => match config.get(&format!("alias.{}", query.name)) {
+            Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
+            Ok(None) => AliasAnswer::NotAlias,
+            Err(reason) => AliasAnswer::Unreadable(reason),
         },
-        Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
-        Ok(out) => AliasAnswer::Unreadable(format!(
-            "`git config` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        Err(e) => AliasAnswer::Unreadable(format!("git could not run: {e}")),
+        Err(reason) => AliasAnswer::Unreadable(reason),
     }
 }
 
@@ -6483,7 +6470,7 @@ fn check_authority(
         matches!(sub, "fetch" | "pull" | "push")
             || super::ref_authority::remote_transport_args(sub, rest).is_some()
     });
-    if moved.transport_env && transport {
+    if (moved.transport_env || moved.config_unknown) && transport {
         violations.push(Violation::always_blocking(
             "git.policy_authority",
             "command-local configuration can redirect the configured remote".into(),
@@ -6567,6 +6554,15 @@ fn check_git(
     };
     let head_moved_before = branches.head_may_move;
     branches.head_may_move |= !discard_readonly_git(sub, rest);
+    let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
+    if (moved.config_unknown || config_env) && JUDGED_SUBCOMMANDS.contains(&sub) && sub != "config"
+    {
+        out.push(Violation::always_blocking(
+            "git.policy_authority",
+            "cannot verify Git configuration after command-local environment changes".into(),
+            "run the Git operation with the configured environment; the operator changes configuration",
+        ));
+    }
 
     // A subcommand that is not a builtin may be an alias: judge what it
     // expands to, as if written literally. One the guard cannot read is
@@ -7212,7 +7208,7 @@ const MAX_ALIAS_DEPTH: usize = 8;
 /// config file it could write? Any mention of a `GIT_CONFIG*` variable,
 /// `XDG_CONFIG_HOME`, a `git/config` or `gitconfig` path, or `HOME` as a word
 /// not read as `$HOME`, counts.
-fn mentions_config_env(command: &str) -> bool {
+pub(crate) fn mentions_config_env(command: &str) -> bool {
     if ["GIT_CONFIG", "XDG_CONFIG_HOME", "git/config", "gitconfig"]
         .iter()
         .any(|marker| command.contains(marker))
@@ -11305,6 +11301,20 @@ mod tests {
             let result = report(command, "task/work");
             assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
             assert!(result.violations.iter().any(|v| v.message.contains("an alias the guard cannot resolve")), "{:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn configuration_environment_changes_refuse_branch_and_discard_decisions() {
+        for command in [
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true git commit -m fix",
+            "BARE=true git --config-env=core.bare=BARE commit -m fix",
+            "GIT_CONFIG_GLOBAL=/tmp/config git branch -D feature",
+            "env -u GIT_CONFIG_SYSTEM git reset --hard",
+            "GIT_CONFIG_NOSYSTEM=1 git push origin task/work",
+        ] {
+            let result = report(command, "task/work");
+            assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
         }
     }
 

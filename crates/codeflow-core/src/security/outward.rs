@@ -5,8 +5,7 @@ use super::headless::{
     skip_options,
 };
 use crate::hooks::git_guard::{
-    command_argv, expand_commands, read_alias, split_alias, strip_launchers, strip_reserved_words,
-    AliasAnswer, AliasQuery, Retarget,
+    command_argv, expand_commands, split_alias, strip_launchers, strip_reserved_words, AliasAnswer,
 };
 use crate::hooks::policy::SecuritySection;
 use crate::hooks::Violation;
@@ -77,6 +76,13 @@ pub(crate) fn evaluate_at(
                         crate::remedy::PUSH_WITHOUT_FOLLOW_TAGS.remedy(),
                     );
                 }
+                if id == "unverified_git_config" {
+                    return Violation::new(
+                        "security.outward_actions", level,
+                        "cannot verify Git configuration after shell environment changes; the alias or push may publish a release".into(),
+                        crate::remedy::GUARD_ALIAS.remedy(),
+                    );
+                }
                 Violation::new(
                     match id {
                         "privilege" => "security.privilege_escalation",
@@ -102,6 +108,7 @@ pub(crate) fn evaluate_at(
 
 #[derive(Default)]
 struct Parsed {
+    config_unknown: bool,
     unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
@@ -138,6 +145,10 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         return;
     }
     shell_inputs(command, out);
+    // A shell environment change may persist across segments or be hidden in
+    // a launcher. Until that state is reproduced, no config-dependent Git
+    // action is proved safe. The git guard uses the same conservative test.
+    out.config_unknown |= crate::hooks::git_guard::mentions_config_env(command);
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
@@ -185,6 +196,28 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     let name = program.rsplit('/').next().unwrap_or(program);
     out.commands.push(args.to_vec());
     let rest = &args[1..];
+    if name == "git" {
+        let sub = global_args("git", rest);
+        let config_env = rest[..rest.len() - sub.len()]
+            .iter()
+            .any(|arg| arg.starts_with("--config-env"));
+        if (out.config_unknown || config_env)
+            && sub.first().is_some_and(|name| {
+                name == "push" || !crate::hooks::git_guard::GIT_BUILTINS.contains(&name.as_str())
+            })
+        {
+            match has_explicit_git_directory(rest)
+                .then(|| git_policy_root(cwd, rest))
+                .transpose()
+            {
+                Ok(source) => out
+                    .families
+                    .push(("unverified_git_config", source.flatten())),
+                Err(reason) => out.unreadable.push(reason),
+            }
+            return;
+        }
+    }
     if name == "env" {
         if let (Some(dir), Some(inner)) = (
             rest.iter().find_map(|s| s.strip_prefix("GIT_DIR=")),
@@ -698,28 +731,11 @@ fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> Result<bool, String> {
         return Ok(option == "--follow-tags");
     }
     let end = globals.len() - sub.len();
-    let override_value = globals[..end]
-        .windows(2)
-        .filter(|p| p[0] == "-c")
-        .map(|p| p[1].split_once('=').unwrap_or((&p[1], "true")))
-        .filter(|(key, _)| key.eq_ignore_ascii_case("push.followTags"))
-        .map(|(_, value)| truthy(value))
-        .next_back();
-    if let Some(value) = override_value {
-        return Ok(value);
-    }
-    let Some(dir) = git_directory(cwd, globals)? else {
+    let Some(dir) = cwd else {
         return Ok(false);
     };
-    let repo = crate::hooks::repo::open(&dir)?.ok_or("command repository disappeared")?;
-    let config = repo
-        .config()
-        .map_err(|e| format!("cannot read command repository config: {e}"))?;
-    match config.get_bool("push.followTags") {
-        Ok(value) => Ok(value),
-        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
-        Err(e) => Err(format!("cannot read push.followTags: {e}")),
-    }
+    super::git_config::read(dir, &globals[..end], &super::git_config::Environment::new())?
+        .boolean("push.followtags")
 }
 
 fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
@@ -730,7 +746,7 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
     if crate::hooks::git_guard::GIT_BUILTINS.contains(&name.as_str()) {
         return;
     }
-    let Some(mut dir) = cwd.map(Path::to_path_buf) else {
+    let Some(dir) = cwd else {
         return;
     };
     let source = has_explicit_git_directory(rest)
@@ -744,59 +760,20 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         }
     };
     let end = rest.len() - sub.len();
-    // Preserve the command's directory and configuration order, including
-    // relative includes and worktree-specific conditional includes.
-    let mut config = Vec::new();
-    let mut git_dir = None;
-    let mut config_unknown = false;
-    let mut at = 0;
-    while at < end {
-        match rest[at].as_str() {
-            "-c" => {
-                config.extend(rest.get(at + 1).cloned());
-                at += 1;
-            }
-            "-C" => {
-                if let Some(path) = rest.get(at + 1) {
-                    dir = dir.join(path);
-                }
-                at += 1;
-            }
-            "--git-dir" => {
-                git_dir = rest.get(at + 1).map(String::as_str);
-                at += 1;
-            }
-            "--work-tree" | "--namespace" => at += 1,
-            "--config-env" => {
-                config_unknown = true;
-                at += 1;
-            }
-            value => {
-                if let Some(path) = value.strip_prefix("--git-dir=") {
-                    git_dir = Some(path);
-                } else if value.starts_with("--config-env=") {
-                    config_unknown = true;
-                } else if let Some(setting) = value.strip_prefix("-c") {
-                    config.push(setting.to_string());
-                }
-            }
-        }
-        at += 1;
-    }
+    let config_unknown = rest[..end]
+        .iter()
+        .any(|arg| arg.starts_with("--config-env"));
     let answer = if config_unknown || depth >= 32 {
         AliasAnswer::Unreadable("alias configuration or expansion is unresolved".into())
     } else {
-        read_alias(
-            &dir,
-            &AliasQuery {
-                target: git_dir.map(|path| Retarget {
-                    path,
-                    git_dir: true,
-                }),
-                config: &config,
-                name,
+        match super::git_config::read(dir, &rest[..end], &super::git_config::Environment::new()) {
+            Ok(config) => match config.get(&format!("alias.{name}")) {
+                Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
+                Ok(None) => AliasAnswer::NotAlias,
+                Err(reason) => AliasAnswer::Unreadable(reason),
             },
-        )
+            Err(reason) => AliasAnswer::Unreadable(reason),
+        }
     };
     let value = match answer {
         AliasAnswer::NotAlias => return,
@@ -984,24 +961,22 @@ mod tests {
 
     #[test]
     fn n2_valueless_follow_tags_is_true() {
+        let context = tempfile::tempdir().unwrap();
+        git2::Repository::init(context.path()).unwrap();
+        let inspect =
+            |command| evaluate_at(command, &SecuritySection::default(), Some(context.path()));
         for command in [
             "git -c push.followTags push origin task/x",
             "git -c PUSH.FOLLOWTAGS push origin task/x",
         ] {
-            assert!(
-                !evaluate(command, &SecuritySection::default()).is_empty(),
-                "{command}"
-            );
+            assert!(!inspect(command).is_empty(), "{command}");
         }
         for command in [
             "git -c push.followTags=false push origin task/x",
             "git -c push.followTags -c push.followTags=false push origin task/x",
             "git -c push.followTags push --no-follow-tags origin task/x",
         ] {
-            assert!(
-                evaluate(command, &SecuritySection::default()).is_empty(),
-                "{command}"
-            );
+            assert!(inspect(command).is_empty(), "{command}");
         }
     }
 
@@ -1199,16 +1174,17 @@ mod tests {
 
     #[test]
     fn f3_follow_tags_configuration() {
+        let context = tempfile::tempdir().unwrap();
+        git2::Repository::init(context.path()).unwrap();
+        let inspect =
+            |command| evaluate_at(command, &SecuritySection::default(), Some(context.path()));
         for command in [
             "git -c push.followTags=true push origin task/x",
             "git -c PUSH.FOLLOWTAGS=on push origin task/x",
             "git config push.followTags true",
             "git config --global push.followTags true",
         ] {
-            assert!(
-                !evaluate(command, &SecuritySection::default()).is_empty(),
-                "{command}"
-            );
+            assert!(!inspect(command).is_empty(), "{command}");
         }
         for command in [
             "git -c push.followTags=false push origin task/x",
@@ -1216,10 +1192,7 @@ mod tests {
             "git config push.followTags",
             "git config push.followTags false",
         ] {
-            assert!(
-                evaluate(command, &SecuritySection::default()).is_empty(),
-                "{command}"
-            );
+            assert!(inspect(command).is_empty(), "{command}");
         }
         let temp = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(temp.path()).unwrap();

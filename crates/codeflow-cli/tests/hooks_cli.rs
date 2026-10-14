@@ -1846,6 +1846,121 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
 }
 
 #[test]
+fn exec_guard_alone_refuses_environment_release_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let global = dir.path().join("extra-config");
+    std::fs::write(&global, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    for command in [
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship".to_string(),
+        "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        format!("GIT_CONFIG_GLOBAL='{}' git ship", global.display()),
+    ] {
+        let out = exec_guard_tool(dir.path(), "Bash", &command);
+        assert_eq!(out.status.code(), Some(2), "{command}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"), "{command}");
+    }
+}
+
+#[test]
+fn installed_exec_guard_and_include_diagnostic_journey() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let installed = codeflow()
+        .args(["init", "--minimal", "--yes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    // This shell-event fixture wires only exec-guard. No git-guard call can
+    // supply the missing refusal on its behalf.
+    let out = exec_guard_tool(dir.path(), "Bash", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"));
+
+    let included = dir.path().join("included-config");
+    std::fs::write(&included, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    git(
+        dir.path(),
+        &["config", "include.path", included.to_str().unwrap()],
+    );
+    let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+        "file_path":included, "content":"[core]\n pager = planted\n"}, "cwd":dir.path()})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "edit-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
+        &guard_payload(
+            &format!("printf planted > '{}'", included.display()),
+            dir.path(),
+        ),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    assert!(output.contains("included-config"), "{output}");
+    assert!(output.contains("writable"), "{output}");
+}
+
+#[test]
+fn doctor_reports_writable_global_and_system_include_files() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let parent = dir.path().join("parent-config");
+    let included = dir.path().join("included-config");
+    std::fs::write(&parent, "[include]\n path = included-config\n").unwrap();
+    std::fs::write(&included, "[core]\n pager = planted\n").unwrap();
+    for variable in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        let out = codeflow()
+            .env(variable, &parent)
+            .env("GIT_CONFIG_NOSYSTEM", "false")
+            .args(["doctor", "--check", "git-config-includes"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            output.contains("included-config") && output.contains("writable"),
+            "{variable}: {output}"
+        );
+    }
+}
+
+#[test]
 fn exec_guard_blocks_powershell_catastrophe_with_exit_2() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");

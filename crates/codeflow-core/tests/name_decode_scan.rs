@@ -348,14 +348,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
         "read_branch_name",
         "from_utf8_lossy",
         1,
@@ -2418,22 +2410,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "grammar:posix-shell",
-    ),
-    // The invalid-byte branch returns AliasAnswer::Unreadable; expand_alias refuses execution of the unresolved alias.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "obtain-absent:from_utf8",
-        1,
-        "unproven",
-    ),
-    // Only subprocess stderr is trimmed for a refusal message; identity stdout is strict and separately framed.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "trim",
-        1,
-        "display",
     ),
     // An unreadable branch becomes NON_UTF8_BRANCH, which GitPolicy::branch_is_protected treats as protected; BranchTracker refuses protected mutations.
     (
@@ -6019,6 +5995,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; every metadata error and non-file returns cannot verify, never an absent include."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),
