@@ -1,0 +1,11 @@
+id = "TSK-319"
+uid = "6a849931-c648-47af-84d7-25a2a8da1d2f"
+kind = "TSK"
+title = "Pushed branches are inventoried and deleted on a recorded-tip proof"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:27:38Z"
+target = "integration/EPC-023-the-3-2-0-adopter-features"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
