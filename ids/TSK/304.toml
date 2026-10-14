@@ -1,0 +1,11 @@
+id = "TSK-304"
+uid = "dd77f531-ebd1-4d2e-811e-a6dfb29cccf4"
+kind = "TSK"
+title = "Pre-push checks every pushed tree or refuses the push"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-14T03:11:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
