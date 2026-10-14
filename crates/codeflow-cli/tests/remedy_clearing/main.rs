@@ -226,9 +226,12 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_STARTUP_PRESETS", Runs),
     ("DOCTOR_STARTUP_SOURCED", Runs),
     ("DOCTOR_STARTUP_RELOCATED", Excluded(HumanAuthority)),
+    // The operator decides which configuration inputs to repair or remove.
+    ("DOCTOR_GIT_CONFIG_INCLUDES", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
+    ("GUARD_GIT_CONFIGURATION", Excluded(HumanAuthority)),
     ("HEADLESS_PEER_RUN", Runs),
     ("HOOK_UNEVALUATED", Runs),
     ("HOOK_STDIN_UNREAD", Runs),
