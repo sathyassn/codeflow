@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "3.1.1",
+  "scaffold_version": "3.2.0",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
@@ -1829,13 +1829,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "7ec981dbea2e78f188944d5bcf2d71589502b2e4ddd381e65affbca8b75e66cf",
+      "sha256": "db2e90d7161c9cefe0fad87fc90b0700c263bbbc0b02b0176309f29225b7325f",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "eb4423f6a128ad48ac9482d591e0e85fe2bbe3e045c2650c24a2e15d4e9b61f0",
+      "sha256": "74b0a3d447b0bfd0abf61d579d17050274b881a26600c075588486f48b718042",
       "exec": false
     },
     "docs/architecture.md": {
