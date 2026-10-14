@@ -7525,6 +7525,14 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name settings.json -exec python3 edit.py {} +".to_string(),
         "cd .claude && python3 edit.py settings.json".to_string(),
         "P=.codeflow/policy.json; python3 edit.py \"$P\"".to_string(),
+        // TSK-302 review F1 to F3.
+        "cd .claude && python3 -c 'import sys' -c settings.json".to_string(),
+        "python3 -c 'import argparse' -o.claude/settings.json".to_string(),
+        "cd -- .claude && python3 -c 'import sys' settings.json".to_string(),
+        "cd -P .claude && python3 -c 'import sys' settings.json".to_string(),
+        "find . -name '*.json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "echo .git/config | xargs python3 tool.py".to_string(),
+        "python3 tool.py .git/con*".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7533,10 +7541,12 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py \"$INPUT\"",
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
+        "cd .claude && cd .. && python3 tool.py settings.json",
+        "python3 tool.py -v -n3 -o out.json",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
-        let out = exec_guard_tool(&root, "Bash", command);
+        let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);
         // Refused for what the interpreter is given, not for its code.
         if out.status.code() != Some(2)
@@ -7553,17 +7563,35 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 edit.py .codeflow/policy.json".to_string(),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
     ] {
-        let out = exec_guard_tool(&linked, "Bash", &command);
+        let out = exec_guard_contract_3(&linked, &command);
         if out.status.code() != Some(2) {
             wrong.push(format!("should refuse in the worktree: {command}"));
         }
     }
     for command in allowed {
-        let out = exec_guard_tool(&root, "Bash", command);
+        let out = exec_guard_contract_3(&root, command);
         if out.status.code() != Some(0) {
             let err = String::from_utf8_lossy(&out.stderr);
             wrong.push(format!("should allow: {command}: {err}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The exec-guard's answer to `command` from `dir` through the hook
+/// contract the harness presets name, `--contract 3`.
+fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    run_with_stdin(
+        codeflow()
+            .env("SHELL", "/bin/zsh")
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(dir),
+        &payload,
+    )
 }
