@@ -332,8 +332,9 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 | `codeflow update` per repo | Run it in the repository | Refreshes scaffold files. Until you do, every command prints a version-skew warning |
 
 1. Upgrade the `codeflow` on `PATH` first. The hooks run that binary. A binary
-   older than a new policy key rejects the policy file, which blocks every
-   commit until you upgrade (for example `git.policy_characters`, ADR-0067).
+   older than a [new policy key](policy-reference.md#where-a-new-key-goes)
+   rejects the policy file, which blocks every commit until you upgrade (for
+   example `git.policy_characters`, ADR-0067).
 2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
    report with unified diffs.
 3. Resolve each `<name>.new` file against the file beside it.
@@ -370,10 +371,6 @@ An upgrade therefore takes two pull requests, in order:
    the `candidate codeflow` job tests the new one.
 2. On a new branch, run `codeflow update` and land its new keys and files;
    the new binary judges them.
-
-A key that is new in a release stays out of the shipped policy template, so
-`codeflow update` does not write it and a binary that predates it still reads
-the file (see [Where a new key goes](policy-reference.md#where-a-new-key-goes)).
 
 | Case | What happens |
 |---|---|
