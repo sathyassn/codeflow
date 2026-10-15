@@ -38,11 +38,17 @@
 //! message. `echo` and `printf` only print, so their operands stay data.
 //! When a shell or interpreter takes its code from anything other than a
 //! literal argument or a heredoc body the guard reads (a pipe, a
-//! here-string, a process substitution, or a `-c`/`-e` value holding a
-//! substitution), every word on the line is judged by its trailing
-//! components, with authority at its fixed level; code the guard can see
-//! there is also judged as that program's code (review round 7). A word
-//! is also judged with one surrounding `{}` pair removed, as Tcl runs it.
+//! here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a
+//! process substitution, or a `-c`/`-e` value holding a substitution),
+//! every word on the line is judged by its trailing components, with
+//! authority at its fixed level; code the guard can see there is also
+//! judged as that program's code (review round 7). On a line where a shell
+//! (`source` and `.` included) or an interpreter runs, every quoted string
+//! anywhere on the line is judged as possible code the same way; unquoted
+//! operands of other programs stay data (review round 8). A word is also
+//! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
+//! file the guard does not read stays past the guard; the OS sandbox is the
+//! backstop.
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
 use super::{actions, outward};
@@ -69,8 +75,8 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
 ) -> Vec<Violation> {
     let calls = outward::interpreter_calls(line, payload_cwd);
-    let opaque = outward::opaque_code(line);
-    if calls.is_empty() && !opaque && outward::interpreter_bodies(line).is_empty() {
+    let (opaque, runs) = outward::code_sources(line);
+    if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
     }
     let line_dirs = outward::line_directories(line, payload_cwd, home);
@@ -105,7 +111,19 @@ pub(crate) fn evaluate(
     // review round 7).
     if opaque {
         for word in outward::literal_words(line) {
-            reaches.extend(opaque_line_word(&word));
+            reaches.extend(opaque_line_word(&word, OPAQUE));
+        }
+    }
+    // Where a shell or interpreter runs, every quoted string on the line
+    // may reach it as code (a here-string with any descriptor, a pipe
+    // producer, a process substitution, an `exec N<<<` body, a fifo
+    // writer, a literal `-c` that runs its stdin), so each is judged the
+    // same way (TSK-302 review round 8). Unquoted operands stay data.
+    if runs {
+        for text in outward::quoted_texts(line) {
+            for word in outward::literal_words(&text) {
+                reaches.extend(opaque_line_word(&word, QUOTED));
+            }
         }
     }
     let mut found = Vec::new();
@@ -695,18 +713,22 @@ fn unknown_dir_literal(value: &str) -> Option<Reach> {
     })
 }
 
+/// Why a line word is judged: its interpreter code is unreadable.
+const OPAQUE: &str = "an interpreter on this line runs code the guard cannot read";
+/// Why a quoted string is judged: a shell or interpreter runs on the line.
+const QUOTED: &str = "a quoted string on a line where a shell or interpreter runs may be its code";
+
 /// A word on a line whose shell or interpreter code the guard cannot read
-/// in full, judged by its trailing components.
-fn opaque_line_word(value: &str) -> Option<Reach> {
+/// in full, or a word of a quoted string where one runs, judged by its
+/// trailing components.
+fn opaque_line_word(value: &str, why: &str) -> Option<Reach> {
     if let Some(name) = tail_names_authority(value) {
         return Some(Reach::Authority(format!(
-            "`{value}` could be policy authority metadata `{name}`: an interpreter on this line runs code the guard cannot read"
+            "`{value}` could be policy authority metadata `{name}`: {why}"
         )));
     }
     let reached = git_guard::word_could_name(value)?;
-    let message = format!(
-        "`{value}` could be `{reached}`: an interpreter on this line runs code the guard cannot read"
-    );
+    let message = format!("`{value}` could be `{reached}`: {why}");
     Some(if names_authority(reached) {
         Reach::Authority(message)
     } else {
@@ -892,8 +914,22 @@ fn tail_names_authority(value: &str) -> Option<&'static str> {
         require_literal_separator: true,
         require_literal_leading_dot: false,
     };
+    // A remote-tracking ref is any name under `refs/remotes/`.
+    if tail
+        .split_once("refs/remotes/")
+        .is_some_and(|(before, name)| {
+            !name.is_empty() && (before.is_empty() || before.ends_with('/'))
+        })
+    {
+        return Some(".git/refs/remotes/x");
+    }
     let depth = tail.split('/').count();
     AUTHORITY_TAILS.iter().copied().find(|path| {
+        // `x` stands for a remote name: a one-component word never
+        // matches it (review round 8 F3), a pattern of more does.
+        if depth == 1 && path.ends_with("/remotes/x") {
+            return false;
+        }
         let parts: Vec<&str> = path.split('/').collect();
         parts.len() >= depth
             && pattern.matches_with(&parts[parts.len() - depth..].join("/"), options)

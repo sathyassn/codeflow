@@ -1334,4 +1334,67 @@ mod tests {
             ],
         );
     }
+
+    /// Grok round 8: where a shell (`source` and `.` included) or an
+    /// interpreter runs, every quoted string on the line is judged as
+    /// possible code (F1 descriptors, `source <(...)`, fifos; F2 a literal
+    /// `-c` that runs its stdin), and a descriptor program is code the
+    /// guard cannot read. F3: the bare word `x` is not a remote ref.
+    #[test]
+    fn quoted_strings_are_judged_where_a_shell_or_interpreter_runs() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 /dev/stdin <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+                "python3 /dev/fd/3 3<<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+                "exec 3<<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'; python3 /dev/fd/3",
+                "source <(echo 'python3 tool.py .claude/settings.json')",
+                ". <(echo 'python3 tool.py .claude/settings.json')",
+                "mkfifo p; echo 'open(\".claude/settings.json\",\"w\").write(\"x\")' > p & python3 p",
+                "echo 'open(\".claude/settings.json\",\"w\").write(\"x\")' | python3 -c 'exec(sys.stdin.read())'",
+                "python3 -c 'exec(sys.stdin.read())' <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+                "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".claude/settings.json\",\"a\").write(\"ok\")'",
+                "node -e 'eval(require(\"fs\").readFileSync(0,\"utf8\"))' <<< 'require(\"fs\").writeFileSync(\".claude/settings.json\",\"\")'",
+                "python3 /proc/self/fd/0 <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 /dev/stdin <<< 'open(\".git/config\").read()'",
+                "python3 /dev/fd/3 3<<< 'open(\".git/config\").read()'",
+                "exec 3<<< 'open(\".git/config\").read()'; python3 /dev/fd/3",
+                "source <(echo 'python3 tool.py .git/config')",
+                ". <(echo 'python3 tool.py .git/config')",
+                "mkfifo p; echo 'open(\".git/config\").read()' > p & python3 p",
+                "echo 'open(\".git/config\").read()' | python3 -c 'exec(sys.stdin.read())'",
+                "python3 -c 'exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
+                "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
+                "python3 <<< 'open(\".git/refs/remotes/origin/main\").read()'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "python3 /dev/stdin <<< 'print(1)'",
+                "python3 /dev/fd/3 3<<< 'print(1)'",
+                "source <(echo 'python3 tool.py notes.txt')",
+                "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'print(1)'",
+                "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+                "python3 <<< 'print(x)'",
+                "echo x | python3",
+                "python3 <<< 'print(y)'",
+                "echo -e \"python3 tool.py .claude/settings.json\"",
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "env python3 <<< 'print(1)'",
+                "xargs python3 tool.py <<< 'notes.txt'",
+                "python3 -c 'print(1)' | cat",
+                "cat notes.txt | python3 -c 'import sys; print(len(sys.stdin.read()))'",
+                "echo -e \"python3 tool.py .claude/settings.json\" | cat",
+            ],
+        );
+    }
 }

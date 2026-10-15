@@ -7608,6 +7608,10 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 <<< 'print(1)'",
         "echo 'print(1)' | python3",
         "expect -c 'spawn python3 tool.py {notes.txt}'",
+        "python3 <<< 'print(x)'",
+        "echo x | python3",
+        "python3 /dev/stdin <<< 'print(1)'",
+        "source <(echo 'python3 tool.py notes.txt')",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
@@ -7631,6 +7635,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "bash <(printf '%s\\n' 'python3 tool.py .claude/settings.json')",
         "echo 'open(\".git/config\").read()' | python3",
         "expect -c 'spawn python3 tool.py {.git/config}'",
+        // Round 8: descriptors, `source <(...)`, a literal `-c` that runs
+        // its stdin.
+        "python3 /dev/fd/3 3<<< 'open(\".git/config\").read()'",
+        "source <(echo 'python3 tool.py .claude/settings.json')",
+        "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
     ] {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);

@@ -227,9 +227,15 @@ pub const SCHEMA: [KeySpec; 68] = [
                 command line; `echo` and `printf` operands stay data. When \
                 a shell or interpreter takes its code from anything other \
                 than a literal argument or a heredoc body the guard reads (a \
-                pipe, a here-string, a process substitution, or a `-c`/`-e` \
-                value holding a substitution), every word on the line is \
-                judged by its trailing components, and a word is also read \
+                pipe, a here-string, a descriptor such as `/dev/stdin` or \
+                `/dev/fd/N`, a process substitution, or a `-c`/`-e` value \
+                holding a substitution), every word on the line is judged \
+                by its trailing components. On a line where a shell \
+                (`source` and `.` included) or an interpreter runs, every \
+                quoted string anywhere on the line is judged as possible \
+                code the same way, so a line that mixes an interpreter with \
+                an unrelated quoted protected path refuses; unquoted \
+                operands of other programs stay data. A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
@@ -244,9 +250,9 @@ pub const SCHEMA: [KeySpec; 68] = [
                 variable, a substitution, a directory after a `cd` it cannot \
                 follow) refuses when its spelled part could name an enforcement \
                 path or the line names one, as git-guard judges a writer's \
-                operands. A path built at run time, such as one a script \
-                assembles internally, is past the guard; the OS sandbox's write \
-                denies are the backstop.",
+                operands. Code in a file the guard does not read, and a path \
+                a script builds at run time, stay past the guard; the OS \
+                sandbox's write denies are the backstop.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {

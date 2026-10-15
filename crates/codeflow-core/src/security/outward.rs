@@ -117,6 +117,9 @@ struct Parsed {
     /// pipe, a here-string, a process substitution, or a `-c`/`-e` value
     /// holding a substitution.
     opaque: bool,
+    /// A shell (`source` and `.` included) or an interpreter family runs
+    /// somewhere on the line (TSK-302 review round 8).
+    runs: bool,
 }
 
 /// One interpreter call (TSK-302, issue 173): the words it receives other
@@ -169,15 +172,93 @@ pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
     parsed.commands
 }
 
-/// Whether a shell or interpreter on the line runs code the guard cannot
-/// read in full: its program comes from stdin through a pipe or a
-/// here-string, from a process substitution, or from a `-c`/`-e` value
-/// holding a substitution. Every word on such a line is then judged by
-/// its trailing components (TSK-302 review round 7).
-pub(crate) fn opaque_code(command: &str) -> bool {
+/// What the line's shells and interpreters read (TSK-302 review rounds 7
+/// and 8). The first value: whether one runs code the guard cannot read in
+/// full, its program coming from stdin through a pipe or a here-string,
+/// from a descriptor (`/dev/stdin`, `/dev/fd/N`), from a process
+/// substitution, or from a `-c`/`-e` value holding a substitution; every
+/// word on such a line is judged by its trailing components. The second:
+/// whether a shell (`source` and `.` included) or an interpreter family
+/// runs on the line at all, so every quoted string on it may be code.
+pub(crate) fn code_sources(command: &str) -> (bool, bool) {
     let mut parsed = Parsed::default();
     visit(command, None, 0, &mut parsed);
-    parsed.opaque
+    let runs = parsed.runs || !parsed.calls.is_empty();
+    (parsed.opaque, runs)
+}
+
+/// Every quoted string on a line, read as the shell quotes it: the text of
+/// each single- or double-quoted region, a command substitution or
+/// backtick inside a double-quoted one read whole, quotes and all.
+pub(crate) fn quoted_texts(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(&ch) = chars.get(at) {
+        at += 1;
+        match ch {
+            '\\' => at += 1,
+            '\'' => {
+                let mut text = String::new();
+                while let Some(&c) = chars.get(at) {
+                    at += 1;
+                    if c == '\'' {
+                        break;
+                    }
+                    text.push(c);
+                }
+                found.push(text);
+            }
+            '"' => {
+                let mut text = String::new();
+                let mut depth = 0usize;
+                let mut inner: Option<char> = None;
+                while let Some(&c) = chars.get(at) {
+                    at += 1;
+                    if c == '\\' {
+                        text.push(c);
+                        text.extend(chars.get(at));
+                        at += 1;
+                        continue;
+                    }
+                    if let Some(q) = inner {
+                        if c == q {
+                            inner = None;
+                        }
+                    } else if depth > 0 && matches!(c, '\'' | '"') {
+                        inner = Some(c);
+                    } else if c == '$' && chars.get(at) == Some(&'(') {
+                        depth += 1;
+                        text.push(c);
+                        text.push('(');
+                        at += 1;
+                        continue;
+                    } else if depth > 0 && c == '(' {
+                        depth += 1;
+                    } else if depth > 0 && c == ')' {
+                        depth -= 1;
+                    } else if depth == 0 && c == '"' {
+                        break;
+                    }
+                    text.push(c);
+                }
+                found.push(text);
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Whether a program operand is a descriptor the guard does not read:
+/// `/dev/stdin`, `/dev/fd/N` or `/proc/self/fd/N`.
+fn descriptor_program(operand: &str) -> bool {
+    operand == "/dev/stdin"
+        || ["/dev/fd/", "/proc/self/fd/"].iter().any(|prefix| {
+            operand
+                .strip_prefix(prefix)
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
 }
 
 pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
@@ -943,6 +1024,7 @@ fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed)
     }
     out.calls.extend(inner.calls);
     out.opaque |= inner.opaque;
+    out.runs |= inner.runs;
 }
 
 /// Whether one word holds more than a bare name: a shell blank (space,
@@ -1713,11 +1795,11 @@ fn family_program(family: &str, rest: &[String]) -> Program {
         at += 1;
         if word == "--" {
             return match rest.get(at) {
-                Some(script) if script != "-" => Program::Script,
+                Some(script) if script != "-" && !descriptor_program(script) => Program::Script,
                 _ => Program::Stdin,
             };
         }
-        if word == "-" {
+        if word == "-" || descriptor_program(word) {
             return Program::Stdin;
         }
         if !word.starts_with('-') {
@@ -1839,11 +1921,15 @@ fn read_program_sources(
     producers: &str,
     out: &mut Parsed,
 ) {
-    let shell = matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash");
+    let shell = matches!(
+        name,
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "source" | "."
+    );
     let family = interpreter_family(name);
     if !shell && family.is_none() {
         return;
     }
+    out.runs = true;
     let substituted = |code: &str| code.contains("$(") || code.contains('`');
     let reads_stdin = if let Some(family) = family {
         let mut inline = Parsed::default();
@@ -1859,7 +1945,8 @@ fn read_program_sources(
         }
         false
     } else {
-        rest.iter().all(|a| a.starts_with('-'))
+        let operand = rest.iter().find(|a| !a.starts_with('-'));
+        operand.is_none_or(|operand| descriptor_program(operand))
             || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
                 a.strip_prefix('-')
                     .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
