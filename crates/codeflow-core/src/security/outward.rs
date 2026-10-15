@@ -162,7 +162,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
-        let mut assigned = crate::hooks::git_guard::configuration_assignment_tail(&words).to_vec();
+        let mut assigned = skip_assignments(&words).to_vec();
         if let Some(setting) = words
             .iter()
             .take_while(|s| s.contains('='))
@@ -203,7 +203,13 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 32 {
         return;
     }
-    let args = crate::hooks::git_guard::configuration_assignment_tail(args);
+    let args = skip_assignments(args);
+    let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
+    if possible_command.len() < args.len() {
+        // An unresolved prefix may be an assignment or an executable path.
+        // Inspect both readings; never discard a program containing `=`.
+        argv(possible_command, cwd, depth + 1, out);
+    }
     let Some(program) = args.first() else {
         return;
     };
@@ -1298,6 +1304,7 @@ mod tests {
         "npx --yes {}",
         "bash -lc '{}'",
         "python3 -c 'run(\"{}\")'",
+        "/tmp/a=b/python3 -c 'run(\"{}\")'",
         "node -e 'run(\"{}\")'",
         "perl -e 'run(\"{}\")'",
         "ruby -e 'run(\"{}\")'",

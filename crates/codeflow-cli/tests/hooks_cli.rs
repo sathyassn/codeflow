@@ -1961,6 +1961,28 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
 }
 
 #[test]
+fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["tag", "v9.9.9"]);
+    for (hook, target) in [("git-guard", "HEAD:main"), ("exec-guard", "v9.9.9")] {
+        for prefix in ["/tmp/a=b/git", "env /tmp/a=b/git", "FOO=/usr/bin/git git"] {
+            let command = format!("{prefix} push origin {target}");
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(&command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");
@@ -2005,6 +2027,7 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "V=1; echo $V",
         "git status",
         "git log -1",
+        "/tmp/a=b/git push origin task/x",
         "export FOO=$(pwd); git push origin task/x",
         "read -r answer < f; git push origin task/x",
         "printf -v out %s x",

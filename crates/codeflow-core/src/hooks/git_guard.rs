@@ -1051,6 +1051,14 @@ fn configuration_destination(program: &str, word: &str) -> Option<String> {
     let name = word
         .split_once('=')
         .map_or(word, |(name, _)| name.strip_suffix('+').unwrap_or(name));
+    if program == "assignment"
+        && name.contains('/')
+        && !unresolved_word(name)
+        && !name.contains(['{', '}', '?', '*', '[', ']', '(', ')'])
+    {
+        // A slash in the literal prefix makes this a path, not a variable.
+        return None;
+    }
     if let Some(reason) = configuration_variable_reason(word) {
         return Some(reason);
     }
@@ -1074,14 +1082,31 @@ fn configuration_destination(program: &str, word: &str) -> Option<String> {
 /// The shape check separately refuses an unresolved destination at that
 /// decision; an uncertain prefix must not hide the command being judged.
 pub(crate) fn configuration_assignment_tail(words: &[String]) -> &[String] {
-    let count = words.iter().take_while(|word| word.contains('=')).count();
+    let count = words
+        .iter()
+        .take_while(|word| configuration_assignment_prefix(word))
+        .count();
     &words[count..]
+}
+
+fn configuration_program(word: &str) -> bool {
+    !matches!(program_kind(word), ProgramKind::Other)
+        || is_prefix_launcher(word)
+        || launcher_name(word) == "env"
+}
+
+fn configuration_assignment_prefix(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        // A literal assignment wins even when its value ends with `/git`.
+        // Otherwise retain a possible Git/launcher program for dispatch.
+        assignment_name(name.strip_suffix('+').unwrap_or(name)) || !configuration_program(word)
+    })
 }
 
 fn configuration_launch(mut words: &[String]) -> Option<(&str, &[String])> {
     loop {
         let (program, args) = strip_launchers(configuration_assignment_tail(words))?;
-        if !program.contains('=') {
+        if !configuration_assignment_prefix(program) {
             return Some((program, args));
         }
         // An env/launcher may expose another unresolved assignment prefix.
