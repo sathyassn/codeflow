@@ -106,8 +106,9 @@ pub fn check(repo: &Repository) -> Result<(), Error> {
 }
 
 fn boundary(repo: &Repository) -> Result<Rc<HashSet<Oid>>, Error> {
+    // Raw commit-object parent reads cannot consume libgit2's graph cache.
+    // Graph-based ancestry calls and Walk check its identity separately.
     let metadata = snapshot(repo).map_err(unverified)?;
-    metadata.graph.check().map_err(unverified)?;
     Ok(Rc::clone(&metadata.boundary))
 }
 

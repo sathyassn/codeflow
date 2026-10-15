@@ -260,10 +260,10 @@ pub(super) fn verify(repo: &Repository) -> Result<Verified, String> {
                 objects.display()
             )
         })?;
-        verified
-            .directories
-            .push((objects.clone(), canonical.clone()));
-        if !seen.insert(canonical) {
+        if !seen.insert(canonical.clone()) {
+            // Files below a first-seen path retain their own identities.
+            // A duplicate alias has no file entries, so retain its target.
+            verified.directories.push((objects, canonical));
             continue;
         }
         if let Some(bytes) = verified.read(&objects.join("info/commit-graph"), true)? {

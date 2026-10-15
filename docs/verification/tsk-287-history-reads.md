@@ -29,7 +29,8 @@ This sweep records the TSK-287 migration for issue 122.
   refused merely because they exist. Each verified graph retains its path,
   size, modification time, inode and device on Unix, and trailing checksum.
   Before every guarded libgit2 ancestry call and walk step, the reader
-  checks that identity again. It also retains absent graph paths and the
+  checks that identity again. Raw object-parent reads keep their per-step
+  shallow check and cannot consume the graph cache. It also retains absent graph paths and the
   full chain and alternate manifests, so a newly planted cache or changed
   object-store selection refuses with the same remove-cache remedy.
   Missing commit objects also report a graph disagreement with that remedy.
