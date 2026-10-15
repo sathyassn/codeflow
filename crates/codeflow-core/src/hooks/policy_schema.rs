@@ -255,7 +255,10 @@ pub const SCHEMA: [KeySpec; 68] = [
                 path or the line names one, as git-guard judges a writer's \
                 operands. Code in a file the guard does not read, and a path \
                 a script builds at run time, stay past the guard; the OS \
-                sandbox's write denies are the backstop.",
+                sandbox's write denies are the backstop. The guard stops at \
+                shell grammar, so a path built by interpreter code, such as \
+                Python adjacent string literals or a node `+` concatenation, \
+                is part of that residual.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {

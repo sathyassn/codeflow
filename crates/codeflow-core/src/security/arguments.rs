@@ -51,7 +51,10 @@
 //! value it joins (review round 9). A word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
-//! backstop.
+//! backstop. The guard stops at shell grammar: a path the interpreter's own
+//! code builds at run time, such as Python adjacent string literals or a
+//! node `+` concatenation, is the same residual (operator decision,
+//! 2026-10-15).
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
 use super::{actions, outward};
