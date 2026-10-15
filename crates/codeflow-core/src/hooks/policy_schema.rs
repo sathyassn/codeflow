@@ -235,7 +235,10 @@ pub const SCHEMA: [KeySpec; 68] = [
                 quoted string anywhere on the line is judged as possible \
                 code the same way, so a line that mixes an interpreter with \
                 an unrelated quoted protected path refuses; unquoted \
-                operands of other programs stay data. A word is also read \
+                operands of other programs stay data. Quoted strings are \
+                read as the shell builds them: `$'...'` decoded, adjacent \
+                quoted pieces joined, and a `printf` of `%s` pieces read as \
+                the value it joins. A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \

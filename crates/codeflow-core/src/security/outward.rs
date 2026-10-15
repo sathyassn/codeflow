@@ -189,15 +189,23 @@ pub(crate) fn code_sources(command: &str) -> (bool, bool) {
 
 /// Every quoted string on a line, read as the shell quotes it: the text of
 /// each single- or double-quoted region, a command substitution or
-/// backtick inside a double-quoted one read whole, quotes and all.
+/// backtick inside a double-quoted one read whole, quotes and all; each
+/// `$'...'` region decoded as bash does; and each shell word that holds a
+/// quoted part, its adjacent pieces joined (TSK-302 review round 9).
 pub(crate) fn quoted_texts(line: &str) -> Vec<String> {
     let chars: Vec<char> = line.chars().collect();
-    let mut found = Vec::new();
+    let mut found = crate::hooks::git_guard::quoted_shell_words(line);
     let mut at = 0;
     while let Some(&ch) = chars.get(at) {
         at += 1;
         match ch {
             '\\' => at += 1,
+            '$' if chars.get(at) == Some(&'\'') => {
+                let rest: String = chars[at + 1..].iter().collect();
+                let mut text = rest.chars();
+                found.push(crate::hooks::git_guard::ansi_c_text(&mut text));
+                at = chars.len() - text.count();
+            }
             '\'' => {
                 let mut text = String::new();
                 while let Some(&c) = chars.get(at) {
@@ -248,6 +256,72 @@ pub(crate) fn quoted_texts(line: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// The values `printf` writes on the line, to stdout or into a `-v`
+/// variable, when its format holds only `%s` conversions, `%%` and literal
+/// text: the arguments joined as bash joins them, the format reused while
+/// arguments remain (TSK-302 review round 9).
+pub(crate) fn printf_values(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for segment in expand_commands(line) {
+        let words = command_argv(&segment);
+        let Some((program, rest)) = strip_launchers(&words) else {
+            continue;
+        };
+        if program.rsplit('/').next() != Some("printf") {
+            continue;
+        }
+        let mut args = rest;
+        loop {
+            match args.first().map(String::as_str) {
+                Some("-v") => args = args.get(2..).unwrap_or_default(),
+                Some(word) if word.starts_with("-v") => args = &args[1..],
+                Some("--") => {
+                    args = &args[1..];
+                    break;
+                }
+                _ => break,
+            }
+        }
+        let Some((format, values)) = args.split_first() else {
+            continue;
+        };
+        found.extend(printf_join(format, values));
+    }
+    found
+}
+
+/// `format` applied to `values` when it holds only `%s` and `%%`.
+fn printf_join(format: &str, values: &[String]) -> Option<String> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
+    let mut chars = format.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            text.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('%') => text.push('%'),
+            Some('s') => pieces.push(std::mem::take(&mut text)),
+            _ => return None,
+        }
+    }
+    let slots = pieces.len();
+    let mut out = String::new();
+    let mut values = values.iter();
+    loop {
+        for piece in &pieces {
+            out.push_str(piece);
+            out.push_str(values.next().map_or("", String::as_str));
+        }
+        out.push_str(&text);
+        if slots == 0 || values.len() == 0 {
+            break;
+        }
+    }
+    Some(out)
 }
 
 /// Whether a program operand is a descriptor the guard does not read:
@@ -1901,8 +1975,14 @@ fn here_string(segment: &str) -> Option<String> {
             continue;
         }
         if segment[at..].starts_with("<<<") {
-            // Kept as written: the readers split on quotes and blanks.
-            return Some(segment[at + 3..].to_string());
+            // Kept as written: the readers split on quotes and blanks. A
+            // `$'...'` body is decoded first, as bash hands it over.
+            let body = &segment[at + 3..];
+            let start = body.find(|c| c != ' ' && c != '\t').unwrap_or(body.len());
+            if let Some(quoted) = body[start..].strip_prefix("$'") {
+                return Some(crate::hooks::git_guard::ansi_c_text(&mut quoted.chars()));
+            }
+            return Some(body.to_string());
         }
     }
     None

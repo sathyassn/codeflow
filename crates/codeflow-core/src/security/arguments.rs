@@ -45,7 +45,10 @@
 //! judged as that program's code (review round 7). On a line where a shell
 //! (`source` and `.` included) or an interpreter runs, every quoted string
 //! anywhere on the line is judged as possible code the same way; unquoted
-//! operands of other programs stay data (review round 8). A word is also
+//! operands of other programs stay data (review round 8). Quoted strings
+//! are read as the shell builds them: `$'...'` decoded, adjacent quoted
+//! pieces joined into one word, and a `printf` of `%s` pieces read as the
+//! value it joins (review round 9). A word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
 //! backstop.
@@ -120,6 +123,13 @@ pub(crate) fn evaluate(
     // writer, a literal `-c` that runs its stdin), so each is judged the
     // same way (TSK-302 review round 8). Unquoted operands stay data.
     if runs {
+        // What `printf` joins from `%s` pieces is one value the next
+        // command may expand (review round 9).
+        for value in outward::printf_values(line) {
+            for word in outward::literal_words(&value) {
+                reaches.extend(opaque_line_word(&word, PRINTF));
+            }
+        }
         for text in outward::quoted_texts(line) {
             for word in outward::literal_words(&text) {
                 reaches.extend(opaque_line_word(&word, QUOTED));
@@ -715,6 +725,9 @@ fn unknown_dir_literal(value: &str) -> Option<Reach> {
 
 /// Why a line word is judged: its interpreter code is unreadable.
 const OPAQUE: &str = "an interpreter on this line runs code the guard cannot read";
+/// Why a `printf` value is judged: a shell or interpreter runs on the line.
+const PRINTF: &str =
+    "a value `printf` joins on a line where a shell or interpreter runs may be its code";
 /// Why a quoted string is judged: a shell or interpreter runs on the line.
 const QUOTED: &str = "a quoted string on a line where a shell or interpreter runs may be its code";
 

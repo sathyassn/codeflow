@@ -10107,7 +10107,7 @@ fn take_digits(chars: &mut std::str::Chars<'_>, radix: u32, max: usize) -> Optio
 /// \E \f \n \r \t \v \\ \' \" \?`, octal `\NNN`, hex `\xHH`, `\uHHHH`,
 /// `\UHHHHHHHH` and `\cX`. A byte above 0x7f reads as the character of that
 /// number; a NUL is dropped. An unknown escape keeps its backslash.
-fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
+pub(crate) fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
     let mut out = String::new();
     while let Some(c) = chars.next() {
         if c == '\'' {
@@ -10264,6 +10264,18 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         });
     }
     words
+}
+
+/// The shell words of `line` that hold any quoted part, as the shell joins
+/// and decodes them: adjacent quoted pieces form one word
+/// (`'.cla''ude/settings.json'`) and `$'...'` is decoded (TSK-302 review
+/// round 9). A word written with no quote at all is left out.
+pub(crate) fn quoted_shell_words(line: &str) -> Vec<String> {
+    shell_words(line)
+        .into_iter()
+        .filter(|word| word.unquoted_prefix < word.text.len())
+        .map(|word| word.text)
+        .collect()
 }
 
 /// The argument vector the program receives: the segment's words without its

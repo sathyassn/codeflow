@@ -1397,4 +1397,50 @@ mod tests {
             ],
         );
     }
+
+    /// Grok round 9: `$'...'` is decoded before a here-string body or a
+    /// quoted string is split (F2); adjacent quoted pieces are judged as the
+    /// one shell word they form, and a `printf` of `%s` pieces as the value
+    /// it joins (F1, shell part).
+    #[test]
+    fn shell_quoting_and_printf_joins_are_judged_as_the_shell_builds_them() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 <<< $'open(\".cla\\x75de/settings.json\",\"w\").write(\"x\")'",
+                "python3 <<< $'open(\"\\056claude/settings.json\",\"w\").write(\"x\")'",
+                "printf -v p '%s%s' '.cla' 'ude/settings.json'; python3 -c \"open(\\\"$p\\\",\\\"w\\\").write(\\\"x\\\")\"",
+                "printf -vp '%s%s' '.cla' 'ude/settings.json'; python3 tool.py \"$p\"",
+                "echo '.cla''ude/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "python3 tool.py '.cla''ude/settings.json'",
+                "python3 tool.py \".cla\"'ude/settings.json'",
+                "x=\".cla\"'ude/settings.json'; python3 -c \"open('$x','w')\"",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 <<< $'open(\".gi\\x74/config\").read()'",
+                "printf -v p '%s%s' '.gi' 't/config'; python3 -c \"print(open(\\\"$p\\\").read())\"",
+                "python3 tool.py '.gi''t/config'",
+                "echo \".gi\"'t/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "python3 <<< $'print(17330\\x32)'",
+                "python3 -c $'print(1)'",
+                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
+                "printf -v p '%s%s' '.cla' 'ude/settings.json'",
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "python3 tool.py 'no''tes.txt'",
+                "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+                "python3 -c 'print(\"173\" \"302\")'",
+            ],
+        );
+    }
 }

@@ -7612,6 +7612,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "echo x | python3",
         "python3 /dev/stdin <<< 'print(1)'",
         "source <(echo 'python3 tool.py notes.txt')",
+        "python3 <<< $'print(17330\\x32)'",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
@@ -7640,6 +7641,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 /dev/fd/3 3<<< 'open(\".git/config\").read()'",
         "source <(echo 'python3 tool.py .claude/settings.json')",
         "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
+        // Round 9: `$'...'` decoded, `printf` joins.
+        "python3 <<< $'open(\".gi\\x74/config\").read()'",
+        "printf -v p '%s%s' '.cla' 'ude/settings.json'; python3 tool.py \"$p\"",
     ] {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);
