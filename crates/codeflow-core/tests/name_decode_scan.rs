@@ -137,14 +137,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // process output shown to a person, never compared
-    (
-        "codeflow-cli/examples/release_integration.rs",
-        "command",
-        "from_utf8_lossy",
-        2,
-        "display",
-    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-cli/src/cmd/ci.rs",
@@ -685,14 +677,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/scaffold/release_pin.rs",
         "fetch_with_curl",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // git clone's stderr after a failed release clone, shown in the refusal only
-    (
-        "codeflow-cli/examples/release_integration.rs",
-        "prepare",
         "from_utf8_lossy",
         1,
         "display",
@@ -5285,14 +5269,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_slice",
         1,
         "unproven",
-    ),
-    // Git's stderr after a failed release clone, trimmed for the refusal text only.
-    (
-        "crates/codeflow-cli/examples/release_integration.rs",
-        "prepare",
-        "trim",
-        1,
-        "display",
     ),
     // The first non-blank line of an item's title text for one index table cell; shown, never matched.
     (

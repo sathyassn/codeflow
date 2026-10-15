@@ -569,20 +569,13 @@ default target's tip, as its pull request is.
   cf-consult and cf-ship ask whether each criterion is supported on this source
   and achieves the outcome.
 
-CodeFlow's repository-only release integration workflow:
-
-- It loads its write-token job from the default branch after epic-line
-  workflow completions and on a daily schedule.
-- Each surviving run imports all verified epic-line tips, including landings
-  whose pending runs were replaced.
-- The `release_integration` example runner checks prospective merges with this
-  judge and the shared reading-structure check before pushing.
-- Conflicts and findings leave the release branch unchanged and name the open
-  release-integration task from the destination's default tip plus a local
-  reproduction command.
-- The workflow is not a task-PR gate and is not installed for adopters.
-- Its local fixtures are in `release_line_cli`. `init_e2e` checks the
-  conditional ship guidance.
+CodeFlow's own repository no longer runs a release integration workflow or
+runner. Its releases ship from `main`, and TSK-310 retired the repository-only
+workflow and its `release_integration` example on 2026-10-14. The release-line
+judge above stays, and a project that configures its own release branch and
+workflow still follows the conditional `cf-ship` guidance, which `init_e2e`
+checks. A later release branch for CodeFlow itself would restore a runner
+through a reviewed change.
 
 #### Durable work and external trackers
 
