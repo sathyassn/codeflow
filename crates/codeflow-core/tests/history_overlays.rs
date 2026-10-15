@@ -349,7 +349,9 @@ fn security_graph_planted_during_judgment_refuses_next_call() {
         let error = result.expect_err("late graph was trusted");
         assert!(error.message().contains("cannot verify"), "{error}");
         assert!(
-            error.message().contains("remove the cache and retry"),
+            error
+                .message()
+                .contains("retry; if it persists, remove the cache"),
             "{error}"
         );
     }
@@ -436,7 +438,9 @@ fn security_verified_graph_identity_covers_split_layers_and_alternates() {
             let error = history::descendant_of(&repo, head, base).unwrap_err();
             assert!(error.message().contains("commit-graph changed"), "{error}");
             assert!(
-                error.message().contains("remove the cache and retry"),
+                error
+                    .message()
+                    .contains("retry; if it persists, remove the cache"),
                 "{error}"
             );
         }

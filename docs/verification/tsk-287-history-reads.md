@@ -27,13 +27,16 @@ This sweep records the TSK-287 migration for issue 122.
   directory and recursively in on-disk alternates. A mismatch or unreadable
   cache reports `cannot verify`; remove that cache and retry. Graphs are not
   refused merely because they exist. Each verified graph retains its path,
-  size, modification time, inode and device on Unix, and trailing checksum.
+  size, modification time and trailing checksum, plus inode, device and ctime
+  (seconds and nanoseconds) on Unix. Ctime detects in-place writes even when
+  mtime and the trailer are restored; those Unix fields are unavailable elsewhere.
   Before every guarded libgit2 ancestry call and walk step, the reader
   checks that identity again. Raw object-parent reads keep their per-step
   shallow check and cannot consume the graph cache. It also retains absent graph paths and the
   full chain and alternate manifests, so a newly planted cache or changed
-  object-store selection refuses with the same remove-cache remedy.
-  Missing commit objects also report a graph disagreement with that remedy.
+  object-store selection refuses: retry; if it persists, remove the cache.
+  This allows a retry after ordinary Git maintenance rewrites a cache.
+  Missing commit objects report a graph disagreement with the remove-cache remedy.
 - Judging subprocesses use `history::command`, which supplies
   `-c core.commitGraph=false` and clears inherited `GIT_DIR`, `GIT_COMMON_DIR`,
   `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_WORK_TREE`.

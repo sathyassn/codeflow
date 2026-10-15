@@ -24,6 +24,9 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, String> {
     Ok(u32::from_be_bytes(bytes.try_into().map_err(|_| invalid())?))
 }
 
+/// Unix ctime detects in-place writes even when mtime and the trailer are restored.
+/// Off Unix, identity retains size, mtime and the trailer (or full manifest),
+/// together with the path stored in `File`; inode, device and ctime are unavailable.
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
     size: u64,
@@ -32,6 +35,10 @@ struct Identity {
     inode: u64,
     #[cfg(unix)]
     device: u64,
+    #[cfg(unix)]
+    changed_seconds: i64,
+    #[cfg(unix)]
+    changed_nanoseconds: i64,
     contents: Vec<u8>,
 }
 
@@ -50,7 +57,7 @@ pub(super) struct Verified {
 
 fn changed(path: &Path) -> String {
     format!(
-        "commit-graph changed during judgment at {}; remove the cache and retry",
+        "commit-graph changed during judgment at {}; retry; if it persists, remove the cache",
         path.display()
     )
 }
@@ -79,6 +86,10 @@ fn identity(path: &Path, graph: bool) -> Result<Option<Identity>, String> {
             inode: std::os::unix::fs::MetadataExt::ino(&metadata),
             #[cfg(unix)]
             device: std::os::unix::fs::MetadataExt::dev(&metadata),
+            #[cfg(unix)]
+            changed_seconds: std::os::unix::fs::MetadataExt::ctime(&metadata),
+            #[cfg(unix)]
+            changed_nanoseconds: std::os::unix::fs::MetadataExt::ctime_nsec(&metadata),
             contents,
         })
     };
@@ -375,7 +386,34 @@ mod tests {
         assert!(verified
             .check()
             .unwrap_err()
-            .contains("remove the cache and retry"));
+            .contains("retry; if it persists, remove the cache"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_refuses_even_when_size_inode_mtime_and_trailer_match() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commit-graph");
+        std::fs::write(&path, [0; 40]).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let mut verified = Verified::default();
+        verified.read(&path, true).unwrap();
+        verified.check().unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut file, &[1]).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+            .unwrap();
+        let after = file.metadata().unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.ino(), after.ino());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(&std::fs::read(&path).unwrap()[20..], &[0; 20]);
+        assert!(verified
+            .check()
+            .unwrap_err()
+            .contains("commit-graph changed"));
     }
 
     #[test]
