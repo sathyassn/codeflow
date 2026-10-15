@@ -221,8 +221,10 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `--chdir` after an env-like word) makes the directory \
                 unknown, and so does an unknown program that launches a \
                 modeled launcher or an interpreter later in its words \
-                (after a `--` too, never a `-m` or `-c` value or a word \
-                inside a quoted argument); every known word is then judged by its trailing \
+                (after a `--` too), and a script string an unknown program \
+                is given, a `-c` or `-e` value or any quoted word (`expect \
+                -c`, `osascript -e`, `ssh host '...'`), which is read as a \
+                command line; `echo` and `printf` operands stay data; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
                 `cd .claude && cd .. && python3 tool.py settings.json`, and a \

@@ -863,19 +863,34 @@ const MODELED_LAUNCHERS: &[&str] = &[
 ];
 
 /// A program the grammar does not model may itself launch what follows it
-/// (`frobnicate env -C.claude python3 tool.py settings.json`). When a
-/// later word in a command position is a modeled launcher or an
-/// interpreter, the rest of the segment from that word is read as a
-/// possible call whose directory is unknown, so its known words are
-/// judged by their trailing components (TSK-302, after review round 4).
-/// A bare `--` does not end the walk: `sandbox-exec ... -- python3` and
-/// `taskpolicy -- python3` run the interpreter after it (Grok round 5 F1).
-/// Before a `--`, the value of `-m` or `-c` is never a command; a word
-/// holding more than a bare name (a quoted argument) never starts one.
+/// (`frobnicate env -C.claude python3 tool.py settings.json`), or run a
+/// script string it is given (`expect -c '...'`, `osascript -e '...'`,
+/// `ssh host '...'`). Each such reading is a possible call whose directory
+/// is unknown, so its known words are judged by their trailing components
+/// and authority keeps its fixed level (TSK-302, review rounds 5 and 6):
+///
+/// - a later word in a command position that is a modeled launcher or an
+///   interpreter starts a call made of the rest of the segment; a bare
+///   `--` does not end the walk (`taskpolicy -- python3`);
+/// - before a `--`, the value of `-c` or `-e` is read as a command line;
+/// - any word that holds a blank or a shell operator was quoted, and is read
+///   as a command line too;
+/// - before a `--`, a single-word `-m` value is a message, never a command.
+///
+/// `echo` and `printf` only print their operands, so their quoted words and
+/// option values are data, never script strings: documentation text written
+/// with them stays allowed (TSK-302 AC-5).
 fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed) {
     if name == "git" || interpreter_family(name).is_some() {
         return;
     }
+    // Only the calls are kept: the rest of what these readings find stays
+    // with the checks that read the modeled grammar.
+    let mut inner = Parsed {
+        supplier: out.supplier.clone(),
+        ..Parsed::default()
+    };
+    let prints = matches!(name, "echo" | "printf");
     let mut operands = false;
     let mut words = rest.iter().enumerate();
     while let Some((at, word)) = words.next() {
@@ -884,25 +899,40 @@ fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed)
                 operands = true;
                 continue;
             }
-            "-m" | "-c" if !operands => {
-                words.next();
+            "-c" | "-e" if !operands && !prints => {
+                if let Some((_, script)) = words.next() {
+                    visit(script, None, depth + 1, &mut inner);
+                }
+                continue;
+            }
+            "-m" if !operands => {
+                if let Some((_, message)) = words.next() {
+                    if !prints && holds_a_command_line(message) {
+                        visit(message, None, depth + 1, &mut inner);
+                    }
+                }
                 continue;
             }
             _ => {}
         }
+        if !prints && holds_a_command_line(word) {
+            visit(word, None, depth + 1, &mut inner);
+            continue;
+        }
         let bare = crate::hooks::git_guard::launcher_name(word);
         if MODELED_LAUNCHERS.contains(&bare) || interpreter_family(bare).is_some() {
-            // Only the calls are kept: the rest of what this reading finds
-            // stays with the checks that read the modeled grammar.
-            let mut inner = Parsed {
-                supplier: out.supplier.clone(),
-                ..Parsed::default()
-            };
             argv(&rest[at..], None, depth + 1, &mut inner);
-            out.calls.extend(inner.calls);
-            return;
+            break;
         }
     }
+    out.calls.extend(inner.calls);
+}
+
+/// Whether one word holds more than a bare name: a shell blank (space,
+/// tab, newline) or a shell operator, which the shell only leaves in a word
+/// that was quoted.
+fn holds_a_command_line(word: &str) -> bool {
+    word.contains([' ', '\t', '\n', ';', '&', '|'])
 }
 
 /// The starting points of a `find` call: the words before its expression,

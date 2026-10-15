@@ -1179,7 +1179,7 @@ mod tests {
                 "npm run build",
                 "docker run img python3 app.py data.json",
                 "frobnicate -m python3 settings.json",
-                "frobnicate 'python3 tool.py settings.json'",
+                "frobnicate 'python3 tool.py notes.txt'",
                 "frobnicate env -C.claude python3 tool.py notes.txt",
             ],
         );
@@ -1226,6 +1226,56 @@ mod tests {
                 "npm run x -- --flag",
                 "make test",
                 "npm run build",
+            ],
+        );
+    }
+
+    /// Grok round 6 F1: a script string an unmodeled program runs, its
+    /// `-c` or `-e` value or any quoted word, is read as a command line
+    /// with an unknown directory (`expect -c`, `osascript -e`, `ssh host`).
+    /// `echo` and `printf` only print, so their operands stay data.
+    #[test]
+    fn a_script_string_an_unknown_program_runs_is_judged() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "expect -c 'spawn python3 tool.py .claude/settings.json'",
+                "osascript -e 'do shell script \"python3 tool.py .claude/settings.json\"'",
+                "frobnicate -c 'python3 tool.py .claude/settings.json'",
+                "frobnicate 'python3 tool.py settings.json'",
+                "frobnicate -- 'python3 tool.py settings.json'",
+                "ssh host 'cd .claude && python3 tool.py settings.json'",
+                "frobnicate -m 'python3 tool.py .claude/settings.json'",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "expect -c 'spawn python3 tool.py .git/config'",
+                "osascript -e 'do shell script \"python3 tool.py .git/config\"'",
+                "frobnicate -c 'python3 tool.py .git/config'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "echo -e 'hello'",
+                "echo -e \"python3 tool.py .claude/settings.json\"",
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "npm run x -- --flag",
+                "cargo test -- --nocapture",
+                "git commit -m \"python3 x\"",
+                "cargo run -- python3 -c 'print(1)'",
+                "make test",
+                "expect -c 'spawn python3 tool.py notes.txt'",
+                "osascript -e 'display notification \"done\"'",
+                "frobnicate -m python3 settings.json",
+                "awk '{print $1}' data.txt",
+                "sed -e 's/a/b/' notes.txt",
+                "grep -e 'python3 tool.py' notes.txt",
             ],
         );
     }

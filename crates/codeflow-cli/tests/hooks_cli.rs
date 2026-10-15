@@ -7573,6 +7573,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         // A bare `--` does not hide the interpreter (Grok round 5 F1).
         "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .git/config".to_string(),
         "taskpolicy -- python3 tool.py .claude/settings.json".to_string(),
+        // A script string an unknown program runs (Grok round 6 F1).
+        "expect -c 'spawn python3 tool.py .claude/settings.json'".to_string(),
+        "expect -c 'spawn python3 tool.py .git/config'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .claude/settings.json\"'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .git/config\"'".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7596,6 +7601,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "cargo run -- python3",
         "npm run x -- --flag",
         "taskpolicy -- python3 tool.py notes.txt",
+        "echo -e 'hello'",
+        "cargo test -- --nocapture",
+        "cargo run -- python3 -c 'print(1)'",
         "git commit -m \"python3 x\"",
     ];
     let mut wrong = Vec::new();

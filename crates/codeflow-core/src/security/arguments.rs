@@ -31,8 +31,11 @@
 //! An unmodeled program followed, in a command position, by a modeled
 //! launcher or an interpreter name may launch it: the rest of the segment
 //! is read as a call whose directory is unknown. A bare `--` does not end
-//! that walk (`taskpolicy -- python3`); before it, the values of `-m` and
-//! `-c` never start a command, and a quoted argument never does.
+//! that walk (`taskpolicy -- python3`). A script string such a program is
+//! given, the value of `-c` or `-e` before a `--` or any quoted word, is
+//! read as a command line with an unknown directory (`expect -c`,
+//! `osascript -e`, `ssh host '...'`); a single-word `-m` value is a
+//! message. `echo` and `printf` only print, so their operands stay data.
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
 use super::{actions, outward};
