@@ -1174,12 +1174,58 @@ mod tests {
                 "make test",
                 "git commit -m \"python3 x\"",
                 "cargo run -- python3",
-                "cargo run -- python3 tool.py settings.json",
+                "cargo run -- python3 tool.py notes.txt",
+                "npm run x -- --flag",
                 "npm run build",
                 "docker run img python3 app.py data.json",
                 "frobnicate -m python3 settings.json",
                 "frobnicate 'python3 tool.py settings.json'",
                 "frobnicate env -C.claude python3 tool.py notes.txt",
+            ],
+        );
+    }
+
+    /// Grok round 5 F1: a bare `--` after an unmodeled program does not
+    /// hide the interpreter it runs (`sandbox-exec ... --`, `taskpolicy --`).
+    /// The call is judged with an unknown directory, so a bare protected
+    /// tail after `--` refuses too (`cargo run -- python3 tool.py
+    /// settings.json`), as after `cd "$DIR"`.
+    #[test]
+    fn a_double_dash_does_not_hide_the_interpreter_a_program_runs() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .claude/settings.json",
+                "sandbox-exec -p '(version 1)(allow default)' -- python3 -c 'open(\"settings.json\",\"w\").write(\"\")'",
+                "taskpolicy -- python3 tool.py .claude/settings.json",
+                "docker run --rm -v .:/w -w /w -- python:3 python3 tool.py .claude/settings.json",
+                "frobnicate -- python3 tool.py settings.json",
+                "cargo run -- python3 tool.py settings.json",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .git/config",
+                "taskpolicy -- python3 tool.py .git/config",
+                "frobnicate -- python3 tool.py .git/config",
+                "frobnicate -- env -C.git python3 tool.py config",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py notes.txt",
+                "taskpolicy -- python3 tool.py notes.txt",
+                "cargo run -- python3",
+                "cargo run -- python3 tool.py notes.txt",
+                "git commit -m \"python3 x\"",
+                "npm run x -- --flag",
+                "make test",
+                "npm run build",
             ],
         );
     }

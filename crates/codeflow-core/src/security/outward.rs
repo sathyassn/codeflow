@@ -868,17 +868,23 @@ const MODELED_LAUNCHERS: &[&str] = &[
 /// interpreter, the rest of the segment from that word is read as a
 /// possible call whose directory is unknown, so its known words are
 /// judged by their trailing components (TSK-302, after review round 4).
-/// A word after `--`, the value of `-m` or `-c`, and a word holding more
-/// than a bare name (a quoted argument) never start a command.
+/// A bare `--` does not end the walk: `sandbox-exec ... -- python3` and
+/// `taskpolicy -- python3` run the interpreter after it (Grok round 5 F1).
+/// Before a `--`, the value of `-m` or `-c` is never a command; a word
+/// holding more than a bare name (a quoted argument) never starts one.
 fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed) {
     if name == "git" || interpreter_family(name).is_some() {
         return;
     }
+    let mut operands = false;
     let mut words = rest.iter().enumerate();
     while let Some((at, word)) = words.next() {
         match word.as_str() {
-            "--" => return,
-            "-m" | "-c" => {
+            "--" if !operands => {
+                operands = true;
+                continue;
+            }
+            "-m" | "-c" if !operands => {
                 words.next();
                 continue;
             }

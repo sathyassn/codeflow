@@ -7570,6 +7570,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         // An unknown program that launches an interpreter.
         "frobnicate env -C.claude python3 tool.py settings.json".to_string(),
         "frobnicate env -C.git python3 tool.py config".to_string(),
+        // A bare `--` does not hide the interpreter (Grok round 5 F1).
+        "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .git/config".to_string(),
+        "taskpolicy -- python3 tool.py .claude/settings.json".to_string(),
     ];
     let allowed = [
         "python3 edit.py notes.txt out.json",
@@ -7591,6 +7594,8 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "caffeinate python3 tool.py data.json",
         "docker run img python3 app.py data.json",
         "cargo run -- python3",
+        "npm run x -- --flag",
+        "taskpolicy -- python3 tool.py notes.txt",
         "git commit -m \"python3 x\"",
     ];
     let mut wrong = Vec::new();
