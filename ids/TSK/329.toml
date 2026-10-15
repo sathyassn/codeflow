@@ -1,0 +1,11 @@
+id = "TSK-329"
+uid = "173a18e9-c6c5-40ff-a51e-b4a32fd491dc"
+kind = "TSK"
+title = "The model evaluation gate target waits for the release binary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-15T18:12:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
