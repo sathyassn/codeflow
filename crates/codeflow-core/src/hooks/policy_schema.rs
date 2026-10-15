@@ -576,10 +576,10 @@ pub const SCHEMA: [KeySpec; 68] = [
                 and the destination authority. At active levels, a clean, complete \
                 checkout at a pushed commit always runs tree checks first. Other \
                 checkouts need no tree checks only when an advertised destination \
-                branch already holds that commit or a descendant; tags and other \
+                branch already holds that commit; tags and other \
                 refs never qualify. This preserves epic new --integration from a \
-                planning branch. Non-empty or unreadable info/grafts makes that \
-                ancestry unproven; replacement refs cannot establish it. At block, \
+                planning branch. Ancestry reads commit objects with commit-graph, \
+                replace refs and grafts disabled. At block, \
                 an unchecked commit outside that branch history refuses the push. \
                 Dirty tracked files, assume-unchanged or skip-worktree index flags, \
                 sparse checkouts and missing or mismatched submodules prevent \
@@ -588,7 +588,8 @@ pub const SCHEMA: [KeySpec; 68] = [
                 allow name the inactive gate, including when checkout inspection \
                 would fail. Untracked files can influence quick targets; a pass \
                 describes the working checkout. Tag and other non-branch pushes \
-                are outside the push set.",
+                are outside the push set. Local-config tampering is outside the \
+                hook threat model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",

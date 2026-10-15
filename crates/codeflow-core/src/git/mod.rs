@@ -42,6 +42,39 @@ pub fn command() -> std::process::Command {
     process("git")
 }
 
+/// A judging Git process whose repository is selected by its explicit path.
+/// Inherited location, object-store and command-config variables cannot steer
+/// these reads. Repository and user config remain in scope; this is not a
+/// sandbox against local-config tampering. Never changes the caller's env.
+#[must_use]
+pub fn judging_command() -> std::process::Command {
+    let mut command = command();
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, _) in std::env::vars_os() {
+        let bytes = name.as_encoded_bytes();
+        if bytes
+            .strip_prefix(b"GIT_CONFIG_KEY_")
+            .or_else(|| bytes.strip_prefix(b"GIT_CONFIG_VALUE_"))
+            .is_some_and(|index| !index.is_empty() && index.iter().all(u8::is_ascii_digit))
+        {
+            command.env_remove(name);
+        }
+    }
+    command.env("GIT_NO_LAZY_FETCH", "1");
+    command
+}
+
 /// A process for `program`. When `program` runs git (its last path part,
 /// without an extension, is `git`), it is built as [`command`] builds git,
 /// so a caller that holds the program name in a variable still gets the
@@ -308,8 +341,9 @@ pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, Rebase
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
 /// Whether local commit objects prove that a tip contains `sha`.
-/// libgit2 ignores replace refs but reads grafts: non-empty or unreadable
-/// common-dir `info/grafts` makes the proof unavailable before any walk.
+/// Git reads commit objects with commit-graph, replace refs and grafts disabled,
+/// and inherited repository/object/config environment inputs removed. A graph
+/// written by normal maintenance is harmless and need not be removed.
 /// Missing or shallow history cannot prove ancestry; no objects are fetched.
 ///
 /// # Errors
@@ -319,21 +353,36 @@ pub fn commit_reachable_from(
     sha: &str,
     tips: &[String],
 ) -> Result<bool, &'static str> {
-    let repo = git2::Repository::discover(root).map_err(|_| "cannot open the repository")?;
-    match crate::absence::metadata_optional(&repo.commondir().join("info/grafts")) {
-        Ok(Some(metadata)) if metadata.is_file() && metadata.len() == 0 => {}
-        Ok(Some(_)) => {
-            return Err("non-empty or invalid info/grafts cannot prove destination ancestry")
+    git2::Oid::from_str(sha).map_err(|_| "invalid commit id")?;
+    for tip in tips {
+        git2::Oid::from_str(tip).map_err(|_| "invalid branch tip id")?;
+        let out = judging_command()
+            .arg("-C")
+            .arg(root)
+            .args([
+                "--no-replace-objects",
+                "-c",
+                "core.commitGraph=false",
+                "-c",
+                "core.useReplaceRefs=false",
+                "merge-base",
+                "--is-ancestor",
+                sha,
+                tip,
+            ])
+            .env(
+                "GIT_GRAFT_FILE",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()
+            .map_err(|_| "cannot read destination ancestry")?;
+        match out.status.code() {
+            Some(0) => return Ok(true),
+            Some(1) => {}
+            _ => return Err("cannot prove destination ancestry from commit objects"),
         }
-        Ok(None) => {}
-        Err(_) => return Err("cannot inspect info/grafts"),
     }
-    let commit = git2::Oid::from_str(sha).map_err(|_| "invalid commit id")?;
-    Ok(tips.iter().any(|tip| {
-        tip == sha
-            || git2::Oid::from_str(tip)
-                .is_ok_and(|tip| repo.graph_descendant_of(tip, commit).unwrap_or(false))
-    }))
+    Ok(false)
 }
 
 #[cfg(test)]

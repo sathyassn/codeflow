@@ -291,7 +291,7 @@ fn tree_policy(
 }
 
 /// Only locally provable advertised branch ancestry counts. The core reader
-/// ignores replace refs and rejects non-empty or unreadable common-dir grafts.
+/// disables commit-graph, replace refs and grafts while reading commit objects.
 fn already_on_destination_branch(
     root: &Path,
     sha: &str,
@@ -529,7 +529,7 @@ fn commits_from(
     if base == tip {
         return Ok(keep);
     }
-    let related = codeflow_core::git::command()
+    let related = codeflow_core::git::judging_command()
         .arg("-C")
         .arg(root)
         .args(["merge-base", tip, &r.local_sha])
@@ -1792,7 +1792,7 @@ fn submodule_problem(line: &str) -> Result<Option<String>, String> {
 /// not valid UTF-8 returns an error through `run_checked` to `run`, which refuses.
 /// Lookup/predicate exit 1, and `remote get-url` exit 2, mean an absent answer.
 fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::git::judging_command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1805,7 +1805,7 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
 /// [`git`] with `input` on stdin.
 fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, String> {
     let out = codeflow_core::git::output_with_input(
-        codeflow_core::git::command()
+        codeflow_core::git::judging_command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1879,6 +1879,8 @@ fn tracked_tree_clean(root: &Path) -> Result<bool, String> {
         &[
             "-c",
             "core.fsmonitor=false",
+            "-c",
+            "diff.ignoreSubmodules=none",
             "status",
             "--porcelain",
             "--untracked-files=no",
@@ -1901,7 +1903,7 @@ mod name_text_tests {
     fn r16_a_git_answer_that_is_not_utf8_refuses() {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
-        let init = codeflow_core::git::command()
+        let init = codeflow_core::git::judging_command()
             .args(["init", "--quiet"])
             .arg(dir.path())
             .status()

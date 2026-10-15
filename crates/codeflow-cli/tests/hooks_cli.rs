@@ -8081,7 +8081,7 @@ fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
     .unwrap();
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("grafts"), "{err}");
+    assert!(err.contains("not the checked-out commit"), "{err}");
     assert!(!err.contains("already on the destination"), "{err}");
     let linked = tempfile::tempdir().unwrap();
     let checkout = linked.path().join("checkout");
@@ -8097,10 +8097,130 @@ fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
     );
     let (code, err) = push_hook(&checkout, "upstream", &[("feat/good", &good)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("grafts"), "{err}");
+    assert!(err.contains("not the checked-out commit"), "{err}");
     assert!(!err.contains("already on the destination"), "{err}");
     std::fs::write(dir.path().join(".git/info/grafts"), "").unwrap();
     let (code, err) = push_hook(&checkout, "upstream", &[("feat/known", &bad)]);
     assert_eq!(code, Some(0), "{err}");
     assert!(err.contains("already on the destination"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_commit_graph_cannot_invent_destination_ancestry() {
+    let dir = sibling_repo();
+    let bare = dir.path().join(".git/upstream-destination.git");
+    receive(&bare, dir.path(), "main:refs/heads/main");
+    git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    receive(&bare, dir.path(), "feat/good:refs/heads/seen");
+    let bad = rev(dir.path(), "feat/bad");
+    let tip = rev(dir.path(), "feat/good");
+    git(dir.path(), &["checkout", "main"]);
+    // libgit2 supports the original chunks, but not the newer GDA2 chunk.
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "commitGraph.generationVersion=1",
+            "commit-graph",
+            "write",
+            "--reachable",
+        ],
+    );
+    // Legitimate graphs must not prevent the advertised-branch exemption.
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/known", &tip)]);
+    assert_eq!(code, Some(0), "{err}");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+
+    // Change the graph's parent data, leaving real commit objects intact.
+    // Graph readers use these chunks without checking the trailing checksum.
+    let path = dir.path().join(".git/objects/info/commit-graph");
+    let mut graph = std::fs::read(&path).unwrap();
+    assert_eq!(&graph[..6], b"CGPH\x01\x01");
+    let chunk = |id: &[u8]| {
+        graph[8..8 + usize::from(graph[6]) * 12]
+            .chunks_exact(12)
+            .find(|entry| &entry[..4] == id)
+            .map(|entry| {
+                usize::try_from(u64::from_be_bytes(entry[4..12].try_into().unwrap())).unwrap()
+            })
+            .unwrap()
+    };
+    let lookup = chunk(b"OIDL");
+    let data = chunk(b"CDAT");
+    let position = |sha: &str| {
+        let oid: Vec<_> = (0..sha.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&sha[at..at + 2], 16).unwrap())
+            .collect();
+        graph[lookup..data]
+            .chunks_exact(20)
+            .position(|bytes| bytes == oid)
+            .unwrap()
+    };
+    let bad_position = position(&bad);
+    let tip_position = position(&tip);
+    let record = data + tip_position * 36;
+    graph[record + 20..record + 24]
+        .copy_from_slice(&u32::try_from(bad_position).unwrap().to_be_bytes());
+    graph[record + 28..record + 32].copy_from_slice(&(100_u32 << 2).to_be_bytes());
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(path, graph).unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_inherited_git_config_cannot_steer_inspection() {
+    let dir = quick_repo("true");
+    let head = rev(dir.path(), "HEAD");
+    let url = push_url(dir.path(), "upstream");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "upstream", &url])
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.sparseCheckout")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .current_dir(dir.path()),
+        &format!("refs/heads/feat/t {head} refs/heads/feat/t {ZERO_SHA}\n"),
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_status_does_not_ignore_submodule_edits() {
+    let dir = quick_repo("true");
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    commit_file(
+        vendor.path(),
+        "tracked.txt",
+        "committed\n",
+        "feat: add tracked input",
+    );
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    git(dir.path(), &["config", "diff.ignoreSubmodules", "all"]);
+    std::fs::write(dir.path().join("vendor/tracked.txt"), "dirty\n").unwrap();
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("tracked files differ"), "{err}");
 }
