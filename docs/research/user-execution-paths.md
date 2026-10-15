@@ -1,9 +1,9 @@
 # Files that run code in a later shell or login: design note
 
 Task: TSK-284. Issues: 87 (PATH directories), 90 (session environment
-files), 91 (login items). Status: revision 3, after Codex's round-2 review
-of 025aa79a6 (`changes_requested`, R2-F1 to R2-F3, N4 to N6); no guard
-code exists yet. Written against the EPC-022 line at `1e6e29e93`, PR 195
+files), 91 (login items). Status: revision 4, after Codex's round-3 review
+of 22fb40519 (`changes_requested`, R3-F1; N7, N8 and N10 are build notes,
+N9 is fixed here); no guard code exists yet. Written against the EPC-022 line at `1e6e29e93`, PR 195
 (TSK-283) at `6fd46ab21`, PR 187 (TSK-302) at `9c2dadea6` and plan PR 162
 (TSK-299) at `d9de22f2b`.
 
@@ -33,6 +33,14 @@ union of the static table, which stays in force, and the shortened dynamic
 set, on each platform (R2-F3). The roots are resolved from the hook's
 environment, which can differ from the service managers' own; that limit
 is stated where it applies.
+
+Changed since revision 3: a local installer that writes into a writable
+dynamic `PATH` directory (`npm install` creating `node_modules/.bin/<bin>`
+in a checkout whose `node_modules/.bin` is on the inherited `PATH`) is an
+uncontained residual of this task, not a refusal (R3-F1): installers are
+opaque to the guards, and no sandbox deny covers a dynamic entry inside
+the writable checkout. Refused direct writes and opaque installer writes
+are now kept apart wherever the workspace case appears.
 
 Operator decisions D1 to D3 are pending. The design follows the
 recommendation for each and says what changes under the other choice. The
@@ -116,14 +124,42 @@ before judging `cp payload /opt/team/bin/git`. No session anchor exists
 (ADR-0075's binding registry was dropped in the 2026-09-29 amendment), and
 `$TMPDIR` has no better provenance. So nothing is exempt: a `PATH` entry
 inside a checkout, a linked worktree, a temporary directory or any other
-place counts like the rest. The cost: where the harness inherits a `PATH`
-that names a workspace directory (`direnv layout node` adds
-`node_modules/.bin`; an activated virtualenv adds `.venv/bin`), `npm
-install` and `pip install` writes into it refuse. The refusal names the
-entry and the sanctioned path: remove the entry from the environment the
-harness is launched with, or ask the operator to run the install; doctor
-names the entry before any refusal. An operator-set allowance would be a
-new policy key, which the operator may ask for; it is not proposed here.
+place counts like the rest. Two things follow for a harness that inherits
+a `PATH` naming a workspace directory (`direnv layout node` adds
+`node_modules/.bin`; an activated virtualenv adds `.venv/bin`), and they
+differ:
+
+- **Direct writes refuse.** `cp x node_modules/.bin/git`, a redirect, `tee`,
+  `install`, `ln`, `chmod` or a placing program (`tar -x`, `unzip`,
+  `rsync`) into that directory refuses, since the entry is in the class.
+  The refusal names the entry and the sanctioned path: remove the entry
+  from the environment the harness is launched with, or ask the operator
+  to make the change; doctor names the entry beforehand.
+- **Installer writes are not refused: an uncontained residual.** `npm
+  install`, `pip install` into a virtualenv and their kin write their
+  files opaquely. `PLACING` has no npm or pip entry (`startup.rs:1270`),
+  `placing_violation` returns no finding for an unlisted program
+  (`startup.rs:2952`), the closed rule needs class text on the line
+  (`startup.rs:2211`), and a plain `npm install` names no `PATH` directory
+  at all. Codex's isolated probe (npm 11.17.0, scratch `HOME`, empty
+  configuration files, `--offline --ignore-scripts`) ran `npm install` of
+  a local package with the project's `node_modules/.bin` first on the
+  inherited `PATH`: exit 0 and `node_modules/.bin/<bin>` created. The
+  checkout is inside every writable root, so no sandbox holds it either.
+  Plainly: a malicious package, or a pull request that changes the local
+  dependencies, can plant an executable in `node_modules/.bin` through an
+  ordinary install, and when the operator's own `PATH` searches that
+  directory the planted program runs under its name. Nothing in this task
+  contains that. D3 as recommended does not close it either: its family
+  covers global installers (`npm i -g`, `pipx`, `cargo install`), not a
+  local `npm install`. Refusing local installers would be a further
+  operator decision, with the cost that `npm install` and `pip install`
+  refuse in any session whose inherited `PATH` names the checkout; it is
+  named here, not proposed. Doctor names the entry so the operator can
+  take it off the launch `PATH`, which is the one relief this task offers.
+
+An operator-set allowance for a direct write would be a new policy key,
+which the operator may ask for; it is not proposed here.
 
 **Relative and empty entries.** `..`, `../tools/bin` and the empty entry
 (the current directory) are resolved against the hook's working directory
@@ -249,8 +285,10 @@ bounded rule and a named residual:
   `workspace` write set, which leaves the home and `/opt/homebrew`
   unwritable.
 - **Doctor:** `codeflow doctor --check startup-files` gains rows for a
-  `PATH` entry inside a checkout or temporary directory (protected; `npm
-  install` or `pip install` into it will refuse), a `PATH` entry the
+  `PATH` entry inside a checkout or temporary directory (direct writes
+  into it refuse; an installer's writes into it are not contained, so a
+  planted executable there would run under the operator's `PATH`), a
+  `PATH` entry the
   static table does not cover (guards only, no sandbox entry), a relative
   or empty entry, a static entry containing the checkout (unsupported
   layout), an unavailable or unknown runtime root, an ignored relative
@@ -287,7 +325,8 @@ bounded rule and a named residual:
 | `sort -o ~/.local/bin/git`, `sort -o~/.local/bin/git` | refused today: `sort` is not in `WRITERS`, so each argument is judged by `word_violation`, which reads a literal class path and an attached-value tail | denied | `cd "$D" && sort -o git` (unresolved directory), a combined option the fallback does not model, and a nested sed script: TSK-299's residuals until it lands |
 | `python3 -c "open('/opt/homebrew/bin/git','w')"`, a heredoc that names a class path | refused (interpreter code names a class path) | denied | a path the code builds from pieces |
 | `brew install x`, `cargo install --path ./evil` (a crate whose binary is named `git`), `npm i -g ./evil.tgz` with a `git` bin, `pipx install ./evil` | not refused by the guards: opaque programs | denied: the home and `/opt/homebrew` are outside every writable root on Claude (macOS), Codex (`workspace-write`) and Grok (`workspace`) | an unsandboxed seat, Claude's unsandboxed retry, a Codex `--sandbox` override, native Windows Claude; D3 |
-| `npm install` in a checkout whose `node_modules/.bin` is on the harness's inherited `PATH` | refused: the entry is in the class; the refusal names the entry and the launch-environment fix; doctor named it beforehand | the checkout is writable | stated cost |
+| `cp x node_modules/.bin/git`, `tar -x -C node_modules/.bin`, in a checkout whose `node_modules/.bin` is on the harness's inherited `PATH` | refused: the entry is in the class; the refusal names the entry and the launch-environment fix; doctor named it beforehand | the checkout is writable | |
+| `npm install` (or `pip install` into `.venv`) in that checkout, a dependency with a `bin` entry, or a pull request that adds one | not refused: an opaque installer write; `PLACING` has no npm or pip entry, the closed rule needs class text on the line, and a plain install names no `PATH` directory (Codex probe: exit 0, `node_modules/.bin/<bin>` created) | not held: the checkout is inside every writable root | uncontained residual of this task; a malicious package can plant an executable that runs under the operator's `PATH`; D3 covers global installers only; refusing local installers is a further operator decision, named and not proposed |
 | `printf 'PATH=/tmp/x:$PATH\n' > ~/.config/environment.d/p.conf`, the same under `$XDG_CONFIG_HOME` moved elsewhere; `> /run/environment.d/p.conf` | refused: the roots are `environment.d(5)`'s | denied at the default root; a moved root has no sandbox entry | a root the hook's environment does not show |
 | A drop-in `~/.config/systemd/user.control/foo.service.d/x.conf`, a unit under `$XDG_DATA_HOME/systemd/user/`, or under `/run/user/<uid>/systemd/user/` with `XDG_RUNTIME_DIR` unset | refused: every directory of the unit search path is in the class; the runtime root falls back to `/run/user/<uid>` where it exists | denied at the default roots | a runtime root the guard cannot resolve (reported by doctor) |
 | A file in a Startup folder redirected by policy | not refused; doctor reports the redirection | not held | residual |
@@ -332,6 +371,13 @@ bounded rule and a named residual:
   the target is outside the writable roots; an unsandboxed seat, Claude's
   unsandboxed retry, a Codex `--sandbox` override, Grok on Windows (stub
   sandbox) and native Windows Claude (no Bash sandbox) stay open.
+- A local installer writing into a writable dynamic `PATH` directory
+  (`npm install` creating `node_modules/.bin/<bin>`, `pip install` into
+  `.venv/bin`) when the inherited `PATH` names that directory: no guard
+  refuses it and no sandbox holds it, so a malicious package or a
+  dependency change in a pull request can plant an executable that runs
+  under the operator's `PATH`. Uncontained by this task; D3 does not cover
+  local installs; doctor names the entry.
 - A file that arrived in the checkout (a pull request's `bin/git`) when
   the operator's own `PATH` names that directory: reported by doctor.
 - A relative `PATH` entry that resolves elsewhere in the operator's shell
@@ -361,15 +407,16 @@ bounded rule and a named residual:
 ## Operator decisions (pending)
 
 Each row states the guard effect and the sandbox effect separately, the
-cost, and what changes if the operator chooses the other way. The static
-table is in force under every choice; only the dynamic set varies. The
-design follows the recommendation until the operator decides.
+cost, and what changes if the operator chooses the other way. Under D1
+the static table is in force under either choice and only the dynamic set
+varies; D2 varies the static Homebrew entries themselves. The design
+follows the recommendation until the operator decides.
 
 | # | Decision and recommendation | Guard effect | Sandbox effect | Cost | If the operator chooses otherwise |
 |---|---|---|---|---|---|
 | D1 | Every `PATH` entry counts (recommended), or only entries searched before the first system directory (the task's wording) | Direct writes (redirect, `cp`, `tee`, `install`, `ln`, `mv`, `chmod`, placing programs, interpreter literals) into any `PATH` entry refuse; installers are not commands the guard refuses | The static entries get `denyWrite` and Codex read-only entries; the sandboxes already deny these writes where the entry is outside the writable roots, so on a sandboxed seat the change is a named refusal in place of a permission error. On an unsandboxed seat, or where a writable root contains an entry (a checkout directory on `PATH` included), these are new refusals | Writes into `~/.cargo/bin`, `~/.local/bin`, `~/go/bin`, the tool-manager trees and any checkout directory on the inherited `PATH` are refused in agent sessions | The dynamic set keeps only the entries before the first system directory: on Linux and macOS the first of `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`; on Windows the first entry under `%SystemRoot%`. The static table still protects its entries wherever they sit on `PATH`, so only non-static later entries lose protection. Examples: with `PATH=/usr/bin:$HOME/.cargo/bin:/opt/team/bin`, `~/.cargo/bin` stays protected (static) and `/opt/team/bin` does not; with the macOS default `PATH` (`/usr/local/bin` first, then `/System/Cryptexes/App/usr/bin`, `/usr/bin`, ...), only `/usr/local/bin` is dynamic, and the static `/usr/local/` subdirectories and `/opt/homebrew/` stay protected regardless; with `PATH=/opt/team/bin:/usr/bin`, `/opt/team/bin` is protected under both choices |
 | D2 | `/opt/homebrew/` counts whole and `/usr/local/` by its Homebrew subdirectories (recommended), or `bin/` and `sbin/` only | Direct writes anywhere under the prefix refuse; `brew install`, `brew upgrade` and `brew link` are opaque installers the guard does not refuse | `/opt/homebrew/` and the `/usr/local/` subdirectories get `denyWrite` and Codex read-only entries; on Claude (macOS), Codex and Grok the prefix is already outside the writable roots, so `brew install` already fails there; an unsandboxed seat stays open until D3 | A project checked out under the prefix is unsupported (doctor names it); a direct write to a Homebrew library from a session refuses | Only `bin/` and `sbin/` are entries; a planted `lib/` library or Cellar binary reached through a link stays open to the text guard and is held by the sandbox alone |
-| D3 | An installer command family (`brew install`, `cargo install`, `npm i -g`, `pipx`, `uv tool install`, `go install`, `gem install`, `rustup`, `asdf`, `mise`) refused in agent sessions. Recommended: yes, as one tracked follow-up task; nothing of it is implemented in this task | The listed spellings refuse with a named rule; the set is open (ADR-0009), so it closes only what it names, never assembled paths, separate scripts or link targets | None; the family adds native text denies, which hold on every seat including unsandboxed ones | Agents cannot set up a missing tool; the operator installs it | Installers stay open on unsandboxed seats and under Claude's unsandboxed retry; the sandboxes keep denying them elsewhere |
+| D3 | An installer command family (`brew install`, `cargo install`, `npm i -g`, `pipx`, `uv tool install`, `go install`, `gem install`, `rustup`, `asdf`, `mise`) refused in agent sessions. Recommended: yes, as one tracked follow-up task; nothing of it is implemented in this task | The listed spellings refuse with a named rule; the set is open (ADR-0009), so it closes only what it names, never assembled paths, separate scripts or link targets. It covers global installers only: a local `npm install` into `node_modules/.bin` or `pip install` into `.venv/bin` is not in the family, so D3 does not close the local-installer residual above | None; the family adds native text denies, which hold on every seat including unsandboxed ones | Agents cannot set up a missing tool; the operator installs it | Installers stay open on unsandboxed seats and under Claude's unsandboxed retry; the sandboxes keep denying them elsewhere; the local-installer residual is unchanged either way |
 
 ## Siblings found during this design, not in scope
 
@@ -425,6 +472,14 @@ item is recommended for the set; none blocks this task.
 - Landing: after PR 195; the `DirSet` shim is replaced when PR 187 lands;
   the Claude edit-guard wiring is TSK-285's and is not required here.
 
+## Changes for review round 3
+
+| Finding | Disposition |
+|---|---|
+| R3-F1 workspace install claimed as refused | Changed: direct writes into a checkout `PATH` directory refuse; an installer's writes (`npm install` into `node_modules/.bin`, `pip install` into `.venv/bin`) are an uncontained residual of this task, stated with the mechanism (`PLACING`, `placing_violation`, the closed rule) and Codex's probe, in the exemption section, the doctor rows, the adversarial table and the residual list; a malicious package or dependency change can plant an executable this way; D3 covers global installers only and does not close it; refusing local installers is named as a further operator decision, not proposed |
+| N9 "only the dynamic set varies" | Fixed: scoped to D1; D2 varies static entries |
+| N7, N8, N10 | Build notes, left to the build and its review as the coordinator directed |
+
 ## Changes for review round 2
 
 | Finding | Disposition |
@@ -455,7 +510,8 @@ item is recommended for the set; none blocks this task.
 |---|---|---|
 | Codex, GPT-6 Astra at high | revision 1 at 2f73fd78d | changes_requested (F1 to F5, N1 to N3) |
 | Codex, GPT-6 Astra at high | revision 2 at 025aa79a6 | changes_requested (R2-F1 to R2-F3, N4 to N6) |
-| Codex, GPT-6 Astra at high | revision 3, this commit | pending |
+| Codex, independent peer | revision 3 at `22fb4051949abbe88724d822db8337dc5cfdd102` | changes_requested; `target/review-design-TSK-284-codex-03.md`, R3-F1 |
+| Codex, GPT-6 Astra at high | revision 4, this commit | pending |
 
 ## Sources
 
