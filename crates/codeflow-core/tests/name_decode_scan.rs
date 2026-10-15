@@ -2324,8 +2324,9 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // An unreadable ancestry graph cannot prove the destination holds a commit;
-    // false keeps that commit on the checked-or-refused path in run_tree_checks.
+    // After rejecting non-empty common-dir grafts, an unreadable libgit2 graph
+    // cannot prove an advertised branch holds a commit. False keeps the tree
+    // on the checked-or-refused path; libgit2 does not follow replacement refs.
     (
         "crates/codeflow-core/src/git/mod.rs",
         "commit_reachable_from",
@@ -6021,6 +6022,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/git/mod.rs", "commit_reachable_from", "is_file", 1, "Type check after metadata_optional proves absence or obtains metadata; errors and non-regular grafts refuse the ancestry exemption."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),

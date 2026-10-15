@@ -573,19 +573,22 @@ pub const SCHEMA: [KeySpec; 68] = [
         valid: LEVEL_VALID,
         purpose: "Run the test gate before a push (pre-push hook).",
         notes: "Tree checks use the strictest level from the working copy, HEAD \
-                and the destination authority. At block, every pushed branch with \
-                a commit not already on the destination must be checked from a \
-                clean, complete checkout at that commit or the push is refused. \
+                and the destination authority. At active levels, a clean, complete \
+                checkout at a pushed commit always runs tree checks first. Other \
+                checkouts need no tree checks only when an advertised destination \
+                branch already holds that commit or a descendant; tags and other \
+                refs never qualify. This preserves epic new --integration from a \
+                planning branch. Non-empty or unreadable info/grafts makes that \
+                ancestry unproven; replacement refs cannot establish it. At block, \
+                an unchecked commit outside that branch history refuses the push. \
                 Dirty tracked files, assume-unchanged or skip-worktree index flags, \
                 sparse checkouts and missing or mismatched submodules prevent \
                 checking that tree. Initialized submodules are included in quick-target \
-                snapshots. Commits already advertised by the destination, or ancestors \
-                of those commits, need no tree checks; this preserves epic new \
-                --integration from a planning branch. Warn notes unchecked trees and \
-                the checks to run; off and allow name the inactive gate, including when \
-                checkout inspection would fail. Untracked files can influence quick \
-                targets; a pass describes the working checkout. Tag and other \
-                non-branch pushes are outside the push set.",
+                snapshots. Warn notes unchecked trees and the checks to run; off and \
+                allow name the inactive gate, including when checkout inspection \
+                would fail. Untracked files can influence quick targets; a pass \
+                describes the working checkout. Tag and other non-branch pushes \
+                are outside the push set.",
     },
     KeySpec {
         path: "git.security_review",

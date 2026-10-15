@@ -6,9 +6,10 @@
 //!   with a `quick` mode) read the working tree, so they run only when a
 //!   pushed sha is the checked-out commit, no tracked file differs from it,
 //!   and the checkout is complete (no sparse checkout, every submodule
-//!   initialized at its recorded commit, no hidden index flags). Commits
-//!   already on the destination need no tree checks. Otherwise the hook refuses at
-//!   `block` and notes the unchecked tree at lower levels; checks are never
+//!   initialized at its recorded commit, no hidden index flags). This path
+//!   runs before any exemption. For other checkouts, only history held by an
+//!   advertised destination branch needs no tree checks. Otherwise the hook
+//!   refuses at `block` and notes the unchecked tree at lower levels; checks are never
 //!   reported as passed for a tree they did not see. Untracked files are part
 //!   of the working checkout and can influence a quick target, which the pass
 //!   line says. The gate uses the strictest level from the working copy,
@@ -204,23 +205,8 @@ fn run_tree_checks(
 ) -> Result<(), String> {
     let head = rev_parse(root, "HEAD")?;
     let policy = tree_policy(root, head.as_deref(), destination)?;
-    let mut unchecked = Vec::new();
-    for r in pushed {
-        if already_on_destination(root, &r.local_sha, destination) {
-            report.status.push(format!(
-                "tree checks not needed for '{}': commit {} is already on the destination",
-                r.remote_branch().unwrap_or_default(),
-                short(&r.local_sha)
-            ));
-        } else {
-            unchecked.push(*r);
-        }
-    }
-    if unchecked.is_empty() {
-        return Ok(());
-    }
     if !policy.test_gate_on_push.is_active() {
-        for r in unchecked {
+        for r in pushed {
             unchecked_tree(
                 &policy,
                 r,
@@ -244,14 +230,35 @@ fn run_tree_checks(
         Err(error) => Some(format!("cannot inspect the checkout: {error}")),
     };
     let at_head = |r: &&PushRef| reason.is_none() && head.as_deref() == Some(r.local_sha.as_str());
-    if unchecked.iter().any(at_head) {
+    if pushed.iter().any(at_head) {
         run_check(exe, root, &["validate", "--docs"], &policy, report, steps);
         steps.extend(git_hook::run_push_targets(root, &policy, report));
     }
-    for r in unchecked.iter().filter(|r| !at_head(r)) {
-        let why = reason
+    for r in pushed.iter().filter(|r| !at_head(r)) {
+        let started = Instant::now();
+        let reachability = already_on_destination_branch(root, &r.local_sha, destination);
+        steps.push(PushStep {
+            name: format!(
+                "destination branch ancestry ({})",
+                r.remote_branch().unwrap_or_default()
+            ),
+            duration: started.elapsed(),
+            configurable: false,
+        });
+        if reachability == Ok(true) {
+            report.status.push(format!(
+                "tree checks not needed for '{}': commit {} is already on the destination through an advertised branch",
+                r.remote_branch().unwrap_or_default(),
+                short(&r.local_sha)
+            ));
+            continue;
+        }
+        let mut why = reason
             .clone()
             .unwrap_or_else(|| format!("{} is not the checked-out commit", short(&r.local_sha)));
+        if let Err(error) = reachability {
+            write!(why, "; destination branch ancestry is unproven: {error}").unwrap();
+        }
         unchecked_tree(&policy, r, &why, report);
     }
     Ok(())
@@ -283,13 +290,23 @@ fn tree_policy(
     Ok(policy)
 }
 
-/// Only locally provable ancestry counts. libgit2 reads actual commit objects,
-/// without replacement refs or grafts that could invent destination ancestry.
-fn already_on_destination(root: &Path, sha: &str, destination: &Destination<'_>) -> bool {
+/// Only locally provable advertised branch ancestry counts. The core reader
+/// ignores replace refs and rejects non-empty or unreadable common-dir grafts.
+fn already_on_destination_branch(
+    root: &Path,
+    sha: &str,
+    destination: &Destination<'_>,
+) -> Result<bool, &'static str> {
     let Advertised::Tips(tips) = destination.advertised(root) else {
-        return false;
+        return Ok(false);
     };
-    codeflow_core::git::commit_reachable_from(root, sha, &tips.commits)
+    let branches = tips
+        .branches
+        .values()
+        .filter(|tip| tips.commits.contains(tip))
+        .cloned()
+        .collect::<Vec<_>>();
+    codeflow_core::git::commit_reachable_from(root, sha, &branches)
 }
 
 fn unchecked_tree(policy: &GitPolicy, r: &PushRef, why: &str, report: &mut StageReport) {

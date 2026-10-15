@@ -7989,3 +7989,118 @@ fn push_tree_review_replacement_cannot_invent_destination_ancestry() {
     assert_eq!(code, Some(1), "{err}");
     assert!(!err.contains("already on the destination"), "{err}");
 }
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_tag_then_branch_still_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", dir.path(), &["switch", "-c", "feat/probe"]);
+    std::fs::write(dir.path().join(".codeflow/test-config.json"), r#"{"schema_version":"1.0","targets":[{"name":"lint","runner":"custom","modes":{"quick":{"command":"test ! -f bad.txt"}}}]}"#).unwrap();
+    std::fs::write(dir.path().join("bad.txt"), "bad\n").unwrap();
+    ok(
+        "git",
+        dir.path(),
+        &["add", ".codeflow/test-config.json", "bad.txt"],
+    );
+    ok(
+        "git",
+        dir.path(),
+        &["commit", "-m", "feat: add failing input"],
+    );
+    answering_destination(dir.path(), "upstream");
+    let first = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(first.status.code(), Some(1), "{}", both_streams(&first));
+    assert!(both_streams(&first).contains("push set failed for: lint"));
+    let tag = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "feat/probe:refs/tags/scratch"],
+    );
+    assert!(tag.status.success(), "{}", both_streams(&tag));
+    ok("git", dir.path(), &["switch", "-c", "feat/other", "HEAD~1"]);
+    let other = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(other.status.code(), Some(1), "{}", both_streams(&other));
+    assert!(both_streams(&other).contains("not the checked-out commit"));
+    ok("git", dir.path(), &["switch", "feat/probe"]);
+    let clean = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(clean.status.code(), Some(1), "{}", both_streams(&clean));
+    assert!(both_streams(&clean).contains("push set failed for: lint"));
+    let branch = ok(
+        "git",
+        dir.path(),
+        &["ls-remote", "upstream", "refs/heads/feat/probe"],
+    );
+    assert!(branch.is_empty(), "{branch}");
+    eprintln!(
+        "tag-then-branch journey: {}\n{}\nbranch advertisement={branch:?}",
+        both_streams(&other),
+        both_streams(&clean)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_clean_advertised_commit_runs_targets() {
+    let dir = sibling_repo();
+    receive(
+        &dir.path().join(".git/upstream-destination.git"),
+        dir.path(),
+        "feat/bad:refs/heads/seen",
+    );
+    git(dir.path(), &["checkout", "feat/bad"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/new-name", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set failed for: lint"), "{err}");
+    assert!(!err.contains("tree checks not needed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
+    let dir = sibling_repo();
+    let bare = dir.path().join(".git/upstream-destination.git");
+    receive(&bare, dir.path(), "main:refs/heads/main");
+    git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    receive(&bare, dir.path(), "feat/bad:refs/heads/seen");
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+    let parent = rev(dir.path(), "main");
+    git(dir.path(), &["checkout", "main"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    std::fs::write(
+        dir.path().join(".git/info/grafts"),
+        format!("{bad} {parent} {good}\n"),
+    )
+    .unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("grafts"), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+    let linked = tempfile::tempdir().unwrap();
+    let checkout = linked.path().join("checkout");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            checkout.to_str().unwrap(),
+            "main",
+        ],
+    );
+    let (code, err) = push_hook(&checkout, "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("grafts"), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+    std::fs::write(dir.path().join(".git/info/grafts"), "").unwrap();
+    let (code, err) = push_hook(&checkout, "upstream", &[("feat/known", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("already on the destination"), "{err}");
+}

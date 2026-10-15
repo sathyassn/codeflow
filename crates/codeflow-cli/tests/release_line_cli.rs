@@ -330,6 +330,7 @@ impl Fx {
     /// destination holds at `remote` (all zeros for a new branch). A separate
     /// fixture ref already holds the candidate, isolating range checks from
     /// whole-tree validation of these intentionally minimal legacy records.
+    /// Keep another commit checked out; a checkable candidate must run targets.
     fn pre_push(&self, branch: &str, local: &str, remote: &str) -> (i32, String) {
         self.pre_push_to(self.origin.to_str().unwrap(), branch, local, remote)
     }
@@ -339,7 +340,7 @@ impl Fx {
         let back = self.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
         let fixture_ref = format!("{local}:refs/heads/fixture/tree-{local}");
         self.git(&["push", "-q", "origin", &fixture_ref]);
-        self.git(&["switch", "-q", "--detach", local]);
+        self.git(&["switch", "-q", "--detach", "main"]);
         let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
             .args(["git-hook", "pre-push", url, url])
             .current_dir(&self.root)
