@@ -1957,6 +1957,44 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
 }
 
 #[test]
+fn configuration_builtins_refuse_in_both_guards_while_alias_operands_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["config", "alias.st", "status"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (command, expected) in [
+            (
+                "declare -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            (
+                "typeset -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            ("export HOME=/tmp/config; git push origin task/x", 2),
+            ("readonly HOME=/tmp/config; git push origin task/x", 2),
+            ("read HOME < file; git ship", 2),
+            ("printf -v HOME %s /tmp/config; git ship", 2),
+            ("for HOME in /tmp/config; do git ship; done", 2),
+            (": ${HOME:=/tmp/config}; git ship", 2),
+            ("git st docs/gitconfig.md", 0),
+            ("git st -- HOME", 0),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(expected),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn installed_exec_guard_and_include_diagnostic_journey() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/config");

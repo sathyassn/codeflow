@@ -915,16 +915,96 @@ fn configuration_environment_change(command: &str) -> Option<String> {
     expand_commands(command).iter().find_map(|segment| {
         let mut tokens = command_argv(segment);
         strip_reserved_words(&mut tokens);
-        configuration_environment_trigger(&tokens)
+        configuration_environment_trigger(&tokens).or_else(|| configuration_shell_change(segment))
     })
+}
+
+fn configuration_variable_reason(word: &str) -> Option<String> {
+    let name = word.split_once('=').map_or(word, |(name, _)| name);
+    configuration_variable(name).then(|| format!("environment variable {name}"))
+}
+
+/// Variable-writing builtins have destination operands, unlike ordinary data.
+fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
+    if matches!(program, "export" | "unset") || is_declare_builtin(program) {
+        return args
+            .iter()
+            .find_map(|word| configuration_variable_reason(word));
+    }
+    match program {
+        "read" => {
+            let mut at = 0;
+            while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
+                at += 1;
+                if option == "--" {
+                    break;
+                }
+                // These read options consume a prompt, delimiter, count or fd.
+                if matches!(
+                    option.as_str(),
+                    "-d" | "-i" | "-n" | "-N" | "-p" | "-t" | "-u"
+                ) {
+                    at += 1;
+                }
+            }
+            args.get(at..)?
+                .iter()
+                .find_map(|word| configuration_variable_reason(word))
+        }
+        "printf" if args.first().is_some_and(|word| word == "-v") => args
+            .get(1)
+            .and_then(|word| configuration_variable_reason(word)),
+        "for" if args.get(1).is_some_and(|word| word == "in") => args
+            .first()
+            .and_then(|word| configuration_variable_reason(word)),
+        _ => None,
+    }
+}
+
+/// A builtin or an assignment expansion can change later commands' environment.
+pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    if let Some(reason) = strip_launchers(&words)
+        .and_then(|(program, args)| configuration_builtin_trigger(program, args))
+    {
+        return Some(reason);
+    }
+    // Read expansion syntax before quote removal. Single-quoted or escaped
+    // examples are data; ${NAME:=value} or ${NAME=value} writes NAME here.
+    let mut single = false;
+    let mut double = false;
+    let mut chars = segment.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if !single => {
+                chars.next();
+            }
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '$' if !single => {
+                let Some(rest) = chars.as_str().strip_prefix('{') else {
+                    continue;
+                };
+                let len = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                let (name, operator) = rest.split_at(len);
+                if operator.starts_with(":=") || operator.starts_with('=') {
+                    if let Some(reason) = configuration_variable_reason(name) {
+                        return Some(reason);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Inspect only assignments and launcher/builtin operands, never Git data.
 pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<String> {
-    let variable = |word: &str| {
-        let name = word.split_once('=').map_or(word, |(name, _)| name);
-        configuration_variable(name).then(|| format!("environment variable {name}"))
-    };
+    let variable = configuration_variable_reason;
     let mut at = 0;
     loop {
         while let Some(word) = tokens.get(at).filter(|word| assignment(word).is_some()) {
@@ -963,12 +1043,10 @@ pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<Str
                 }
             }
             at = end;
-        } else if matches!(name, "export" | "unset") || is_declare_builtin(program) {
-            return tokens[at + 1..].iter().find_map(|word| variable(word));
         } else if is_prefix_launcher(program) {
             at = skip_launcher_options(program, tokens, at + 1)?;
         } else {
-            return None;
+            return configuration_builtin_trigger(program, &tokens[at + 1..]);
         }
     }
 }
@@ -6409,10 +6487,8 @@ struct LineFacts {
 struct Mentions {
     /// A git location variable (`GIT_DIR`, …).
     location_var: bool,
-    /// Where git reads its configuration from (`GIT_CONFIG_*`, `HOME`,
-    /// `XDG_CONFIG_HOME`) or a config file path, which the alias reader
-    /// cannot see.
-    config_env: bool,
+    /// A parsed builtin or expansion that writes a configuration variable.
+    shell_env: Option<String>,
     /// Transport cannot trust config supplied by the command being judged.
     transport_env: Option<String>,
     /// `GIT_CONFIG` itself, not one of the `GIT_CONFIG_*` variables.
@@ -6420,7 +6496,7 @@ struct Mentions {
     /// A `git config` write whose order the guard does not model: anywhere
     /// on a line that is not flat, or nested in a substitution. Top-level
     /// writes on a flat line are followed in order.
-    config_write: bool,
+    config_write: Option<String>,
 }
 
 impl LineFacts {
@@ -6430,13 +6506,15 @@ impl LineFacts {
             nested_mover: false,
             mentions: Mentions {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
-                config_env: mentions_config_env(command),
+                shell_env: segments
+                    .iter()
+                    .find_map(|segment| configuration_shell_change(segment)),
                 transport_env: configuration_environment_change(command),
                 git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
                     !command[at + word.len()..]
                         .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
                 }),
-                config_write: false,
+                config_write: None,
             },
         };
         for (idx, segment) in segments.iter().enumerate() {
@@ -6450,12 +6528,27 @@ impl LineFacts {
                 || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
             let nested = roles.is_some_and(|r| r[idx].is_none());
             let unordered = roles.is_none() || nested;
-            facts.mentions.config_write |= unordered
+            if unordered
                 && strip_launchers(&words).is_some_and(|(program, args)| {
                     matches!(program_kind(program), ProgramKind::Git)
                         && git_subcommand(args)
                             .is_some_and(|(sub, rest)| sub == "config" && !config_only_reads(rest))
-                });
+                })
+            {
+                facts.mentions.config_write =
+                    Some("a git config write whose order the guard cannot model".to_string());
+            }
+            if let Some(path) = redirect_writes(segment).targets.into_iter().find(|path| {
+                let path = Path::new(path);
+                path.ends_with("gitconfig")
+                    || path.ends_with(".gitconfig")
+                    || path.ends_with(".git/config")
+                    || path.ends_with(".git/config.worktree")
+                    || path.ends_with("git/config")
+            }) {
+                facts.mentions.config_write =
+                    Some(format!("a redirect into configuration path `{path}`"));
+            }
             facts.any_mover |= mover;
             let sets_var = program.is_none_or(|p| p == "export")
                 && tokens.iter().any(|t| assignment(t).is_some());
@@ -6490,7 +6583,7 @@ impl LineFacts {
             // A location variable the line sets outside the op's own launcher
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
-            config_unknown: self.mentions.config_env || self.mentions.config_write,
+            config_write: self.mentions.config_write.clone(),
             transport_env: configuration_environment_trigger(tokens)
                 .or_else(|| {
                     tracked
@@ -6504,6 +6597,7 @@ impl LineFacts {
                         })
                         .flatten()
                 })
+                .or_else(|| self.mentions.shell_env.clone())
                 .or_else(|| {
                     (!tracked)
                         .then(|| self.mentions.transport_env.clone())
@@ -6525,8 +6619,8 @@ struct Moves<'r> {
     vars: Option<&'r HashMap<String, Val>>,
     /// A git location variable may be set in a way the guard cannot scope.
     location_unknown: bool,
-    /// The line may change where git reads its configuration from.
-    config_unknown: bool,
+    /// A parsed configuration write the alias reader cannot reproduce.
+    config_write: Option<String>,
     transport_env: Option<String>,
     /// The line mentions `GIT_CONFIG`, the file `git config` writes when
     /// no scope option names one.
@@ -7292,26 +7386,6 @@ pub(crate) const GIT_BUILTINS: &[&str] = &[
 /// How deep an alias may expand into further aliases before the guard stops.
 const MAX_ALIAS_DEPTH: usize = 8;
 
-/// Does the line touch where git reads its configuration from, or name a git
-/// config file it could write? Any mention of a `GIT_CONFIG*` variable,
-/// `XDG_CONFIG_HOME`, a `git/config` or `gitconfig` path, or `HOME` as a word
-/// not read as `$HOME`, counts.
-pub(crate) fn mentions_config_env(command: &str) -> bool {
-    if ["GIT_CONFIG", "XDG_CONFIG_HOME", "git/config", "gitconfig"]
-        .iter()
-        .any(|marker| command.contains(marker))
-    {
-        return true;
-    }
-    let bytes = command.as_bytes();
-    command.match_indices("HOME").any(|(at, _)| {
-        let before = at.checked_sub(1).map(|i| bytes[i]);
-        let after = bytes.get(at + 4).copied();
-        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-        !before.is_some_and(|b| word(b) || b == b'$' || b == b'{') && !after.is_some_and(word)
-    })
-}
-
 /// Expand `sub`, a subcommand that is not a builtin, through the alias it
 /// names in every repository the op could target (TSK-112). Each result is
 /// the op's argument vector with the alias replaced by its expansion, the way
@@ -7333,8 +7407,11 @@ fn expand_alias(
     let lookup = ctx
         .alias_lookup
         .ok_or_else(|| "no alias reader".to_string())?;
-    if moved.config_unknown {
-        return Err("the line changes where git reads its configuration".to_string());
+    if let Some(trigger) = &moved.transport_env {
+        return Err(format!("the line changes {trigger}"));
+    }
+    if let Some(trigger) = &moved.config_write {
+        return Err(trigger.clone());
     }
     if config_changed {
         return Err(
@@ -11412,6 +11489,9 @@ mod tests {
     #[test]
     fn configuration_environment_changes_refuse_branch_and_discard_decisions() {
         for command in [
+            "declare -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
+            "typeset -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
+            "readonly GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true git commit -m fix",
             "BARE=true git --config-env=core.bare=BARE commit -m fix",
             "GIT_CONFIG_GLOBAL=/tmp/config git branch -D feature",
@@ -11424,6 +11504,22 @@ mod tests {
             let result = report(command, "task/work");
             assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
             assert!(result.violations.iter().any(|v| v.message.contains("GIT_CONFIG") || v.message.contains("HOME") || v.message.contains("--config-env")), "{command}: {:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn alias_operands_are_not_configuration_changes() {
+        for command in [
+            "git st docs/gitconfig.md",
+            "git st -- HOME",
+            "git st git/config",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                !blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
         }
     }
 
@@ -13310,7 +13406,7 @@ mod tests {
                 cwd: Cwd::Paths(vec![String::new()]),
                 vars: None,
                 location_unknown: false,
-                config_unknown: mentions,
+                config_write: None,
                 transport_env: None,
                 git_config_var: mentions,
                 narrows: false,
@@ -16053,11 +16149,11 @@ mod tests {
         );
         assert_eq!(split_alias("a 'b"), None);
         assert_eq!(split_alias("a\\"), None);
-        assert!(mentions_config_env("HOME=/x git y"));
-        assert!(mentions_config_env("unset HOME"));
-        assert!(!mentions_config_env("git -C \"$HOME/r\" y"));
-        assert!(!mentions_config_env("git -C ${HOME}/r y"));
-        assert!(!mentions_config_env("CODEFLOW_HOME=1 git y"));
+        assert!(configuration_environment_change("HOME=/x git y").is_some());
+        assert!(configuration_environment_change("unset HOME").is_some());
+        assert!(configuration_environment_change("git -C \"$HOME/r\" y").is_none());
+        assert!(configuration_environment_change("git -C ${HOME}/r y").is_none());
+        assert!(configuration_environment_change("CODEFLOW_HOME=1 git y").is_none());
     }
 
     // A rebase given a `<branch>` checks it out and rewrites it: that branch

@@ -155,16 +155,10 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
         let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
-        if skip_assignments(&words).is_empty()
-            || words.first().is_some_and(|word| {
-                matches!(
-                    word.as_str(),
-                    "export" | "unset" | "declare" | "typeset" | "readonly"
-                )
-            })
-        {
+        if skip_assignments(&words).is_empty() {
             persistent = trigger.clone().or(persistent);
         }
+        persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
         let mut assigned = skip_assignments(&words).to_vec();
         if let Some(setting) = words
@@ -1302,6 +1296,49 @@ mod tests {
         "perl -e 'run(\"{}\")'",
         "ruby -e 'run(\"{}\")'",
     ];
+
+    #[test]
+    fn shell_variable_writes_make_configuration_decisions_unverifiable() {
+        for variable in ["GIT_CONFIG_GLOBAL", "HOME", "XDG_CONFIG_HOME"] {
+            for setting in [
+                format!("declare -x {variable}=/tmp/config"),
+                format!("typeset -x {variable}=/tmp/config"),
+                format!("export {variable}=/tmp/config"),
+                format!("readonly {variable}=/tmp/config"),
+                format!("read {variable} < file"),
+                format!("printf -v {variable} %s /tmp/config"),
+                format!("for {variable} in /tmp/config; do :; done"),
+                format!(": ${{{variable}:=/tmp/config}}"),
+                format!(": ${{{variable}=/tmp/config}}"),
+            ] {
+                for git in ["git ship", "git push origin task/x"] {
+                    let command = format!("{setting}; {git}");
+                    let findings = evaluate(&command, &SecuritySection::default());
+                    assert!(
+                        findings.iter().any(|v| v.message.contains(variable)),
+                        "{command}: {findings:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_variable_names_in_data_do_not_change_configuration() {
+        for command in [
+            "read -p HOME answer; git push origin task/x",
+            "printf '%s' HOME; git push origin task/x",
+            "printf -v answer '%s' HOME; git push origin task/x",
+            "for answer in HOME; do git push origin task/x; done",
+            ": '${HOME:=/tmp/config}'; git push origin task/x",
+            r": \${HOME:=/tmp/config}; git push origin task/x",
+        ] {
+            assert!(
+                evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
 
     #[test]
     fn table_families_are_refused_through_each_wrapper() {
