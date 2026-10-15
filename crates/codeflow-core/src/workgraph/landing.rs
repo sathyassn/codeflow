@@ -186,6 +186,10 @@ pub(super) struct RecordStore<'r> {
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
     boundary: HashSet<Oid>,
+    /// Every introduction of a version in a holder's history
+    /// ([`RecordStore::introductions`]), or why it cannot be read, so each
+    /// history is walked once per version in a run.
+    introduced: HashMap<(Oid, Version), Result<Vec<Oid>, String>>,
 }
 
 impl<'r> RecordStore<'r> {
@@ -219,6 +223,7 @@ impl<'r> RecordStore<'r> {
             spells: HashMap::new(),
             overlay,
             boundary,
+            introduced: HashMap::new(),
         }
     }
 
@@ -559,13 +564,17 @@ impl<'r> RecordStore<'r> {
             .iter()
             .any(|(_, _, record)| record.criteria.signature() != signature)
         {
+            // Held versions compete by their criteria, so each introduction
+            // is traced by criteria signature (SEC-306-01).
             let mut remaining = Vec::new();
             for &(point, blob, record) in &versions {
                 let mut older = false;
+                let held = Holding::new(point, blob, Version::criteria(record));
                 for &(other, other_blob, version) in &versions {
-                    if record.criteria.signature() != version.criteria.signature()
+                    let newer = Holding::new(other, other_blob, Version::criteria(version));
+                    if held.version != newer.version
                         && self
-                            .yields(task, point, blob, other, other_blob)
+                            .yields(task, &held, &newer)
                             .map_err(|reason| format!("{reason}; judged points: {context}"))?
                     {
                         older = true;
@@ -632,13 +641,17 @@ impl<'r> RecordStore<'r> {
         // A holder's version is older when its line inherited it unchanged
         // from a line that holds another version. The rest must agree,
         // whatever order the walks met them in.
+        // Lines here compete by criteria, status and epic ([`same_version`]),
+        // so each introduction is traced by those.
         let mut newest: Vec<usize> = Vec::new();
         for (index, (commit, blob, record)) in holders.iter().enumerate() {
             let mut older = false;
+            let held = Holding::new(*commit, *blob, Version::standing(record));
             for (other, other_blob, version) in &holders {
+                let newer = Holding::new(*other, *other_blob, Version::standing(version));
                 if other != commit
-                    && !same_version(record, version)
-                    && self.yields(task, *commit, *blob, *other, *other_blob)?
+                    && held.version != newer.version
+                    && self.yields(task, &held, &newer)?
                 {
                     older = true;
                     break;
@@ -668,25 +681,22 @@ impl<'r> RecordStore<'r> {
         Ok(Some(kept.clone()))
     }
 
-    /// Whether every introduction of `blob` precedes every introduction of
-    /// `newer_blob`. Comparing decisions, rather than tips, keeps a restored
-    /// version competing even after its line merged the other version.
+    /// Whether every introduction of `older`'s version precedes every
+    /// introduction of `newer`'s. Comparing decisions, rather than tips,
+    /// keeps a restored version competing even after its line merged the
+    /// other version.
     fn yields(
         &mut self,
         task: &Identity,
-        holder: Oid,
-        blob: Oid,
-        newer: Oid,
-        newer_blob: Oid,
+        older: &Holding,
+        newer: &Holding,
     ) -> Result<bool, String> {
-        let earlier = self.introductions(task, holder, blob).map_err(|reason| {
-            format!("reading the history of {holder:.9} ({blob:.9}): {reason}")
-        })?;
+        let earlier = self
+            .introductions(task, older.commit, &older.version)
+            .map_err(|reason| older.context(&reason))?;
         let later = self
-            .introductions(task, newer, newer_blob)
-            .map_err(|reason| {
-                format!("reading the history of {newer:.9} ({newer_blob:.9}): {reason}")
-            })?;
+            .introductions(task, newer.commit, &newer.version)
+            .map_err(|reason| newer.context(&reason))?;
         for before in earlier {
             for &after in &later {
                 if before == after
@@ -699,13 +709,35 @@ impl<'r> RecordStore<'r> {
         Ok(true)
     }
 
-    /// Read every introduction of a blob in a complete, unambiguous history.
-    /// A merge resolution is a new decision even when its bytes match a parent.
+    /// Every introduction of `version` in the complete, unambiguous history
+    /// of `holder`, walked once per holder and version in a run.
     fn introductions(
         &mut self,
         task: &Identity,
         holder: Oid,
-        blob: Oid,
+        version: &Version,
+    ) -> Result<Vec<Oid>, String> {
+        let key = (holder, version.clone());
+        if let Some(found) = self.introduced.get(&key) {
+            return found.clone();
+        }
+        let found = self.trace(task, holder, version);
+        self.introduced.insert(key, found.clone());
+        found
+    }
+
+    /// Walk `holder`'s history for the commits that introduce `version`: a
+    /// commit holds it while some parent holds no record of the task or
+    /// another version, or it has no parent. A merge that resolves the
+    /// record to one parent's version against the other's therefore
+    /// introduces the version it keeps, whatever its bytes; a version is
+    /// what its caller compares, never the blob, so a resolution that keeps
+    /// one side's criteria with new text still introduces them (SEC-306-01).
+    fn trace(
+        &mut self,
+        task: &Identity,
+        holder: Oid,
+        version: &Version,
     ) -> Result<Vec<Oid>, String> {
         if let Some(overlay) = &self.overlay {
             return Err(overlay.clone());
@@ -716,10 +748,12 @@ impl<'r> RecordStore<'r> {
         walk.push(holder).map_err(unreadable)?;
         let mut introduced = Vec::new();
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
+        // Whether each blob holds the version, read once per walk.
+        let mut holds: HashMap<Oid, bool> = HashMap::new();
         for commit in walk {
             let commit = commit.map_err(unreadable)?;
             let held = self.history_at(task, commit, &mut uids)?;
-            if !held.records.iter().any(|(held, _)| *held == blob) {
+            if !version.held(&held, &mut holds) {
                 continue;
             }
             let parents: Vec<Oid> = self
@@ -728,47 +762,20 @@ impl<'r> RecordStore<'r> {
                 .map_err(unreadable)?
                 .parent_ids()
                 .collect();
-            let mut from_parent = false;
+            let mut decided = parents.is_empty();
             for parent in &parents {
-                if self
-                    .history_at(task, *parent, &mut uids)?
-                    .records
-                    .iter()
-                    .any(|(held, _)| *held == blob)
-                {
-                    from_parent = true;
+                let held = self.history_at(task, *parent, &mut uids)?;
+                if !version.held(&held, &mut holds) {
+                    decided = true;
                     break;
                 }
             }
-            // A merge that resolves the record to one parent's version
-            // against the automatic remerge chose that version: it
-            // introduces it there, however its bytes match.
-            if from_parent && parents.len() > 1 {
-                let path = self
-                    .held_at(commit, task)?
-                    .records
-                    .iter()
-                    .find(|(held, _)| *held == blob)
-                    .map(|(_, record)| record.path.clone())
-                    .ok_or_else(|| {
-                        format!("{commit} no longer holds the version it was read with")
-                    })?;
-                let merge = self.repo.find_commit(commit).map_err(unreadable)?;
-                from_parent = match super::acceptance::read_merge(self.repo, &merge) {
-                    super::acceptance::MergeReading::Clean => true,
-                    super::acceptance::MergeReading::Changed(paths) => {
-                        !paths.iter().any(|name| name.as_slice() == path.as_bytes())
-                    }
-                    super::acceptance::MergeReading::Unknown(reason) => return Err(reason),
-                };
+            if decided {
+                introduced.push(commit);
             }
-            if from_parent {
-                continue;
-            }
-            introduced.push(commit);
         }
         if introduced.is_empty() {
-            return Err(format!("no introduction of {blob:.9} could be proved"));
+            return Err("no introduction of this version could be proved".to_string());
         }
         Ok(introduced)
     }
@@ -1053,10 +1060,8 @@ fn criteria_source(points: &[(Oid, Held)], authority: &Authority, unordered: boo
                 for (other, version) in points {
                     if let Some((old_blob, old)) = version.records.first() {
                         if old.criteria.signature() != kept.criteria.signature() {
-                            let _ = write!(
-                                source,
-                                "; {other:.9} holds older inherited version {old_blob:.9}"
-                            );
+                            let _ =
+                                write!(source, "; {other:.9} holds older version {old_blob:.9}");
                         }
                     }
                 }
@@ -1068,6 +1073,76 @@ fn criteria_source(points: &[(Oid, Held)], authority: &Authority, unordered: boo
         "criteria authority recovered from the judged history; judged points: {}",
         held_context(points)
     )
+}
+
+/// What makes two records of a task one version for a caller: the criteria
+/// signature the freeze compares, for the versions judged points hold
+/// (`agreed`), and with it the status and epic ([`same_version`]) for the
+/// lines of a history the points no longer hold (`recovered`).
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Version {
+    criteria: Vec<(String, String)>,
+    standing: Option<(String, Option<String>)>,
+}
+
+impl Version {
+    /// The version `record` holds, by its criteria alone.
+    fn criteria(record: &RecordView) -> Self {
+        Self {
+            criteria: record.criteria.signature(),
+            standing: None,
+        }
+    }
+
+    /// The version `record` holds, by its criteria, status and epic.
+    fn standing(record: &RecordView) -> Self {
+        Self {
+            criteria: record.criteria.signature(),
+            standing: Some((record.status.clone(), record.epic_id.clone())),
+        }
+    }
+
+    /// Whether `record` is this version.
+    fn is(&self, record: &RecordView) -> bool {
+        record.criteria.signature() == self.criteria
+            && self
+                .standing
+                .as_ref()
+                .is_none_or(|(status, epic)| *status == record.status && *epic == record.epic_id)
+    }
+
+    /// Whether `held` holds this version, reading each blob once through
+    /// `seen`.
+    fn held(&self, held: &Held, seen: &mut HashMap<Oid, bool>) -> bool {
+        held.records
+            .iter()
+            .any(|(blob, record)| *seen.entry(*blob).or_insert_with(|| self.is(record)))
+    }
+}
+
+/// A version held at a commit, with the blob that names it in messages.
+struct Holding {
+    commit: Oid,
+    blob: Oid,
+    version: Version,
+}
+
+impl Holding {
+    fn new(commit: Oid, blob: Oid, version: Version) -> Self {
+        Self {
+            commit,
+            blob,
+            version,
+        }
+    }
+
+    /// `reason`, prefixed with the history it was read in.
+    fn context(&self, reason: &str) -> String {
+        format!(
+            "reading the history of {:.9} ({:.9}): {reason}",
+            self.commit, self.blob
+        )
+    }
 }
 
 /// Whether two versions of a task's record keep the same authority: the
@@ -1571,18 +1646,24 @@ mod tests {
         git(root, &["commit", "-q", "-m", "fixture change"]);
     }
 
-    /// Merge the amended line into main, then deliberately choose v1.
-    /// Advancing the line afterwards keeps the judged tips unordered.
-    fn main_chooses_old_version(in_merge: bool) -> tempfile::TempDir {
+    /// `text` with a new description line and the same criteria.
+    fn reworded(text: &str) -> String {
+        text.replace("# Work\n", "# Work\n\nReworded after a merge.\n")
+    }
+
+    /// Merge the amended line into main, then deliberately choose v1's
+    /// criteria, written as `v1`. Advancing the line afterwards keeps the
+    /// judged tips unordered.
+    fn main_chooses_old_version(in_merge: bool, v1: &str) -> tempfile::TempDir {
         let dir = positive_shape();
         let root = dir.path();
         git(root, &["switch", "main"]);
         if in_merge {
             git(root, &["merge", "--no-ff", "--no-commit", LINE]);
-            save(root, RECORD, &record(UID));
+            save(root, RECORD, v1);
         } else {
             git(root, &["merge", "--no-ff", "-m", "take v2", LINE]);
-            save(root, RECORD, &record(UID));
+            save(root, RECORD, v1);
         }
         git(root, &["switch", LINE]);
         save(root, "later.txt", "the line advanced\n");
@@ -1596,13 +1677,28 @@ mod tests {
 
     #[test]
     fn a_revert_to_the_inherited_bytes_still_competes() {
-        let dir = main_chooses_old_version(false);
+        let dir = main_chooses_old_version(false, &record(UID));
         refuses_both_orders(dir.path(), "different versions");
     }
 
     #[test]
     fn a_merge_resolution_to_the_inherited_bytes_still_competes() {
-        let dir = main_chooses_old_version(true);
+        let dir = main_chooses_old_version(true, &record(UID));
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    /// SEC-306-01: a revert to v1's criteria with new text is still a
+    /// decision for v1, so main does not inherit the line's v2 by bytes.
+    #[test]
+    fn a_revert_to_the_inherited_criteria_with_new_text_still_competes() {
+        let dir = main_chooses_old_version(false, &reworded(&record(UID)));
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    /// SEC-306-01: the same for a merge resolution on main.
+    #[test]
+    fn a_merge_resolution_to_the_inherited_criteria_with_new_text_still_competes() {
+        let dir = main_chooses_old_version(true, &reworded(&record(UID)));
         refuses_both_orders(dir.path(), "different versions");
     }
 
@@ -1629,6 +1725,27 @@ mod tests {
 
     #[test]
     fn a_merge_resolution_on_the_line_still_competes() {
+        let dir = line_resolves_concurrent_amendments(&with_criterion(
+            "When run, the system shall work fast.",
+        ));
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    /// SEC-306-01: a line that resolves a conflict with main's concurrent
+    /// amendment to its own criteria, with new text, keeps its earlier
+    /// decision, so main's amendment still competes in both point orders.
+    #[test]
+    fn a_merge_resolution_on_the_line_with_new_text_still_competes() {
+        let dir = line_resolves_concurrent_amendments(&reworded(&with_criterion(
+            "When run, the system shall work fast.",
+        )));
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    /// Main and the line amend the criteria concurrently; the line merges
+    /// main, resolving the record's conflict to `resolved`; main then
+    /// advances so the tips stay unordered.
+    fn line_resolves_concurrent_amendments(resolved: &str) -> tempfile::TempDir {
         let dir = diverged(
             Step::File(RECORD, record(UID)),
             vec![Step::File(
@@ -1654,14 +1771,10 @@ mod tests {
             .path()
             .join("MERGE_HEAD")
             .exists());
-        save(
-            root,
-            RECORD,
-            &with_criterion("When run, the system shall work fast."),
-        );
+        save(root, RECORD, resolved);
         git(root, &["switch", "main"]);
         save(root, "later.txt", "main advanced\n");
-        refuses_both_orders(root, "different versions");
+        dir
     }
 
     #[test]
@@ -1677,8 +1790,11 @@ mod tests {
         refuses_both_orders(dir.path(), "different versions");
     }
 
+    /// Introductions are traced by criteria signature (SEC-306-01), so an
+    /// edit on main that keeps v1's criteria decides nothing about them:
+    /// main still holds the criteria the line replaced.
     #[test]
-    fn a_noncriteria_record_edit_on_main_is_not_unchanged_inheritance() {
+    fn a_noncriteria_record_edit_on_main_does_not_compete() {
         let dir = diverged(
             Step::File(RECORD, record(UID)),
             vec![Step::File(
@@ -1690,7 +1806,12 @@ mod tests {
                 with_criterion("When run, the system shall work fast."),
             )],
         );
-        refuses_both_orders(dir.path(), "different versions");
+        for points in [[LINE, "main"], ["main", LINE]] {
+            let Authority::Held(held) = judge_at(dir.path(), &points).criteria else {
+                panic!("{points:?}: a text edit on main competed with the line's criteria");
+            };
+            assert!(held.content.contains("work fast"), "{points:?}");
+        }
     }
 
     #[test]

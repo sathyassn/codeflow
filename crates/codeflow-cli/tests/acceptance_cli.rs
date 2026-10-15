@@ -3628,7 +3628,7 @@ fn a_task_on_a_diverged_line_uses_its_newer_held_version() {
         &line[..9],
         &blob[..9],
         &main[..9],
-        "inherited",
+        "holds older version",
     ] {
         assert!(result.1.contains(text), "missing {text}: {}", result.1);
     }
