@@ -3652,6 +3652,152 @@ fn competing_held_versions_name_the_points_and_blobs() {
     );
 }
 
+/// `ci` on a task branch cut from the line, judged with `main` as the
+/// hook's fixed authority.
+fn ci_on_line(root: &Path, line: &str, main: &str, branch: &str) -> (i32, String) {
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            line,
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--policy-from",
+            main,
+            "--commits-from",
+            main,
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// SEC-306-03: one run judges every task with one record store. TSK-001's
+/// line replaced the criteria main still holds; TSK-002 has the same two
+/// criteria, but main amended it concurrently. TSK-001's proof is judged
+/// first and must not answer for TSK-002, which still refuses.
+#[test]
+fn an_earlier_task_cannot_clear_a_later_tasks_competing_versions() {
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
+    let root = dir.path();
+    let criterion = |id: &str, text: &str| {
+        line_task(id, "todo", "Pending.\n").replace("the system shall work.", text)
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &criterion("TSK-001", "the system shall stop."),
+    );
+    commit(root, "docs: plan TSK-001 to stop");
+    git(root, &["branch", "-f", LINE, "main"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &criterion("TSK-002", "the system shall stop."),
+    );
+    commit(root, "docs: amend TSK-002 on main");
+    git(root, &["switch", LINE]);
+    for id in ["TSK-001", "TSK-002"] {
+        write(
+            root,
+            &record_path(id),
+            &criterion(id, "the system shall work fast."),
+        );
+    }
+    let line = commit(root, "docs: amend both on the line");
+    git(root, &["switch", "main"]);
+    write(root, "unrelated.txt", "unrelated\n");
+    let main = commit(root, "chore: unrelated");
+    git(root, &["switch", "-c", BRANCH, LINE]);
+    for id in ["TSK-001", "TSK-002"] {
+        let text = format!(
+            "{}\nA description note.\n",
+            criterion(id, "the system shall work fast.")
+        );
+        write(root, &record_path(id), &text);
+    }
+    commit(root, "docs: describe the tasks");
+    let result = ci_on_line(root, &line, &main, BRANCH);
+    assert_blocks(
+        &result,
+        "TSK-002's concurrent amendment competes",
+        &[
+            "lifecycle invariant work.criteria_frozen",
+            "TSK-002 changes its record",
+            "TSK-001 criteria authority:",
+            "holds older version",
+            "TSK-002 criteria authority unknown",
+        ],
+    );
+}
+
+/// SEC-306-04: on a record neither judged point holds, a status change
+/// after the line resolved main's concurrent amendment does not erase the
+/// line's earlier decision, so main's amendment still competes.
+#[test]
+fn a_status_change_does_not_settle_a_recovered_records_competing_criteria() {
+    let dir = line_repo(&["TSK-002"]);
+    let root = dir.path();
+    let path = record_path("TSK-002");
+    let version = |status: &str, text: &str| {
+        line_task("TSK-002", status, "Pending.\n").replace("the system shall work.", text)
+    };
+    write(root, &path, &version("todo", "the system shall stop."));
+    commit(root, "docs: amend on main");
+    git(root, &["switch", LINE]);
+    write(root, &path, &version("todo", "the system shall work fast."));
+    commit(root, "docs: amend on the line");
+    Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", "main"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    write(root, &path, &version("todo", "the system shall work fast."));
+    commit(root, "merge main, keep the line");
+    write(
+        root,
+        &path,
+        &version("blocked", "the system shall work fast."),
+    );
+    commit(root, "docs: block the task");
+    git(root, &["rm", "-q", &path]);
+    let line = commit(root, "docs: retire on the line");
+    git(root, &["switch", "main"]);
+    write(root, "unrelated.txt", "unrelated\n");
+    commit(root, "chore: unrelated");
+    git(root, &["rm", "-q", &path]);
+    let main = commit(root, "docs: retire on main");
+    let branch = "task/TSK-002-work";
+    git(root, &["switch", "-c", branch, LINE]);
+    write(
+        root,
+        &path,
+        &version("blocked", "the system shall work fast."),
+    );
+    commit(root, "docs: restore the task");
+    let result = ci_on_line(root, &line, &main, branch);
+    assert_blocks(
+        &result,
+        "main's amendment competes with the line's",
+        &[
+            "lifecycle invariant work.criteria_frozen",
+            "TSK-002 criteria authority unknown",
+        ],
+    );
+}
+
 /// Round 2 of the TSK-220 review: a line range's own line carries a merge
 /// after the review only for a task whose target is that line. A task
 /// bound for `main` that merges the line after its review still refuses

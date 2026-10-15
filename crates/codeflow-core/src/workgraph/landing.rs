@@ -186,10 +186,12 @@ pub(super) struct RecordStore<'r> {
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
     boundary: HashSet<Oid>,
-    /// Every introduction of a version in a holder's history
+    /// Every introduction of a version in a holder's history for one task
     /// ([`RecordStore::introductions`]), or why it cannot be read, so each
-    /// history is walked once per version in a run.
-    introduced: HashMap<(Oid, Version), Result<Vec<Oid>, String>>,
+    /// task's history is walked once per holder and version in a run. One
+    /// store judges every task of a run, so the key carries the task's
+    /// whole identity: another task's proof never answers (SEC-306-03).
+    introduced: HashMap<Traced, Result<Vec<Oid>, String>>,
 }
 
 impl<'r> RecordStore<'r> {
@@ -641,18 +643,26 @@ impl<'r> RecordStore<'r> {
         // A holder's version is older when its line inherited it unchanged
         // from a line that holds another version. The rest must agree,
         // whatever order the walks met them in.
-        // Lines here compete by criteria, status and epic ([`same_version`]),
-        // so each introduction is traced by those.
+        // Lines here compete by criteria, status and epic ([`same_version`]).
+        // Lines with other criteria are ordered by criteria introductions
+        // alone, as held points are, so a status or epic change never erases
+        // an earlier decision for competing criteria (SEC-306-04). Only
+        // lines whose criteria agree are ordered by the whole tuple.
         let mut newest: Vec<usize> = Vec::new();
         for (index, (commit, blob, record)) in holders.iter().enumerate() {
             let mut older = false;
-            let held = Holding::new(*commit, *blob, Version::standing(record));
             for (other, other_blob, version) in &holders {
-                let newer = Holding::new(*other, *other_blob, Version::standing(version));
-                if other != commit
-                    && held.version != newer.version
-                    && self.yields(task, &held, &newer)?
-                {
+                if other == commit || same_version(record, version) {
+                    continue;
+                }
+                let key = if record.criteria.signature() == version.criteria.signature() {
+                    Version::standing
+                } else {
+                    Version::criteria
+                };
+                let held = Holding::new(*commit, *blob, key(record));
+                let newer = Holding::new(*other, *other_blob, key(version));
+                if self.yields(task, &held, &newer)? {
                     older = true;
                     break;
                 }
@@ -717,7 +727,13 @@ impl<'r> RecordStore<'r> {
         holder: Oid,
         version: &Version,
     ) -> Result<Vec<Oid>, String> {
-        let key = (holder, version.clone());
+        let key = Traced {
+            id: task.id.clone(),
+            uid: task.uid.clone(),
+            own_file: task.own_file.clone(),
+            holder,
+            version: version.clone(),
+        };
         if let Some(found) = self.introduced.get(&key) {
             return found.clone();
         }
@@ -1077,8 +1093,9 @@ fn criteria_source(points: &[(Oid, Held)], authority: &Authority, unordered: boo
 
 /// What makes two records of a task one version for a caller: the criteria
 /// signature the freeze compares, for the versions judged points hold
-/// (`agreed`), and with it the status and epic ([`same_version`]) for the
-/// lines of a history the points no longer hold (`recovered`).
+/// (`agreed`) and for lines of a history the points no longer hold whose
+/// criteria differ (`recovered`); and with it the status and epic
+/// ([`same_version`]) only for such lines whose criteria agree.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Version {
     criteria: Vec<(String, String)>,
@@ -1118,6 +1135,17 @@ impl Version {
             .iter()
             .any(|(blob, record)| *seen.entry(*blob).or_insert_with(|| self.is(record)))
     }
+}
+
+/// What one walk of [`RecordStore::trace`] answers for: one task, by its
+/// whole identity, one holder and one version.
+#[derive(PartialEq, Eq, Hash)]
+struct Traced {
+    id: String,
+    uid: Option<String>,
+    own_file: String,
+    holder: Oid,
+    version: Version,
 }
 
 /// A version held at a commit, with the blob that names it in messages.
@@ -2000,5 +2028,241 @@ mod tests {
             Authority::Unknown(reason) => assert!(reason.contains("does not parse"), "{reason}"),
             _ => panic!("a doubt gave an answer"),
         }
+    }
+
+    const SECOND: &str = "project-management/tasks/TSK-002.md";
+    const THIRD: &str = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d";
+    const SHARED: &str = "When run, the system shall work.";
+    const LINE_V: &str = "When run, the system shall work fast.";
+
+    /// Task `id`'s record, carrying `uid`, with its one criterion `criterion`.
+    fn task_with(id: &str, uid: &str, criterion: &str) -> String {
+        record(uid)
+            .replace("TSK-001", id)
+            .replace("When run, the system shall work.", criterion)
+    }
+
+    fn uid_of(id: &str) -> &'static str {
+        if id == "TSK-001" {
+            UID
+        } else {
+            OTHER
+        }
+    }
+
+    /// Judge task `id` at the tips `points` in the run's shared `store`.
+    fn judge_in(
+        store: &mut RecordStore<'_>,
+        repo: &Repository,
+        id: &str,
+        points: &[&str],
+    ) -> TaskJudgement {
+        let judged: Vec<Oid> = points
+            .iter()
+            .map(|name| {
+                repo.revparse_single(name)
+                    .unwrap()
+                    .peel_to_commit()
+                    .unwrap()
+                    .id()
+            })
+            .collect();
+        let identity = Identity::named(id, Some(uid_of(id).to_string()), &format!("{id}.md"));
+        store.judge(
+            &identity,
+            &judged,
+            &Outside {
+                head: judged[0],
+                tips: &[],
+                at: None,
+                own: &[],
+            },
+        )
+    }
+
+    /// TSK-001 and TSK-002 hold the same criteria at the fork, and the line
+    /// amends both to the same new criteria. `main` runs `second` on
+    /// TSK-002 only, and leaves TSK-001 as the line inherited it.
+    fn two_tasks(second: &dyn Fn(&std::path::Path)) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        std::fs::write(root.join(RECORD), task_with("TSK-001", UID, SHARED)).unwrap();
+        std::fs::write(root.join(SECOND), task_with("TSK-002", OTHER, SHARED)).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "plan both"]);
+        git(root, &["branch", LINE]);
+        second(root);
+        git(root, &["switch", "-q", LINE]);
+        std::fs::write(root.join(RECORD), task_with("TSK-001", UID, LINE_V)).unwrap();
+        std::fs::write(root.join(SECOND), task_with("TSK-002", OTHER, LINE_V)).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "amend both on the line"]);
+        let repo = Repository::open(root).unwrap();
+        let main = repo.revparse_single("main").unwrap().id();
+        let line = repo.revparse_single(LINE).unwrap().id();
+        assert!(!repo.graph_descendant_of(main, line).unwrap());
+        assert!(!repo.graph_descendant_of(line, main).unwrap());
+        dir
+    }
+
+    /// Main amends TSK-002, then restores its first criteria.
+    fn main_restores_second(root: &std::path::Path) {
+        save(
+            root,
+            SECOND,
+            &task_with("TSK-002", OTHER, "When run, the system shall stop."),
+        );
+        save(root, SECOND, &task_with("TSK-002", OTHER, SHARED));
+    }
+
+    /// Main deletes TSK-002, then adds its first criteria again.
+    fn main_reintroduces_second(root: &std::path::Path) {
+        git(root, &["rm", "-q", SECOND]);
+        git(root, &["commit", "-q", "-m", "delete TSK-002"]);
+        save(root, SECOND, &task_with("TSK-002", OTHER, SHARED));
+    }
+
+    /// Main holds TSK-002's id with another uid for a while.
+    fn main_doubts_second(root: &std::path::Path) {
+        let path = "project-management/tasks/TSK-999.md";
+        save(root, path, &task_with("TSK-002", THIRD, SHARED));
+        git(root, &["rm", "-q", path]);
+        git(root, &["commit", "-q", "-m", "delete the duplicate"]);
+    }
+
+    /// Delete both records on `main` and on the line, so neither judged
+    /// point holds them and `recovered` reads their history.
+    fn delete_both(root: &std::path::Path) {
+        for branch in ["main", LINE] {
+            git(root, &["switch", "-q", branch]);
+            git(root, &["rm", "-q", RECORD, SECOND]);
+            git(root, &["commit", "-q", "-m", "retire both"]);
+        }
+    }
+
+    /// SEC-306-03: one store judges both tasks in both task orders and both
+    /// point orders. TSK-001 inherited, so the line's criteria win; TSK-002's
+    /// answer is refused with `reason`, whatever was judged before it.
+    fn tasks_do_not_share_introductions(root: &std::path::Path, reason: &str) {
+        let repo = Repository::open(root).unwrap();
+        for ids in [["TSK-001", "TSK-002"], ["TSK-002", "TSK-001"]] {
+            for points in [[LINE, "main"], ["main", LINE]] {
+                let mut store = RecordStore::new(&repo);
+                for id in ids {
+                    match (id, judge_in(&mut store, &repo, id, &points).criteria) {
+                        ("TSK-001", Authority::Held(held)) => {
+                            assert!(held.content.contains("work fast"), "{ids:?} {points:?}");
+                        }
+                        ("TSK-002", Authority::Unknown(why)) => {
+                            assert!(why.contains(reason), "{ids:?} {points:?}: {why}");
+                        }
+                        (id, _) => panic!("{ids:?} {points:?}: {id} took another task's answer"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_tasks_proof_does_not_settle_another_tasks_restore() {
+        let dir = two_tasks(&main_restores_second);
+        tasks_do_not_share_introductions(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn one_tasks_proof_does_not_settle_another_tasks_reintroduction() {
+        let dir = two_tasks(&main_reintroduces_second);
+        tasks_do_not_share_introductions(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn one_tasks_refusal_does_not_refuse_another_task() {
+        let dir = two_tasks(&main_doubts_second);
+        tasks_do_not_share_introductions(dir.path(), "another uid");
+    }
+
+    #[test]
+    fn recovered_tasks_do_not_share_introductions() {
+        let dir = two_tasks(&main_restores_second);
+        delete_both(dir.path());
+        tasks_do_not_share_introductions(dir.path(), "different versions");
+    }
+
+    /// SEC-306-04: main merges the line's V, then restores the first
+    /// criteria S with `change` (another epic or status), in the merge's
+    /// resolution when `in_merge`; each line then deletes the record, so
+    /// `recovered` decides. S was decided at the fork as well, so the line's
+    /// V does not yield to it, and neither wins.
+    fn recovered_restore(in_merge: bool, change: fn(&str) -> String) -> tempfile::TempDir {
+        let first = record(UID).replace("status: todo", "epic_id: EPC-001\nstatus: todo");
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        save(root, RECORD, &first);
+        git(root, &["branch", LINE]);
+        git(root, &["switch", "-q", LINE]);
+        save(
+            root,
+            RECORD,
+            &first.replace("When run, the system shall work.", LINE_V),
+        );
+        git(root, &["switch", "-q", "main"]);
+        if in_merge {
+            git(root, &["merge", "--no-ff", "--no-commit", LINE]);
+        } else {
+            git(root, &["merge", "--no-ff", "-m", "take v2", LINE]);
+        }
+        save(root, RECORD, &change(&first));
+        git(root, &["rm", "-q", RECORD]);
+        git(root, &["commit", "-q", "-m", "retire on main"]);
+        git(root, &["switch", "-q", LINE]);
+        save(root, "later.txt", "the line advanced\n");
+        git(root, &["rm", "-q", RECORD]);
+        git(root, &["commit", "-q", "-m", "retire on the line"]);
+        let repo = Repository::open(root).unwrap();
+        let main = repo.revparse_single("main").unwrap().id();
+        let line = repo.revparse_single(LINE).unwrap().id();
+        assert!(!repo.graph_descendant_of(main, line).unwrap());
+        assert!(!repo.graph_descendant_of(line, main).unwrap());
+        dir
+    }
+
+    fn other_epic(text: &str) -> String {
+        text.replace("epic_id: EPC-001", "epic_id: EPC-002")
+    }
+
+    fn other_status(text: &str) -> String {
+        text.replace("status: todo", "status: blocked")
+    }
+
+    #[test]
+    fn a_recovered_restore_with_another_epic_still_competes() {
+        let dir = recovered_restore(false, other_epic);
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_recovered_restore_with_another_status_still_competes() {
+        let dir = recovered_restore(false, other_status);
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_recovered_merge_resolution_with_another_epic_still_competes() {
+        let dir = recovered_restore(true, other_epic);
+        refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn a_recovered_merge_resolution_with_another_status_still_competes() {
+        let dir = recovered_restore(true, other_status);
+        refuses_both_orders(dir.path(), "different versions");
     }
 }
