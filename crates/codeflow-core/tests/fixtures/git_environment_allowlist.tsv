@@ -160,3 +160,6 @@ crates/codeflow-cli/tests/hooks_cli.rs	"git log -- HOME GIT_CONFIG_PARAMETERS; g
 crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
 crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
 crates/codeflow-core/src/hooks/git_guard.rs	configuration_destination("export","{A,B}{C,D}{E,F}{G,H}")	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"git -c x.y=$[GIT_CONFIG_COUNT=1] zz"	1	Inert arithmetic guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"git zz $[GIT_CONFIG_COUNT=1]"	1	Inert arithmetic guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"git ship $[GIT_CONFIG_COUNT=1]"	1	Inert arithmetic guard regression input; parsed by hooks only, never executed as a shell command.

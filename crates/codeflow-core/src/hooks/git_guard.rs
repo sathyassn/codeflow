@@ -1216,6 +1216,13 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
 
 /// A builtin or an assignment expansion can change later commands' environment.
 pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
+    for word in shell_words(segment) {
+        if let Some((name, value)) = word.text.split_once('=') {
+            if value.starts_with('(') && word.unquoted_prefix > name.len() + 1 {
+                return Some(format!("unsupported array assignment to {name}"));
+            }
+        }
+    }
     let mut words = command_argv(segment);
     strip_reserved_words(&mut words);
     if let Some(reason) = words
@@ -1243,6 +1250,16 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
             '\'' if !double => single = !single,
             '"' if !single => double = !double,
             '$' if !single => {
+                if let Some(expression) = arithmetic_expansion(chars.as_str()) {
+                    if let Some(name) = expression
+                        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .find(|name| configuration_input(name))
+                    {
+                        return Some(format!(
+                            "environment variable {name} in arithmetic expansion"
+                        ));
+                    }
+                }
                 let Some(rest) = chars.as_str().strip_prefix('{') else {
                     continue;
                 };
@@ -1272,6 +1289,30 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Retain either shell arithmetic spelling, including nested array subscripts.
+/// An unterminated expression keeps its remaining text for fail-closed inspection.
+fn arithmetic_expansion(after_dollar: &str) -> Option<&str> {
+    let (open, close, mut depth) = if after_dollar.starts_with('[') {
+        ('[', ']', 1usize)
+    } else if after_dollar.starts_with("((") {
+        ('(', ')', 2usize)
+    } else {
+        return None;
+    };
+    let body = &after_dollar[depth..];
+    for (at, ch) in body.char_indices() {
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&body[..at]);
+            }
+        }
+    }
+    Some(body)
 }
 
 /// Inspect only assignments and launcher/builtin operands, never Git data.
@@ -6538,6 +6579,15 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     while i < chars.len() {
         match chars[i] {
             '\\' => i += 2,
+            '$' if chars.get(i + 1) == Some(&'[') => {
+                // Arithmetic in data heredocs changes variables too. Keep
+                // the shell syntax so both guards use the same write scan.
+                let rest: String = chars[i + 1..].iter().collect();
+                if let Some(expression) = arithmetic_expansion(&rest) {
+                    out.push(format!(": $[{expression}]"));
+                }
+                i += 2;
+            }
             '$' if chars.get(i + 1) == Some(&'{') => {
                 // A data heredoc still evaluates parameter assignments. Keep
                 // the expansion without interpreting its surrounding prose.
@@ -10574,6 +10624,19 @@ fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
     out
 }
 
+fn capture_array_initializer(chars: &mut std::str::Chars<'_>) -> String {
+    let rest: Vec<char> = chars.clone().collect();
+    let (body, end) = capture_word_group(&rest, 0);
+    let mut array = format!("({body}");
+    if rest.get(end.saturating_sub(1)) == Some(&')') {
+        array.push(')');
+    }
+    for _ in 0..end {
+        chars.next();
+    }
+    array
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -10636,6 +10699,18 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         prefix_open = false;
                     }
                 }
+            }
+            '(' if !in_single && !in_double && cur.ends_with('=') => {
+                // An array initializer is one assignment, not one operand
+                // per element. Preserve it for the configuration diagnostic.
+                let array = capture_array_initializer(&mut chars);
+                cur.push_str(&array);
+                expands |= array.contains(['$', '`']);
+                if prefix_open {
+                    unquoted_prefix += 1;
+                }
+                prefix_open = false;
+                started = true;
             }
             // The shell splits words at its blanks (space, tab, newline); any
             // other whitespace, a no-break space included, is part of the word
@@ -11782,6 +11857,34 @@ mod tests {
             segments.iter().any(|s| s.contains("git push origin main")),
             "{segments:?}"
         );
+    }
+
+    #[test]
+    fn configuration_expansions_and_arrays_name_the_write() {
+        for command in [
+            "git -c x.y=$[HOME=1] zz",
+            "git zz $[HOME=1]",
+            "cat <<EOF\n$[HOME=1]\nEOF\ngit zz",
+        ] {
+            assert!(
+                configuration_line_backstop(command).is_some_and(|reason| reason.contains("HOME")),
+                "{command}"
+            );
+        }
+        for command in ["declare -a arr=(1 2)", "arr=(1 2)"] {
+            assert!(
+                configuration_shell_change(command)
+                    .is_some_and(|reason| reason.contains("arr") && !reason.contains("2)")),
+                "{command}"
+            );
+        }
+        for command in [
+            "git log -1 \"$((1+1))\"",
+            "git log -1 '$[HOME=1]'",
+            "git log -1 \\$[HOME=1]",
+        ] {
+            assert!(configuration_line_backstop(command).is_none(), "{command}");
+        }
     }
 
     #[test]

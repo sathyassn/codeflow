@@ -419,11 +419,13 @@ changes cannot be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
 option. The parser reads assignments, declaring and input-setting builtins
 (`declare`, `typeset`, `export`, `readonly`, `local`, `unset`, `read`,
 `getln`, `printf -v`, `print -v`, `getopts`, `mapfile`, `readarray`, `let`), loop
-variables (`for VAR in`) and assignment expansions, including those in unquoted
-heredocs. A destination is verified only when it is a literal variable name
-after quote removal; brace, glob, subscript and substitution shapes are
-unresolved. Namerefs, variable redirections and indirect assignment expansions
-also leave configuration-dependent actions unverifiable. Literal configuration
+variables (`for VAR in`) and assignment expansions, including `$[...]` and
+`$((...))` arithmetic in Git segments and unquoted heredocs. Array literals
+are read as one assignment and refusals name the array. A destination is
+verified only when it is a literal variable name after quote removal; brace,
+glob, subscript and substitution shapes are unresolved. Namerefs, variable
+redirections and indirect assignment expansions also leave
+configuration-dependent actions unverifiable. Literal configuration
 destinations refuse append writes too. A dynamic value for a known unrelated
 destination, such as `export PATH=$PATH:/x`, is allowed.
 
@@ -437,6 +439,9 @@ refuses. Git operands and commit messages remain excluded. Lines without such
 a decision, such as `grep HOME f`, are unaffected by this backstop. Clearing
 the environment with `env -i` or `--ignore-environment` also leaves
 configuration-dependent decisions unverifiable.
+
+Configuration or refs supplied as data through variables or xargs, such as
+`V=$(cat f); git push origin "$V"`, are not judged.
 
 Command-local reader environment entries are limited to `GIT_CONFIG_*`,
 `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `HOME`, `XDG_CONFIG_HOME` and

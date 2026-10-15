@@ -1993,6 +1993,15 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
     std::fs::create_dir_all(&nested).unwrap();
     init_repo(&nested, "task/x");
     let refusals = [
+        "git -c x.y=$[HOME=1] zz",
+        "git zz $[HOME=1]",
+        "git ship $[HOME=1]",
+        "git -c x.y=$[GIT_CONFIG_COUNT=1] zz",
+        "git zz $[GIT_CONFIG_COUNT=1]",
+        "git ship $[GIT_CONFIG_COUNT=1]",
+        "cat <<EOF\n$[HOME=1]\nEOF\ngit zz",
+        "declare -a arr=(1 2); git zz",
+        "arr=(1 2); git zz",
         "export {GIT_CONFIG_PARAMETERS,X}=\"'remote.origin.push=HEAD:refs/heads/main'\"; git push origin",
         "export {HOME,X}=/evil; git zz",
         "export H{OME,X}=/evil; git zz",
@@ -2027,8 +2036,10 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
         "V=1; echo $V",
         "git status",
         "git log -1",
+        "git log -1 \"$((1+1))\"",
         "/tmp/a=b/git push origin task/x",
         "export FOO=$(pwd); git push origin task/x",
+        "export FOO='(1 2)'; git push origin task/x",
         "read -r answer < f; git push origin task/x",
         "printf -v out %s x",
         "cd \"$HOME/src/x\" && git push origin task/x",
@@ -2057,6 +2068,7 @@ fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() 
                 );
                 let diagnostic = String::from_utf8_lossy(&out.stderr);
                 if out.status.code() != Some(expected)
+                    || (command.contains("arr=(1 2); git") && !diagnostic.contains("arr"))
                     || (expected == 2
                         && !diagnostic.contains("configuration")
                         && !diagnostic.contains("configured remote"))
