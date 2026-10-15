@@ -45,9 +45,16 @@ impl EffectiveConfig {
 
     /// All raw values in Git's precedence order, with their scope and origin.
     pub(crate) fn get_all(&self, key: &str) -> Vec<ConfigValue<'_>> {
+        // Git folds section and variable names, but preserves subsection case.
+        let mut key = key.as_bytes().to_vec();
+        if let Some(first) = key.iter().position(|byte| *byte == b'.') {
+            let last = key.iter().rposition(|byte| *byte == b'.').unwrap_or(first);
+            key[..first].make_ascii_lowercase();
+            key[last + 1..].make_ascii_lowercase();
+        }
         self.entries
             .iter()
-            .filter(|entry| entry.key == key.as_bytes())
+            .filter(|entry| entry.key == key)
             .map(|entry| {
                 (
                     entry.scope.as_str(),
@@ -373,6 +380,30 @@ mod tests {
             ("GIT_WORK_TREE".into(), dir.path().to_str().unwrap().into()),
         ]);
         (dir, environment)
+    }
+
+    #[test]
+    fn lookup_matches_git_key_case_rules() {
+        let (dir, env) = fixture();
+        let config = read(
+            dir.path(),
+            &[
+                "-c".into(),
+                "Alias.Pm=push origin HEAD:main".into(),
+                "-c".into(),
+                "remote.Mixed.Url=first".into(),
+                "-c".into(),
+                "remote.mixed.url=second".into(),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            config.get("ALIAS.Pm").unwrap(),
+            Some("push origin HEAD:main")
+        );
+        assert_eq!(config.get_all("REMOTE.Mixed.URL")[0].2, b"first");
+        assert_eq!(config.get("REMOTE.mixed.URL").unwrap(), Some("second"));
     }
 
     #[test]

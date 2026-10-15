@@ -171,7 +171,7 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
         globals.extend(["-c".into(), setting.clone()]);
     }
     match crate::security::git_config::read(cwd, &globals, &BTreeMap::new()) {
-        Ok(config) => match config.get(&format!("alias.{}", query.name)) {
+        Ok(config) => match config.get(&format!("alias.{}", query.name.to_ascii_lowercase())) {
             Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
             Ok(None) => AliasAnswer::NotAlias,
             Err(reason) => AliasAnswer::Unreadable(reason),
@@ -921,42 +921,126 @@ fn configuration_environment_change(command: &str) -> Option<String> {
 
 fn configuration_variable_reason(word: &str) -> Option<String> {
     let name = word.split_once('=').map_or(word, |(name, _)| name);
+    let name = name.trim_end_matches('+');
+    let name = name.split_once('[').map_or(name, |(name, _)| name);
     configuration_variable(name).then(|| format!("environment variable {name}"))
+}
+
+/// A literal non-configuration destination stays safe even with a dynamic value.
+/// An unresolved destination could name any configuration variable.
+fn configuration_destination(program: &str, word: &str) -> Option<String> {
+    let name = word.split_once('=').map_or(word, |(name, _)| name);
+    if unresolved_word(name) {
+        Some(format!(
+            "unresolved variable destination in {program}: {name}"
+        ))
+    } else {
+        configuration_variable_reason(word)
+    }
+}
+
+fn configuration_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let name = name.trim_end_matches('+');
+        let name = name.split_once('[').map_or(name, |(base, _)| base);
+        assignment_name(name)
+    })
 }
 
 /// Variable-writing builtins have destination operands, unlike ordinary data.
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
     if matches!(program, "export" | "unset") || is_declare_builtin(program) {
+        if is_declare_builtin(program)
+            && args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| {
+                    arg.strip_prefix('-')
+                        .is_some_and(|flags| flags.contains('n'))
+                })
+        {
+            return Some(format!("unsupported nameref option {program} -n"));
+        }
         return args
             .iter()
-            .find_map(|word| configuration_variable_reason(word));
+            .filter(|word| !word.starts_with('-'))
+            .find_map(|word| configuration_destination(program, word));
     }
     match program {
-        "read" => {
+        "read" | "mapfile" | "readarray" => {
             let mut at = 0;
             while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
                 at += 1;
                 if option == "--" {
                     break;
                 }
-                // These read options consume a prompt, delimiter, count or fd.
-                if matches!(
-                    option.as_str(),
-                    "-d" | "-i" | "-n" | "-N" | "-p" | "-t" | "-u"
-                ) {
-                    at += 1;
+                // Skip option values, but inspect read -a's array destination.
+                let options_with_values = if program == "read" {
+                    "adinNptu"
+                } else {
+                    "dnuOsCc"
+                };
+                for (index, flag) in option.char_indices().skip(1) {
+                    if options_with_values.contains(flag) {
+                        let attached = &option[index + flag.len_utf8()..];
+                        let value = if attached.is_empty() {
+                            let value = args.get(at).map(String::as_str);
+                            at += 1;
+                            value
+                        } else {
+                            Some(attached)
+                        };
+                        if program == "read" && flag == 'a' {
+                            if let Some(reason) =
+                                value.and_then(|word| configuration_destination(program, word))
+                            {
+                                return Some(reason);
+                            }
+                        }
+                        break;
+                    }
                 }
             }
             args.get(at..)?
                 .iter()
-                .find_map(|word| configuration_variable_reason(word))
+                .find_map(|word| configuration_destination(program, word))
         }
-        "printf" if args.first().is_some_and(|word| word == "-v") => args
+        "printf" | "print" => {
+            let options = args.iter().take_while(|arg| arg.starts_with('-'));
+            for (index, option) in options.enumerate() {
+                if option == "--" {
+                    break;
+                }
+                if let Some(flags) = option.strip_prefix('-') {
+                    if let Some(position) = flags.find('v') {
+                        let attached = &flags[position + 1..];
+                        let destination = if attached.is_empty() {
+                            args.get(index + 1).map(String::as_str)
+                        } else {
+                            Some(attached)
+                        };
+                        return destination
+                            .and_then(|word| configuration_destination(program, word));
+                    }
+                }
+            }
+            None
+        }
+        "getopts" => args
             .get(1)
-            .and_then(|word| configuration_variable_reason(word)),
+            .and_then(|word| configuration_destination(program, word)),
+        "let" => args.iter().find_map(|word| {
+            if unresolved_word(word) {
+                Some("unresolved variable destination in let".into())
+            } else {
+                // Arithmetic expressions may contain several assignments.
+                word.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                    .find_map(configuration_variable_reason)
+            }
+        }),
         "for" if args.get(1).is_some_and(|word| word == "in") => args
             .first()
-            .and_then(|word| configuration_variable_reason(word)),
+            .and_then(|word| configuration_destination(program, word)),
         _ => None,
     }
 }
@@ -965,6 +1049,14 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
 pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
     let mut words = command_argv(segment);
     strip_reserved_words(&mut words);
+    if words.iter().all(|word| configuration_assignment(word)) {
+        if let Some(reason) = words
+            .iter()
+            .find_map(|word| configuration_variable_reason(word))
+        {
+            return Some(reason);
+        }
+    }
     if let Some(reason) = strip_launchers(&words)
         .and_then(|(program, args)| configuration_builtin_trigger(program, args))
     {
@@ -990,7 +1082,10 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
                     .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
                     .unwrap_or(rest.len());
                 let (name, operator) = rest.split_at(len);
-                if operator.starts_with(":=") || operator.starts_with('=') {
+                if operator.starts_with(":=")
+                    || operator.starts_with("::=")
+                    || operator.starts_with('=')
+                {
                     if let Some(reason) = configuration_variable_reason(name) {
                         return Some(reason);
                     }
@@ -1007,7 +1102,7 @@ pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<Str
     let variable = configuration_variable_reason;
     let mut at = 0;
     loop {
-        while let Some(word) = tokens.get(at).filter(|word| assignment(word).is_some()) {
+        while let Some(word) = tokens.get(at).filter(|word| configuration_assignment(word)) {
             if let Some(reason) = variable(word) {
                 return Some(reason);
             }

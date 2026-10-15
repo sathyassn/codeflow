@@ -1,5 +1,7 @@
 # file	normalized call span	count	reason
 crates/codeflow-core/src/hooks/git_guard.rs	contains("GIT_CONFIG")	1	TSK-283 regression asserts the refusal names the parsed variable; no process environment mutation.
+crates/codeflow-cli/tests/hooks_cli.rs	"V=GIT_CONFIG_PARAMETERS; K=core.hooks; export $V=\"'${K}Path=/dev/null'\""	1	TSK-283 security regression passes unresolved hook-path configuration as command data to both guards; never executes the string or changes any process environment.
+crates/codeflow-cli/tests/hooks_cli.rs	"V=GIT_CONFIG_PARAMETERS; export $V=\"'remote.origin.push=HEAD:refs/heads/main'\""	1	TSK-283 security regression passes unresolved push configuration as command data to both guards; never executes the string or changes any process environment.
 crates/codeflow-core/src/security/git_config.rs	"--config-env=alias.ship=GIT_CONFIG_VALUE_0"	1	TSK-283 read-only fixture checks config-env precedence through an allowlisted variable; the alias is never executed.
 crates/codeflow-core/src/security/git_config.rs	starts_with("GIT_CONFIG_")	1	TSK-283 reader allowlist predicate checks variable names before passing explicit environment entries to read-only children.
 crates/codeflow-cli/tests/hooks_cli.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship"	1	TSK-283 command text supplied to exec-guard; never executed as Git or applied to the fixture process environment.

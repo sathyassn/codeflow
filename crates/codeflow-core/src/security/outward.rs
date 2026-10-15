@@ -791,7 +791,7 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         AliasAnswer::Unreadable("alias configuration or expansion is unresolved".into())
     } else {
         match super::git_config::read(dir, &rest[..end], &super::git_config::Environment::new()) {
-            Ok(config) => match config.get(&format!("alias.{name}")) {
+            Ok(config) => match config.get(&format!("alias.{}", name.to_ascii_lowercase())) {
                 Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
                 Ok(None) => AliasAnswer::NotAlias,
                 Err(reason) => AliasAnswer::Unreadable(reason),

@@ -403,8 +403,10 @@ The alias and follow-tags checks use one bounded effective-configuration
 reader. Git resolves files, includes, conditional includes, command options
 and inherited configuration environment variables. The reader preserves
 configuration values as bytes until a decision needs text, retaining scope,
-origin and all values for multi-valued keys. Relative file origins resolve
-from Git's repository base, including invocations from subdirectories. A
+origin and all values for multi-valued keys. Lookup folds section and variable
+names to lowercase while preserving subsection case, as Git does. Alias names
+are case-insensitive. Relative file origins resolve from Git's repository
+base, including invocations from subdirectories. A
 malformed configuration, include loop, unsupported include-path interpolation,
 or read beyond three seconds or 4 MiB is reported as "cannot verify". Missing
 includes contribute nothing, as in Git, and remain in the diagnostic inventory.
@@ -415,10 +417,17 @@ changes cannot be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
 `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
 `GIT_CONFIG_NOSYSTEM`. Refusals name the affected variable or unsupported
 option. The parser reads assignments, declaring and input-setting builtins
-(`declare`, `typeset`, `export`, `readonly`, `read`, `printf -v`), loop variables
-(`for VAR in`) and assignment expansions (`${VAR:=value}`). Configuration
-words inside commit messages and alias operands do not count as environment
-changes. Clearing the environment with `env -i` or `--ignore-environment` also
+(`declare`, `typeset`, `export`, `readonly`, `local`, `unset`, `read`,
+`printf -v`, `print -v`, `getopts`, `mapfile`, `readarray`, `let`), loop variables
+(`for VAR in`) and assignment expansions (`${VAR:=value}`, `${VAR::=value}`).
+An unresolved variable destination or a nameref declaration leaves a later
+configuration-dependent action unverifiable. This includes a destination
+computed with a variable or command substitution. Literal configuration
+destinations also refuse append and subscripted writes. A dynamic value for a
+known unrelated destination, such as `export PATH=$PATH:/x`, is allowed.
+Configuration words inside commit messages and alias operands do not count as
+environment changes. Clearing the environment with `env -i` or
+`--ignore-environment` also
 leaves these decisions unverifiable.
 
 Command-local reader environment entries are limited to `GIT_CONFIG_*`,
@@ -427,6 +436,10 @@ Command-local reader environment entries are limited to `GIT_CONFIG_*`,
 invocations remain conservative refusals because a shell assignment can supply
 the named variable. Exec-guard alone does not discover configuration variables
 set inside sourced files; this remains a tracked follow-up.
+Repository discovery uses libgit2 before the bounded reader runs. A FIFO or
+device named by an include can block that discovery; bounding this earlier
+stage remains a tracked follow-up. The reader's deadline does not bound the
+whole hook invocation.
 
 `codeflow doctor --check git-config-includes` names include files that may
 be writable, distinguishes missing files, and reports when discovery cannot be
