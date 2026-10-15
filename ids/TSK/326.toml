@@ -1,0 +1,11 @@
+id = "TSK-326"
+uid = "82a31b32-2036-4dca-b5a2-2322a026322b"
+kind = "TSK"
+title = "Guards judge git operands and environment supplied as data"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-15T17:57:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
