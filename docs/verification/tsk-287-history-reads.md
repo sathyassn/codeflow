@@ -26,7 +26,13 @@ This sweep records the TSK-287 migration for issue 122.
   Both monolithic files and split chains are checked in the common object
   directory and recursively in on-disk alternates. A mismatch or unreadable
   cache reports `cannot verify`; remove that cache and retry. Graphs are not
-  refused merely because they exist.
+  refused merely because they exist. Each verified graph retains its path,
+  size, modification time, inode and device on Unix, and trailing checksum.
+  Before every guarded libgit2 ancestry call and walk step, the reader
+  checks that identity again. It also retains absent graph paths and the
+  full chain and alternate manifests, so a newly planted cache or changed
+  object-store selection refuses with the same remove-cache remedy.
+  Missing commit objects also report a graph disagreement with that remedy.
 - Judging subprocesses use `history::command`, which supplies
   `-c core.commitGraph=false` and clears inherited `GIT_DIR`, `GIT_COMMON_DIR`,
   `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_WORK_TREE`.
@@ -49,9 +55,10 @@ This sweep records the TSK-287 migration for issue 122.
   pre-push shim, `work start` and local CI; its destination is a local bare
   repository, so it does not verify hosted enforcement.
 - This reader does not lock Git metadata against concurrent external edits.
-  A new judgment checks overlays again; an active judgment and its walks
-  use the snapshot they began with. An object fetch invalidates its
-  repository's snapshot; other Git mutations must end the scope.
+  A new judgment checks overlays again. Graph changes between guarded calls
+  invalidate an active judgment, but there is no atomic lock across a
+  libgit2 call. An object fetch invalidates its repository's snapshot;
+  other Git mutations must end the scope.
 
 ## Judging sites
 
@@ -252,10 +259,12 @@ object and ref reads use the same subprocess settings.
 | `crates/codeflow-core/src/workgraph/readiness.rs:490` | Patch equivalence, `cherry`; `cherry_all_equivalent` calls `check_command` |
 | `crates/codeflow-core/src/workgraph/lifecycle.rs:1744` | Shipped-spec history, `log --raw`; `shipped_in_history` calls `check_command` |
 
-## Direct reads retained for display
+## Direct reads retained for display and supporting reports
 
 | Site | Reason |
 |---|---|
+| `crates/codeflow-core/src/validate/mod.rs:777` | Spawned `log --merges HEAD` feeds only the R-66 warning; it does not authorize a transition |
+| `crates/codeflow-core/src/testing/validation.rs:450` | Spawned `merge-base HEAD origin/main` supplies the coverage diff base, with a caller override and `HEAD~1` fallback; it is outside the lifecycle history proof |
 | `crates/codeflow-core/src/ceremony/history.rs:77` | Ceremony metrics; never authorizes work or landing |
 | `crates/codeflow-core/src/ceremony/history.rs:89` | Ceremony metrics; never authorizes work or landing |
 | `crates/codeflow-core/src/ceremony/history.rs:189` | Ceremony metrics; never authorizes work or landing |

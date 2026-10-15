@@ -323,3 +323,156 @@ fn security_ordinary_octopus_graph_remains_allowed() {
         ids
     );
 }
+
+#[test]
+fn security_graph_planted_during_judgment_refuses_next_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let base = commit(&repo, None, "base");
+    let middle = commit(&repo, Some(base), "source change");
+    let forged = commit(&repo, Some(middle), "revert");
+    let head = commit(&repo, Some(forged), "tip");
+    repo.reference("refs/heads/main", head, true, "fixture")
+        .unwrap();
+    let _judgment = history::judgment();
+    history::check(&repo).unwrap();
+    let mut walk = history::revwalk(&repo).unwrap();
+    walk.push(head).unwrap();
+    forged_graph::plant(dir.path(), &forged.to_string(), &base.to_string());
+    for result in [
+        history::descendant_of(&repo, head, middle).map(|_| ()),
+        history::merge_base(&repo, head, middle).map(|_| ()),
+        history::ahead_behind(&repo, head, middle).map(|_| ()),
+        history::merge_base_many(&repo, &[head, middle]).map(|_| ()),
+        walk.next().unwrap().map(|_| ()),
+    ] {
+        let error = result.expect_err("late graph was trusted");
+        assert!(error.message().contains("cannot verify"), "{error}");
+        assert!(
+            error.message().contains("remove the cache and retry"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn security_graph_for_pruned_commit_has_remedy() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let head = commit(&repo, None, "base");
+    repo.reference("refs/heads/main", head, true, "fixture")
+        .unwrap();
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["commit-graph", "write", "--reachable"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let hex = head.to_string();
+    std::fs::remove_file(repo.path().join("objects").join(&hex[..2]).join(&hex[2..])).unwrap();
+    let repo = Repository::open(dir.path()).unwrap();
+    let error = history::check(&repo).unwrap_err();
+    assert!(
+        error.message().contains("commit-graph disagrees"),
+        "{error}"
+    );
+    assert!(
+        error.message().contains("remove the cache and retry"),
+        "{error}"
+    );
+}
+
+#[test]
+fn security_verified_graph_identity_covers_split_layers_and_alternates() {
+    for split in [false, true] {
+        for alternate in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = Repository::init(dir.path()).unwrap();
+            let base = commit(&repo, None, "base");
+            let head = commit(&repo, Some(base), "tip");
+            repo.reference("refs/heads/main", head, true, "fixture")
+                .unwrap();
+            let mut command = std::process::Command::new("git");
+            command
+                .arg("-C")
+                .arg(dir.path())
+                .args(["commit-graph", "write", "--reachable"]);
+            if split {
+                command.arg("--split=no-merge");
+            }
+            let out = command.output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            let objects = if alternate {
+                let objects = dir.path().join("alternate-objects");
+                std::fs::rename(repo.path().join("objects"), &objects).unwrap();
+                std::fs::create_dir_all(repo.path().join("objects/info")).unwrap();
+                std::fs::write(
+                    repo.path().join("objects/info/alternates"),
+                    "../../alternate-objects\n",
+                )
+                .unwrap();
+                objects
+            } else {
+                repo.path().join("objects")
+            };
+            let graph = if split {
+                let hash =
+                    std::fs::read_to_string(objects.join("info/commit-graphs/commit-graph-chain"))
+                        .unwrap();
+                objects.join(format!("info/commit-graphs/graph-{}.graph", hash.trim()))
+            } else {
+                objects.join("info/commit-graph")
+            };
+            let repo = Repository::open(dir.path()).unwrap();
+            let _judgment = history::judgment();
+            history::check(&repo).unwrap();
+            assert!(history::descendant_of(&repo, head, base).unwrap());
+            assert_eq!(history::merge_base(&repo, head, base).unwrap(), base);
+            // Replacing even a valid graph invalidates the verified identity.
+            let bytes = std::fs::read(&graph).unwrap();
+            std::fs::rename(&graph, graph.with_extension("saved")).unwrap();
+            std::fs::write(&graph, bytes).unwrap();
+            let error = history::descendant_of(&repo, head, base).unwrap_err();
+            assert!(error.message().contains("commit-graph changed"), "{error}");
+            assert!(
+                error.message().contains("remove the cache and retry"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn security_unreadable_alternate_names_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    std::fs::create_dir_all(repo.path().join("objects/info")).unwrap();
+    std::fs::write(
+        repo.path().join("objects/info/alternates"),
+        "../../missing-alternate\n",
+    )
+    .unwrap();
+    let error = history::check(&repo).unwrap_err();
+    assert!(error.message().contains("missing-alternate"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn security_alternate_alias_change_invalidates_judgment() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let head = commit(&repo, None, "base");
+    let alias = dir.path().join("alias");
+    std::os::unix::fs::symlink(repo.path().join("objects"), &alias).unwrap();
+    std::fs::create_dir_all(repo.path().join("objects/info")).unwrap();
+    std::fs::write(repo.path().join("objects/info/alternates"), "../../alias\n").unwrap();
+    let _judgment = history::judgment();
+    history::check(&repo).unwrap();
+    let other = dir.path().join("other-objects");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&other, &alias).unwrap();
+    let error = history::descendant_of(&repo, head, head).unwrap_err();
+    assert!(error.message().contains("commit-graph changed"), "{error}");
+}

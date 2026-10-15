@@ -8,7 +8,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-type Snapshot = Result<Rc<HashSet<Oid>>, String>;
+struct Metadata {
+    boundary: Rc<HashSet<Oid>>,
+    graph: Rc<super::history_graph::Verified>,
+}
+type Snapshot = Result<Rc<Metadata>, String>;
 thread_local! {
     static JUDGMENT: RefCell<Option<HashMap<PathBuf, Snapshot>>> = const { RefCell::new(None) };
 }
@@ -80,8 +84,9 @@ fn read_snapshot(repo: &Repository) -> Snapshot {
             "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
         ));
     }
-    super::history_graph::verify(repo)?;
-    super::release_line::shallow_boundary(repo).map(Rc::new)
+    let graph = Rc::new(super::history_graph::verify(repo)?);
+    let boundary = Rc::new(super::release_line::shallow_boundary(repo)?);
+    Ok(Rc::new(Metadata { boundary, graph }))
 }
 
 use git2::{Commit, Error, ErrorCode, Oid, Repository, Sort};
@@ -95,11 +100,15 @@ fn unverified(why: impl std::fmt::Display) -> Error {
 /// # Errors
 /// Returns `cannot verify` for a graft, replacement or unreadable overlay.
 pub fn check(repo: &Repository) -> Result<(), Error> {
-    snapshot(repo).map(|_| ()).map_err(unverified)
+    snapshot(repo)
+        .and_then(|metadata| metadata.graph.check())
+        .map_err(unverified)
 }
 
 fn boundary(repo: &Repository) -> Result<Rc<HashSet<Oid>>, Error> {
-    snapshot(repo).map_err(unverified)
+    let metadata = snapshot(repo).map_err(unverified)?;
+    metadata.graph.check().map_err(unverified)?;
+    Ok(Rc::clone(&metadata.boundary))
 }
 
 fn complete(boundary: &HashSet<Oid>, oid: Oid) -> Result<(), Error> {
@@ -150,6 +159,7 @@ pub fn parent<'r>(
 pub struct Walk<'r> {
     inner: git2::Revwalk<'r>,
     boundary: Rc<HashSet<Oid>>,
+    graph: Rc<super::history_graph::Verified>,
 }
 
 /// Begin a guarded walk. Push and hide retain libgit2's range semantics.
@@ -157,9 +167,12 @@ pub struct Walk<'r> {
 /// # Errors
 /// Refuses overlays or an unreadable shallow boundary.
 pub fn revwalk(repo: &Repository) -> Result<Walk<'_>, Error> {
+    let metadata = snapshot(repo).map_err(unverified)?;
+    metadata.graph.check().map_err(unverified)?;
     Ok(Walk {
         inner: repo.revwalk()?,
-        boundary: boundary(repo)?,
+        boundary: Rc::clone(&metadata.boundary),
+        graph: Rc::clone(&metadata.graph),
     })
 }
 
@@ -168,24 +181,28 @@ impl Walk<'_> {
     /// # Errors
     /// Returns a Git error if the commit cannot be read.
     pub fn push(&mut self, oid: Oid) -> Result<(), Error> {
+        self.graph.check().map_err(unverified)?;
         self.inner.push(oid)
     }
     /// Exclude a commit and its ancestors.
     /// # Errors
     /// Returns a Git error if the commit cannot be read.
     pub fn hide(&mut self, oid: Oid) -> Result<(), Error> {
+        self.graph.check().map_err(unverified)?;
         self.inner.hide(oid)
     }
     /// Select the traversal order.
     /// # Errors
     /// Returns a Git error when sorting cannot be set.
     pub fn set_sorting(&mut self, sorting: Sort) -> Result<(), Error> {
+        self.graph.check().map_err(unverified)?;
         self.inner.set_sorting(sorting)
     }
     /// Follow only first parents.
     /// # Errors
     /// Returns a Git error when the walk cannot be configured.
     pub fn simplify_first_parent(&mut self) -> Result<(), Error> {
+        self.graph.check().map_err(unverified)?;
         self.inner.simplify_first_parent()
     }
 }
@@ -193,6 +210,9 @@ impl Walk<'_> {
 impl Iterator for Walk<'_> {
     type Item = Result<Oid, Error>;
     fn next(&mut self) -> Option<Self::Item> {
+        if let Err(error) = self.graph.check() {
+            return Some(Err(unverified(error)));
+        }
         self.inner.next().map(|oid| {
             let oid = oid?;
             complete(&self.boundary, oid)?;
@@ -260,6 +280,7 @@ pub fn ahead_behind(repo: &Repository, local: Oid, upstream: Oid) -> Result<(usi
         Err(error) => return Err(error),
     };
     verify_range(repo, &[local, upstream], base)?;
+    check(repo)?;
     repo.graph_ahead_behind(local, upstream)
 }
 
@@ -399,6 +420,7 @@ pub fn merge_commits(
         Err(error) if error.code() == ErrorCode::NotFound => {}
         Err(error) => return Err(error),
     }
+    check(repo)?;
     repo.merge_commits(ours, theirs, None)
 }
 

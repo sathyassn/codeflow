@@ -1,5 +1,6 @@
 //! Check cached graph parents against commit objects before libgit2 walks.
 use std::collections::HashSet;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use git2::{Oid, Repository};
@@ -23,14 +24,105 @@ fn word(bytes: &[u8], offset: usize) -> Result<u32, String> {
     Ok(u32::from_be_bytes(bytes.try_into().map_err(|_| invalid())?))
 }
 
-fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!(
-            "cannot read history metadata {}: {error}",
-            path.display()
-        )),
+#[derive(Debug, PartialEq, Eq)]
+struct Identity {
+    size: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    device: u64,
+    contents: Vec<u8>,
+}
+
+struct File {
+    path: PathBuf,
+    graph: bool,
+    identity: Option<Identity>,
+}
+
+/// Verified cache files, including absent paths and manifests which select them.
+#[derive(Default)]
+pub(super) struct Verified {
+    files: Vec<File>,
+    directories: Vec<(PathBuf, PathBuf)>,
+}
+
+fn changed(path: &Path) -> String {
+    format!(
+        "commit-graph changed during judgment at {}; remove the cache and retry",
+        path.display()
+    )
+}
+
+fn identity(path: &Path, graph: bool) -> Result<Option<Identity>, String> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{} ({error})", changed(path))),
+    };
+    let mut read = || -> std::io::Result<Identity> {
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::other("not a regular file"));
+        }
+        // Graphs carry a SHA-1 trailer. Manifests are small and retained whole.
+        if graph {
+            file.seek(SeekFrom::Start(metadata.len().saturating_sub(20)))?;
+        }
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        Ok(Identity {
+            size: metadata.len(),
+            modified: metadata.modified()?,
+            #[cfg(unix)]
+            inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+            #[cfg(unix)]
+            device: std::os::unix::fs::MetadataExt::dev(&metadata),
+            contents,
+        })
+    };
+    read()
+        .map(Some)
+        .map_err(|error| format!("{} ({error})", changed(path)))
+}
+
+impl Verified {
+    fn read(&mut self, path: &Path, graph: bool) -> Result<Option<Vec<u8>>, String> {
+        let before = identity(path, graph)?;
+        let bytes = if before.is_some() {
+            Some(std::fs::read(path).map_err(|error| format!("{} ({error})", changed(path)))?)
+        } else {
+            None
+        };
+        let after = identity(path, graph)?;
+        if before != after {
+            return Err(changed(path));
+        }
+        self.files.push(File {
+            path: path.to_path_buf(),
+            graph,
+            identity: after,
+        });
+        Ok(bytes)
+    }
+
+    pub(super) fn check(&self) -> Result<(), String> {
+        // Retain alias paths too: an alternate symlink may change its target.
+        for (path, canonical) in &self.directories {
+            if std::fs::canonicalize(path)
+                .map_err(|error| format!("{} ({error})", changed(path)))?
+                != *canonical
+            {
+                return Err(changed(path));
+            }
+        }
+        for file in &self.files {
+            if identity(&file.path, file.graph)? != file.identity {
+                return Err(changed(&file.path));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -120,9 +212,12 @@ fn append_graph(bytes: &[u8], entries: &mut Vec<Entry>, base_hashes: &[u8]) -> R
 fn verify_entries(repo: &Repository, entries: &[Entry]) -> Result<(), String> {
     let legacy = entries.iter().all(|entry| entry.generation == 0);
     for entry in entries {
-        let commit = repo
-            .find_commit(entry.oid)
-            .map_err(|error| error.to_string())?;
+        let commit = repo.find_commit(entry.oid).map_err(|error| {
+            format!(
+                "commit-graph disagrees with commit {}: {error}; remove the cache and retry",
+                entry.oid
+            )
+        })?;
         let parents: Vec<&Entry> = entry
             .parents
             .iter()
@@ -154,25 +249,32 @@ fn verify_entries(repo: &Repository, entries: &[Entry]) -> Result<(), String> {
 
 /// Validate every cached entry, a superset of the commits a judgment may walk.
 /// Alternate object stores and split chains are checked with the same rule.
-pub(super) fn verify(repo: &Repository) -> Result<(), String> {
+pub(super) fn verify(repo: &Repository) -> Result<Verified, String> {
+    let mut verified = Verified::default();
     let mut pending = vec![repo.commondir().join("objects")];
     let mut seen = HashSet::new();
     while let Some(objects) = pending.pop() {
-        let objects = std::fs::canonicalize(&objects).map_err(|error| {
+        let canonical = std::fs::canonicalize(&objects).map_err(|error| {
             format!(
                 "cannot read object directory {}: {error}",
                 objects.display()
             )
         })?;
-        if !seen.insert(objects.clone()) {
+        verified
+            .directories
+            .push((objects.clone(), canonical.clone()));
+        if !seen.insert(canonical) {
             continue;
         }
-        if let Some(bytes) = read(&objects.join("info/commit-graph"))? {
+        if let Some(bytes) = verified.read(&objects.join("info/commit-graph"), true)? {
             let mut entries = Vec::new();
             append_graph(&bytes, &mut entries, &[])?;
             verify_entries(repo, &entries)?;
         }
-        if let Some(chain) = read(&objects.join("info/commit-graphs/commit-graph-chain"))? {
+        if let Some(chain) = verified.read(
+            &objects.join("info/commit-graphs/commit-graph-chain"),
+            false,
+        )? {
             let mut entries = Vec::new();
             let mut base_hashes = Vec::new();
             for hash in chain
@@ -184,14 +286,14 @@ pub(super) fn verify(repo: &Repository) -> Result<(), String> {
                 }
                 let hash = std::str::from_utf8(hash).map_err(|_| invalid())?;
                 let path = objects.join(format!("info/commit-graphs/graph-{hash}.graph"));
-                let bytes = read(&path)?.ok_or_else(invalid)?;
+                let bytes = verified.read(&path, true)?.ok_or_else(invalid)?;
                 append_graph(&bytes, &mut entries, &base_hashes)?;
                 base_hashes
                     .extend_from_slice(Oid::from_str(hash).map_err(|_| invalid())?.as_bytes());
             }
             verify_entries(repo, &entries)?;
         }
-        if let Some(alternates) = read(&objects.join("info/alternates"))? {
+        if let Some(alternates) = verified.read(&objects.join("info/alternates"), false)? {
             for line in alternates
                 .split(|byte| *byte == b'\n')
                 .filter(|line| !line.is_empty())
@@ -203,7 +305,8 @@ pub(super) fn verify(repo: &Repository) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    verified.check()?;
+    Ok(verified)
 }
 
 fn alternate_path(line: &[u8]) -> Result<PathBuf, String> {
@@ -254,6 +357,26 @@ fn alternate_path(line: &[u8]) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checksum_change_refuses_even_when_size_inode_and_mtime_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("commit-graph");
+        std::fs::write(&path, [0; 40]).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut verified = Verified::default();
+        verified.read(&path, true).unwrap();
+        verified.check().unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::End(-1)).unwrap();
+        std::io::Write::write_all(&mut file, &[1]).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(verified
+            .check()
+            .unwrap_err()
+            .contains("remove the cache and retry"));
+    }
 
     #[test]
     fn alternate_paths_keep_quoted_bytes_and_reject_bad_escapes() {
