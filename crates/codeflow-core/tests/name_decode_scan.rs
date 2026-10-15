@@ -1899,6 +1899,38 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "schema-reject-only",
     ),
+    // Reads the first line of an acceptance file only to tell a header-led block from a misshapen file; the YAML parse error is shown, the block grammar judges the block, and no file name or record identity is read.
+    (
+        "crates/codeflow-cli/src/cmd/new.rs",
+        "check_acceptance_file",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // Reads the first line of an acceptance file only to tell a header-led block from a misshapen file; the YAML parse error is shown, the block grammar judges the block, and no file name or record identity is read.
+    (
+        "crates/codeflow-cli/src/cmd/new.rs",
+        "check_acceptance_file",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
+    // Reads the first line of an acceptance file only to tell a header-led block from a misshapen file; the YAML parse error is shown, the block grammar judges the block, and no file name or record identity is read.
+    (
+        "crates/codeflow-cli/src/cmd/new.rs",
+        "check_acceptance_file",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // Reads the first line of an acceptance file only to tell a header-led block from a misshapen file; the YAML parse error is shown, the block grammar judges the block, and no file name or record identity is read.
+    (
+        "crates/codeflow-cli/src/cmd/new.rs",
+        "check_acceptance_file",
+        "trim_end",
+        1,
+        "format-contract",
+    ),
     // Lenient second read displays any readable invalid values; validate_policy and Policy::source independently preserve read/parse failure and nonzero exit.
     (
         "crates/codeflow-cli/src/cmd/policy.rs",
