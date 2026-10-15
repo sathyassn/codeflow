@@ -674,16 +674,9 @@ fn security_suffixed_replace_refs_refuse() {
 fn security_linked_shallow_worktree_refuses() {
     let (dir, root, _, _) = security_range();
     let shallow = dir.path().join("shallow");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--depth",
-            "1",
-            &format!("file://{}", root.display()),
-            shallow.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), format!("file://{}", root.display()), &shallow)
+        .depth(1)
+        .run();
     let base = git(&shallow, &["rev-parse", "HEAD"]);
     std::fs::write(shallow.join("extra"), "extra").unwrap();
     commit(&shallow, "fix: extend shallow history");
@@ -738,9 +731,18 @@ fn security_repository_environment_cannot_redirect_ci() {
         "GIT_OBJECT_DIRECTORY",
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ] {
-        let out = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
-            .current_dir(&root)
-            .env(key, other.join(".git"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        with_env(&mut command).current_dir(&root);
+        match key {
+            "GIT_DIR" => command.env("GIT_DIR", other.join(".git")),
+            "GIT_COMMON_DIR" => command.env("GIT_COMMON_DIR", other.join(".git")),
+            "GIT_OBJECT_DIRECTORY" => command.env("GIT_OBJECT_DIRECTORY", other.join(".git")),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES" => {
+                command.env("GIT_ALTERNATE_OBJECT_DIRECTORIES", other.join(".git"))
+            }
+            _ => unreachable!(),
+        };
+        let out = command
             .args([
                 "ci",
                 "--base",
