@@ -80,6 +80,7 @@ fn read_snapshot(repo: &Repository) -> Snapshot {
             "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
         ));
     }
+    super::history_graph::verify(repo)?;
     super::release_line::shallow_boundary(repo).map(Rc::new)
 }
 
@@ -277,6 +278,26 @@ pub fn merge_base_many(repo: &Repository, commits: &[Oid]) -> Result<Oid, Error>
     result
 }
 
+/// Build a judging Git subprocess bound to its explicit directory.
+/// Call `check_command` before history queries; this constructor also serves
+/// their supporting object and ref lookups. Never inherit an object store
+/// or repository redirect that the reader did not check.
+#[must_use]
+pub fn command() -> std::process::Command {
+    let mut command = crate::git::command();
+    command.args(["-c", "core.commitGraph=false"]);
+    for key in [
+        "GIT_DIR",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_WORK_TREE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 /// Guard a spawned history query whose range is supplied as Git arguments.
 /// These callers require complete history; they cannot distinguish a cut
 /// from the root of an unrelated line.
@@ -286,6 +307,16 @@ pub fn merge_base_many(repo: &Repository, commits: &[Oid]) -> Result<Oid, Error>
 pub fn check_command(root: &std::path::Path) -> Result<(), String> {
     let repo = Repository::discover(root).map_err(|error| unverified(error).to_string())?;
     check(&repo).map_err(|error| error.to_string())?;
+    if !boundary(&repo)
+        .map_err(|error| error.to_string())?
+        .is_empty()
+    {
+        return Err(crate::remedy::Finding::new(
+            unverified("this clone is shallow").to_string(),
+            crate::remedy::CI_RANGE_UNREADABLE.remedy(),
+        )
+        .to_string());
+    }
     if let Some(file) = std::env::var_os("GIT_SHALLOW_FILE") {
         // Git treats an empty override as an explicitly complete history.
         if file.is_empty() {
@@ -313,16 +344,6 @@ pub fn check_command(root: &std::path::Path) -> Result<(), String> {
             .to_string());
         }
         return Ok(());
-    }
-    if !boundary(&repo)
-        .map_err(|error| error.to_string())?
-        .is_empty()
-    {
-        return Err(crate::remedy::Finding::new(
-            unverified("this clone is shallow").to_string(),
-            crate::remedy::CI_RANGE_UNREADABLE.remedy(),
-        )
-        .to_string());
     }
     Ok(())
 }

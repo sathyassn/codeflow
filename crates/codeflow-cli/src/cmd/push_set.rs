@@ -425,7 +425,7 @@ fn commits_from(
     if base == tip {
         return Ok(keep);
     }
-    let related = codeflow_core::git::command()
+    let related = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["merge-base", tip, &r.local_sha])
@@ -1645,7 +1645,7 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
     if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
         codeflow_core::workgraph::history::check_command(root)?;
     }
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1661,7 +1661,7 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, 
         codeflow_core::workgraph::history::check_command(root)?;
     }
     let out = codeflow_core::git::output_with_input(
-        codeflow_core::git::command()
+        codeflow_core::workgraph::history::command()
             .arg("-C")
             .arg(root)
             .args(args)

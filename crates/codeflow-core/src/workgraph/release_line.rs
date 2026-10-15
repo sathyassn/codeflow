@@ -2189,7 +2189,7 @@ pub fn history_overlay_at(repo_root: &Path) -> Result<Option<String>, String> {
 /// A local overlay that makes git or libgit2 read commits' parents or
 /// objects as something other than what they record: a non-empty graft
 /// file, or a replace ref: a ref named by the literal prefix
-/// `refs/replace/` or `GIT_REPLACE_REF_BASE` followed by an object id.
+/// `refs/replace/` or `GIT_REPLACE_REF_BASE`, regardless of the remainder.
 /// The release walks go through libgit2, which follows grafts, and the
 /// push set through git, which follows both.
 ///
@@ -2202,7 +2202,7 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
         repo.path().join("info").join("grafts"),
     ];
     if let Some(file) = std::env::var_os("GIT_GRAFT_FILE") {
-        grafts.push(std::path::PathBuf::from(file));
+        grafts.push(repo.workdir().unwrap_or(repo.path()).join(file));
     }
     for file in grafts {
         match std::fs::read_to_string(&file) {
@@ -2221,26 +2221,22 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
     }
     // As git reads them: the base is a literal prefix, `refs/replace/`
     // unless `GIT_REPLACE_REF_BASE` names another (`refs/custom` selects
-    // `refs/custom<id>`), and a ref replaces the object its remainder names.
+    // `refs/custom<id>`). Git also accepts nested and suffixed names.
     // The built-in base is checked either way.
     let mut bases = vec![b"refs/replace/".to_vec()];
     if let Some(base) = std::env::var_os("GIT_REPLACE_REF_BASE") {
         bases.push(base.as_encoded_bytes().to_vec());
     }
-    let object_id =
-        |rest: &[u8]| matches!(rest.len(), 40 | 64) && rest.iter().all(u8::is_ascii_hexdigit);
     let references = repo
         .references()
         .map_err(|error| error.message().to_string())?;
     for reference in references {
         let reference = reference.map_err(|error| error.message().to_string())?;
         let name = reference.name_bytes();
-        let replaces = bases
-            .iter()
-            .any(|base| name.strip_prefix(base.as_slice()).is_some_and(&object_id));
+        let replaces = bases.iter().any(|base| name.starts_with(base));
         if replaces {
             return Ok(Some(format!(
-                "the replace ref {} (`git replace -d` removes it)",
+                "the replace ref {} (remove this ref before judging history)",
                 crate::git::GitName::from_bytes(name).display()
             )));
         }
@@ -2256,23 +2252,29 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
 /// Returns a message when the clone is shallow but its boundary list
 /// cannot be read.
 pub(super) fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
-    if !repo.is_shallow() {
-        return Ok(HashSet::new());
-    }
-    // A linked worktree shares the list with its main checkout.
-    // Only a missing file falls back; any other read error refuses.
-    let listed = match std::fs::read_to_string(repo.path().join("shallow")) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::read_to_string(repo.commondir().join("shallow"))
+    // Git uses the common directory in linked worktrees. Libgit2 may also
+    // use the private file, so neither an absent nor an empty file masks
+    // a boundary in the other location.
+    let mut boundary = HashSet::new();
+    for file in [
+        repo.commondir().join("shallow"),
+        repo.path().join("shallow"),
+    ] {
+        let listed = match std::fs::read_to_string(&file) {
+            Ok(listed) => listed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "shallow boundary {} cannot be read: {error}",
+                    file.display()
+                ))
+            }
+        };
+        for line in listed.split('\n').filter(|line| !line.is_empty()) {
+            boundary.insert(Oid::from_str(line).map_err(|error| error.message().to_string())?);
         }
-        read => read,
     }
-    .map_err(|error| format!("this clone is shallow and its boundary cannot be read: {error}"))?;
-    listed
-        .split('\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| Oid::from_str(line).map_err(|error| error.message().to_string()))
-        .collect()
+    Ok(boundary)
 }
 
 /// The default target's history, read from the parents each commit

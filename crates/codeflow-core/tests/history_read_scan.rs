@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use syn::visit::Visit;
 
-const READER: &str = "codeflow-core/src/workgraph/history.rs";
+const READERS: &[&str] = &[
+    "codeflow-core/src/workgraph/history.rs",
+    "codeflow-core/src/workgraph/history_graph.rs",
+];
 // These modules only report historical metrics or session context. None
 // authorizes work, a landing, deletion or review coverage.
 const DISPLAY: &[(&str, &str)] = &[
@@ -110,10 +113,12 @@ fn direct_history_reads_require_the_reader_or_a_display_reason() {
     for name in ["codeflow-core", "codeflow-cli", "codeflow-present"] {
         scan(root, &root.join(name).join("src"), &mut found);
     }
-    assert!(
-        found.remove(READER).is_some(),
-        "reader moved: update the scan"
-    );
+    for reader in READERS {
+        assert!(
+            found.remove(*reader).is_some(),
+            "reader moved: update the scan"
+        );
+    }
     for (file, reason) in DISPLAY {
         assert!(!reason.is_empty());
         let calls = found

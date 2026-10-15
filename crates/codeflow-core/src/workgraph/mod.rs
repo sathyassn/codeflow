@@ -14,6 +14,7 @@ pub mod classify;
 pub mod deps;
 mod format_id;
 pub mod history;
+mod history_graph;
 mod landing;
 pub(crate) mod layout;
 pub mod lifecycle;

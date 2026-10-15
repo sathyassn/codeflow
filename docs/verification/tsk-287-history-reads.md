@@ -1,7 +1,10 @@
 # Guarded history reads
 
-Local judging reads refuse a graft file or replace ref before trusting
-parents or ancestry. Walks also refuse a shallow boundary they reach.
+Local judging reads refuse a graft file or any ref under a replace-ref
+base before trusting parents or ancestry, including nested and suffixed refs.
+Cached commit-graph parents and ancestry metadata must match commit objects;
+ordinary monolithic graphs and split chains remain allowed. Walks also
+refuse a shallow boundary they reach.
 This sweep records the TSK-287 migration for issue 122.
 
 ## Scope and limits
@@ -17,10 +20,26 @@ This sweep records the TSK-287 migration for issue 122.
   repository on its thread. Nested scopes reuse that snapshot; the outer
   scope clears it on return. Calls outside a scope check metadata afresh.
   Every parent step still checks its commit against the saved boundary.
-- `GIT_SHALLOW_FILE` follows the spawned query's working directory, set to
-  the repository root with `current_dir` or Git's `-C`. Missing and empty
-  override files, or an empty override value, mean no boundary; other read
-  errors refuse.
+- `history_graph` checks all cached entries once per judgment, a superset of
+  any walk's entries. Parent IDs come from each commit object's `parent_ids()`;
+  cached tree IDs, timestamps and topological generations are also checked.
+  Both monolithic files and split chains are checked in the common object
+  directory and recursively in on-disk alternates. A mismatch or unreadable
+  cache reports `cannot verify`; remove that cache and retry. Graphs are not
+  refused merely because they exist.
+- Judging subprocesses use `history::command`, which supplies
+  `-c core.commitGraph=false` and clears inherited `GIT_DIR`, `GIT_COMMON_DIR`,
+  `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_WORK_TREE`.
+  Each caller supplies the checked repository's directory. This preserves
+  configured on-disk alternates and prevents environment redirects from
+  selecting an unchecked repository or object store.
+- Shallow boundaries are the union of non-empty files in the common and
+  private Git directories. Neither libgit2's `is_shallow()` result nor an
+  empty private file masks the common boundary.
+- `GIT_GRAFT_FILE` and `GIT_SHALLOW_FILE` follow the spawned query's working
+  directory, set to the repository root with `current_dir` or Git's `-C`. Missing and empty
+  shallow override files, or an empty shallow override value, add no boundary;
+  they do not mask a boundary in either Git directory. Other read errors refuse.
 - The source scan catches direct Rust parent and ancestry calls, including
   new calls in the counted exception files. It does not resolve types,
   inspect subprocess arguments, or prove that callers propagate errors.
@@ -44,16 +63,13 @@ spawned readers listed below.
 
 | Site | Guarded read |
 |---|---|
-| `crates/codeflow-cli/src/cmd/ci/change_class.rs:61` | `check_command` |
-| `crates/codeflow-cli/src/cmd/ci.rs:254` | `judgment` |
-| `crates/codeflow-cli/src/cmd/ci.rs:354` | `check_command` |
-| `crates/codeflow-cli/src/cmd/push_set.rs:423` | `check_command` |
-| `crates/codeflow-cli/src/cmd/push_set.rs:1646` | `check_command` |
-| `crates/codeflow-cli/src/cmd/push_set.rs:1661` | `check_command` |
+| `crates/codeflow-core/src/estimate/outcomes/mod.rs:184` | `records` |
 | `crates/codeflow-core/src/git/conflict.rs:58` | `merge_base` |
 | `crates/codeflow-core/src/hooks/git_discard.rs:201` | `descendant_of` |
 | `crates/codeflow-core/src/hooks/git_hook.rs:1129` | `merge_base` |
 | `crates/codeflow-core/src/hooks/git_hook.rs:1241` | `descendant_of` |
+| `crates/codeflow-core/src/ids/git.rs:33` | `command` |
+| `crates/codeflow-core/src/ids/git.rs:49` | `check_command` |
 | `crates/codeflow-core/src/integrate.rs:258` | `descendant_of` |
 | `crates/codeflow-core/src/integrate.rs:602` | `revwalk` |
 | `crates/codeflow-core/src/status.rs:143` | `judgment` |
@@ -111,15 +127,17 @@ spawned readers listed below.
 | `crates/codeflow-core/src/workgraph/landing.rs:847` | `revwalk` |
 | `crates/codeflow-core/src/workgraph/landing.rs:860` | `parents` |
 | `crates/codeflow-core/src/workgraph/lifecycle.rs:616` | `descendant_of` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2156` | `parents` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2162` | `parent` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2166` | `parents` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2211` | `revwalk` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2224` | `parents` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2308` | `merge_base` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2379` | `merge_base` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2412` | `merge_base` |
-| `crates/codeflow-core/src/workgraph/lifecycle.rs:2614` | `descendant_of` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:1747` | `check_command` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:1748` | `command` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2159` | `parents` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2165` | `parent` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2169` | `parents` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2214` | `revwalk` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2227` | `parents` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2311` | `merge_base` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2382` | `merge_base` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2415` | `merge_base` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:2617` | `descendant_of` |
 | `crates/codeflow-core/src/workgraph/line_adoption.rs:150` | `revwalk` |
 | `crates/codeflow-core/src/workgraph/line_adoption.rs:192` | `parents` |
 | `crates/codeflow-core/src/workgraph/line_adoption.rs:215` | `merge_base` |
@@ -138,6 +156,8 @@ spawned readers listed below.
 | `crates/codeflow-core/src/workgraph/readiness.rs:606` | `parents` |
 | `crates/codeflow-core/src/workgraph/readiness.rs:609` | `parent` |
 | `crates/codeflow-core/src/workgraph/readiness.rs:753` | `judgment` |
+| `crates/codeflow-core/src/workgraph/readiness.rs:873` | `command` |
+| `crates/codeflow-core/src/workgraph/readiness.rs:887` | `command` |
 | `crates/codeflow-core/src/workgraph/readiness.rs:1204` | `descendant_of` |
 | `crates/codeflow-core/src/workgraph/readiness.rs:1436` | `merge_base` |
 | `crates/codeflow-core/src/workgraph/release_line.rs:393` | `merge_commits` |
@@ -174,8 +194,8 @@ spawned readers listed below.
 | `crates/codeflow-core/src/workgraph/release_line.rs:1992` | `parent_id` |
 | `crates/codeflow-core/src/workgraph/release_line.rs:1993` | `parent_id` |
 | `crates/codeflow-core/src/workgraph/release_line.rs:2047` | `descendant_of` |
-| `crates/codeflow-core/src/workgraph/release_line.rs:2303` | `recorded_first_parent` |
-| `crates/codeflow-core/src/workgraph/release_line.rs:2563` | `descendant_of` |
+| `crates/codeflow-core/src/workgraph/release_line.rs:2305` | `recorded_first_parent` |
+| `crates/codeflow-core/src/workgraph/release_line.rs:2565` | `descendant_of` |
 | `crates/codeflow-core/src/workgraph/status_verb.rs:342` | `merge_base` |
 | `crates/codeflow-core/src/workgraph/work_start.rs:408` | `ahead_behind` |
 | `crates/codeflow-core/src/workgraph/work_start.rs:674` | `merge_base` |
@@ -193,15 +213,44 @@ spawned readers listed below.
 | `crates/codeflow-core/src/workgraph/work_start.rs:1993` | `merge_base` |
 | `crates/codeflow-core/src/workgraph/work_start.rs:2390` | `descendant_of` |
 | `crates/codeflow-core/src/workgraph/work_start.rs:2802` | `judgment` |
+| `crates/codeflow-cli/src/cmd/ci/change_class.rs:61` | `check_command` |
+| `crates/codeflow-cli/src/cmd/ci/change_class.rs:62` | `command` |
+| `crates/codeflow-cli/src/cmd/ci/classification.rs:993` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:254` | `judgment` |
+| `crates/codeflow-cli/src/cmd/ci.rs:354` | `check_command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:1178` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2359` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2452` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2468` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2497` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2669` | `command` |
+| `crates/codeflow-cli/src/cmd/ci.rs:2716` | `command` |
 
 ## Spawned CI reads covered by its entry check
 
 | Site | Query |
 |---|---|
 | `crates/codeflow-cli/src/cmd/ci.rs:2496` | Commit log and parent fields |
-| `crates/codeflow-cli/src/cmd/ci.rs:2567` | Merge base for added lines |
+| `crates/codeflow-cli/src/cmd/ci.rs:2566` | Merge base for added lines |
 | `crates/codeflow-cli/src/cmd/ci/conflict_markers.rs:90` | Merge base for conflict markers |
-| `crates/codeflow-cli/src/cmd/ci/classification.rs:1004` | Three-dot diff for classification |
+| `crates/codeflow-cli/src/cmd/ci/classification.rs:992` | Three-dot diff for classification |
+
+## Additional spawned judging reads
+
+Every row uses `history::command` for its Git process as well as the guard
+shown here. The registry runner guards `log`, `rev-list`, `merge-base`,
+`cherry` and `diff-tree` at its shared output entry points. CI's supporting
+object and ref reads use the same subprocess settings.
+
+| Site | Query and guard |
+|---|---|
+| `crates/codeflow-core/src/ids/ledger.rs:375` | Range violations, `rev-list`; `ids::Git::check_history` calls `check_command` |
+| `crates/codeflow-core/src/ids/inventory.rs:386` | Record lifetime, `rev-list --parents`; same registry guard |
+| `crates/codeflow-core/src/ids/issue.rs:633` | Pending entries, `rev-list`; same registry guard |
+| `crates/codeflow-core/src/ids/git.rs:168` | `is_ancestor`, `merge-base --is-ancestor`; same registry guard |
+| `crates/codeflow-core/src/workgraph/readiness.rs:478` | Merge detection, `rev-list`; `spawned_cherry_landed` calls `check_command` |
+| `crates/codeflow-core/src/workgraph/readiness.rs:490` | Patch equivalence, `cherry`; `cherry_all_equivalent` calls `check_command` |
+| `crates/codeflow-core/src/workgraph/lifecycle.rs:1744` | Shipped-spec history, `log --raw`; `shipped_in_history` calls `check_command` |
 
 ## Direct reads retained for display
 

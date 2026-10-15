@@ -1175,7 +1175,7 @@ fn protected_base(root: &Path, git: &GitPolicy, base: &str) -> Result<bool, Stri
     let remote = if let Some(name) = base.strip_prefix("refs/remotes/") {
         Some(name)
     } else {
-        let out = codeflow_core::git::command()
+        let out = codeflow_core::workgraph::history::command()
             .arg("-C")
             .arg(root)
             .args(["show-ref", "--verify", "--quiet"])
@@ -2356,7 +2356,7 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["remote", "get-url", "origin"])
@@ -2449,7 +2449,7 @@ fn resolve_base(root: &Path, candidates: &[String]) -> Result<Option<String>, St
 /// `GIT_REPLACE_REF_BASE` git 2.55 refuses.
 fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
     candidates.iter().find_map(|candidate| {
-        let out = codeflow_core::git::command()
+        let out = codeflow_core::workgraph::history::command()
             .arg("-C")
             .arg(root)
             .args(["rev-parse", "--verify", "--quiet"])
@@ -2465,7 +2465,7 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
 /// `git rev-parse --verify --quiet <rev>^{commit}` — returns the resolved sha,
 /// or `None` when the rev does not name a commit.
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--verify", "--quiet"])
@@ -2494,7 +2494,7 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
 /// message) records flagged merge or not. Git log supplies revision identities;
 /// messages come from stored objects so Git cannot recode their bytes.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["log", "-z", "--format=%H %P%n"])
@@ -2666,7 +2666,10 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
 /// deadlock the pipes.
 fn git_with_stdin(root: &Path, args: &[&str], input: &str) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::output_with_input(
-        codeflow_core::git::command().arg("-C").arg(root).args(args),
+        codeflow_core::workgraph::history::command()
+            .arg("-C")
+            .arg(root)
+            .args(args),
         input.as_bytes(),
     )
     .map_err(|e| e.to_string())?;
@@ -2710,7 +2713,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// [`git_stdout`] as the exact bytes, for output that holds paths.
 fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(args)

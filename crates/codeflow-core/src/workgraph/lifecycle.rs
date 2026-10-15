@@ -1740,10 +1740,13 @@ fn frozen_spec_problems(
 /// escaped YAML string names the spec too). The state is then derived at
 /// each commit that changed a relevant path, from those paths alone, and
 /// the walk stops at the first implemented state. Side branches count
-/// (`--full-history`); a shallow clone reads only the history it has.
+/// (`--full-history`); shallow clones refuse this judgment.
 fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let output = crate::git::command()
+    let root = repo.workdir().unwrap_or(repo.path());
+    history::check_command(root)?;
+    let output = history::command()
+        .current_dir(root)
         .arg("--git-dir")
         .arg(repo.path())
         .args([

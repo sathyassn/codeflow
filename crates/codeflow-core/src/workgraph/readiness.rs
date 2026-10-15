@@ -870,7 +870,7 @@ pub struct Claim {
 
 /// `git <args>` with its output as exact bytes.
 fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -884,7 +884,7 @@ fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -1535,7 +1535,7 @@ mod tests {
     use std::fs;
 
     fn run(root: &Path, args: &[&str]) -> String {
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -2015,7 +2015,7 @@ mod tests {
 
     fn commit_dated(root: &Path, message: &str, date: &str) -> String {
         run(root, &["add", "-A"]);
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(["commit", "-q", "-m", message])

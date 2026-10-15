@@ -30,7 +30,7 @@ impl Git {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = crate::git::command();
+        let mut command = crate::workgraph::history::command();
         command
             .arg("-C")
             .arg(&self.root)
@@ -41,12 +41,23 @@ impl Git {
         command
     }
 
+    fn check_history(&self, args: &[&str]) -> Result<(), IdsError> {
+        if matches!(
+            args.first(),
+            Some(&"log" | &"rev-list" | &"merge-base" | &"cherry" | &"diff-tree")
+        ) {
+            crate::workgraph::history::check_command(&self.root).map_err(IdsError::Git)?;
+        }
+        Ok(())
+    }
+
     /// Run git and return its raw output, whatever the exit status.
     ///
     /// # Errors
     ///
     /// Returns an error when git cannot be started.
     pub fn output(&self, args: &[&str]) -> Result<Output, IdsError> {
+        self.check_history(args)?;
         self.command(args)
             .output()
             .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))
@@ -58,6 +69,7 @@ impl Git {
     ///
     /// Returns an error when git cannot be started.
     pub fn output_env(&self, args: &[&str], env: &[(&str, &Path)]) -> Result<Output, IdsError> {
+        self.check_history(args)?;
         let mut command = self.command(args);
         for (key, value) in env {
             command.env(key, value);
@@ -105,6 +117,7 @@ impl Git {
     ///
     /// Returns an error naming the command and git's stderr.
     pub fn run_input(&self, args: &[&str], input: &[u8]) -> Result<String, IdsError> {
+        self.check_history(args)?;
         let output = crate::git::output_with_input(&mut self.command(args), input)
             .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))?;
         checked(args, &output)

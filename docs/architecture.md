@@ -145,13 +145,21 @@ Records follow the Markdown-truth design.
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
 Judging parent and ancestry reads use `workgraph::history` (TSK-287).
-The reader refuses graft files and replace refs with `cannot verify`.
-A read-only judgment checks overlays and loads the shallow boundary once,
+The reader refuses graft files and all refs under a replace-ref base with
+`cannot verify`. Before libgit2 walks, it compares cached commit-graph
+parents, trees, generation numbers and timestamps with commit objects.
+Ordinary graphs remain allowed; mismatched caches refuse. Split chains
+and alternate object directories receive the same check.
+A read-only judgment checks overlays and graph caches and loads both the
+common and private shallow boundaries once,
 then clears that snapshot on return. Each parent step and walk refuses a
 shallow boundary it reaches; a boundary hidden by its
 base does not cut that range. Spawned Git history queries require a full
 clone because their command arguments do not expose a bounded walk to the
-reader. Landing inventory retains unproven branches when history cannot
+reader. These subprocesses disable commit-graph reads and clear inherited
+repository and object-store redirects so they read the checked repository.
+Relative graft and shallow overrides resolve at the query directory.
+Landing inventory retains unproven branches when history cannot
 be checked. Display-only metrics and session summaries keep their direct
 reads, with counted exceptions in `history_read_scan.rs`.
 The [history-read sweep](https://github.com/sathyassn/codeflow/blob/main/docs/verification/tsk-287-history-reads.md) records the
