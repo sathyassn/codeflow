@@ -9,7 +9,7 @@
 //! line (D19).
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -606,7 +606,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // redirections are the shell's, not arguments.
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        let launched = strip_launchers(&words);
+        let launched = configuration_launch(&words);
         if top_level {
             // A redirection can fail, and the assignment with it.
             let redirected = words.len() != tokens.len();
@@ -919,6 +919,125 @@ fn configuration_environment_change(command: &str) -> Option<String> {
     })
 }
 
+/// The closing rule covers Git's configuration, location and program inputs.
+fn configuration_input(name: &str) -> bool {
+    configuration_variable(name)
+        || GIT_LOCATION_VARS.contains(&name)
+        || matches!(
+            name,
+            "GIT_EXEC_PATH"
+                | "GIT_TEMPLATE_DIR"
+                | "GIT_INDEX_FILE"
+                | "GIT_CEILING_DIRECTORIES"
+                | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+                | "GIT_NAMESPACE"
+                | "GIT_OBJECT_DIRECTORY"
+                | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+                | "GIT_EDITOR"
+                | "GIT_SEQUENCE_EDITOR"
+                | "GIT_PAGER"
+                | "GIT_SSH"
+                | "GIT_SSH_COMMAND"
+                | "GIT_EXTERNAL_DIFF"
+                | "GIT_ASKPASS"
+                | "GIT_PROXY_COMMAND"
+        )
+}
+
+/// A line-wide backstop, consumed only by configuration-dependent decisions.
+/// Ordinary Git operands are excluded; shell writes and plain reads are read
+/// before quote removal so redirections and parameter syntax are not lost.
+pub(crate) fn configuration_line_backstop(command: &str) -> Option<String> {
+    expand_commands(command).iter().find_map(|segment| {
+        if let Some(reason) = configuration_shell_change(segment) {
+            return Some(reason);
+        }
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let git = strip_launchers(&words)
+            .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git));
+        configuration_text_backstop(segment, !git).or_else(|| {
+            if git {
+                return None;
+            }
+            words
+                .iter()
+                .take_while(|word| word.contains('='))
+                .find_map(|word| configuration_destination("assignment", word))
+        })
+    })
+}
+
+fn configuration_text_backstop(text: &str, inspect_names: bool) -> Option<String> {
+    let bytes = text.as_bytes();
+    let identifier = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut reads = BTreeSet::new();
+    let (mut single, mut double) = (false, false);
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' if !single => {
+                at += 2;
+                continue;
+            }
+            b'\'' if !double => single = !single,
+            b'"' if !single => double = !double,
+            b'$' if !single => {
+                let braced = bytes.get(at + 1) == Some(&b'{');
+                let start = at + if braced { 2 } else { 1 };
+                let end = start
+                    + bytes
+                        .get(start..)
+                        .unwrap_or_default()
+                        .iter()
+                        .take_while(|byte| identifier(**byte))
+                        .count();
+                if end > start && (!braced || bytes.get(end) == Some(&b'}')) {
+                    reads.insert((start, end));
+                }
+            }
+            b'{' if !single && !double => {
+                if let Some(close) = text[at + 1..].find('}').map(|end| at + 1 + end) {
+                    if matches!(bytes.get(close + 1), Some(b'>' | b'<')) {
+                        return Some(format!(
+                            "unresolved configuration write in variable redirection {{{}}}",
+                            &text[at + 1..close]
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    if !inspect_names {
+        return None;
+    }
+    at = 0;
+    while at < bytes.len() {
+        if !identifier(bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && identifier(bytes[at]) {
+            at += 1;
+        }
+        let name = &text[start..at];
+        if configuration_input(name) && !reads.contains(&(start, at)) {
+            return Some(format!(
+                "configuration variable {name} outside a plain read in a non-Git segment"
+            ));
+        }
+    }
+    None
+}
+
+/// Resolve a literal path or a plain inherited HOME read without shell code.
+pub(crate) fn inherited_path(word: &str) -> Option<String> {
+    expand_word(word, &HashMap::new()).ok()
+}
+
 fn configuration_variable_reason(word: &str) -> Option<String> {
     let name = word.split_once('=').map_or(word, |(name, _)| name);
     let name = name.trim_end_matches('+');
@@ -929,22 +1048,45 @@ fn configuration_variable_reason(word: &str) -> Option<String> {
 /// A literal non-configuration destination stays safe even with a dynamic value.
 /// An unresolved destination could name any configuration variable.
 fn configuration_destination(program: &str, word: &str) -> Option<String> {
-    let name = word.split_once('=').map_or(word, |(name, _)| name);
-    if unresolved_word(name) {
-        Some(format!(
-            "unresolved variable destination in {program}: {name}"
-        ))
-    } else {
-        configuration_variable_reason(word)
+    let name = word
+        .split_once('=')
+        .map_or(word, |(name, _)| name.strip_suffix('+').unwrap_or(name));
+    if let Some(reason) = configuration_variable_reason(word) {
+        return Some(reason);
     }
+    // Quote removal may leave a brace word with several possible names.
+    // Preserve a named trigger when one reading is a configuration input;
+    // otherwise every non-name shape (including an unreadable brace word)
+    // is unresolved, rather than another spelling to enumerate.
+    let readings = word_readings(name);
+    if let Some(reason) = readings.as_ref().and_then(|words| {
+        words
+            .iter()
+            .find_map(|word| configuration_variable_reason(word))
+    }) {
+        return Some(reason);
+    }
+    (!assignment_name(name) || readings.is_none())
+        .then(|| format!("unresolved variable destination in {program}: {name}"))
 }
 
-fn configuration_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        let name = name.trim_end_matches('+');
-        let name = name.split_once('[').map_or(name, |(base, _)| base);
-        assignment_name(name)
-    })
+/// Look past assignment-shaped words to inspect a possible Git invocation.
+/// The shape check separately refuses an unresolved destination at that
+/// decision; an uncertain prefix must not hide the command being judged.
+pub(crate) fn configuration_assignment_tail(words: &[String]) -> &[String] {
+    let count = words.iter().take_while(|word| word.contains('=')).count();
+    &words[count..]
+}
+
+fn configuration_launch(mut words: &[String]) -> Option<(&str, &[String])> {
+    loop {
+        let (program, args) = strip_launchers(configuration_assignment_tail(words))?;
+        if !program.contains('=') {
+            return Some((program, args));
+        }
+        // An env/launcher may expose another unresolved assignment prefix.
+        words = args;
+    }
 }
 
 /// Variable-writing builtins have destination operands, unlike ordinary data.
@@ -967,7 +1109,7 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
             .find_map(|word| configuration_destination(program, word));
     }
     match program {
-        "read" | "mapfile" | "readarray" => {
+        "read" | "getln" | "mapfile" | "readarray" => {
             let mut at = 0;
             while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
                 at += 1;
@@ -1034,8 +1176,10 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
                 Some("unresolved variable destination in let".into())
             } else {
                 // Arithmetic expressions may contain several assignments.
-                word.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-                    .find_map(configuration_variable_reason)
+                configuration_destination(program, word).or_else(|| {
+                    word.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .find_map(configuration_variable_reason)
+                })
             }
         }),
         "for" if args.get(1).is_some_and(|word| word == "in") => args
@@ -1049,13 +1193,12 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
 pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
     let mut words = command_argv(segment);
     strip_reserved_words(&mut words);
-    if words.iter().all(|word| configuration_assignment(word)) {
-        if let Some(reason) = words
-            .iter()
-            .find_map(|word| configuration_variable_reason(word))
-        {
-            return Some(reason);
-        }
+    if let Some(reason) = words
+        .iter()
+        .take_while(|word| word.contains('='))
+        .find_map(|word| configuration_destination("assignment", word))
+    {
+        return Some(reason);
     }
     if let Some(reason) = strip_launchers(&words)
         .and_then(|(program, args)| configuration_builtin_trigger(program, args))
@@ -1078,6 +1221,15 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
                 let Some(rest) = chars.as_str().strip_prefix('{') else {
                     continue;
                 };
+                let body = rest.split('}').next().unwrap_or(rest);
+                if let Some((head, _)) = body.split_once('=') {
+                    let head = head.trim_end_matches(':');
+                    if !assignment_name(head) {
+                        return Some(format!(
+                            "unresolved variable destination in parameter expansion: {head}"
+                        ));
+                    }
+                }
                 let len = rest
                     .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
                     .unwrap_or(rest.len());
@@ -1102,8 +1254,8 @@ pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<Str
     let variable = configuration_variable_reason;
     let mut at = 0;
     loop {
-        while let Some(word) = tokens.get(at).filter(|word| configuration_assignment(word)) {
-            if let Some(reason) = variable(word) {
+        while let Some(word) = tokens.get(at).filter(|word| word.contains('=')) {
+            if let Some(reason) = configuration_destination("assignment", word) {
                 return Some(reason);
             }
             at += 1;
@@ -6353,14 +6505,27 @@ fn heredoc_body(chars: &[char], start: usize, doc: &Heredoc) -> Option<(String, 
     None
 }
 
-/// Split the `$(…)` and backtick substitutions of an unquoted heredoc body,
-/// the only parts of it the shell runs. A backslash escapes `$` and `` ` ``.
+/// Retain parameter expansions and split command substitutions in an unquoted
+/// data heredoc. A backslash escapes `$` and `` ` ``.
 fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
     while i < chars.len() {
         match chars[i] {
             '\\' => i += 2,
+            '$' if chars.get(i + 1) == Some(&'{') => {
+                // A data heredoc still evaluates parameter assignments. Keep
+                // the expansion without interpreting its surrounding prose.
+                if let Some(end) = chars[i + 2..].iter().position(|ch| *ch == '}') {
+                    let end = i + 3 + end;
+                    let parameter: String = chars[i..end].iter().collect();
+                    out.push(format!(": {parameter}"));
+                    // Nested command substitutions in the value also run.
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
             '$' if chars.get(i + 1) == Some(&'(') => {
                 let (inner, next) = capture_balanced(&chars, i + 2);
                 split_into_segments(&inner, out, depth, false);
@@ -6603,7 +6768,8 @@ impl LineFacts {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 shell_env: segments
                     .iter()
-                    .find_map(|segment| configuration_shell_change(segment)),
+                    .find_map(|segment| configuration_shell_change(segment))
+                    .or_else(|| configuration_line_backstop(command)),
                 transport_env: configuration_environment_change(command),
                 git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
                     !command[at + word.len()..]
@@ -11561,6 +11727,54 @@ mod tests {
             let result = report(command, "task/work");
             assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
             assert!(result.violations.iter().any(|v| v.message.contains("an alias the guard cannot resolve")), "{:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn configuration_destinations_require_a_literal_name() {
+        for name in ["{A,B}", "A?", "A*", "A[0]", "$A", "`name`", "(A)", ""] {
+            for program in ["export", "read", "getln", "printf", "for"] {
+                assert!(
+                    configuration_destination(program, name).is_some(),
+                    "{program}: {name}"
+                );
+            }
+        }
+        assert!(configuration_destination("export", "FOO=$BAR").is_none());
+        assert!(configuration_destination("export", "PATH+=:/x").is_none());
+        assert!(configuration_destination("export", "{A,B}{C,D}{E,F}{G,H}").is_some());
+        for command in [
+            "cat <<'EOF'\n${HOME:=/evil}\nEOF\ngit zz",
+            "cat <<EOF\n${HOME}\nEOF\ngit zz",
+            "cd \"$HOME/src/x\" && git push origin task/x",
+            "git commit -m 'set HOME'",
+        ] {
+            assert!(configuration_line_backstop(command).is_none(), "{command}");
+        }
+        // Parameter scanning must retain nested commands from data heredocs.
+        let segments = expand_commands("cat <<EOF\n${FOO:-$(git push origin main)}\nEOF");
+        assert!(
+            segments.iter().any(|s| s.contains("git push origin main")),
+            "{segments:?}"
+        );
+    }
+
+    #[test]
+    fn configuration_closing_rule_reaches_transports_and_discards() {
+        for command in [
+            "export H{OME,X}=/evil; git fetch origin",
+            "printf HOME; git pull origin task/x",
+            "exec {HOME}>/dev/null; git reset --hard",
+            "{HOME,X}=/evil git reset --hard",
+            "env HOM?=/evil git push origin task/x",
+            "command env H{OME,X}=/evil git push origin task/x",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
         }
     }
 

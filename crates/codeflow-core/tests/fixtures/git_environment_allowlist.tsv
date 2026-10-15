@@ -154,3 +154,9 @@ crates/codeflow-present/src/responses.rs	env(CHILD_BODY,&body_path)	1	Adds respo
 crates/codeflow-present/src/responses.rs	env(CHILD_ROOT,session.store.root())	1	Adds response crash-child fixture variables only.
 crates/codeflow-present/src/responses.rs	env(CHILD_SESSION,session.id.to_string())	1	Adds response crash-child fixture variables only.
 crates/codeflow-present/src/responses.rs	env(crash::CRASH_AT,cut.to_string())	1	Adds response crash-child fixture variables only.
+crates/codeflow-cli/tests/hooks_cli.rs	"export {GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\"; git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"export {GIT_CONFIG_PARAMETERS,X}=\"'remote.origin.push=HEAD:refs/heads/main'\"; git push origin"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"git log -- HOME GIT_CONFIG_PARAMETERS; git push origin task/x"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
+crates/codeflow-core/src/hooks/git_guard.rs	configuration_destination("export","{A,B}{C,D}{E,F}{G,H}")	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.

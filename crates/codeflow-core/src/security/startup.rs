@@ -1158,6 +1158,7 @@ impl Line<'_> {
 /// `bat` are not here: a log file, a shell escape or a preprocessor from a
 /// configuration file can write; `rg` and `sed` are judged by operation.
 const READERS: &[&str] = &[
+    ":",
     "cat",
     "head",
     "tail",

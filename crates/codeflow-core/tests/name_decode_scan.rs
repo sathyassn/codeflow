@@ -1483,6 +1483,15 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Missing or non-Unicode HOME leaves the path unresolved and refused;
+    // no empty value or alternate path is substituted after a decode error.
+    (
+        "crates/codeflow-core/src/hooks/git_target.rs",
+        "expand_word",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
     // A blank check-name test: the name is kept untrimmed, and a wider whitespace set only refuses more names as blank.
     (
         "crates/codeflow-core/src/doctor/remote_perimeter.rs",

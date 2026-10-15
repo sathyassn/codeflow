@@ -1949,11 +1949,105 @@ fn exec_guard_alone_refuses_environment_release_aliases() {
         "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship".to_string(),
         "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
         format!("GIT_CONFIG_GLOBAL='{}' git ship", global.display()),
+        "{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        "{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship".to_string(),
+        format!("{{GIT_CONFIG_GLOBAL,X}}='{}' git ship", global.display()),
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\"; git ship".to_string(),
     ] {
         let out = exec_guard_tool(dir.path(), "Bash", &command);
         assert_eq!(out.status.code(), Some(2), "{command}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"), "{command}");
     }
+}
+
+#[test]
+fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    git(dir.path(), &["config", "alias.zz", "status"]);
+    let home = dir.path().join("home");
+    let nested = home.join("src/x");
+    std::fs::create_dir_all(&nested).unwrap();
+    init_repo(&nested, "task/x");
+    let refusals = [
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'remote.origin.push=HEAD:refs/heads/main'\"; git push origin",
+        "export {HOME,X}=/evil; git zz",
+        "export H{OME,X}=/evil; git zz",
+        "{HOME,X}=/evil git zz",
+        "env H{OME,X}=/evil git zz",
+        "command env HOM?=/evil git push origin task/x",
+        "printf -v {HOME,X} %s /evil; git zz",
+        "read {HOME,X} < f; git zz",
+        "for H{OME,X} in /evil; do git zz; done",
+        "getln HOM?; git zz",
+        ": ${H?ME=/evil}; git zz",
+        ": ${$V=/evil}; git zz",
+        "cat <<EOF\n${(P)V::=/evil}\nEOF\ngit zz",
+        "V=HOME; : ${(P)V::=/evil}; git zz",
+        ": ${(P)V::=/evil}; git zz",
+        "print -z /evil; getln HOME; git zz",
+        "exec {HOME}>/dev/null; git zz",
+        "exec {slot}</dev/null; git zz",
+        "export HOM?=/evil; git zz",
+        "read HOM? < f; git push origin task/x",
+        "HOM?=/evil; git push origin task/x",
+        "cat <<EOF\n${HOME:=/evil}\nEOF\ngit zz",
+        "getln GIT_DIR; git push origin task/x",
+        "getln GIT_COMMON_DIR; git push origin task/x",
+        "getln GIT_EXEC_PATH; git push origin task/x",
+        "getln XDG_CONFIG_HOME; git push origin task/x",
+        "printf HOME; git zz",
+        "git zz; getln HOME",
+    ];
+    let allowed = [
+        "export PATH=$PATH:/x; git status",
+        "V=1; echo $V",
+        "git status",
+        "git log -1",
+        "export FOO=$(pwd); git push origin task/x",
+        "read -r answer < f; git push origin task/x",
+        "printf -v out %s x",
+        "cd \"$HOME/src/x\" && git push origin task/x",
+        "git commit -m \"set HOME\"",
+        "printf '%s' \"${HOME}\"; git push origin task/x",
+        "git log -- HOME GIT_CONFIG_PARAMETERS; git push origin task/x",
+        "getln HOME; git status",
+        "export PATH=$PATH:/x",
+        "read -p \"...\" answer",
+        "echo \"${HOME:-/x}\"",
+        "declare -a arr=(1 2)",
+        ": ${FOO:=bar}",
+        "grep HOME f",
+        "env | grep HOME",
+    ];
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for (commands, expected) in [(&refusals[..], 2), (&allowed[..], 0)] {
+            for command in commands {
+                let out = run_with_stdin(
+                    codeflow()
+                        .args(["hook", hook])
+                        .env("HOME", &home)
+                        .current_dir(dir.path()),
+                    &guard_payload(command, dir.path()),
+                );
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(expected)
+                    || (expected == 2
+                        && !diagnostic.contains("configuration")
+                        && !diagnostic.contains("configured remote"))
+                {
+                    failures.push(format!(
+                        "{hook}: {command}: expected {expected}, got {:?}: {}",
+                        out.status.code(),
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]

@@ -149,7 +149,9 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     }
     shell_inputs(command, out);
     let inherited = out.config_trigger.clone();
-    let mut persistent = inherited.clone();
+    let mut persistent = inherited
+        .clone()
+        .or_else(|| crate::hooks::git_guard::configuration_line_backstop(command));
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
@@ -160,7 +162,7 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
-        let mut assigned = skip_assignments(&words).to_vec();
+        let mut assigned = crate::hooks::git_guard::configuration_assignment_tail(&words).to_vec();
         if let Some(setting) = words
             .iter()
             .take_while(|s| s.contains('='))
@@ -179,10 +181,13 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
         if args.first().is_some_and(|s| s == "cd") {
-            if let Some(path) = args.get(1).filter(|p| !p.contains(['$', '`'])) {
+            if let Some(path) = args
+                .get(1)
+                .and_then(|p| crate::hooks::git_guard::inherited_path(p))
+            {
                 let next: Vec<_> = directories
                     .iter()
-                    .filter_map(|dir| dir.as_ref().map(|dir| Some(dir.join(path))))
+                    .filter_map(|dir| dir.as_ref().map(|dir| Some(dir.join(&path))))
                     .collect();
                 directories.extend(next);
                 directories.sort();
@@ -198,6 +203,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 32 {
         return;
     }
+    let args = crate::hooks::git_guard::configuration_assignment_tail(args);
     let Some(program) = args.first() else {
         return;
     };
@@ -1324,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_variable_names_in_data_do_not_change_configuration() {
+    fn configuration_mentions_close_uncertain_non_git_segments() {
         for command in [
             "read -p HOME answer; git push origin task/x",
             "printf '%s' HOME; git push origin task/x",
@@ -1334,7 +1340,9 @@ mod tests {
             r": \${HOME:=/tmp/config}; git push origin task/x",
         ] {
             assert!(
-                evaluate(command, &SecuritySection::default()).is_empty(),
+                evaluate(command, &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.message.contains("configuration")),
                 "{command}"
             );
         }
