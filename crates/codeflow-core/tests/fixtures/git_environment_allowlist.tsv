@@ -1,4 +1,12 @@
 # file	normalized call span	count	reason
+crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_COUNT","1")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
+crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_KEY_0","core.sparseCheckout")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
+crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_VALUE_0","true")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
+crates/codeflow-core/src/git/mod.rs	"GIT_CONFIG_COUNT"	1	TSK-304 judging_command intentionally removes inherited command configuration from its child Git reads; the ordinary command constructor remains unchanged.
+crates/codeflow-core/src/git/mod.rs	"GIT_CONFIG_PARAMETERS"	1	TSK-304 judging_command intentionally removes inherited command configuration from its child Git reads; the ordinary command constructor remains unchanged.
+crates/codeflow-core/src/git/mod.rs	env_remove(name)	2	TSK-304 judging_command removes the fixed repository/object/config input list and numbered command-config keys and values from child Git reads only; caller environment is unchanged.
+crates/codeflow-core/src/git/mod.rs	strip_prefix("GIT_CONFIG_KEY_")	1	TSK-304 judging_command identifies numbered command-config keys for removal; it never reads or prints their values.
+crates/codeflow-core/src/git/mod.rs	strip_prefix("GIT_CONFIG_VALUE_")	1	TSK-304 judging_command identifies numbered command-config values for removal; it never prints their contents.
 crates/codeflow-cli/src/cmd/ci.rs	env(key)	2	Reads CI variables through the environment lookup closure; not a process mutation.
 crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
 crates/codeflow-cli/src/cmd/mod.rs	env(CHILD,&gone)	1	A test re-runs its own binary from a removed directory; this call sets only the child marker CODEFLOW_R22_REMOVED_CWD (the directory to remove) and leaves Git configuration untouched.
