@@ -44,8 +44,10 @@ pub fn command() -> std::process::Command {
 
 /// A judging Git process whose repository is selected by its explicit path.
 /// Inherited location, object-store and command-config variables cannot steer
-/// these reads. Repository and user config remain in scope; this is not a
-/// sandbox against local-config tampering. Never changes the caller's env.
+/// these reads. `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`
+/// are kept on purpose: repository, user and system config remain in scope.
+/// This is not a sandbox against local-config tampering. Never changes the
+/// caller's env.
 #[must_use]
 pub fn judging_command() -> std::process::Command {
     let mut command = command();

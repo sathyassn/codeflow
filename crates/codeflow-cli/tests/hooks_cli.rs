@@ -8224,3 +8224,48 @@ fn push_tree_round_three_status_does_not_ignore_submodule_edits() {
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("tracked files differ"), "{err}");
 }
+
+#[cfg(unix)]
+#[test]
+fn push_tree_committed_submodule_ignore_cannot_hide_tracked_edits() {
+    for ignore in ["all", "dirty"] {
+        let dir = quick_repo("true");
+        let vendor = tempfile::tempdir().unwrap();
+        init_repo(vendor.path(), "main");
+        commit_file(
+            vendor.path(),
+            "tracked.txt",
+            "committed\n",
+            "feat: add input",
+        );
+        git(
+            dir.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                vendor.path().to_str().unwrap(),
+                "vendor",
+            ],
+        );
+        git(
+            dir.path(),
+            &[
+                "config",
+                "--file",
+                ".gitmodules",
+                "submodule.vendor.ignore",
+                ignore,
+            ],
+        );
+        git(dir.path(), &["add", ".gitmodules"]);
+        git(dir.path(), &["commit", "-m", "chore: add ignored vendor"]);
+        std::fs::write(dir.path().join("vendor/tracked.txt"), "dirty\n").unwrap();
+        let head = rev(dir.path(), "HEAD");
+        let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+        assert_eq!(code, Some(1), "ignore={ignore}: {err}");
+        assert!(err.contains("tracked files differ"), "{err}");
+    }
+}

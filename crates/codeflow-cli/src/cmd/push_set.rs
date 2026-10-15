@@ -1884,6 +1884,7 @@ fn tracked_tree_clean(root: &Path) -> Result<bool, String> {
             "status",
             "--porcelain",
             "--untracked-files=no",
+            "--ignore-submodules=none",
         ],
     )?
     .ok_or("cannot read worktree status")?

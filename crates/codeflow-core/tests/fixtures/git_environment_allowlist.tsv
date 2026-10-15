@@ -1,4 +1,5 @@
 # file	normalized call span	count	reason
+crates/codeflow-core/src/git/remote_query.rs	env("GIT_CONFIG_PARAMETERS",parameters)	1	TSK-304 regression injects a command-line URL rewrite into only its test child; destination queries and object fetches must ignore it.
 crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_COUNT","1")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
 crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_KEY_0","core.sparseCheckout")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
 crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_VALUE_0","true")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
@@ -57,7 +58,7 @@ crates/codeflow-core/src/doctor/mod.rs	env(name:&str)	2	Read-only environment lo
 crates/codeflow-core/src/git/mod.rs	"GIT"	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
 crates/codeflow-core/src/git/mod.rs	env(HOOK_BINARY_ENV,binary)	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
 crates/codeflow-core/src/git/remote_query.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_SSH_QUERY_CHILD, and leaves Git configuration untouched.
-crates/codeflow-core/src/git/remote_query.rs	env(CHILD,dir.path())	1	A test re-runs its own binary with a stub git on PATH; this call sets only the child marker CODEFLOW_R20_EMPTY_REMOTE (the repository path) and leaves Git configuration untouched.
+crates/codeflow-core/src/git/remote_query.rs	env(CHILD,dir.path())	2	Tests re-run their own binary; these calls set only the repository-path markers CODEFLOW_R20_EMPTY_REMOTE and CODEFLOW_REMOTE_REWRITE_CHILD, leaving Git configuration untouched at these spans.
 crates/codeflow-core/src/hooks/conflict_markers.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_ATTRIBUTE_CHILD, and leaves Git configuration untouched.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
