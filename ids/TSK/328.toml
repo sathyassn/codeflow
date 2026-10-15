@@ -1,0 +1,11 @@
+id = "TSK-328"
+uid = "a2ebf894-aabb-4d06-ab25-6d54c3fa1ab7"
+kind = "TSK"
+title = "The present close test is reliable under host load"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-15T17:57:33Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
