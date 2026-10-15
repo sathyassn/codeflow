@@ -71,11 +71,9 @@ pub(super) fn dispatch(
         Ok(found) => {
             for found in found {
                 if found.note {
-                    if found.rule == AUTHORITY_NOTE {
-                        println!("codeflow ci: note: {}: {}", found.rule, found.message);
-                        continue;
-                    }
-                    let remedy = if is_correction(&found) {
+                    let remedy = if found.rule == AUTHORITY_NOTE {
+                        codeflow_core::remedy::CRITERIA_AUTHORITY.remedy()
+                    } else if is_correction(&found) {
                         codeflow_core::remedy::CRITERIA_CORRECTION.remedy()
                     } else if found.rule == FROZEN_RULE {
                         codeflow_core::remedy::CRITERIA_DELTA.remedy()
