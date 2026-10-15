@@ -1,0 +1,11 @@
+id = "TSK-327"
+uid = "b20c3a96-7da5-4017-9d8f-fbe0d0f51aa9"
+kind = "TSK"
+title = "The pre-push destination query is isolated from local configuration and transport"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-15T17:57:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
