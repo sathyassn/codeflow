@@ -1279,4 +1279,59 @@ mod tests {
             ],
         );
     }
+
+    /// Grok round 7 F1: a shell or interpreter that takes its code from a
+    /// pipe, a here-string, a process substitution or a `-c` value holding a
+    /// substitution runs code the guard cannot read in full, so every word
+    /// on the line is judged by its trailing components. F2: a word loses
+    /// one `{}` pair before Tcl runs it.
+    #[test]
+    fn code_the_guard_cannot_read_makes_every_word_judged() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 -c \"$(printf '%s\\n' 'open(\".claude/settings.json\",\"w\").write(\"x\")')\"",
+                "bash <(printf '%s\\n' 'python3 tool.py .claude/settings.json')",
+                "python3 <(printf '%s\\n' 'open(\".claude/settings.json\",\"w\").write(\"x\")')",
+                "sh <<< 'python3 tool.py .claude/settings.json'",
+                "bash <<< 'python3 tool.py .claude/settings.json'",
+                "python3 <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+                "python3 - <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+                "node <<< 'require(\"fs\").writeFileSync(\".claude/settings.json\",\"\")'",
+                "echo 'open(\".claude/settings.json\",\"w\").write(\"x\")' | python3",
+                "sh <<< 'cd .claude && python3 tool.py settings.json'",
+                "expect -c 'spawn python3 tool.py {.claude/settings.json}'",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "bash <(printf '%s\\n' 'python3 tool.py .git/config')",
+                "python3 <(printf '%s\\n' 'open(\".git/config\").read()')",
+                "sh <<< 'python3 tool.py .git/config'",
+                "python3 <<< 'open(\".git/config\").read()'",
+                "echo 'open(\".git/config\").read()' | python3",
+                "expect -c 'spawn python3 tool.py {.git/config}'",
+            ],
+            true,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "python3 <<< 'print(1)'",
+                "echo 'print(1)' | python3",
+                "echo -e \"python3 tool.py .claude/settings.json\"",
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "sh <<< 'python3 tool.py notes.txt'",
+                "bash <(printf '%s\\n' 'python3 tool.py notes.txt')",
+                "echo 'open(\"notes.txt\").read()' | python3",
+                "expect -c 'spawn python3 tool.py {notes.txt}'",
+                "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+                "python3 -c \"$(printf '%s\\n' 'print(1)')\"",
+                "diff <(sort a.txt) <(sort b.txt)",
+            ],
+        );
+    }
 }

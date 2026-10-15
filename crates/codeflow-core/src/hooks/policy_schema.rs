@@ -224,7 +224,13 @@ pub const SCHEMA: [KeySpec; 68] = [
                 (after a `--` too), and a script string an unknown program \
                 is given, a `-c` or `-e` value or any quoted word (`expect \
                 -c`, `osascript -e`, `ssh host '...'`), which is read as a \
-                command line; `echo` and `printf` operands stay data; every known word is then judged by its trailing \
+                command line; `echo` and `printf` operands stay data. When \
+                a shell or interpreter takes its code from anything other \
+                than a literal argument or a heredoc body the guard reads (a \
+                pipe, a here-string, a process substitution, or a `-c`/`-e` \
+                value holding a substitution), every word on the line is \
+                judged by its trailing components, and a word is also read \
+                without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
                 `cd .claude && cd .. && python3 tool.py settings.json`, and a \

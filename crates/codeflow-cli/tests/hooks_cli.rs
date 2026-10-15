@@ -7605,6 +7605,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "cargo test -- --nocapture",
         "cargo run -- python3 -c 'print(1)'",
         "git commit -m \"python3 x\"",
+        "python3 <<< 'print(1)'",
+        "echo 'print(1)' | python3",
+        "expect -c 'spawn python3 tool.py {notes.txt}'",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
@@ -7616,6 +7619,22 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             || !err.contains("interpreter")
             || err.contains("interpreter code")
         {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // Code a shell or interpreter takes from a here-string, a process
+    // substitution or a pipe (review round 7): the refusal may name the code
+    // or the line, so only the rule and exit are checked.
+    for command in [
+        "sh <<< 'python3 tool.py .git/config'",
+        "python3 <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+        "bash <(printf '%s\\n' 'python3 tool.py .claude/settings.json')",
+        "echo 'open(\".git/config\").read()' | python3",
+        "expect -c 'spawn python3 tool.py {.git/config}'",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
             wrong.push(format!("should refuse: {command}: {err}"));
         }
     }

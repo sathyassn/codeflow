@@ -36,6 +36,13 @@
 //! read as a command line with an unknown directory (`expect -c`,
 //! `osascript -e`, `ssh host '...'`); a single-word `-m` value is a
 //! message. `echo` and `printf` only print, so their operands stay data.
+//! When a shell or interpreter takes its code from anything other than a
+//! literal argument or a heredoc body the guard reads (a pipe, a
+//! here-string, a process substitution, or a `-c`/`-e` value holding a
+//! substitution), every word on the line is judged by its trailing
+//! components, with authority at its fixed level; code the guard can see
+//! there is also judged as that program's code (review round 7). A word
+//! is also judged with one surrounding `{}` pair removed, as Tcl runs it.
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
 use super::{actions, outward};
@@ -62,7 +69,8 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
 ) -> Vec<Violation> {
     let calls = outward::interpreter_calls(line, payload_cwd);
-    if calls.is_empty() {
+    let opaque = outward::opaque_code(line);
+    if calls.is_empty() && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
     }
     let line_dirs = outward::line_directories(line, payload_cwd, home);
@@ -89,6 +97,15 @@ pub(crate) fn evaluate(
             for dir in &code_dirs {
                 reaches.extend(code_reach(&word, dir.as_deref(), &mut facts));
             }
+        }
+    }
+    // A shell or interpreter whose code the guard cannot read in full makes
+    // every word on the line a possible part of that code, judged by its
+    // trailing components with authority at its fixed level (TSK-302
+    // review round 7).
+    if opaque {
+        for word in outward::literal_words(line) {
+            reaches.extend(opaque_line_word(&word));
         }
     }
     let mut found = Vec::new();
@@ -572,6 +589,17 @@ fn call_reaches(
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
                 value_reach(value, dir, facts)
             }));
+            // A Tcl or brace-quoted word loses one `{}` pair before it runs
+            // (`expect -c 'spawn ... {.git/config}'`, review round 7 F2).
+            if let Some(inner) = value
+                .strip_prefix('{')
+                .and_then(|inner| inner.strip_suffix('}'))
+                .filter(|inner| !inner.is_empty())
+            {
+                found.extend(strongest_over_dirs(inner, &dirs, |dir| {
+                    value_reach(inner, dir, facts)
+                }));
+            }
         }
     }
     // The call's own code is judged from the same directories.
@@ -659,6 +687,25 @@ fn unknown_dir_literal(value: &str) -> Option<Reach> {
     let reached = git_guard::word_could_name(value)?;
     let message = format!(
         "an interpreter's code literal `{value}` could be `{reached}`: it runs from a directory the guard cannot follow"
+    );
+    Some(if names_authority(reached) {
+        Reach::Authority(message)
+    } else {
+        Reach::Enforcement(message)
+    })
+}
+
+/// A word on a line whose shell or interpreter code the guard cannot read
+/// in full, judged by its trailing components.
+fn opaque_line_word(value: &str) -> Option<Reach> {
+    if let Some(name) = tail_names_authority(value) {
+        return Some(Reach::Authority(format!(
+            "`{value}` could be policy authority metadata `{name}`: an interpreter on this line runs code the guard cannot read"
+        )));
+    }
+    let reached = git_guard::word_could_name(value)?;
+    let message = format!(
+        "`{value}` could be `{reached}`: an interpreter on this line runs code the guard cannot read"
     );
     Some(if names_authority(reached) {
         Reach::Authority(message)

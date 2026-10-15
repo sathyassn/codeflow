@@ -112,6 +112,11 @@ struct Parsed {
     /// What gives the command being read more arguments, while the
     /// command an `xargs` or `find -exec` runs is read.
     supplier: Option<Supplier>,
+    /// A shell or interpreter on the line takes its code from somewhere the
+    /// guard cannot read in full (TSK-302 review round 7): stdin from a
+    /// pipe, a here-string, a process substitution, or a `-c`/`-e` value
+    /// holding a substitution.
+    opaque: bool,
 }
 
 /// One interpreter call (TSK-302, issue 173): the words it receives other
@@ -162,6 +167,17 @@ pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
     let mut parsed = Parsed::default();
     visit(command, None, 0, &mut parsed);
     parsed.commands
+}
+
+/// Whether a shell or interpreter on the line runs code the guard cannot
+/// read in full: its program comes from stdin through a pipe or a
+/// here-string, from a process substitution, or from a `-c`/`-e` value
+/// holding a substitution. Every word on such a line is then judged by
+/// its trailing components (TSK-302 review round 7).
+pub(crate) fn opaque_code(command: &str) -> bool {
+    let mut parsed = Parsed::default();
+    visit(command, None, 0, &mut parsed);
+    parsed.opaque
 }
 
 pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
@@ -926,6 +942,7 @@ fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed)
         }
     }
     out.calls.extend(inner.calls);
+    out.opaque |= inner.opaque;
 }
 
 /// Whether one word holds more than a bare name: a shell blank (space,
@@ -1675,6 +1692,196 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
     }
 }
 
+/// Where an interpreter family takes its program from.
+#[derive(PartialEq, Eq)]
+enum Program {
+    /// `-c`, `-e` or `--eval` code on the command line.
+    Inline,
+    /// `python -m MODULE`.
+    Module,
+    /// A script operand other than `-`.
+    Script,
+    /// Standard input: no script, or the script `-`.
+    Stdin,
+}
+
+/// Where an interpreter family of `family` takes its program from, read by
+/// the same option grammar as [`interpreter_arguments`].
+fn family_program(family: &str, rest: &[String]) -> Program {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            return match rest.get(at) {
+                Some(script) if script != "-" => Program::Script,
+                _ => Program::Stdin,
+            };
+        }
+        if word == "-" {
+            return Program::Stdin;
+        }
+        if !word.starts_with('-') {
+            return Program::Script;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                return Program::Inline;
+            }
+            if value.is_none() && long_takes_value(family, name) {
+                at += 1;
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        for (i, letter) in letters.char_indices() {
+            let attached = !letters[i + letter.len_utf8()..].is_empty()
+                && !matches!(family, "node" | "nodejs");
+            match short_option(family, letter) {
+                Short::Flag => continue,
+                Short::Code => return Program::Inline,
+                Short::Module => return Program::Module,
+                Short::Value | Short::Chdir => at += usize::from(!attached),
+                Short::Attached => {}
+            }
+            break;
+        }
+    }
+    Program::Stdin
+}
+
+/// The bodies of the process substitutions (`<(...)`, `>(...)`) in one
+/// segment, read outside quotes.
+fn process_substitutions(segment: &str) -> Vec<String> {
+    let chars: Vec<(usize, char)> = segment.char_indices().collect();
+    let mut found = Vec::new();
+    let mut quote = None;
+    let mut at = 0;
+    while let Some(&(_, ch)) = chars.get(at) {
+        at += 1;
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        let Some(&(open, '(')) = chars.get(at).filter(|_| matches!(ch, '<' | '>')) else {
+            continue;
+        };
+        // The body runs to the matching parenthesis, quotes respected.
+        let mut depth = 0;
+        let mut inner = None;
+        let mut end = segment.len();
+        at += 1;
+        while let Some(&(offset, c)) = chars.get(at) {
+            at += 1;
+            if let Some(q) = inner {
+                if c == q {
+                    inner = None;
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' => inner = Some(c),
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = offset;
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        found.push(segment[open + 1..end].to_string());
+    }
+    found
+}
+
+/// The text after a here-string operator (`<<<`) in one segment, read
+/// outside quotes, as written.
+fn here_string(segment: &str) -> Option<String> {
+    let mut quote = None;
+    for (at, ch) in segment.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        if segment[at..].starts_with("<<<") {
+            // Kept as written: the readers split on quotes and blanks.
+            return Some(segment[at + 3..].to_string());
+        }
+    }
+    None
+}
+
+/// Read where a shell or interpreter in one pipeline segment takes its
+/// code from (TSK-302 review round 7). Code the guard can read, a quoted
+/// producer, a here-string or a process substitution, is kept as that
+/// program's code so its paths are judged precisely; any program fed from
+/// a pipe, a here-string, a process substitution or a `-c`/`-e` value
+/// holding a substitution marks the line opaque.
+fn read_program_sources(
+    name: &str,
+    rest: &[String],
+    segment: &str,
+    producers: &str,
+    out: &mut Parsed,
+) {
+    let shell = matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash");
+    let family = interpreter_family(name);
+    if !shell && family.is_none() {
+        return;
+    }
+    let substituted = |code: &str| code.contains("$(") || code.contains('`');
+    let reads_stdin = if let Some(family) = family {
+        let mut inline = Parsed::default();
+        record_interpreter(name, rest, None, &mut inline);
+        if inline.code.iter().any(|code| substituted(code)) {
+            out.opaque = true;
+        }
+        family_program(family, rest) == Program::Stdin
+    } else if let Some(script) = shell_command_string(rest) {
+        if substituted(script) {
+            out.code.push(script.to_string());
+            out.opaque = true;
+        }
+        false
+    } else {
+        rest.iter().all(|a| a.starts_with('-'))
+            || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
+                a.strip_prefix('-')
+                    .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
+            })
+    };
+    let substitutions = process_substitutions(segment);
+    if !substitutions.is_empty() {
+        out.opaque = true;
+        out.code.extend(substitutions);
+    }
+    if reads_stdin {
+        if let Some(body) = here_string(segment) {
+            out.opaque = true;
+            out.code.push(body);
+        }
+        if !producers.is_empty() {
+            out.opaque = true;
+            out.code.push(producers.to_string());
+        }
+    }
+}
+
 // Keep pipeline boundaries and quoted producer text. Only a shell that reads
 // stdin makes that text code; ordinary pipes and separate commands stay data.
 fn shell_inputs(command: &str, out: &mut Parsed) {
@@ -1711,21 +1918,7 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
         let words = command_argv(segment);
         if let Some((program, rest)) = strip_launchers(&words) {
             let name = program.rsplit('/').next().unwrap_or(program);
-            if matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash") {
-                if let Some(script) = shell_command_string(rest) {
-                    if script.contains("$(") || script.contains('`') {
-                        out.code.push(script.to_string());
-                    }
-                } else if !producers.is_empty()
-                    && (rest.iter().all(|a| a.starts_with('-'))
-                        || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
-                            a.strip_prefix('-')
-                                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
-                        }))
-                {
-                    out.code.push(producers.clone());
-                }
-            }
+            read_program_sources(name, rest, segment, &producers, out);
         }
         if ch == '|' && !command[at..].starts_with("||") {
             producers.push_str(segment);
