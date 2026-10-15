@@ -247,7 +247,7 @@ object and ref reads use the same subprocess settings.
 | `crates/codeflow-core/src/ids/ledger.rs:375` | Range violations, `rev-list`; `ids::Git::check_history` calls `check_command` |
 | `crates/codeflow-core/src/ids/inventory.rs:386` | Record lifetime, `rev-list --parents`; same registry guard |
 | `crates/codeflow-core/src/ids/issue.rs:633` | Pending entries, `rev-list`; same registry guard |
-| `crates/codeflow-core/src/ids/git.rs:168` | `is_ancestor`, `merge-base --is-ancestor`; same registry guard |
+| `crates/codeflow-core/src/ids/git.rs:169` | `is_ancestor`, `merge-base --is-ancestor`; same registry guard |
 | `crates/codeflow-core/src/workgraph/readiness.rs:478` | Merge detection, `rev-list`; `spawned_cherry_landed` calls `check_command` |
 | `crates/codeflow-core/src/workgraph/readiness.rs:490` | Patch equivalence, `cherry`; `cherry_all_equivalent` calls `check_command` |
 | `crates/codeflow-core/src/workgraph/lifecycle.rs:1744` | Shipped-spec history, `log --raw`; `shipped_in_history` calls `check_command` |
