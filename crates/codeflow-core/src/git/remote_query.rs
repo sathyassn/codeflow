@@ -179,6 +179,17 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
             MAX_ANSWER_BYTES >> 20
         )));
     }
+    // A descendant may retain stderr after git exits. Keep git unreaped
+    // until both pipes finish, so its group ID cannot be reused before
+    // timeout cleanup, and keep the same deadline for this pipe too.
+    while !diagnostics.is_finished() {
+        if Instant::now() >= until {
+            kill_group(&mut child);
+            return Err(timed_out());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let diagnostics = diagnostics.join().unwrap_or_default();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -189,16 +200,6 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
             }
         }
     };
-    // A descendant may retain stderr after git exits. Do not wait for it
-    // beyond the same deadline.
-    while !diagnostics.is_finished() {
-        if Instant::now() >= until {
-            kill_group(&mut child);
-            return Err(timed_out());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let diagnostics = diagnostics.join().unwrap_or_default();
     if !status.success() {
         if authentication_failed(&diagnostics) {
             return Err(Failure::Authentication);
@@ -316,6 +317,46 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_stderr_keeps_the_query_within_its_deadline() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Some(root) = std::env::var_os("CODEFLOW_STDERR_ONLY_CHILD") {
+            let started = Instant::now();
+            let result = run(
+                Path::new(&root),
+                &["ls-remote", "stub"],
+                Duration::from_millis(200),
+            );
+            assert!(matches!(result, Err(Failure::Timeout(_))));
+            assert!(started.elapsed() < Duration::from_secs(5));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let git = bin.join("git");
+        // Git exits and closes stdout while its descendant retains stderr.
+        std::fs::write(&git, "#!/bin/sh\n/bin/sleep 60 >/dev/null &\nexit 0\n").unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = crate::git::process(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::inherited_stderr_keeps_the_query_within_its_deadline",
+                "--nocapture",
+            ])
+            .env("CODEFLOW_STDERR_ONLY_CHILD", dir.path())
+            .env("PATH", bin)
+            .env("GIT_SSH_COMMAND", "ssh")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
 
     #[test]
     fn default_lookup_retries_only_timeouts_and_stops_at_its_bound() {
