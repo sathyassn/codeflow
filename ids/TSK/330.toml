@@ -1,0 +1,11 @@
+id = "TSK-330"
+uid = "17796faa-4af9-49d7-9a90-67aae22329a7"
+kind = "TSK"
+title = "Hooks stay usable while the project settings file has merge conflicts"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-16T13:34:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
