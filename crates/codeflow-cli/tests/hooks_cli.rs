@@ -5322,6 +5322,17 @@ fn push_hook_over_http(
     askpass: &Path,
     helper: &Path,
 ) -> (Option<i32>, String, std::time::Duration) {
+    git(dir, &["config", "--local", "credential.helper", ""]);
+    git(
+        dir,
+        &[
+            "config",
+            "--local",
+            "--add",
+            "credential.helper",
+            helper.to_str().unwrap(),
+        ],
+    );
     git(dir, &["remote", "add", "dest", url]);
     let head = rev(dir, "HEAD");
     let started = std::time::Instant::now();
@@ -5331,11 +5342,6 @@ fn push_hook_over_http(
             .env("GIT_ASKPASS", askpass)
             .env("HOME", askpass.parent().unwrap())
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_COUNT", "2")
-            .env("GIT_CONFIG_KEY_0", "credential.helper")
-            .env("GIT_CONFIG_VALUE_0", "")
-            .env("GIT_CONFIG_KEY_1", "credential.helper")
-            .env("GIT_CONFIG_VALUE_1", helper)
             .current_dir(dir),
         &format!("refs/heads/feat/h {head} refs/heads/feat/h {ZERO_SHA}\n"),
     );

@@ -165,6 +165,18 @@ fn missing_default_is_one_destination_refusal_without_retry() {
 fn timeout_is_one_destination_refusal_and_ignores_stale_local_default() {
     let dir = fixture();
     let stub = Stub::new(dir.path(), "sleep 60");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/old-default", "main"],
+    );
+    git(
+        dir.path(),
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/old-default",
+        ],
+    );
     destination_refusal(&stub.ci(dir.path()), "timeout");
     assert_eq!(stub.attempts(), 3);
 }
@@ -275,15 +287,23 @@ fn installed_pre_push_refuses_timeout_then_allows_the_same_task_push() {
     .unwrap();
     std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     let push = || {
-        let command = super::codeflow();
-        // Use the same isolated environment for real git and the installed shim.
         let mut git = std::process::Command::new("git");
-        git.envs(
-            command
-                .get_envs()
-                .filter_map(|(key, value)| value.map(|value| (key, value))),
-        );
-        git.current_dir(dir.path())
+        git.env("CODEFLOW_HOME", super::isolated_home())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_EVENT_NAME")
+            .env_remove("GITHUB_HEAD_REF")
+            .env_remove("GITHUB_BASE_REF")
+            .env_remove("CI_PIPELINE_SOURCE")
+            .env_remove("CI_MERGE_REQUEST_IID")
+            .env_remove("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+            .env_remove("BITBUCKET_PR_ID")
+            .env_remove("BITBUCKET_PR_DESTINATION_BRANCH")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .current_dir(dir.path())
             .env("GIT_SSH_COMMAND", &ssh)
             .env("GIT_SSH_VARIANT", "ssh")
             .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
