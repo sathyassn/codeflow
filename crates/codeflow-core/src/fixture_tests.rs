@@ -10,9 +10,15 @@
 
 use std::path::Path;
 
-/// Whether a folder above `root` holds a repository.
+/// Whether a folder above `root` holds a repository. The path is resolved
+/// first: a `TMPDIR` reached through a link into a repository's folder has no
+/// `.git` among its lexical parents.
 fn enclosed(root: &Path) -> bool {
-    root.ancestors()
+    let physical = root
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("cannot resolve fixture {}: {error}", root.display()));
+    physical
+        .ancestors()
         .skip(1)
         .any(|ancestor| ancestor.join(".git").symlink_metadata().is_ok())
 }
@@ -60,4 +66,37 @@ pub(crate) fn outside_repository() -> Option<tempfile::TempDir> {
         return None;
     }
     Some(dir)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{outside_repository, own_repository};
+
+    /// A fixture reached through a link into a repository's folder still gets
+    /// a repository of its own: its lexical parents hold no `.git`.
+    #[test]
+    fn a_link_into_a_repository_does_not_hide_it() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join(".git")).unwrap();
+        let inside = repository.path().join("tmp");
+        std::fs::create_dir(&inside).unwrap();
+        let alias = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+        let fixture = alias.path().join("link/proj");
+        std::fs::create_dir(&fixture).unwrap();
+        assert!(super::enclosed(&fixture));
+        own_repository(&fixture);
+        assert!(fixture.join(".git").exists());
+    }
+
+    #[test]
+    fn a_fixture_outside_any_repository_stays_bare() {
+        let Some(dir) = outside_repository() else {
+            return;
+        };
+        let fixture = dir.path().join("proj");
+        std::fs::create_dir(&fixture).unwrap();
+        own_repository(&fixture);
+        assert!(!fixture.join(".git").exists());
+    }
 }

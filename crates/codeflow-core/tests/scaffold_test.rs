@@ -273,6 +273,27 @@ fn git_config(root: &Path, key: &str) -> String {
 
 /// The fixture `git` helper reports a failed command, so a command that ran
 /// against the wrong repository, or not at all, fails the test (issue 104).
+/// A fixture reached through a link into a repository's folder still gets a
+/// repository of its own (issue 104): its lexical parents hold no `.git`.
+#[cfg(unix)]
+#[test]
+fn own_repository_judges_a_fixture_by_its_physical_path() {
+    isolate_git();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "-q"]);
+    let inside = repository.path().join("tmp");
+    std::fs::create_dir(&inside).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+    let fixture = alias.path().join("link/proj");
+    std::fs::create_dir(&fixture).unwrap();
+    git_isolation::own_repository(&fixture);
+    assert!(
+        fixture.join(".git").exists(),
+        "the fixture has its own repository"
+    );
+}
+
 #[test]
 fn the_git_helper_returns_stdout_when_git_succeeds() {
     isolate_git();

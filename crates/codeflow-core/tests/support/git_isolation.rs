@@ -50,11 +50,16 @@ fn ceiling() -> std::ffi::OsString {
 /// as `scaffold::init` into a bare folder, covered in a normal run. Call
 /// [`isolate_git`] first.
 pub fn own_repository(root: &Path) {
-    let enclosed = root
+    // Ancestry is judged on the physical path: a `TMPDIR` reached through a
+    // link into a repository's folder has no `.git` among its lexical parents.
+    let physical = root
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("cannot resolve fixture {}: {error}", root.display()));
+    let enclosed = physical
         .ancestors()
         .skip(1)
         .any(|ancestor| ancestor.join(".git").symlink_metadata().is_ok());
-    if !enclosed || root.join(".git").symlink_metadata().is_ok() {
+    if !enclosed || physical.join(".git").symlink_metadata().is_ok() {
         return;
     }
     let out = Command::new("git")
