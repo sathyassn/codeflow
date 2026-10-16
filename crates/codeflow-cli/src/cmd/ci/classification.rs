@@ -15,7 +15,9 @@ use codeflow_core::git::GitName;
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
-use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
+use codeflow_core::workgraph::classify::{
+    is_secret_scan_exemption, is_spike_path, path_sets, ProjectPaths,
+};
 use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
     check_epic_line, check_epic_line_with_adoptions, durable_work_tracking_enabled,
@@ -121,6 +123,9 @@ fn epic_list(value: &str) -> Option<TaskLine> {
 pub(super) enum Class {
     /// Tracked work for the task named in the body.
     Tracked { task_id: String },
+    /// Only the scanner's ignore file; dependency readiness does not block
+    /// the exemption from reaching the trusted base before its work lands.
+    SecretScanExemption(ExemptionWork),
     /// A release pull request (SPC-013 R-120): a release head whose body
     /// names the task the release checks select as its owner. They judge
     /// what the range brings and bind that task's completion to the head,
@@ -137,6 +142,37 @@ pub(super) enum Class {
     /// (ADR-0074); small edits land on it directly, and each nested project
     /// lands through its own repository.
     RootBranch(String),
+}
+
+/// The existing unit whose reviewed false positive an exemption names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ExemptionWork {
+    Task(String),
+    Epic(String),
+}
+
+impl Class {
+    pub(super) fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Tracked { task_id }
+            | Self::ReleaseIntegration { task_id }
+            | Self::SecretScanExemption(ExemptionWork::Task(task_id)) => Some(task_id),
+            _ => None,
+        }
+    }
+
+    /// Task review rows bind ordinary work and its exemption, while release
+    /// integration has its own acceptance check.
+    pub(super) fn review_task(&self) -> Option<&str> {
+        match self {
+            Self::ReleaseIntegration { .. } => None,
+            _ => self.task_id(),
+        }
+    }
+
+    pub(super) fn is_secret_scan_exemption(&self) -> bool {
+        matches!(self, Self::SecretScanExemption(_))
+    }
 }
 
 /// A release head (SPC-013 R-120) and the one task the release checks
@@ -186,7 +222,11 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     ));
                 }
             }
-            Ok(Class::Tracked { task_id })
+            if is_secret_scan_exemption(input.files) {
+                Ok(Class::SecretScanExemption(ExemptionWork::Task(task_id)))
+            } else {
+                Ok(Class::Tracked { task_id })
+            }
         }
         Some(TaskLine::Epic(epic)) => {
             if input.branch_task.is_some() {
@@ -202,7 +242,14 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
             }
-            planning(input, vec![epic])
+            if is_secret_scan_exemption(input.files) {
+                if let Some(problem) = (input.epic_problem)(&epic) {
+                    return Err(problem);
+                }
+                Ok(Class::SecretScanExemption(ExemptionWork::Epic(epic)))
+            } else {
+                planning(input, vec![epic])
+            }
         }
         Some(TaskLine::Epics(epics)) => {
             if input.branch_task.is_some() {
@@ -612,9 +659,9 @@ pub(super) fn dispatch(
             return None;
         }
     };
+    announce(&class, epic_line.as_ref());
     match &class {
-        Class::Tracked { task_id } => {
-            println!("codeflow ci: pull request class: tracked {task_id} (from the Task: line)");
+        Class::Tracked { task_id } | Class::SecretScanExemption(ExemptionWork::Task(task_id)) => {
             let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
             let level = git.work_planning_level();
             let anchor = Anchor {
@@ -623,17 +670,15 @@ pub(super) fn dispatch(
                 branch,
                 base: range.base,
                 head: range.head,
+                exemption: class.is_secret_scan_exemption(),
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
             range_journey(root, git, task_id, range, tagged);
         }
         Class::ReleaseIntegration { task_id } => {
-            println!(
-                "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
-            );
             range_journey(root, git, task_id, range, tagged);
         }
-        untracked => announce(untracked, epic_line.as_ref()),
+        _ => {}
     }
     Some(class)
 }
@@ -653,6 +698,9 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
     match class {
+        Class::SecretScanExemption(ExemptionWork::Task(id) | ExemptionWork::Epic(id)) => println!(
+            "codeflow ci: pull request class: secret-scan exemption for {id} (only .gitleaksignore; dependency readiness is not required)"
+        ),
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
             epics.join(", ")
@@ -687,7 +735,12 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
-        Class::Tracked { .. } | Class::ReleaseIntegration { .. } => {}
+        Class::Tracked { task_id } => println!(
+            "codeflow ci: pull request class: tracked {task_id} (from the Task: line)"
+        ),
+        Class::ReleaseIntegration { task_id } => println!(
+            "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
+        ),
     }
 }
 
@@ -768,6 +821,7 @@ struct Anchor<'a> {
     branch: &'a str,
     base: &'a str,
     head: &'a str,
+    exemption: bool,
 }
 
 fn anchor_failure(
@@ -865,9 +919,12 @@ fn tracked(
             return;
         }
     };
-    match codeflow_core::workgraph::work_start::check_work_admission(
-        root, task_id, &target, branch, head,
-    ) {
+    let admission = if anchor.exemption {
+        codeflow_core::workgraph::work_start::check_secret_scan_exemption_admission
+    } else {
+        codeflow_core::workgraph::work_start::check_work_admission
+    };
+    match admission(root, task_id, &target, branch, head) {
         Ok(report) => {
             if report.work_type.as_deref() == Some("spike") && !branch.starts_with("spike/") {
                 spike_paths(task_id, files, tagged);
@@ -1101,6 +1158,7 @@ mod tests {
                     dir.path(),
                     "TSK-001",
                     Anchor {
+                        exemption: false,
                         own_branch,
                         level: PolicyLevel::Off,
                         branch: "task/TSK-001-test",
@@ -1131,6 +1189,7 @@ mod tests {
                 dir.path(),
                 "TSK-001",
                 Anchor {
+                    exemption: false,
                     own_branch,
                     level: PolicyLevel::Off,
                     branch: "spike/TSK-001-test",
@@ -1159,6 +1218,7 @@ mod tests {
                 dir.path(),
                 "TSK-001",
                 Anchor {
+                    exemption: false,
                     own_branch,
                     level: PolicyLevel::Off,
                     branch: "spike/TSK-001-test",

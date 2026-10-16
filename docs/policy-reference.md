@@ -96,6 +96,28 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Secret-scan exemption pull requests
+
+The managed secret scan reads `.gitleaksignore` from the pull request's
+trusted base. When an integration line contains a reviewed false positive,
+land its fingerprint on the base in a separate pull request first, then
+rerun the line's scan.
+
+`codeflow ci` gives a range that changes only the root `.gitleaksignore`
+the **secret-scan exemption** class. Its body names one existing epic or
+task with `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its
+own task. Adding a record, a document or any other path keeps the range out
+of this class; `.gitleaksignore` remains outside planning amendments.
+
+The class permits a task whose predecessor is incomplete at the planning
+anchor, including one complete only on an integration line. Task identity,
+record validation, PR-body requirements and commit standards still apply.
+The secret scan and security review jobs still run at their configured
+levels. The new fingerprint takes effect only after it lands on the trusted
+base; it cannot exempt a finding introduced by its own pull request.
+Repository approval rules, including code-owner review where configured,
+are unchanged. The class neither configures protection nor grants approval.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It

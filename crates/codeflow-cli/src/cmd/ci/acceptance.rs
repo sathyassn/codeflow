@@ -250,11 +250,11 @@ fn criteria(
 ) -> Result<Criteria, String> {
     // A release range is judged by `judge` and does not reach here; were it
     // to, the release pull request keeps its task's criteria as tracked work.
-    if let Some(Class::Tracked { task_id } | Class::ReleaseIntegration { task_id }) = class {
+    if let Some(task_id) = class.and_then(Class::task_id) {
         let own_branch = task_id_from_branch(root, branch)
             .map_err(|error| error.to_string())?
             .as_deref()
-            == Some(task_id.as_str());
+            == Some(task_id);
         return codeflow_core::workgraph::acceptance::task_criteria(
             root, range.base, task_id, own_branch,
         );

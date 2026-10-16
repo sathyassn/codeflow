@@ -224,6 +224,14 @@ pub fn is_planning_path(path: &str) -> bool {
             || path.starts_with("docs/plan/"))
 }
 
+/// Whether the complete range changes only the ignore file read by the
+/// managed secret scan. Exact bytes keep nested files, lookalikes, empty
+/// ranges and mixed ranges out. This does not admit a planning path.
+#[must_use]
+pub fn is_secret_scan_exemption(paths: &[crate::git::GitName]) -> bool {
+    matches!(paths, [path] if path.bytes() == b".gitleaksignore")
+}
+
 /// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmendmentPath {
@@ -314,6 +322,31 @@ pub fn is_spike_path(path: &str, task_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_scan_exemption_is_exactly_the_root_ignore_file() {
+        use crate::git::GitName;
+        assert!(is_secret_scan_exemption(&[GitName::from(
+            ".gitleaksignore"
+        )]));
+        for paths in [
+            vec![],
+            vec![".gitleaksignore", "docs/guide.md"],
+            vec!["nested/.gitleaksignore"],
+            vec![".GITLEAKSIGNORE"],
+            vec![".gitleaks.toml"],
+        ] {
+            let paths: Vec<_> = paths.into_iter().map(GitName::from).collect();
+            assert!(!is_secret_scan_exemption(&paths));
+        }
+        assert!(!is_secret_scan_exemption(&[GitName::from_bytes(
+            b".gitleaksignore\xff"
+        )]));
+        assert_eq!(
+            amendment_path(".gitleaksignore", &ProjectPaths::default()),
+            None
+        );
+    }
 
     #[test]
     fn embedded_table_parses_and_every_fixed_member_has_an_example() {
