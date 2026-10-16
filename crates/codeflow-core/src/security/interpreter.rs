@@ -1506,4 +1506,48 @@ mod tests {
             ],
         );
     }
+
+    /// Grok round 11: layer 1 is closed-world. One payload per construct
+    /// family it used to resolve wrongly composes an enforcement path on a
+    /// line where an interpreter runs, and refuses, resolved exactly or as
+    /// cannot-verify; the same constructs over ordinary files stay allowed.
+    #[test]
+    fn each_composing_family_resolves_exactly_or_refuses() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                // An assignment whose value holds an expansion.
+                "a=.cla; b=\"${a}ude/settings.json\"; python3 -c \"open('$b','w')\"",
+                // A declaration builtin, and an indexed element.
+                "export a=.cla; python3 -c \"open('${a}ude/settings.json','w')\"",
+                "a[0]=.cla; python3 -c \"open('${a}ude/settings.json','w')\"",
+                // An echo option cluster that decodes.
+                "echo -ne '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
+                // A printf format given through a variable.
+                "f='.cla\\x75de/settings.json'; printf \"$f\" | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
+                // A unicode escape.
+                "printf '.cla\\u0075de/settings.json' | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
+                // Indirect expansion.
+                "n=p; p=.claude/settings.json; python3 -c \"open('${!n}','w')\"",
+            ],
+            false,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "echo -e \"python3 tool.py .claude/settings.json\"",
+                "print -r '.cla\\x75de/settings.json'",
+                "python3 tool.py \"$ROOT/$NAME\"",
+                "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+                "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
+                "export a=notes.txt; python3 tool.py \"$a\"",
+                "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
+                "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+            ],
+        );
+    }
 }

@@ -7651,6 +7651,10 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "printf '%b' '.gi\\x74/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
         "IFS=; arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${arr[*]}\\\",\\\"w\\\")\"",
         "echo -e '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+        // Round 11: a value built from an expansion, a format from a
+        // variable; each resolved exactly or refused as cannot-verify.
+        "a=.cla; b=\"${a}ude/settings.json\"; python3 -c \"open('$b','w')\"",
+        "f='.cla\\x75de/settings.json'; printf \"$f\" | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
     ] {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);

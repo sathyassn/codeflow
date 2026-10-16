@@ -288,7 +288,12 @@ pub const SCHEMA: [KeySpec; 68] = [
                 on-line assignments) is resolved exactly where the guard \
                 can and judged by the tail rule, and on a running line a \
                 composing construct it cannot resolve refuses as \
-                cannot-verify, naming it. A word is also read \
+                cannot-verify, naming it. That reading is closed-world: \
+                a value is resolved only when every input is a literal \
+                read exactly through a construct the guard models and the \
+                result equals what bash and zsh produce; any other \
+                construct feeding it is unresolved, named by its family. \
+                A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \

@@ -53,7 +53,12 @@
 //! or a join of on-line assignments, is resolved exactly where the guard
 //! can and judged by the tail rule, and on a running line a composing
 //! construct it cannot resolve refuses as cannot-verify, naming it (review
-//! round 10). A word is also
+//! round 10). That resolution is closed-world (`composed`, review round
+//! 11): a value is resolved only when every input is a literal read
+//! exactly through a construct the guard models, and the value equals what
+//! bash and zsh produce, checked against both shells by a differential
+//! test; any other construct feeding it is unresolved, named by its
+//! family, never read by its spelling. A word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
 //! backstop. The guard stops at shell grammar: a path the interpreter's own
@@ -62,7 +67,7 @@
 //! 2026-10-15).
 //! Only string literals in code are read as file names, never identifiers
 //! or numbers.
-use super::{actions, outward};
+use super::{actions, composed, outward};
 use crate::hooks::{edit_guard, git_guard, PolicyLevel, Violation};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -135,14 +140,14 @@ pub(crate) fn evaluate(
         // value (a `printf`, an `echo -e`/`print` operand, a join of on-line
         // assignments) is judged by the tail rule; one the guard cannot
         // resolve refuses as cannot-verify, naming it (review rounds 9, 10).
-        for composed in outward::composed_texts(line) {
+        for composed in composed::composed_texts(line) {
             match composed {
-                outward::Composed::Resolved(value) => {
-                    for word in outward::literal_words(&value) {
+                composed::Composed::Resolved(value) => {
+                    for word in outward::literal_words(&value.render()) {
                         reaches.extend(opaque_line_word(&word, PRINTF));
                     }
                 }
-                outward::Composed::Unverified(construct) => {
+                composed::Composed::Unresolved(construct) => {
                     reaches.push(Reach::Enforcement(format!(
                         "a path is composed with {construct} on a line where a shell or interpreter runs"
                     )));

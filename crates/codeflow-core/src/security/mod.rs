@@ -27,6 +27,7 @@
 
 pub mod actions;
 pub(crate) mod arguments;
+pub mod composed;
 pub mod dangerous;
 mod deletion;
 pub mod git;
