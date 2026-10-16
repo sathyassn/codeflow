@@ -181,9 +181,9 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<STAGE>` | Hook stage (receives git's standard hook arguments). One of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push`, `capabilities`. |
 | | `[ARGS]...` | Arguments passed through by git (e.g. the commit-msg file path, the pre-push remote name and URL). |
 | `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
-| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then the branch's declared target, then policy protected branches. An unresolved declared target warns; pass --base to select the intended range. |
+| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches. An unresolved declared target warns; pass --base to select the intended range. |
 | | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
-| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Pass --branch when an explicit --head belongs to another line. |
+| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Pass --branch when an explicit --head belongs to another line. |
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
@@ -386,14 +386,15 @@ select a branch. For a detached candidate, pass the branch whose work is being
 judged.
 
 Without `--base`, CI base metadata and `CODEFLOW_DEFAULT_BRANCH` take priority.
-Next comes the branch's declared target: a task's `integration_target`, the
+Next comes `--into`, when supplied, or the branch's declared target: a task's `integration_target`, the
 epic line named by a `plan/EPC-NNN-*` branch, or the default branch for an
 `integration/*` line. The protected-branch fallback warns if a declared target
 does not resolve. Pass `--base` to choose the range explicitly. `--into`
 selects the acceptance target; otherwise CI target metadata, the branch's
 declared target, or branches at the resolved base commit supply it. When
 several branches share the base, the command refuses with instructions to pass `--into` or `--branch`. A tracked range also refuses when its branch
-or target context is missing.
+or target context is missing. An empty range without a PR body does not need
+a target.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,

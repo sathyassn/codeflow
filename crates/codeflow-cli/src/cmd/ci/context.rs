@@ -50,15 +50,19 @@ pub(super) fn resolve(
         base_candidates = vec![base.clone()];
         range_source = "explicit --base flag".into();
     } else if range_source == "policy protected branches (fallback)" {
-        if let Some(target) = explicit_target
+        if let Some((target, source)) = explicit_target
             .as_ref()
-            .map(|(name, _)| name)
-            .or(declared.as_ref())
+            .map(|(name, source)| (name, *source))
+            .or_else(|| {
+                declared
+                    .as_ref()
+                    .map(|name| (name, "branch declared target"))
+            })
         {
             let candidates = target_candidates(target);
             if resolve_base(root, &candidates)?.is_some() {
                 base_candidates = candidates;
-                range_source = format!("declared target '{target}' for branch '{branch}'");
+                range_source = format!("{source} '{target}' for branch '{branch}'");
             } else {
                 println!("codeflow ci: warning: declared target '{target}' does not resolve; base falls back to the policy protected branches; pass --base <ref> to judge against the intended target");
             }
@@ -69,18 +73,7 @@ pub(super) fn resolve(
     if let Some(base) = &base {
         base_candidates = vec![base.clone()];
     }
-    let tracked =
-        codeflow_core::workgraph::work_start::durable_work_tracking_enabled_at(root, &head)
-            .map_err(|error| format!("cannot read head configuration: {error}"))?
-            || base
-                .as_deref()
-                .map(|base| {
-                    codeflow_core::workgraph::work_start::durable_work_tracking_enabled_at(
-                        root, base,
-                    )
-                })
-                .transpose()?
-                .unwrap_or(false);
+    let tracked = tracked_range(root, base.as_deref(), &head)?;
     if branch.is_empty() && tracked {
         return Err("detached checkout has no branch context; pass --branch <name> for this head before acceptance can be judged".into());
     }
@@ -245,4 +238,14 @@ fn head_source(explicit: bool, env: impl Fn(&str) -> Option<String>) -> &'static
     } else {
         "checkout HEAD"
     }
+}
+
+fn tracked_range(root: &Path, base: Option<&str>, head: &str) -> Result<bool, String> {
+    use codeflow_core::workgraph::work_start::durable_work_tracking_enabled_at;
+    Ok(durable_work_tracking_enabled_at(root, head)
+        .map_err(|error| format!("cannot read head configuration: {error}"))?
+        || base
+            .map(|base| durable_work_tracking_enabled_at(root, base))
+            .transpose()?
+            .unwrap_or(false))
 }

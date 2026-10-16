@@ -8,7 +8,8 @@
 //!
 //! Exit 1 when any block-level violation is found; 0 when clean or only
 //! warnings (which are printed, then the gate proceeds). Exit 2 when the
-//! verification could not run in full — the commit checks were skipped (no
+//! verification could not run in full: range or acceptance context could not
+//! be resolved, the commit checks were skipped (no
 //! base ref resolved, or the range could not be enumerated) or an explicit
 //! `--pr-body-file` was unreadable: an unverified range is not a pass. The
 //! scaffolded wrappers avoid the skip state entirely (full-depth checkout
@@ -48,7 +49,7 @@ use crate::embedded::EmbeddedAssets;
 #[derive(Debug, Args)]
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
-    /// `CODEFLOW_DEFAULT_BRANCH`, then the branch's declared target, then policy
+    /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
     /// protected branches. An unresolved declared target warns; pass --base to
     /// select the intended range.
     #[arg(long, value_name = "REF")]
@@ -59,7 +60,7 @@ pub struct CiArgs {
     pub head: Option<String>,
 
     /// Branch context for naming policy and acceptance binding (frozen or amendable).
-    /// Defaults to CI metadata, then the checkout. Its declared target selects
+    /// Defaults to CI metadata, then the checkout. Without --into, its declared target selects
     /// the base when no --base or CI base exists: a task's `integration_target`,
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
     /// Pass --branch when an explicit --head belongs to another line.
@@ -1015,10 +1016,8 @@ fn record_checks(
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
-/// The branch a range lands on, for the line proof: the pull request's
-/// target when one is named (`into`), else the repository's default work
-/// target. The commit that bounds the range is never a branch (a hosted
-/// run passes the base as a SHA), so it is not consulted.
+/// The resolved target for the line proof, with the repository default for
+/// an untracked or empty range that needs no inferred acceptance target.
 fn line_target(root: &Path, into: Option<&str>) -> Result<String, String> {
     if let Some(target) = into {
         return Ok(target.to_string());
@@ -2207,6 +2206,7 @@ fn is_empty_table_row(t: &str) -> bool {
 /// `CODEFLOW_DEFAULT_BRANCH` names the base branch explicitly (documented in
 /// `assets/base/ci/ci-generic.sh`); the terminal fallback tries the policy's
 /// protected branches (`git.protected_branches`, e.g. `main` then `master`).
+/// Context resolution inserts a declared target before that final fallback.
 fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> DetectedRange {
     // GitLab merge-request pipeline: an exact base sha is provided.
     if let Some(base) = env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
@@ -2301,8 +2301,8 @@ fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
         .or_else(|| env("BITBUCKET_PR_DESTINATION_BRANCH"))
 }
 
-/// The branch an explicit `--base` names (`origin/main` names `main`); a
-/// commit id names none.
+/// Normalize a branch name or branch ref (`origin/main` names `main`);
+/// a commit id or revision expression names no branch.
 fn named_branch(base: &str) -> Option<String> {
     let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
     let name = base
@@ -2344,7 +2344,7 @@ fn origin_url(root: &Path) -> Result<Option<String>, String> {
     Ok((!url.is_empty()).then_some(url))
 }
 
-/// Auto-detect the head branch NAME to name-check. Verified variable names:
+/// Auto-detect the head branch context. Verified variable names:
 /// GitHub `GITHUB_HEAD_REF`; GitLab `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` then
 /// `CI_COMMIT_REF_NAME`; Bitbucket `BITBUCKET_BRANCH`.
 fn detect_branch<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
