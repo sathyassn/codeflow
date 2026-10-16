@@ -141,10 +141,11 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
     let stderr = child.stderr.take();
     let diagnostics = std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        if let Some(stderr) = stderr {
-            let _ = stderr.take(64 << 10).read_to_end(&mut bytes);
-        }
-        bytes
+        let read = match stderr {
+            Some(stderr) => stderr.take(64 << 10).read_to_end(&mut bytes),
+            None => Ok(0),
+        };
+        read.map(|_| bytes)
     });
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -189,7 +190,12 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let diagnostics = diagnostics.join().unwrap_or_default();
+    // Unreadable diagnostics cannot prove an authentication failure, so a
+    // failed exit is then reported as a plain one, which still refuses.
+    let authentication = match diagnostics.join() {
+        Ok(Ok(bytes)) => authentication_failed(&bytes),
+        Ok(Err(_)) | Err(_) => false,
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -201,7 +207,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         }
     };
     if !status.success() {
-        if authentication_failed(&diagnostics) {
+        if authentication {
             return Err(Failure::Authentication);
         }
         return Err(Failure::Exit(status.code()));
@@ -209,8 +215,10 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
     text_answer(&bytes)
 }
 
+/// Whether git's diagnostics carry an authentication marker. The bytes are
+/// matched as ASCII and never decoded: the text is not shown to anyone.
 fn authentication_failed(diagnostics: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(diagnostics).to_ascii_lowercase();
+    let bytes = diagnostics.to_ascii_lowercase();
     [
         "authentication failed",
         "permission denied",
@@ -220,7 +228,11 @@ fn authentication_failed(diagnostics: &[u8]) -> bool {
         "returned error: 401",
     ]
     .iter()
-    .any(|marker| text.contains(marker))
+    .any(|marker| {
+        bytes
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    })
 }
 
 /// The answer as text, one line per advertised ref.
@@ -356,6 +368,20 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&out.stdout)
         );
+    }
+
+    #[test]
+    fn authentication_markers_match_raw_bytes_in_any_case() {
+        assert!(authentication_failed(
+            b"fatal: Authentication failed for 'https://example.invalid/'\n"
+        ));
+        assert!(authentication_failed(
+            b"git@example.invalid: Permission denied (publickey).\xff\n"
+        ));
+        assert!(!authentication_failed(
+            b"fatal: unable to access: Could not resolve host\n"
+        ));
+        assert!(!authentication_failed(b""));
     }
 
     #[test]
