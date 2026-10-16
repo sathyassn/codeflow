@@ -53,37 +53,22 @@ pub(super) fn resolve(
                     .map(|name| (name, "branch declared target"))
             })
         {
-            let allowed = explicit_target.is_some()
-                || (normalize(target) != normalize(&branch)
-                    && eligible_target(target, &branch, protected));
-            let candidates = target_candidates(target);
-            if !allowed {
-                let warning = codeflow_core::remedy::Finding::new(
-                    format!("{source} '{target}' is not a protected branch or a valid epic line distinct from '{branch}'; base falls back to the policy protected branches"),
-                    codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
-                );
-                println!("{}", warning.line("codeflow ci", "warning"));
-            } else if let Some(tip) = resolve_base(root, &candidates)? {
-                if explicit_target.is_none() {
-                    check_declared_base(root, target, &branch, &tip, &head)?;
-                }
+            if let Some(tip) = local_base(
+                root,
+                target,
+                source,
+                &branch,
+                &head,
+                protected,
+                explicit_target.is_some(),
+            )? {
                 base_candidates = vec![tip];
                 range_source = format!("{source} '{target}' for branch '{branch}'");
-            } else {
-                let warning = codeflow_core::remedy::Finding::new(
-                    format!("{source} '{target}' does not resolve; base falls back to the policy protected branches"),
-                    codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
-                );
-                println!("{}", warning.line("codeflow ci", "warning"));
             }
         }
     }
     let named_base = args.base.as_deref().and_then(named_branch);
-    if let (Some(target), Some(base)) = (&declared, &named_base) {
-        if normalize(target) != *base {
-            println!("codeflow ci: notice: declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding");
-        }
-    }
+    note_base_disagreement(declared.as_deref(), named_base.as_deref());
     let commit_base = base_candidates
         .first()
         .is_some_and(|base| named_branch(base).is_none());
@@ -141,6 +126,43 @@ pub(super) fn resolve(
         into,
         target,
     })
+}
+
+fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
+    if let (Some(target), Some(base)) = (declared, named_base) {
+        if normalize(target) != base {
+            println!("codeflow ci: notice: declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding");
+        }
+    }
+}
+
+fn local_base(
+    root: &Path,
+    target: &str,
+    source: &str,
+    branch: &str,
+    head: &str,
+    protected: &[String],
+    explicit: bool,
+) -> Result<Option<String>, String> {
+    let allowed = explicit
+        || (normalize(target) != normalize(branch) && eligible_target(target, branch, protected));
+    let reason = if !allowed {
+        format!("is not a protected branch or a valid epic line distinct from '{branch}'")
+    } else if let Some(tip) = resolve_base(root, &target_candidates(target))? {
+        if !explicit {
+            check_declared_base(root, target, branch, &tip, head)?;
+        }
+        return Ok(Some(tip));
+    } else {
+        "does not resolve".into()
+    };
+    let warning = codeflow_core::remedy::Finding::new(
+        format!("{source} '{target}' {reason}; base falls back to the policy protected branches"),
+        codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+    );
+    println!("{}", warning.line("codeflow ci", "warning"));
+    Ok(None)
 }
 
 fn head_context(
