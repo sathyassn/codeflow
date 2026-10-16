@@ -4,6 +4,10 @@
 They exercise the kit's own code on synthetic observations. They are a
 tooling check, like `validate-suite` is a structural one: neither runs a
 model case, so neither is behavioural evidence.
+
+The gate declares codeflow-bin as a prerequisite in essential and full mode.
+Direct runs need `cargo build --locked -p codeflow-cli` first; CODEFLOW_BIN
+selects its output, otherwise CARGO_TARGET_DIR/debug/codeflow is used.
 """
 
 from __future__ import annotations
@@ -40,6 +44,59 @@ SPEC.loader.exec_module(eval_kit)
 
 def project_root() -> Path:
     return ROOT
+
+
+def codeflow_binary() -> Path:
+    """Use the gate's producer output, or the same debug build when run directly."""
+    configured = os.environ.get("CODEFLOW_BIN")
+    binary = (Path(configured) if configured else
+              Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug" / "codeflow")
+    binary = binary.expanduser().resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError(
+            f"missing codeflow-bin prerequisite: {binary}; "
+            "run `cargo build --locked -p codeflow-cli` with the same CARGO_TARGET_DIR "
+            "and set CODEFLOW_BIN to its debug/codeflow output, or run "
+            "`codeflow test --mode essential --only model-eval-kit`")
+    return binary
+
+
+class CodeflowBinaryTests(unittest.TestCase):
+    def test_explicit_binary_wins_over_the_target_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "chosen-codeflow"
+            binary.touch(mode=0o755)
+            with patch.dict(os.environ, {"CODEFLOW_BIN": str(binary), "CARGO_TARGET_DIR": temp}):
+                self.assertEqual(binary.resolve(), codeflow_binary())
+
+    def test_direct_run_uses_debug_under_the_target_directory(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ):
+            os.environ.pop("CODEFLOW_BIN", None)
+            os.environ["CARGO_TARGET_DIR"] = temp
+            binary = Path(temp) / "debug" / "codeflow"
+            binary.parent.mkdir()
+            binary.touch(mode=0o755)
+            self.assertEqual(binary.resolve(), codeflow_binary())
+            # A release binary cannot hide a missing declared debug output.
+            binary.unlink()
+            release = Path(temp) / "release" / "codeflow"
+            release.parent.mkdir()
+            release.touch(mode=0o755)
+            with self.assertRaisesRegex(RuntimeError, "missing codeflow-bin prerequisite"):
+                codeflow_binary()
+
+    def test_direct_invocation_names_the_missing_prerequisite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = {**os.environ, "CARGO_TARGET_DIR": temp}
+            env.pop("CODEFLOW_BIN", None)
+            result = subprocess.run(
+                [sys.executable, "-B", str(Path(__file__).resolve()),
+                 "ProcessRepairTests.test_closeout_inventory_matches_real_local_worktrees"],
+                env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing codeflow-bin prerequisite", result.stderr)
+            self.assertIn("cargo build --locked -p codeflow-cli", result.stderr)
+            self.assertNotIn("FileNotFoundError", result.stderr)
 
 
 # Every test signs and verifies under a disposable evaluator key; GraderTests
@@ -8508,8 +8565,7 @@ class ProcessRepairTests(unittest.TestCase):
             (root / ".gitignore").write_text(".worktrees/\n")
             (root / "README.md").write_text("fixture\n")
             eval_kit.reset_fixture_history(root, "test/worktree-closeout", install_hooks=False)
-            codeflow = (Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")).expanduser().resolve()
-                        / "release" / "codeflow")
+            codeflow = codeflow_binary()
             eval_kit.configure_closeout_inventory(root, codeflow)
             records = eval_kit.git_output(["worktree", "list", "--porcelain"], root)
             self.assertEqual("refs/remotes/origin/main", eval_kit.git_output(["symbolic-ref", "refs/remotes/origin/HEAD"], root).strip())

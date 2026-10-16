@@ -858,15 +858,31 @@ def gate_binary_problems(cfg: dict) -> list[str]:
         for required in targets.get(name, {}).get("requires", []):
             closure(required, seen)
         return seen
-    producer = targets.get("codeflow-bin", {})
     for target in targets.values():
-        cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
-        if not re.search(r"check:real-browser(\s|$)", cmd):
-            continue
-        if "codeflow-bin" not in closure(target["name"]) or producer.get("outputs") != ["target/debug/codeflow"] or not applicable(producer):
-            problems.append(f"target '{target['name']}' needs codeflow-bin's declared output; the coordinator sets its absolute path following CARGO_TARGET_DIR")
-        if "CF_PRESENT_CODEFLOW=" in cmd:
-            problems.append(f"target '{target['name']}' must use the coordinator's absolute binary path following CARGO_TARGET_DIR")
+        for mode, settings in target.get("modes", {}).items():
+            cmd = norm(settings.get("command", ""))
+            # These script entry points consume CODEFLOW_BIN indirectly.
+            consumer = (re.search(r"check:real-browser(\s|$)", cmd)
+                        or "evals/model-artifacts/test_eval_kit.py" in cmd
+                        or "$CODEFLOW_BIN" in cmd)
+            inputs = set(re.findall(r"target/(?:debug|release)/codeflow(?:\.exe)?", cmd))
+            if consumer:
+                inputs.add("target/debug/codeflow")
+            dependencies = closure(target["name"]) - {target["name"]}
+            for artifact in sorted(inputs):
+                producers = [targets[name] for name in dependencies if name in targets
+                             and artifact in targets[name].get("outputs", [])]
+                if consumer:
+                    # Only this named producer makes the coordinator export CODEFLOW_BIN.
+                    producers = [p for p in producers if p["name"] == "codeflow-bin"
+                                 and p.get("outputs") == ["target/debug/codeflow"]]
+                if not any(applicable(p) and mode in p.get("modes", {}) for p in producers):
+                    problems.append(
+                        f"target '{target['name']}' ({mode}) needs a declared prerequisite "
+                        f"producing {artifact}; codeflow-bin produces target/debug/codeflow "
+                        "and the coordinator sets CODEFLOW_BIN following CARGO_TARGET_DIR")
+            if consumer and "CF_PRESENT_CODEFLOW=" in cmd:
+                problems.append(f"target '{target['name']}' must use the coordinator's absolute binary path following CARGO_TARGET_DIR")
     return problems
 
 

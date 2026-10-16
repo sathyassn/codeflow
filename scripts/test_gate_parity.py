@@ -244,6 +244,37 @@ class GateBinaryControls(unittest.TestCase):
                 problems = parity.gate_binary_problems(mutated(drop))
                 self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p for p in problems), problems)
 
+    def test_model_eval_requires_the_binary_in_each_mode(self):
+        for mode in ("essential", "full"):
+            for change in ("missing dependency", "wrong dependency", "missing mode", "disabled", "wrong output"):
+                with self.subTest(mode=mode, change=change):
+                    cfg = copy.deepcopy(CONFIG)
+                    consumer = target(cfg, "model-eval-kit")
+                    consumer["modes"] = {mode: consumer["modes"][mode]}
+                    producer = target(cfg, "codeflow-bin")
+                    if change == "missing dependency":
+                        consumer["requires"] = []
+                    elif change == "wrong dependency":
+                        consumer["requires"] = ["release-automation"]
+                        target(cfg, "release-automation")["requires"] = []
+                    elif change == "missing mode":
+                        del producer["modes"][mode]
+                    elif change == "disabled":
+                        producer["enabled"] = False
+                    else:
+                        producer["outputs"] = ["target/release/codeflow"]
+                    self.assertTrue(any("model-eval-kit" in p and mode in p
+                                        for p in parity.gate_binary_problems(cfg)))
+
+    def test_a_direct_binary_path_needs_a_matching_producer(self):
+        cfg = copy.deepcopy(CONFIG)
+        consumer = target(cfg, "model-eval-kit")
+        consumer["requires"] = ["codeflow-bin"]
+        consumer["modes"] = {"essential": {"command": "target/release/codeflow status"}}
+        self.assertTrue(any("target/release/codeflow" in p for p in parity.gate_binary_problems(cfg)))
+        target(cfg, "codeflow-bin")["outputs"] = ["target/release/codeflow"]
+        self.assertEqual([p for p in parity.gate_binary_problems(cfg) if "model-eval-kit" in p], [])
+
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '

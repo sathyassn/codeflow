@@ -286,6 +286,9 @@
           "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "narrow": [
         "evals/**",
         ".agents/skills/**",
