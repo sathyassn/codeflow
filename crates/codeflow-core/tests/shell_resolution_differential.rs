@@ -720,6 +720,10 @@ const CASES: &[(&str, &str, &str)] = &[
         "U",
         r#"printf '%s\n' "$(echo .cla*)"173302"#,
     ),
+    ("path program", "R", r"echo 173302 $(/usr/bin/true) x"),
+    ("path program", "R", r#"echo 173302 "$(/usr/bin/true)" x"#),
+    ("path program", "R", r"echo $(/usr/bin/true) 173302"),
+    ("path program", "U", r"echo ok .cla* 173302"),
     // Globs, braces and tildes.
     ("expansion", "U", r"printf '%s\n' 1733{02,} 173302"),
     ("expansion", "U", r"printf '%s\n' ~ 173302"),

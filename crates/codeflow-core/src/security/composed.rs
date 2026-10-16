@@ -63,9 +63,10 @@
 //! spells is a composition and is judged; a glob argument stands for
 //! outside names and is judged by its pattern, whole, as a glob argument
 //! to any program is, so a glob an output builtin writes refuses when it
-//! can match a protected path; since zsh does not run a command whose
-//! glob matches nothing, that command's output is judged but not claimed. Code from
-//! outside the line (`source`, `eval` of
+//! can match a protected path, in any field, since the separators around
+//! a field that may vanish still separate it when judged; since zsh does
+//! not run a command whose glob matches nothing, that command's output is
+//! judged but not claimed. Code from outside the line (`source`, `eval` of
 //! outside text) is that residual too: what it may change keeps its value
 //! for judging, but an output built from such a value is not claimed exact.
 //! The differential test `tests/shell_resolution_differential.rs` runs the
@@ -95,6 +96,9 @@ pub enum Piece {
     /// The names an unquoted glob matches: unknown text, judged by its
     /// pattern.
     Glob(String),
+    /// A separator beside a field that may expand to nothing: for
+    /// exactness it may be absent, but it always separates when judged.
+    Soft(String),
 }
 
 /// A value the line composes: literal text and unknown outside text.
@@ -133,6 +137,7 @@ impl Value {
                     }
                 }
                 Piece::Glob(pattern) => self.0.push(Piece::Glob(pattern.clone())),
+                Piece::Soft(sep) => self.0.push(Piece::Soft(sep.clone())),
             }
         }
     }
@@ -150,7 +155,7 @@ impl Value {
         for piece in &self.0 {
             match piece {
                 Piece::Text(text) => out.push_str(text),
-                Piece::Open | Piece::Glob(_) => return None,
+                Piece::Open | Piece::Glob(_) | Piece::Soft(_) => return None,
             }
         }
         Some(out)
@@ -165,7 +170,7 @@ impl Value {
         let mut out = String::new();
         for piece in &self.0 {
             match piece {
-                Piece::Text(text) | Piece::Glob(text) => out.push_str(text),
+                Piece::Text(text) | Piece::Glob(text) | Piece::Soft(text) => out.push_str(text),
                 Piece::Open => out.push('$'),
             }
         }
@@ -186,7 +191,7 @@ impl Value {
             let mut left = String::new();
             for before in self.0[..at].iter().rev() {
                 let text = match before {
-                    Piece::Text(t) | Piece::Glob(t) => t.clone(),
+                    Piece::Text(t) | Piece::Glob(t) | Piece::Soft(t) => t.clone(),
                     Piece::Open => "$".to_string(),
                 };
                 let kept: String = text.chars().rev().take_while(|c| !breaks(*c)).collect();
@@ -199,7 +204,7 @@ impl Value {
             let mut right = String::new();
             for after in &self.0[at + 1..] {
                 let text = match after {
-                    Piece::Text(t) | Piece::Glob(t) => t.clone(),
+                    Piece::Text(t) | Piece::Glob(t) | Piece::Soft(t) => t.clone(),
                     Piece::Open => "$".to_string(),
                 };
                 let kept: String = text.chars().take_while(|c| !breaks(*c)).collect();
@@ -228,6 +233,12 @@ impl Value {
                 Some((Piece::Text(head), rest)) => text
                     .strip_prefix(head.as_str())
                     .is_some_and(|tail| at(rest, tail)),
+                Some((Piece::Soft(sep), rest)) => {
+                    at(rest, text)
+                        || text
+                            .strip_prefix(sep.as_str())
+                            .is_some_and(|tail| at(rest, tail))
+                }
                 Some((Piece::Open | Piece::Glob(_), rest)) => text
                     .char_indices()
                     .map(|(i, _)| i)
@@ -251,7 +262,7 @@ impl Value {
     fn any_text(&self, test: impl Fn(char) -> bool) -> bool {
         self.0.iter().any(|piece| match piece {
             Piece::Text(chunk) => chunk.chars().any(&test),
-            Piece::Open | Piece::Glob(_) => false,
+            Piece::Open | Piece::Glob(_) | Piece::Soft(_) => false,
         })
     }
 }
@@ -4222,8 +4233,8 @@ fn word_has_unquoted_param(tok: &Tok) -> bool {
 }
 
 fn join(fields: &[Value], sep: &str, newline: bool) -> Value {
-    // A field of unknown text alone may expand to nothing, or to several
-    // words: it takes the separators around it.
+    // A field of unknown text alone may expand to nothing: the separators
+    // around it may be absent, but they still separate it when judged.
     let unknown = |field: &Value| {
         !field.0.is_empty()
             && field
@@ -4233,8 +4244,12 @@ fn join(fields: &[Value], sep: &str, newline: bool) -> Value {
     };
     let mut out = Value::default();
     for (at, field) in fields.iter().enumerate() {
-        if at > 0 && !unknown(field) && !unknown(&fields[at - 1]) {
-            out.push_text(sep);
+        if at > 0 {
+            if unknown(field) || unknown(&fields[at - 1]) {
+                out.0.push(Piece::Soft(sep.to_string()));
+            } else {
+                out.push_text(sep);
+            }
         }
         out.append(field);
     }

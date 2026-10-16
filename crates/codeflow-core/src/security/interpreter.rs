@@ -1541,6 +1541,12 @@ mod tests {
                 "echo .cl?ude/settings.js?n | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
                 "echo .cla* | python3 -c 'import sys; open(sys.stdin.read().strip()+\"/settings.json\",\"w\")'",
                 "python3 -c \"open('$(echo .[c]laude)'+'/settings.json','w')\"",
+                // Round 14: the glob in a later field, beside outside text,
+                // through a substitution, and as a later printf argument.
+                "echo ok .cla* | python3 -c 'import sys; open(sys.stdin.read().split()[1]+\"/settings.json\",\"w\")'",
+                "echo \"$TAG\" .cl?ude/settings.js?n | python3 -c 'import sys; open(sys.stdin.read().split()[-1],\"w\")'",
+                "python3 -c \"open('$(echo ok .[c]laude)'.split()[1]+'/settings.json','w')\"",
+                "printf '%s %s\\n' ok .cla* | python3 -c 'import sys; open(sys.stdin.read().split()[1]+\"/settings.json\",\"w\")'",
             ],
             false,
         );
@@ -1567,6 +1573,9 @@ mod tests {
                 "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo *.txt; python3 src/app.py",
                 "python3 lint.py \"$(echo src/*.py)\"",
+                "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo \"$TAG\" *.txt; python3 src/app.py",
+                "python3 lint.py \"$(echo ok src/*.py)\"",
             ],
         );
     }
