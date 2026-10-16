@@ -339,6 +339,13 @@ Upgrade the binary once, then run `codeflow update` in each repository.
    report with unified diffs.
 3. Resolve each `<name>.new` file against the file beside it.
 
+`update` refuses before changing project files if the binary is older than
+the project's `scaffold_version`, including with `--force`. Install the
+pinned version named in the error and retry. An unparsable pin also refuses
+and shows the value to correct. This safeguard applies to binaries that
+carry it; older released binaries can still lower the pin and replace
+managed files with older assets.
+
 | Case | What `update` does |
 |---|---|
 | Unmodified managed file | Replaced |

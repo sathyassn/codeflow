@@ -147,7 +147,12 @@ adrs: [ADR-0011, ADR-0019]
 - User-owned schema-versioned files gain new keys with defaults.
 
 Update also installs missing in-tier manifest entries. It never clobbers and
-never silently skips.
+never silently skips. Before writing project files, it refuses a binary
+older than the project's `scaffold_version` or an unparsable pin. The
+refusal preserves the pin, its release digests and managed files, and names
+the pinned version to install when the binary is older. Binaries released
+before this safeguard can still lower the pin. The update cases in
+`codeflow-core tests/scaffold_test.rs` verify this boundary.
 
 | Policy scalar | On update |
 |---|---|
