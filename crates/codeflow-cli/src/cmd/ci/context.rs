@@ -131,7 +131,11 @@ pub(super) fn resolve(
 fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
     if let (Some(target), Some(base)) = (declared, named_base) {
         if normalize(target) != base {
-            println!("codeflow ci: notice: declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding");
+            let notice = codeflow_core::remedy::Finding::new(
+                format!("declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding"),
+                codeflow_core::remedy::CI_BASE_TARGET_DIFFER.remedy(),
+            );
+            println!("{}", notice.line("codeflow ci", "note"));
         }
     }
 }
