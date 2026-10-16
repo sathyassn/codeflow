@@ -233,13 +233,17 @@ fn task_target_selects_base_from_flag_ci_or_checkout() {
 #[test]
 fn unresolved_declared_target_warns_before_findings() {
     let f = Line::new();
-    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    // The protected branch binds the missing line, so only resolution fails.
+    f.git(&["switch", "-q", "main"]);
     let path = "project-management/tasks/TSK-001.md";
     let record = std::fs::read_to_string(f.root().join(path))
         .unwrap()
         .replace(LINE, "integration/EPC-001-missing");
     f.write(path, &record);
     f.commit("docs: change target");
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
     let out = ci(&f, &[], None);
     let text = output(&out);
     let warning = text
@@ -421,17 +425,19 @@ fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
         let f = Line::new();
         let branch = "fix/TSK-002-self";
         f.git(&["switch", "-qc", branch]);
-        let target = if variant == "self" {
-            branch
-        } else {
-            "integration/EPC-001-contains-head"
-        };
+        // A bound line (TSK-001 targets it on main) reaches the head check.
+        let target = if variant == "self" { branch } else { LINE };
         f.write(
             "project-management/tasks/TSK-002.md",
-            &super::planned_task("TSK-002", "").replace(
-                "integration_target: main",
-                &format!("integration_target: {target}"),
-            ),
+            &super::planned_task("TSK-002", "")
+                .replace(
+                    "epic_id: null\nstandalone_reason: bounded work",
+                    "epic_id: EPC-001\nstandalone_reason: null",
+                )
+                .replace(
+                    "integration_target: main",
+                    &format!("integration_target: {target}"),
+                ),
         );
         let path = "project-management/tasks/TSK-001.md";
         let record = std::fs::read_to_string(f.root().join(path))
@@ -440,7 +446,8 @@ fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
         f.write(path, &record);
         let head = f.commit("docs: change another criterion");
         if variant != "self" {
-            f.git(&["switch", "-qc", target]);
+            f.git(&["branch", "-f", target, &head]);
+            f.git(&["switch", "-q", target]);
             if variant == "descendant" {
                 f.write("later.md", "Later.\n");
                 f.commit("docs: later notes");
@@ -563,7 +570,102 @@ fn round_two_declared_decoy_cannot_hide_an_earlier_change() {
             text.contains("warning") && text.contains("protected branches"),
             "{text}"
         );
+        assert!(
+            !text.contains(&format!("acceptance target '{target}'")),
+            "{target}: {text}"
+        );
     }
+}
+
+#[test]
+fn round_three_ineligible_declared_target_keeps_the_default_target() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    let path = "project-management/tasks/TSK-001.md";
+    let record = std::fs::read_to_string(f.root().join(path))
+        .unwrap()
+        .replace(LINE, "feat/decoy");
+    f.write(path, &record);
+    f.write("src/lib.rs", "pub fn work() {}\n");
+    f.commit("feat: implement work");
+    f.git(&["branch", "feat/decoy"]);
+    let body = "Task: TSK-001\n\n## Summary\nWork.\n\n- Do work\n\n## Changes\n- Work\n\n## Testing\nFixture.\nNot tested: hosted CI.\n\n## Reviews\nNone: independent review follows\n";
+    let out = ci(&f, &["--pr-body", body], None);
+    let text = output(&out);
+    assert!(
+        text.contains("target 'main' (repository default)"),
+        "{text}"
+    );
+    assert!(!text.contains("acceptance target 'feat/decoy'"), "{text}");
+    assert!(text.contains("git.pr_release_impact"), "{text}");
+}
+
+#[test]
+fn round_three_epic_shaped_decoy_cannot_hide_an_earlier_change() {
+    for target in ["integration/EPC-001-decoy", "integration/EPC-777-decoy"] {
+        let f = Line::new();
+        f.git(&["switch", "-qc", "fix/TSK-002-prior"]);
+        f.write(
+            "project-management/tasks/TSK-002.md",
+            &super::planned_task("TSK-002", "")
+                .replace(
+                    "epic_id: null\nstandalone_reason: bounded work",
+                    "epic_id: EPC-001\nstandalone_reason: null",
+                )
+                .replace(
+                    "integration_target: main",
+                    &format!("integration_target: {target}"),
+                ),
+        );
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(f.root().join(path))
+            .unwrap()
+            .replace("AC-1 Work runs.", "AC-1 Changed another task.");
+        f.write(path, &record);
+        f.commit("docs: change another criterion");
+        f.git(&["branch", target]);
+        f.write("src/lib.rs", "pub fn changed() {}\n");
+        f.commit("fix: change work");
+        let out = ci(&f, &[], None);
+        let text = output(&out);
+        assert!(text.contains("work.criteria_frozen"), "{target}: {text}");
+        assert!(
+            text.contains(&format!("declared target '{target}'"))
+                && text.contains("base falls back to the policy protected branches"),
+            "{target}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("acceptance target '{target}'")),
+            "{target}: {text}"
+        );
+    }
+}
+
+#[test]
+fn round_three_cancelled_epic_line_is_not_bound() {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    let epic = super::line_adoption::fixture::EPIC_PATH;
+    let record = std::fs::read_to_string(f.root().join(epic))
+        .unwrap()
+        .replace("status: planning", "status: cancelled");
+    f.write(epic, &record);
+    let main = f.commit("docs: cancel the epic");
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    let text = output(&ci(&f, &[], None));
+    assert!(
+        text.contains(&format!(
+            "declared target '{LINE}' names EPC-001, which is cancelled"
+        )),
+        "{text}"
+    );
+    assert!(text.contains(&format!("range {}..", &main[..8])), "{text}");
+    assert!(
+        !text.contains(&format!("acceptance target '{LINE}'")),
+        "{text}"
+    );
 }
 
 #[test]

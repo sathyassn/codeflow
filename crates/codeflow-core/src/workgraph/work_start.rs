@@ -790,6 +790,20 @@ pub fn declared_work_target_at_revision(
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
+    Ok(
+        declared_work_record_at_revision(repo_root, branch, revision)?
+            .and_then(|record| record.integration_target)
+            .filter(|target| !target.is_empty())
+            .map(|target| logical_target(&target).to_owned()),
+    )
+}
+
+/// The task record a work branch claims, read at `revision`.
+fn declared_work_record_at_revision(
+    repo_root: &Path,
+    branch: &str,
+    revision: &str,
+) -> Result<Option<Record>, WorkStartError> {
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
@@ -808,12 +822,80 @@ pub fn declared_work_target_at_revision(
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
     })?;
     Ok(records
-        .values()
+        .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
-        .max_by_key(|record| record.id.len())
-        .and_then(|record| record.integration_target.as_deref())
-        .filter(|target| !target.is_empty())
-        .map(|target| logical_target(target).to_owned()))
+        .max_by_key(|record| record.id.len()))
+}
+
+/// Why `line` is not an epic line that `branch` may declare, judged from the
+/// records at `anchor`, a protected branch tip the change itself cannot
+/// write; `None` when those records bind it. The line's epic must be the
+/// branch's own (the epic a `plan/` branch names, or the epic of the task a
+/// work branch claims at `head`), must exist at `anchor` without being
+/// cancelled or archived, and a task of that epic there must target this
+/// exact line, as [`check_epic_line`] requires of a landing line. A name
+/// alone binds nothing, so a branch created under an epic-shaped name
+/// cannot bound a range.
+///
+/// # Errors
+///
+/// Returns why the repository, a revision or a record could not be read.
+pub fn epic_line_binding_refusal(
+    repo_root: &Path,
+    branch: &str,
+    head: &str,
+    line: &str,
+    anchor: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(Some(reason)),
+    };
+    let own = if let Some(plan) = branch.strip_prefix("plan/") {
+        super::line_adoption::epic_id(&format!("integration/{plan}"))
+            .ok()
+            .map(str::to_owned)
+    } else {
+        declared_work_record_at_revision(repo_root, branch, head)?.and_then(|record| record.epic_id)
+    };
+    if own.as_deref() != Some(epic_id) {
+        return Ok(Some(format!(
+            "names {epic_id}, which is not the epic of branch '{branch}'"
+        )));
+    }
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(anchor)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(format!("{anchor}: {error}")))?;
+    let records = records_from_tree(&repo, &tree)?;
+    let Some(epic) = records
+        .get(epic_id)
+        .filter(|record| record.kind == RecordKind::Epic)
+    else {
+        return Ok(Some(format!(
+            "names {epic_id}, which has no epic record on the protected branch"
+        )));
+    };
+    if matches!(epic.status.as_str(), "cancelled" | "archived") {
+        return Ok(Some(format!("names {epic_id}, which is {}", epic.status)));
+    }
+    let bound = records.values().any(|record| {
+        record.kind == RecordKind::Task
+            && record.epic_id.as_deref() == Some(epic_id)
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| logical_target(target) == line)
+    });
+    if !bound {
+        return Ok(Some(format!(
+            "is not the target of any task of {epic_id} on the protected branch"
+        )));
+    }
+    Ok(None)
 }
 
 /// The `integration_target` the task record at `path` declares.

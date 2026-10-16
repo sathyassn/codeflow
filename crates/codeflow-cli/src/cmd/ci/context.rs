@@ -32,12 +32,15 @@ pub(super) fn resolve(
         .clone()
         .map(|name| (name, "--into"))
         .or_else(|| detect_target(env).map(|name| (name, "CI target metadata")));
+    let fallback = matches!(detected.source, super::RangeSource::ProtectedBranches);
+    let base_falls_back = fallback && args.base.is_none();
+    // Eligibility is decided once: a declared target that may not select the
+    // base selects no acceptance target either.
     let declared = if explicit_target.is_none() {
-        declared_target(root, &branch, &head)?
+        eligible_declared(root, &branch, &head, protected, base_falls_back)?
     } else {
         None
     };
-    let fallback = matches!(detected.source, super::RangeSource::ProtectedBranches);
     let mut range_source = detected.source.to_string();
     let mut base_candidates = detected.base_candidates;
     if let Some(base) = &args.base {
@@ -59,7 +62,6 @@ pub(super) fn resolve(
                 source,
                 &branch,
                 &head,
-                protected,
                 explicit_target.is_some(),
             )? {
                 base_candidates = vec![tip];
@@ -140,29 +142,77 @@ fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
     }
 }
 
+/// Whether a declared target may select the base and the acceptance target:
+/// a protected branch, or an epic line that the records on the protected
+/// branch bind to this branch's epic. A name alone binds nothing. A rejected
+/// target is reported once and selects neither.
+fn eligible_declared(
+    root: &Path,
+    branch: &str,
+    head: &str,
+    protected: &[String],
+    base_falls_back: bool,
+) -> Result<Option<String>, String> {
+    let Some(target) = declared_target(root, branch, head)? else {
+        return Ok(None);
+    };
+    let name = normalize(&target);
+    let policy = super::GitPolicy {
+        protected_branches: protected.to_vec(),
+        ..Default::default()
+    };
+    let shape = name != normalize(branch) && codeflow_core::workgraph::is_stable_work_target(&name);
+    let refusal = if shape && policy.branch_is_protected(&name) {
+        None
+    } else if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
+        Some(format!(
+            "is not a protected branch or a valid epic line distinct from '{branch}'"
+        ))
+    } else {
+        let tips = detect_range(|_: &str| None, protected).base_candidates;
+        match resolve_base(root, &tips).map_err(|error| base_refusal(&error))? {
+            Some(anchor) => codeflow_core::workgraph::epic_line_binding_refusal(
+                root, branch, head, &name, &anchor,
+            )
+            .map_err(|error| error.to_string())?
+            .map(|reason| format!("{reason}, so it is not a bound epic line")),
+            None => Some(
+                "cannot be checked as an epic line because no protected branch resolves".into(),
+            ),
+        }
+    };
+    let Some(reason) = refusal else {
+        return Ok(Some(target));
+    };
+    let effect = if base_falls_back {
+        "base falls back to the policy protected branches and the acceptance target is chosen without it"
+    } else {
+        "the acceptance target is chosen without it"
+    };
+    let warning = codeflow_core::remedy::Finding::new(
+        format!("branch declared target '{target}' {reason}; {effect}"),
+        codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+    );
+    println!("{}", warning.line("codeflow ci", "warning"));
+    Ok(None)
+}
+
 fn local_base(
     root: &Path,
     target: &str,
     source: &str,
     branch: &str,
     head: &str,
-    protected: &[String],
     explicit: bool,
 ) -> Result<Option<String>, String> {
-    let allowed = explicit
-        || (normalize(target) != normalize(branch) && eligible_target(target, branch, protected));
-    let reason = if !allowed {
-        format!("is not a protected branch or a valid epic line distinct from '{branch}'")
-    } else if let Some(tip) = resolve_base(root, &target_candidates(target))? {
+    if let Some(tip) = resolve_base(root, &target_candidates(target))? {
         if !explicit {
             check_declared_base(root, target, branch, &tip, head)?;
         }
         return Ok(Some(tip));
-    } else {
-        "does not resolve".into()
-    };
+    }
     let warning = codeflow_core::remedy::Finding::new(
-        format!("{source} '{target}' {reason}; base falls back to the policy protected branches"),
+        format!("{source} '{target}' does not resolve; base falls back to the policy protected branches"),
         codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
     );
     println!("{}", warning.line("codeflow ci", "warning"));

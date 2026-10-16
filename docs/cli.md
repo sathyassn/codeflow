@@ -183,7 +183,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
 | | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches. An unresolved or unsuitable declared target warns; pass --base to select the intended range. |
 | | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
-| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Only protected branches and valid epic lines may supply a declared base. Pass --branch when an explicit --head belongs to another line. |
+| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Only protected branches and bound epic lines may supply a declared target. Pass --branch when an explicit --head belongs to another line. |
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
@@ -384,10 +384,9 @@ Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 no branch. Detached candidates need `--branch`.
 
 Without `--base`: CI metadata, `CODEFLOW_DEFAULT_BRANCH`,
-`--into` or the declared target, then protected branches. Declared bases require
-protection or valid `integration/EPC-NNN-*` names. Self-targets and unsuitable
-branches warn and use the protected fallback. Unresolved targets
-warn. Targets containing the head require `--base`.
+`--into` or the declared target, then protected branches. Declared targets count
+only when protected or bound to the branch's epic on a protected branch; others
+and unresolved targets warn. Targets containing the head require `--base`.
 
 Acceptance uses `--into`, CI metadata, the declared target, a named `--base`,
 a protected or eligible epic line at the base commit, then the repository

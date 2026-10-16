@@ -64,7 +64,7 @@ pub struct CiArgs {
     /// Defaults to CI metadata, then the checkout. Without --into, its declared target selects
     /// the base when no --base or CI base exists: a task's `integration_target`,
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
-    /// Only protected branches and valid epic lines may supply a declared base.
+    /// Only protected branches and bound epic lines may supply a declared target.
     /// Pass --branch when an explicit --head belongs to another line.
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
