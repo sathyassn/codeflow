@@ -5,6 +5,8 @@
 //! capability table from `docs/capabilities.md`. Every tier degrades
 //! gracefully: absent layers become notes, never errors.
 
+use crate::workgraph::history;
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -138,6 +140,7 @@ pub struct StatusView {
 /// tier — absent layers are reported in `notes`.
 #[must_use]
 pub fn collect_status(repo_root: &Path) -> StatusView {
+    let _judgment = history::judgment();
     let mut notes = Vec::new();
 
     let (branch, worktrees, cleanup_target, cleanup) =
@@ -420,7 +423,10 @@ fn classify_cleanup(
             format!("open claim: nothing of it has landed in {}", target.name),
         );
     }
-    if oid == target.oid || repo.graph_descendant_of(target.oid, oid).unwrap_or(false) {
+    if let Err(error) = history::check(repo) {
+        return (CleanupDisposition::RetainUnproven, error.to_string());
+    }
+    if oid == target.oid || history::descendant_of(repo, target.oid, oid).unwrap_or(false) {
         return (
             CleanupDisposition::Removable,
             format!("landed by ancestry in {}", target.name),

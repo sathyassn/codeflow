@@ -3,6 +3,8 @@
 //! Performs a tree-level merge between the current HEAD and a target branch
 //! to detect conflicts before PR creation, without modifying the working tree.
 
+use crate::workgraph::history;
+
 use std::path::Path;
 
 use crate::error::GitError;
@@ -52,9 +54,14 @@ pub fn check_merge_conflicts(
     let target_ref = find_target_ref(&repo, target_branch)?;
     let target_commit = target_ref.peel_to_commit()?;
 
-    let merge_base_oid = repo
-        .merge_base(head_commit.id(), target_commit.id())
-        .map_err(|_| GitError::NoCommonAncestor(target_branch.to_string()))?;
+    let merge_base_oid =
+        history::merge_base(&repo, head_commit.id(), target_commit.id()).map_err(|error| {
+            if error.code() == git2::ErrorCode::NotFound {
+                GitError::NoCommonAncestor(target_branch.to_string())
+            } else {
+                GitError::Git2(error)
+            }
+        })?;
 
     // Fast-forward: HEAD is at or behind the merge base.
     if head_commit.id() == merge_base_oid {

@@ -339,12 +339,10 @@ impl Adopted {
         Self { _dir: dir, root }
     }
 
-    /// Push `branch` with its tip not checked out, so the push set's tree
-    /// checks (which read the working checkout) leave it to CI and the
-    /// journey sees only the git-data checks, the release preflight among
-    /// them.
+    /// Push from the candidate's clean checkout so tree checks can run
+    /// alongside the release preflight.
     fn push(&self, branch: &str, draft: Option<&Path>) -> Output {
-        git(&self.root, &["switch", "-q", "main"]);
+        git(&self.root, &["switch", "-q", branch]);
         let mut command = Command::new("git");
         // No CODEFLOW_BIN: the hook passes itself to release.py, and the
         // draft below is read only if it does.

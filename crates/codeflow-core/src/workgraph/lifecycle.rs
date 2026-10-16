@@ -18,6 +18,8 @@
 //! a range whose base predates it judges older records from their baseline
 //! blobs.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -611,8 +613,7 @@ fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> Result<bool
     if tip == commit {
         return Ok(true);
     }
-    repo.graph_descendant_of(tip, commit)
-        .map_err(|error| error.to_string())
+    history::descendant_of(repo, tip, commit).map_err(|error| error.to_string())
 }
 
 /// The baseline entries of a parsed project config: a list, or a single
@@ -1739,10 +1740,13 @@ fn frozen_spec_problems(
 /// escaped YAML string names the spec too). The state is then derived at
 /// each commit that changed a relevant path, from those paths alone, and
 /// the walk stops at the first implemented state. Side branches count
-/// (`--full-history`); a shallow clone reads only the history it has.
+/// (`--full-history`); shallow clones refuse this judgment.
 fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Result<bool, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let output = crate::git::command()
+    let root = repo.workdir().unwrap_or(repo.path());
+    history::check_command(root)?;
+    let output = history::command()
+        .current_dir(root)
         .arg("--git-dir")
         .arg(repo.path())
         .args([
@@ -2152,14 +2156,21 @@ fn landing_paths(
         RecordView::parse(record.kind, &record.path, text).map(|view| Some(view.status))
     };
     while commit.id() != base {
-        if commit.parent_count() == 0 {
+        if history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
             return Ok(None);
         }
-        let parent = commit.parent(0).map_err(|error| error.to_string())?;
+        let parent = history::parent(repo, &commit, 0).map_err(|error| error.to_string())?;
         let arrived = status_at(&commit)?.as_deref() == Some(to)
             && status_at(&parent)?.as_deref() != Some(to);
         if arrived {
-            if commit.parent_count() < 2 {
+            if history::parents(repo, &commit)
+                .map_err(|error| error.to_string())?
+                .len()
+                < 2
+            {
                 return Ok(None);
             }
             return changed_paths(
@@ -2200,7 +2211,7 @@ pub(super) fn reopened_in_range(
     };
     let base = resolve(base)?;
     let tip = resolve(head.unwrap_or("HEAD"))?;
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|error| error.to_string())?;
     walk.push(tip)
         .and_then(|()| walk.hide(base))
         .map_err(|error| error.to_string())?;
@@ -2213,7 +2224,11 @@ pub(super) fn reopened_in_range(
             };
             let status = RecordView::parse(record.kind, &record.path, &content)?.status;
             if status != "complete" {
-                if let Some(parent) = commit.parent_ids().next() {
+                if let Some(parent) = history::parents(repo, &commit)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .next()
+                {
                     if let Some(content) = super::acceptance::blob_at(repo, parent, &record.path)? {
                         if RecordView::parse(record.kind, &record.path, &content)?.status
                             == "complete"
@@ -2293,8 +2308,7 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
                     .map(|commit| commit.id())
                     .map_err(|error| error.to_string())
             };
-            let anchor = repo
-                .merge_base(resolve("HEAD")?, resolve(&target)?)
+            let anchor = history::merge_base(&repo, resolve("HEAD")?, resolve(&target)?)
                 .map_err(|error| error.to_string())?;
             Some(Graph::from_revision(&repo, &anchor.to_string())?)
         }
@@ -2365,8 +2379,7 @@ fn judge_pull_request_shaped(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target = commit(authority)?;
-    let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+    let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
     judge_range_against(
         repo_root,
@@ -2399,8 +2412,7 @@ pub fn judge_release_range(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let target = commit(authority)?;
-    let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+    let anchor = history::merge_base(&repo, commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
     judge_range_against(
         repo_root,
@@ -2602,7 +2614,7 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         };
         match target {
             Some(target) => {
-                tip != target && !repo.graph_descendant_of(target, tip).unwrap_or(false)
+                tip != target && !history::descendant_of(repo, target, tip).unwrap_or(false)
             }
             None => true,
         }

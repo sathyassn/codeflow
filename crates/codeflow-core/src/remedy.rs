@@ -278,6 +278,10 @@ catalog! {
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
+    /// The criteria version a changed task record is judged against
+    /// (TSK-306): evidence, not a refusal.
+    CRITERIA_AUTHORITY = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` names the judged point and version whose criteria the record is compared with, and any point whose older version it set aside; a human reviewer confirms that version is the one the task keeps";
     /// A text correction of a completed standalone task's criteria
     /// (ADR-0080): evidence, not a refusal.
     CRITERIA_CORRECTION = Step::Codeflow("codeflow ci"),
@@ -486,9 +490,12 @@ catalog! {
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
         "run `codeflow ci` and `codeflow validate --docs` by hand";
-    /// A pushed ref whose tree checks ran on another checkout.
+    /// A pushed ref whose tree checks did not run at a nonblocking level.
     PUSH_TREE_UNCHECKED = Step::Codeflow("codeflow validate"),
-        "push from a clean checkout of the pushed commit (commit or discard tracked edits first), or run `codeflow validate --docs` and `codeflow test --mode quick` on it by hand";
+        "run `codeflow validate --docs` and `codeflow test --mode quick` in a clean, complete checkout of the pushed commit";
+    /// A pushed ref whose unchecked tree must refuse at block level.
+    PUSH_TREE_REQUIRED = Step::Git("git switch"),
+        "push from a clean, complete checkout of each pushed commit. Select its branch with `git switch <branch>`";
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";

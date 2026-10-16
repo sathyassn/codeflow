@@ -8,6 +8,8 @@
 //! since the read (a concurrent edit), and replaces it atomically through a
 //! temporary file in the same directory.
 
+use crate::workgraph::history;
+
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -337,7 +339,7 @@ fn own_range_base(
         })
         .and_then(|target| repo.revparse_single(&target).ok())
         .and_then(|object| object.peel_to_commit().ok())
-        .and_then(|target| repo.merge_base(head, target.id()).ok())
+        .and_then(|target| history::merge_base(repo, head, target.id()).ok())
 }
 
 /// The binding of a completion to the reviewed commit (R-60), with the

@@ -1,5 +1,7 @@
 //! Read-only state inspection for local-work discard checks.
 //! No mutation is performed by inspect. Tests create disposable Git fixtures.
+use crate::workgraph::history;
+
 use super::git_guard::Retarget;
 use git2::{BranchType, Repository, Status, StatusOptions};
 use std::collections::BTreeSet;
@@ -196,9 +198,7 @@ fn delete_branches(repo: &Repository, names: &[String]) -> Result<Option<String>
         let mut backed = false;
         for other in &kept {
             if *other == tip
-                || repo
-                    .graph_descendant_of(*other, tip)
-                    .map_err(|e| e.to_string())?
+                || history::descendant_of(repo, *other, tip).map_err(|e| e.to_string())?
             {
                 backed = true;
                 break;

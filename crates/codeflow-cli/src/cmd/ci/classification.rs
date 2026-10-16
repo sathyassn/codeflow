@@ -990,7 +990,7 @@ pub(super) fn range_changes(
 /// The raw `git diff -z --name-status` output for the net change from
 /// `base` to `head`.
 fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args([
