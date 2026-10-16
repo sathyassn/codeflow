@@ -1,0 +1,104 @@
+# The policy schema of the last released binary: codeflow v3.1.1.
+# One line per key: the dotted key path, a tab, and its kind. Lines starting
+# with # are comments. Kinds: level (off|warn|allow|block), uint (u32),
+# string-list, string, enum:a|b|c, profiles (array), mapping (object),
+# retry-entries (array) and deprecated (accepted, any value).
+# tests/policy_key_placement.rs reads this list; see "Where a new key goes"
+# in docs/policy-reference.md.
+#
+# It pins each key's name, kind and valid values, not the key-specific checks
+# of the released validator (a regular expression, a remote name, a
+# non-empty required_checks list, the shape inside a profile entry).
+#
+# Refresh it after a release publishes, in the change that first needs the
+# new list. A stale list only keeps a newer key out of the template, which is
+# the safe side. Regenerate it from the release tag with the script below,
+# saved as gen.py and run as `python3 gen.py v3.1.1` in a clone that has the
+# tag; the output must equal the non-comment lines of this file.
+#   import re, subprocess, sys
+#   tag = sys.argv[1]
+#   src = subprocess.check_output(["git", "show", f"{tag}:crates/codeflow-core/src/hooks/policy_schema.rs"], text=True)
+#   rows = {}
+#   for m in re.finditer(r'path: "([^"]*)",\s*kind: KeyKind::(\w+)(?:\(&\[([^\]]*)\]\))?', src):
+#       path, kind, values = m.groups()
+#       if kind == "Enum":
+#           kind = "enum:" + "|".join(re.findall(r'"([^"]*)"', values))
+#       else:
+#           kind = {"Level": "level", "UInt": "uint", "StringList": "string-list", "String": "string",
+#                   "Profiles": "profiles", "SectionMapping": "mapping", "RetryEntries": "retry-entries"}[kind]
+#       rows[path] = kind
+#   block = re.search(r"pub const DEPRECATED_KEYS.*?\n\];", src, re.S).group(0)
+#   for key in re.findall(r'^        "([a-z_.]+)",$', block, re.M):
+#       rows[key] = "deprecated"
+#   for path in sorted(rows):
+#       print(f"{path}\t{rows[path]}")
+git.ai_attribution	level
+git.automation_profiles	profiles
+git.branch_naming	level
+git.branch_prefixes	string-list
+git.breaking_watch_paths	string-list
+git.claim_remotes	string-list
+git.clean_regenerable	string-list
+git.commit_body	level
+git.commit_body_bullet_max_len	uint
+git.commit_body_max_bullets	uint
+git.commit_desc_max_len	uint
+git.commit_emoji	level
+git.commit_footer_tokens	string-list
+git.commit_format	level
+git.commit_required_footers	string-list
+git.commit_subject_max_len	uint
+git.commit_ticket_keys	string-list
+git.commit_ticket_pattern	string
+git.commit_ticket_required	level
+git.commit_to_protected	level
+git.commit_types	string-list
+git.conflict_markers	level
+git.delete_protected	level
+git.dep_audit	level
+git.direct_changes	enum:allow|forbid
+git.discard_uncommitted	level
+git.force_push_protected	level
+git.force_push_unprotected	level
+git.hard_reset_protected	level
+git.hook_integrity	level
+git.local_ref_protection	level
+git.merge_to_protected	level
+git.policy_characters	level
+git.pr_body_max_words	uint
+git.pr_breaking_level	enum:patch|minor|major
+git.pr_code_sections	string-list
+git.pr_merge_to_protected	level
+git.pr_release_impact	level
+git.pr_required_sections	string-list
+git.pr_section_mapping	mapping
+git.pr_sections	level
+git.pr_summary	level
+git.product_paths	string-list
+git.protected_branches	string-list
+git.push_to_protected	level
+git.release_branch_pattern	string
+git.required_checks	string-list
+git.root_branch	string
+git.root_checkout_commits	level
+git.secret_scan	level
+git.security_review	level
+git.test_gate_on_push	level
+git.work_planning	enum:block|warn
+git.work_records	enum:block|warn
+git.worktree_locations	string-list
+guidance.prompt_reminders	enum:off|allow|warn
+human_authorization	deprecated
+schema_version	uint
+security.dangerous_commands	enum:block
+security.enforcement_baseline	level
+security.headless_opt_in	deprecated
+security.headless_peer_runs	level
+security.interpreter_scan	level
+security.outward_actions	level
+security.privilege_escalation	level
+security.sandbox_retry	enum:allowlist|block
+security.sandbox_retry_allow	retry-entries
+security.script_bypass	level
+security.secret_reads	level
+security.workflow_pushes	enum:queue|allow
