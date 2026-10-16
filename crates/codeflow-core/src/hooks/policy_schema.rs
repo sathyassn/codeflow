@@ -295,7 +295,8 @@ pub const SCHEMA: [KeySpec; 68] = [
                 construct feeding it is unresolved, named by its family. \
                 The output of a program other than the modelled builtins is \
                 outside text, judged by its trailing components as an \
-                unassigned variable is. \
+                unassigned variable is, and also as if empty, the spelled \
+                pieces around it joined. \
                 A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \

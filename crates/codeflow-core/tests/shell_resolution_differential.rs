@@ -724,6 +724,15 @@ const CASES: &[(&str, &str, &str)] = &[
     ("path program", "R", r#"echo 173302 "$(/usr/bin/true)" x"#),
     ("path program", "R", r"echo $(/usr/bin/true) 173302"),
     ("path program", "U", r"echo ok .cla* 173302"),
+    // An expansion that is empty joins the spelled pieces around it.
+    ("empty span", "R", r"echo notes$(/bin/cat /dev/null).txt"),
+    ("empty span", "R", r"echo notes${CF_NOPE}.txt"),
+    ("empty span", "R", r"echo 1733$(/usr/bin/true)02"),
+    (
+        "empty span",
+        "R",
+        r#"printf '%s\n' "1733$(/bin/cat /dev/null)02""#,
+    ),
     // Globs, braces and tildes.
     ("expansion", "U", r"printf '%s\n' 1733{02,} 173302"),
     ("expansion", "U", r"printf '%s\n' ~ 173302"),

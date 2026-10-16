@@ -1547,8 +1547,21 @@ mod tests {
                 "echo \"$TAG\" .cl?ude/settings.js?n | python3 -c 'import sys; open(sys.stdin.read().split()[-1],\"w\")'",
                 "python3 -c \"open('$(echo ok .[c]laude)'.split()[1]+'/settings.json','w')\"",
                 "printf '%s %s\\n' ok .cla* | python3 -c 'import sys; open(sys.stdin.read().split()[1]+\"/settings.json\",\"w\")'",
+                // Round 15: an empty expansion inside one written word
+                // joins the spelled directory and final component.
+                "echo .claude/$(/usr/bin/true)settings.json | python3 -c 'import sys; print(sys.stdin.read())'",
+                "print -r -- .claude/$(/bin/cat /dev/null)settings.json | python3 -c 'import sys; print(sys.stdin.read())'",
             ],
             false,
+        );
+        // The same join naming policy authority refuses at every level.
+        assert_public_refused(
+            &repo,
+            &[
+                "echo .git/$(/bin/cat /dev/null)config | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo .git/${nope}config | python3 -c 'import sys; print(sys.stdin.read())'",
+            ],
+            true,
         );
         assert_public_allowed(
             &repo,
@@ -1576,6 +1589,8 @@ mod tests {
                 "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$TAG\" *.txt; python3 src/app.py",
                 "python3 lint.py \"$(echo ok src/*.py)\"",
+                "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo notes.txt \"$(/bin/cat /dev/null)\"; python3 src/app.py",
             ],
         );
     }

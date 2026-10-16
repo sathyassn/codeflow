@@ -59,8 +59,10 @@
 //! bash and zsh produce, checked against both shells by a differential
 //! test; any other construct feeding it is unresolved, named by its
 //! family, never read by its spelling. The output of a program other than
-//! the modelled builtins is outside text, as an unassigned variable is. A
-//! word is also
+//! the modelled builtins is outside text, as an unassigned variable is.
+//! A part filled in at run time may be empty, so a word holding one is
+//! also judged with it removed, the spelled pieces joined (review round
+//! 15). A word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
 //! backstop. The guard stops at shell grammar: a path the interpreter's own
@@ -770,20 +772,98 @@ const QUOTED: &str = "a quoted string on a line where a shell or interpreter run
 
 /// A word on a line whose shell or interpreter code the guard cannot read
 /// in full, or a word of a quoted string where one runs, judged by its
-/// trailing components.
+/// trailing components. A part filled in at run time may be empty, which
+/// joins the spelled pieces around it (TSK-302 review round 15): the word
+/// is judged with each such part removed too, for authority and for
+/// enforcement alike.
 fn opaque_line_word(value: &str, why: &str) -> Option<Reach> {
-    if let Some(name) = tail_names_authority(value) {
+    tail_reach(value, value, why).or_else(|| {
+        empty_spans(value)
+            .iter()
+            .find_map(|joined| tail_reach(joined, value, why))
+    })
+}
+
+/// [`opaque_line_word`] for one reading of a word, shown as `shown`.
+fn tail_reach(word: &str, shown: &str, why: &str) -> Option<Reach> {
+    let empty = if word == shown {
+        String::new()
+    } else {
+        format!(" (`{word}` when what is filled in is empty)")
+    };
+    if let Some(name) = tail_names_authority(word) {
         return Some(Reach::Authority(format!(
-            "`{value}` could be policy authority metadata `{name}`: {why}"
+            "`{shown}` could be policy authority metadata `{name}`{empty}: {why}"
         )));
     }
-    let reached = git_guard::word_could_name(value)?;
-    let message = format!("`{value}` could be `{reached}`: {why}");
+    let reached = git_guard::word_could_name(word)?;
+    let message = format!("`{shown}` could be `{reached}`{empty}: {why}");
     Some(if names_authority(reached) {
         Reach::Authority(message)
     } else {
         Reach::Enforcement(message)
     })
+}
+
+/// `value` with every part the shell fills in at run time removed, as
+/// it reads when each is empty: a `${...}`, `$(...)` or backquoted span,
+/// a substitution placeholder, and a `$` with the name it introduces or,
+/// read as a composed value's unknown piece, the `$` alone. The distinct
+/// readings other than `value` itself.
+fn empty_spans(value: &str) -> Vec<String> {
+    if !value.contains(['$', '`', '\u{1}', '\u{2}']) {
+        return Vec::new();
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let mut readings = Vec::new();
+    for named in [false, true] {
+        let mut out = String::new();
+        let mut at = 0;
+        while let Some(&c) = chars.get(at) {
+            at += 1;
+            match c {
+                '\u{1}' | '\u{2}' => {}
+                '`' => {
+                    while chars.get(at).is_some_and(|c| *c != '`') {
+                        at += 1;
+                    }
+                    at += 1;
+                }
+                '$' => match chars.get(at) {
+                    Some(open @ ('{' | '(')) => {
+                        let close = if *open == '{' { '}' } else { ')' };
+                        let mut depth = 0usize;
+                        while let Some(&d) = chars.get(at) {
+                            at += 1;
+                            if d == *open {
+                                depth += 1;
+                            } else if d == close {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Some(d) if named && (d.is_ascii_alphabetic() || *d == '_') => {
+                        while chars
+                            .get(at)
+                            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        {
+                            at += 1;
+                        }
+                    }
+                    Some(d) if named && (d.is_ascii_digit() || "@*#?!-".contains(*d)) => at += 1,
+                    _ => {}
+                },
+                other => out.push(other),
+            }
+        }
+        if out != value && !out.is_empty() && !readings.contains(&out) {
+            readings.push(out);
+        }
+    }
+    readings
 }
 
 /// [`value_reach`] for a code literal: a word inside the interpreter's own
