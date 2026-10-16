@@ -99,7 +99,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--owner <OWNER>` | Who owns the blocker. |
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
-| | `--acceptance <FILE>` | A file holding the acceptance block (the YAML between the fences) to add to the Closeout on completion. |
+| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
 | `codeflow spec new <TITLE>` | | Allocate the next `SPC-NNN`, scaffold it, and link the consuming work item |
 | | `--for <EPC-NNN\|TSK-NNN>...` | Epic or task that consumes this specification; repeat the flag (or separate ids with commas) for several consumers. Required. |
 | | `<TITLE>` | Specification title. |
@@ -121,7 +121,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--owner <OWNER>` | Who owns the blocker. |
 | | `--revisit <REVISIT>` | The event that revisits the blocker. |
 | | `--scope <SCOPE>` | Where a cancelled record's scope went. |
-| | `--acceptance <FILE>` | A file holding the acceptance block (the YAML between the fences) to add to the Closeout on completion. |
+| | `--acceptance <FILE>` | A file holding the acceptance block to add to the Closeout on completion: the YAML between the fences, starting with a top-level `acceptance:` key that holds `reviewed`, `review`, `criteria`, `journey`, `not_verified`, `follow_ups` and `verdict`. |
 | `codeflow adr new <TITLE>` | | Number the next ADR and write it from the template as `proposed` |
 | | `<TITLE>` | Decision title. |
 | `codeflow ids seed` | | Register every id on every ref and in retained history, once (maintainer) |
