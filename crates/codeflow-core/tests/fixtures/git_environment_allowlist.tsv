@@ -1,5 +1,5 @@
 # file	normalized call span	count	reason
-crates/codeflow-cli/src/cmd/ci.rs	env(key)	2	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
 crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
 crates/codeflow-cli/src/cmd/mod.rs	env(CHILD,&gone)	1	A test re-runs its own binary from a removed directory; this call sets only the child marker CODEFLOW_R22_REMOVED_CWD (the directory to remove) and leaves Git configuration untouched.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"inner")	1	Presentation service and canary environment controls; these children perform no Git operations.
