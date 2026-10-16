@@ -110,6 +110,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
+    ("CRITERIA_AUTHORITY", Excluded(HumanAuthority)),
     ("CRITERIA_CORRECTION", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
@@ -170,6 +171,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PUSH_SET_VALIDATE", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_TREE_UNCHECKED", Runs),
+    ("PUSH_TREE_REQUIRED", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
     ("PUSH_DESTINATION_SILENT", Runs),
     ("PUSH_REWRITE", Runs),
@@ -1933,8 +1935,30 @@ fn clears_push_set_validate() {
 
 #[test]
 fn clears_push_tree_unchecked() {
+    clear_push_tree("warn", "PUSH_TREE_UNCHECKED");
+}
+
+#[test]
+fn clears_push_tree_required() {
+    clear_push_tree("block", "PUSH_TREE_REQUIRED");
+}
+
+fn clear_push_tree(level: &str, row: &str) {
     let dir = scaffolded("--standard");
     let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "chore/tree-gate"]);
+    push::set_policy(&root, &[("test_gate_on_push", level.into())]);
+    git(&root, &["add", "-A"]);
+    git(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "chore: configure the tree gate",
+        ],
+    );
     with_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     commit_all(&root, "chore: add a quick target");
@@ -1945,16 +1969,28 @@ fn clears_push_tree_unchecked() {
     let check = || push(&root, &["origin", "feat/y"]);
     let before = check();
     let printed = block(&before, "did not run for").to_string();
-    assert_prints_row(&printed, "PUSH_TREE_UNCHECKED");
-    assert!(
-        printed.contains("push from a clean checkout of the pushed commit"),
-        "{printed}"
-    );
-    git(&root, &["switch", "-q", "feat/y"]);
+    assert_prints_row(&printed, row);
+    assert_eq!(before.contains("BLOCKED"), level == "block", "{before}");
+    if level == "block" {
+        let switch = printed_command(&printed, row, None);
+        run_printed(&root, &switch, &[("<branch>", "feat/y")], &[]);
+    } else {
+        git(&root, &["switch", "-q", "feat/y"]);
+    }
     write(&root, "y.txt", "y\n");
     commit_all(&root, "feat: add y");
+    if level == "warn" {
+        let validate = printed_command(&printed, row, None);
+        run_printed(&root, &validate, &[], &[]);
+        let quick = printed
+            .split('`')
+            .find(|span| span.starts_with("codeflow test "))
+            .expect("the remedy names its quick check");
+        run_printed(&root, quick, &[], &[]);
+    }
     let after = check();
     assert!(!after.contains("did not run for"), "{after}");
+    assert!(after.contains("quick targets passed"), "{after}");
 }
 
 #[test]
