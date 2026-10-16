@@ -1,0 +1,11 @@
+id = "TSK-333"
+uid = "a6593660-0a7e-4837-ba64-453f56c31716"
+kind = "TSK"
+title = "Version pins compare with one parser everywhere"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-16T13:35:01Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
