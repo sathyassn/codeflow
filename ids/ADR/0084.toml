@@ -1,0 +1,11 @@
+id = "ADR-0084"
+uid = "a5c3b822-40ec-4870-a185-0f71228430df"
+kind = "ADR"
+title = "Record-only redactions retain acceptance results and review provenance"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-16T14:35:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
