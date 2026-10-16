@@ -330,3 +330,22 @@ fn branches_sharing_a_base_refuse_both_spellings_until_into_is_given() {
         passes(&ci(&f, &["--base", spelling, "--into", LINE], None));
     }
 }
+
+#[test]
+fn a_protected_target_wins_over_an_ordinary_branch_alias() {
+    let f = Line::new();
+    f.write("line.md", "Line notes.\n");
+    f.commit("docs: line notes");
+    f.git(&["branch", "feat/alias", "main"]);
+    f.git(&["switch", "-qc", "feat/unbound"]);
+    let base = f.git(&["rev-parse", "main"]);
+    for spelling in ["main", base.as_str()] {
+        let out = ci(&f, &["--base", spelling], None);
+        passes(&out);
+        assert!(
+            output(&out).contains("acceptance target 'main'"),
+            "{}",
+            output(&out)
+        );
+    }
+}

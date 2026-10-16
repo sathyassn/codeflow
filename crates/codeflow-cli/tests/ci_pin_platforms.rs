@@ -307,7 +307,7 @@ impl Fixture {
         match platform {
             Platform::Generic => {
                 if let Some(target) = target {
-                    command.arg(target).arg(head);
+                    command.arg(target).arg(head).env("GITHUB_BASE_REF", "main");
                 }
             }
             Platform::GitLab => {
@@ -318,6 +318,7 @@ impl Fixture {
                 if let Some(target) = target {
                     command
                         .env("CI_MERGE_REQUEST_EVENT_TYPE", "merged_result")
+                        .env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "main")
                         .env("CI_MERGE_REQUEST_TARGET_BRANCH_SHA", target)
                         .env("CI_MERGE_REQUEST_DIFF_BASE_SHA", target);
                 }
@@ -327,7 +328,9 @@ impl Fixture {
                     .env("BITBUCKET_COMMIT", head)
                     .env("BITBUCKET_BRANCH", "feat/x");
                 if let Some(target) = target {
-                    command.env("BITBUCKET_PR_DESTINATION_COMMIT", target);
+                    command
+                        .env("BITBUCKET_PR_DESTINATION_COMMIT", target)
+                        .env("BITBUCKET_PR_DESTINATION_BRANCH", "main");
                 }
             }
         }

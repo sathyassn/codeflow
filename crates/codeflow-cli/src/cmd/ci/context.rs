@@ -64,11 +64,21 @@ pub(super) fn resolve(
                 base_candidates = candidates;
                 range_source = format!("{source} '{target}' for branch '{branch}'");
             } else {
-                println!("codeflow ci: warning: declared target '{target}' does not resolve; base falls back to the policy protected branches; pass --base <ref> to judge against the intended target");
+                let warning = codeflow_core::remedy::Finding::new(
+                    format!("declared target '{target}' does not resolve; base falls back to the policy protected branches"),
+                    codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+                );
+                println!("{}", warning.line("codeflow ci", "warning"));
             }
         }
     }
-    let base = resolve_base(root, &base_candidates)?;
+    let base = resolve_base(root, &base_candidates).map_err(|error| {
+        codeflow_core::remedy::Finding::new(
+            format!("cannot resolve the base because git refused it: {error}"),
+            codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
+        )
+        .to_string()
+    })?;
     // Pin every downstream reader to the same object, even if a ref moves.
     if let Some(base) = &base {
         base_candidates = vec![base.clone()];
@@ -88,11 +98,11 @@ pub(super) fn resolve(
     } else if let Some(target) = declared {
         (Some(normalize(&target)), "branch declared target")
     } else if empty_push {
-        (None, "empty push range")
+        (None, "range without an acceptance target")
     } else {
         let inferred = base
             .as_deref()
-            .map(|base| target_at_commit(root, base))
+            .map(|base| target_at_commit(root, base, protected, tracked))
             .transpose()?
             .flatten();
         (inferred, "branches at the resolved base commit")
@@ -190,13 +200,33 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
 }
 
 /// Infer by object identity, never by the spelling supplied by the caller.
-fn target_at_commit(root: &Path, base: &str) -> Result<Option<String>, String> {
-    let names = branches(root)?
+fn target_at_commit(
+    root: &Path,
+    base: &str,
+    protected: &[String],
+    tracked: bool,
+) -> Result<Option<String>, String> {
+    let mut names = branches(root)?
         .into_iter()
         .filter(|(_, sha)| sha == base)
         .map(|(name, _)| name)
         .collect::<BTreeSet<_>>();
     if names.len() > 1 {
+        let targets = names
+            .iter()
+            .filter(|name| {
+                name.starts_with("integration/") || protected.iter().any(|p| normalize(p) == **name)
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !targets.is_empty() {
+            names = targets;
+        }
+    }
+    if names.len() > 1 {
+        if !tracked {
+            return Ok(None);
+        }
         return Err(format!("resolved base commit names several branches: {}; pass --into <target> or --branch <name> with a declared target", names.into_iter().collect::<Vec<_>>().join(", ")));
     }
     Ok(names.into_iter().next())
@@ -210,10 +240,10 @@ fn branches(root: &Path) -> Result<Vec<(String, String)>, String> {
         if branch.get().symbolic_target_bytes().is_some() {
             continue;
         }
-        let name = branch
-            .name()
-            .map_err(|e| e.to_string())?
-            .ok_or("branch name is not valid UTF-8")?;
+        let Some(name) = branch.name().map_err(|e| e.to_string())? else {
+            // A byte-only name cannot be supplied as CLI branch context.
+            continue;
+        };
         let name = if branch.get().is_remote() {
             name.split_once('/').map_or(name, |(_, name)| name)
         } else {

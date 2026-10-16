@@ -379,22 +379,20 @@ does not by itself mean enforcement succeeded.
 
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 
-`codeflow ci` resolves base and head to commit IDs before running range checks.
-It prints the branch context and its source. `--branch` also selects the
-acceptance-binding mode, frozen or amendable; an explicit `--head` does not
-select a branch. For a detached candidate, pass the branch whose work is being
-judged.
+`codeflow ci` pins base and head to commit IDs and prints the branch context's
+source. `--branch` selects frozen or amendable acceptance binding;
+`--head` alone does not select a branch. Detached candidates need `--branch`.
 
-Without `--base`, CI base metadata and `CODEFLOW_DEFAULT_BRANCH` take priority.
-Next comes `--into`, when supplied, or the branch's declared target: a task's `integration_target`, the
-epic line named by a `plan/EPC-NNN-*` branch, or the default branch for an
-`integration/*` line. The protected-branch fallback warns if a declared target
-does not resolve. Pass `--base` to choose the range explicitly. `--into`
-selects the acceptance target; otherwise CI target metadata, the branch's
-declared target, or branches at the resolved base commit supply it. When
-several branches share the base, the command refuses with instructions to pass `--into` or `--branch`. A tracked range also refuses when its branch
-or target context is missing. An empty range without a PR body does not need
-a target.
+Without `--base`, selection is: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`,
+`--into` or the declared target, then protected branches. Declared targets
+are a task's `integration_target`, a `plan/EPC-NNN-*` branch's epic line,
+or an integration line's default branch. An unresolved declared target warns
+before findings and names `--base`.
+
+Acceptance uses `--into`, CI target metadata, the declared target, or branches
+at the base commit, preferring protected and integration branches over other
+aliases. Missing or ambiguous tracked context requires `--into` or `--branch`.
+Untracked ranges and empty pushes without a PR body need no acceptance target.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,

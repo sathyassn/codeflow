@@ -144,6 +144,9 @@ fn body(root: &Path, task: &str) -> String {
 
 fn ci(root: &Path, base: &str, branch: &str, body: Option<&str>) -> Output {
     let mut args = vec!["ci", "--base", base, "--head", "HEAD", "--branch", branch];
+    if base.starts_with("integration/") {
+        args.extend(["--into", base]);
+    }
     if let Some(body) = body {
         args.extend(["--pr-body", body]);
     }
