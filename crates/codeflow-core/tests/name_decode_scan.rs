@@ -85,6 +85,7 @@ const OBTAIN: &[&str] = &[
     "find_reference",
     "head",
     "graph_descendant_of",
+    "descendant_of",
     "merge_base",
     "get_path",
     "into_string",
@@ -3131,14 +3132,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-porcelain-status",
     ),
-    // An ancestry error gives is_fast_forward false, which restores the checkout and returns MergeFailed; an unreadable ancestry refuses the landing.
-    (
-        "crates/codeflow-core/src/integrate.rs",
-        "integrate",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
         "crates/codeflow-core/src/integrate.rs",
@@ -3706,7 +3699,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/status.rs",
         "classify_cleanup",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4386,7 +4379,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
         "has_active_branch",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "display",
     ),
@@ -4482,7 +4475,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "landed",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4499,14 +4492,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "remote_claims",
         "obtain-absent:find_commit",
-        1,
-        "unproven",
-    ),
-    // An ancestry read failure gives Err(the standalone branch must contain its current target), so claim_on refuses.
-    (
-        "crates/codeflow-core/src/workgraph/readiness.rs",
-        "standalone_claim_base",
-        "obtain-absent:graph_descendant_of",
         1,
         "unproven",
     ),
@@ -4626,7 +4611,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/release_line.rs",
         "Lines::position",
-        "obtain-absent:graph_descendant_of",
+        "obtain-absent:descendant_of",
         1,
         "unproven",
     ),
@@ -4763,30 +4748,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/workgraph/work_start.rs",
         "check_work_start_anchored",
         "obtain-absent:head",
-        1,
-        "unproven",
-    ),
-    // unwrap_or(false) makes the pin not an ancestor, and check_work_start_on returns InvalidGraph (pin is not an ancestor of HEAD), so work start refuses.
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "check_work_start_on",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
-    // unwrap_or(false) leads to a DependencyPin refusal (not on line).
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "pinned_dependency",
-        "obtain-absent:graph_descendant_of",
-        1,
-        "unproven",
-    ),
-    // A failed check rejects that candidate; only a proven container of all pins is chosen, so a failure gives the right base or the no reviewed base refusal.
-    (
-        "crates/codeflow-core/src/workgraph/work_start.rs",
-        "stack_base_in",
-        "obtain-absent:graph_descendant_of",
         1,
         "unproven",
     ),
@@ -6027,6 +5988,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/workgraph/history.rs", "check_command", "ErrorKind::NotFound", 1, "Git treats an absent GIT_SHALLOW_FILE as no boundary, including a dangling path; other read errors refuse. The installed CLI test compares relative, missing and empty overrides with native Git."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; a dangling link exists, so it and every other error propagate."),
@@ -6263,7 +6225,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "recorded_baseline", "ErrorKind::NotFound", 1, "Gives the empty baseline only after proven_absent confirms the file is missing."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
-    ("crates/codeflow-core/src/workgraph/release_line.rs", "shallow_boundary", "ErrorKind::NotFound", 1, "Git keeps a linked worktree's shallow list in the common directory, so only a missing file in the worktree's own git directory falls back to it; that read's error, and any other error, refuses with the shallow-boundary reason."),
+    ("crates/codeflow-core/src/workgraph/history_graph.rs", "identity", "is_file", 1, "Metadata from the opened cache must be a regular file; every other file type refuses, never means absent."),
+    ("crates/codeflow-core/src/workgraph/history_graph.rs", "identity", "ErrorKind::NotFound", 1, "A missing optional graph, chain or alternates file adds no cached history; every other read failure refuses. A chain-named graph must exist."),
+    ("crates/codeflow-core/src/workgraph/release_line.rs", "shallow_boundary", "ErrorKind::NotFound", 1, "Missing common or private shallow files contribute no boundary; both files are read, and every other read error refuses."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "History::parent_of", "exists", 1, "An object database without the object returns Err with a fetch or unshallow remedy; it never reads as a root or as absent."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "history_overlay", "ErrorKind::NotFound", 1, "A graft file that cannot be found is unreadable to git and libgit2 as well, so no overlay is in effect for either; other errors refuse."),
     ("crates/codeflow-core/src/workgraph/work_start.rs", "durable_work_tracking_enabled", "ErrorKind::NotFound", 2, "Callers pass the discovered repository root: a .codeflow that is not found there is proven, and the state file is read under a real .codeflow or an absent one."),

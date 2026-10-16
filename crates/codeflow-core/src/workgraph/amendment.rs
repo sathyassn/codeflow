@@ -20,6 +20,8 @@
 //! the target, and a line takes it by merging the target; a record that
 //! changed on its line since the line last merged the target is flagged.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use git2::{Oid, Repository};
@@ -290,7 +292,7 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
         Err(error) => return Some(format!("cannot read task target {line}: {error}")),
     };
     tips.into_iter().find_map(|(name, tip)| {
-        let shared = match repo.merge_base(tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
+        let shared = match history::merge_base(repo, tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
         let before = match blob_at(repo, shared, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
         let after = match blob_at(repo, tip, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
         (after != before).then(|| {

@@ -6,6 +6,8 @@
 //! lists it under `line_adoptions` and that entry is itself landed work: the
 //! target tip already lists it, or the first commit on the line's
 //! first-parent history whose record holds the entry is a merge.
+use crate::workgraph::history;
+
 use std::path::Path;
 
 use git2::{Oid, Repository};
@@ -145,7 +147,7 @@ fn entries(repo: &Repository, oid: Oid, epic: &str) -> Result<Vec<LineAdoption>,
 }
 
 fn first_parent_range(repo: &Repository, head: Oid, base: Oid) -> Result<Vec<Oid>, String> {
-    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|e| e.to_string())?;
     walk.push(head)
         .and_then(|()| walk.hide(base))
         .and_then(|()| walk.simplify_first_parent())
@@ -187,10 +189,9 @@ pub fn check_range(
     });
     let mut direct = Vec::new();
     for oid in &range {
-        let parents = repo
-            .find_commit(*oid)
+        let parents = history::parents(&repo, &repo.find_commit(*oid).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?
-            .parent_count();
+            .len();
         if parents < 2 {
             let id = oid.to_string();
             direct.push((
@@ -211,7 +212,7 @@ pub fn check_range(
         .iter()
         .any(|(_, entry)| entry.is_some_and(|entry| !at_target.contains(entry)))
     {
-        let fork = repo.merge_base(target, head).map_err(|e| e.to_string())?;
+        let fork = history::merge_base(&repo, target, head).map_err(|e| e.to_string())?;
         let mut history = first_parent_range(&repo, head, fork)?;
         history.push(fork);
         history.reverse();
@@ -228,7 +229,8 @@ pub fn check_range(
             .find(|(_, entries)| entries.contains(entry))
             .is_some_and(|(first, _)| {
                 repo.find_commit(*first)
-                    .is_ok_and(|commit| commit.parent_count() >= 2)
+                    .and_then(|commit| history::parents(&repo, &commit))
+                    .is_ok_and(|parents| parents.len() >= 2)
             })
     };
     for (id, adoption) in direct {
