@@ -379,22 +379,22 @@ does not by itself mean enforcement succeeded.
 
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 
-`codeflow ci` pins base and head to commit IDs and prints the branch context's
-source. `--branch` selects frozen or amendable acceptance binding;
-`--head` alone does not select a branch. Detached candidates need `--branch`.
+`codeflow ci` pins both revisions and prints branch context and source.
+`--branch` selects frozen or amendable acceptance binding; `--head` does
+not select a branch. Detached candidates need `--branch`.
 
-Without `--base`, selection is: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`,
+Without `--base`, selection follows CI base metadata, `CODEFLOW_DEFAULT_BRANCH`,
 `--into` or the declared target, then protected branches. Declared targets
-are a task's `integration_target`, a `plan/EPC-NNN-*` branch's epic line,
-or an integration line's default branch. An unresolved declared target warns
-before findings and names `--base`.
+are task `integration_target` values, planning epic lines (`plan/EPC-NNN-*`),
+or an integration line's default branch. Unresolved targets warn before
+findings and name `--base`.
 
 Acceptance uses `--into`, CI target metadata, the declared target, a named
-`--base`, a unique protected or integration branch at the base commit, then
-the repository default. A commit-ID base at several destinations requires
-`--into` or `--branch`. A named protected base retains protected PR checks.
-Declared targets that name the head branch or contain its head cannot supply
-a fallback base; pass `--base` explicitly. Pre-push passes its target as `--into`.
+`--base`, one protected or integration branch at the base commit, then
+the repository default. A commit-ID base at several destinations needs
+`--into` or `--branch`. Named protected bases retain protected PR checks.
+Declared fallback targets naming the head branch or containing its commit
+require an explicit `--base`. Pre-push passes its target as `--into`.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,
