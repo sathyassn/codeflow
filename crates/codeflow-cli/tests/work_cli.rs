@@ -1346,6 +1346,17 @@ fn a_claim_on_a_reviewed_head_passes_its_own_push_check() {
     let bin = tempfile::tempdir().unwrap();
     let branch = "task/TSK-001-work";
     let (_, pin) = reviewed_predecessor(root, branch);
+    // Seed reviewed destination history under a non-task branch. The actual
+    // claim exercises the hook; hosted review comes from the provider below.
+    git(
+        origin.path(),
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{pin}:refs/heads/chore/reviewed-predecessor"),
+        ],
+    );
     review_tool_naming(bin.path(), branch, &pin, &pin);
     let on = format!("TSK-001@{pin}");
 

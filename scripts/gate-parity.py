@@ -847,6 +847,21 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
 REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
 
 
+def script_uses_codeflow_bin(command: str, cwd: Path) -> bool:
+    """Inspect literal script operands, including those inside launcher strings."""
+    # These two files inspect references and construct synthetic controls.
+    # The runtime Windows portal test has its own binary-dependent target.
+    structural = {ROOT / "scripts/gate-parity.py", ROOT / "scripts/test_gate_parity.py"}
+    scripts = re.findall(
+        r'''(?<![\w./-])([/\w.-]+\.(?:py|mjs|cjs|js|sh|bash|ps1))(?=$|[\s"';&|()<>])''',
+        command)
+    for name in scripts:
+        path = (cwd / name).resolve()
+        if path not in structural and path.is_file() and re.search(r"\bCODEFLOW_BIN\b", path.read_text()):
+            return True
+    return False
+
+
 def gate_binary_problems(cfg: dict) -> list[str]:
     problems = []
     targets = {t["name"]: t for t in cfg.get("targets", [])}
@@ -858,15 +873,32 @@ def gate_binary_problems(cfg: dict) -> list[str]:
         for required in targets.get(name, {}).get("requires", []):
             closure(required, seen)
         return seen
-    producer = targets.get("codeflow-bin", {})
     for target in targets.values():
-        cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
-        if not re.search(r"check:real-browser(\s|$)", cmd):
-            continue
-        if "codeflow-bin" not in closure(target["name"]) or producer.get("outputs") != ["target/debug/codeflow"] or not applicable(producer):
-            problems.append(f"target '{target['name']}' needs codeflow-bin's declared output; the coordinator sets its absolute path following CARGO_TARGET_DIR")
-        if "CF_PRESENT_CODEFLOW=" in cmd:
-            problems.append(f"target '{target['name']}' must use the coordinator's absolute binary path following CARGO_TARGET_DIR")
+        for mode, settings in target.get("modes", {}).items():
+            cmd = norm(settings.get("command", ""))
+            # The browser uses the coordinator's CF_PRESENT_CODEFLOW alias.
+            # CODEFLOW_BIN consumers are discovered from named scripts.
+            consumer = (re.search(r"check:real-browser(\s|$)", cmd)
+                        or re.search(r"\bCODEFLOW_BIN\b", cmd)
+                        or script_uses_codeflow_bin(cmd, ROOT / target.get("cwd", ".")))
+            inputs = set(re.findall(r'''target/(?:debug|release)/codeflow(?:\.exe)?(?=$|[\s"';&|()<>])''', cmd))
+            if consumer:
+                inputs.add("target/debug/codeflow")
+            dependencies = closure(target["name"]) - {target["name"]}
+            for artifact in sorted(inputs):
+                producers = [targets[name] for name in dependencies if name in targets
+                             and artifact in targets[name].get("outputs", [])]
+                if consumer:
+                    # Only this named producer makes the coordinator export CODEFLOW_BIN.
+                    producers = [p for p in producers if p["name"] == "codeflow-bin"
+                                 and p.get("outputs") == ["target/debug/codeflow"]]
+                if not any(applicable(p) and mode in p.get("modes", {}) for p in producers):
+                    problems.append(
+                        f"target '{target['name']}' ({mode}) needs a declared prerequisite "
+                        f"producing {artifact}; codeflow-bin produces target/debug/codeflow "
+                        "and the coordinator sets CODEFLOW_BIN following CARGO_TARGET_DIR")
+            if consumer and "CF_PRESENT_CODEFLOW=" in cmd:
+                problems.append(f"target '{target['name']}' must use the coordinator's absolute binary path following CARGO_TARGET_DIR")
     return problems
 
 
