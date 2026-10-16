@@ -16,6 +16,8 @@
 //! not prove the evidence is honest, and the review reference is
 //! recheckable, not authenticated.
 
+use crate::workgraph::history;
+
 use git2::{Oid, Repository};
 
 use super::classify::is_planning_path;
@@ -82,11 +84,15 @@ pub(crate) fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
 }
 
 fn is_first_parent_ancestor(repo: &Repository, ancestor: Oid, mut tip: Oid) -> bool {
+    let _judgment = history::judgment();
     loop {
         if tip == ancestor {
             return true;
         }
-        let Ok(parent) = repo.find_commit(tip).and_then(|commit| commit.parent_id(0)) else {
+        let Ok(parent) = repo
+            .find_commit(tip)
+            .and_then(|commit| history::parent_id(repo, &commit, 0))
+        else {
             return false;
         };
         tip = parent;
@@ -100,10 +106,11 @@ pub(super) fn is_ancestor_or_same(
     ancestor: Oid,
     of: Oid,
 ) -> Result<bool, String> {
+    history::check(repo).map_err(|error| error.to_string())?;
     if ancestor == of {
         return Ok(true);
     }
-    repo.graph_descendant_of(of, ancestor)
+    history::descendant_of(repo, of, ancestor)
         .map_err(|error| format!("cannot read ancestry from {of} to {ancestor}: {error}"))
 }
 
@@ -112,10 +119,10 @@ pub(crate) fn common_base(repo: &Repository, left: Oid, right: Oid) -> Result<Op
     let unreadable = |error: git2::Error| {
         format!("cannot read the common ancestry of {left} and {right}: {error}")
     };
-    match repo.merge_base(left, right) {
+    match history::merge_base(repo, left, right) {
         Ok(base) => Ok(Some(base)),
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
-            let mut walk = repo.revwalk().map_err(unreadable)?;
+            let mut walk = history::revwalk(repo).map_err(unreadable)?;
             walk.push(left).map_err(unreadable)?;
             walk.push(right).map_err(unreadable)?;
             for commit in walk {
@@ -185,7 +192,10 @@ fn first_parent(repo: &Repository, at: Oid) -> Result<Option<Oid>, String> {
     let commit = repo
         .find_commit(at)
         .map_err(|error| format!("cannot read commit {at}: {error}"))?;
-    Ok(commit.parent_ids().next())
+    Ok(history::parents(repo, &commit)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .next())
 }
 
 /// A record's text without its frontmatter `status:` field and its
@@ -639,7 +649,10 @@ fn epic_waiver_problem(
     let Ok(commit) = repo.find_commit(amendment) else {
         return Some(format!("names {named}, which cannot be read"));
     };
-    let parent = commit.parent_id(0).ok();
+    let parent = match history::parents(repo, &commit) {
+        Ok(parents) => parents.first().copied(),
+        Err(error) => return Some(error.to_string()),
+    };
     match non_planning_change(repo, parent, amendment) {
         Ok(None) => {}
         Ok(Some(path)) => {
@@ -943,19 +956,9 @@ fn stacked(
 ) -> Stacked {
     let authorities = stacking.tips();
     let stop = |why: String| Stacked::No(Some(Stop::Other(why)));
-    match super::release_line::history_overlay(repo) {
-        Ok(None) => {}
-        Ok(Some(overlay)) => {
-            return stop(format!(
-                "this clone overlays its recorded history with {overlay}, so the parents a merge records cannot be trusted; remove it, or judge from a clone without it"
-            ))
-        }
-        Err(why) => return stop(why),
+    if let Err(error) = history::check(repo) {
+        return stop(error.to_string());
     }
-    let shallow = match super::release_line::shallow_boundary(repo) {
-        Ok(shallow) => shallow,
-        Err(why) => return stop(why),
-    };
     let tips = || {
         authorities
             .iter()
@@ -970,15 +973,14 @@ fn stacked(
                 "the history from {at} to the reviewed commit cannot be read at {cursor}"
             ))
         };
-        if shallow.contains(&cursor) {
-            return stop(format!(
-                "this clone is shallow at {cursor}, so the history to the reviewed commit is cut; fetch it in full"
-            ));
-        }
         let Ok(commit) = repo.find_commit(cursor) else {
             return unreadable();
         };
-        let Ok(parent) = commit.parent_id(0) else {
+        let parents = match history::parents(repo, &commit) {
+            Ok(parents) => parents,
+            Err(error) => return stop(error.to_string()),
+        };
+        let Some(parent) = parents.first().copied() else {
             return unreadable();
         };
         let contains = match is_ancestor_or_same(repo, reviewed, parent) {
@@ -990,7 +992,7 @@ fn stacked(
                 "{cursor} brings the reviewed commit through a parent other than its first, so the reviewed commit is not on the head's first-parent chain"
             ));
         }
-        match commit.parent_count() {
+        match parents.len() {
             1 => {
                 let changed = match blob_at(repo, cursor, &task.path) {
                     Ok(None) => Some(format!("{} was removed", task.path)),
@@ -1005,7 +1007,7 @@ fn stacked(
                 }
             }
             2 => {
-                let Ok(side) = commit.parent_id(1) else {
+                let Ok(side) = history::parent_id(repo, &commit, 1) else {
                     return unreadable();
                 };
                 if authorities.is_empty() {
@@ -1057,6 +1059,10 @@ fn task_landing(
     landing: Landing<'_>,
     reviewed: Oid,
 ) -> Landed {
+    let _judgment = history::judgment();
+    if let Err(error) = history::check(repo) {
+        return Landed::Refused(error.to_string());
+    }
     let unreadable = |what: &str| Landed::Refused(format!("{what} cannot be read"));
     let (start, completion) = match landing {
         Landing::Worktree { head, changed } => (
@@ -1075,7 +1081,10 @@ fn task_landing(
             let Ok(commit) = repo.find_commit(at) else {
                 return unreadable("the completing commit");
             };
-            let parent = commit.parent_id(0).ok();
+            let parent = match history::parents(repo, &commit) {
+                Ok(parents) => parents.first().copied(),
+                Err(error) => return Landed::Refused(error.to_string()),
+            };
             match non_planning_change(repo, parent, at) {
                 Ok(outside) => (parent, outside),
                 Err(_) => return unreadable("the completing commit's change"),
@@ -1098,7 +1107,11 @@ fn task_landing(
         let Ok(commit) = repo.find_commit(oid) else {
             return unreadable("the first-parent chain");
         };
-        let first = commit.parent_id(0).ok();
+        let parents = match history::parents(repo, &commit) {
+            Ok(parents) => parents,
+            Err(error) => return Landed::Refused(error.to_string()),
+        };
+        let first = parents.first().copied();
         let contains = match first
             .map(|first| is_ancestor_or_same(repo, reviewed, first))
             .transpose()
@@ -1107,23 +1120,23 @@ fn task_landing(
             Err(error) => return Landed::Refused(error),
         };
         if !contains {
-            if commit.parent_count() == 2 {
+            if parents.len() == 2 {
                 break commit;
             }
             return Landed::NoMerge;
         }
-        if commit.parent_count() < 2 && after_merge.is_none() {
-            match non_planning_change(repo, commit.parent_id(0).ok(), oid) {
+        if parents.len() < 2 && after_merge.is_none() {
+            match non_planning_change(repo, first, oid) {
                 Ok(None) => {}
                 Ok(Some(path)) => after_merge = Some((oid, path)),
                 Err(_) => return unreadable("the first-parent chain"),
             }
         }
-        at = commit.parent_id(0).ok();
+        at = first;
     };
     // The reviewed commit is the merge's second parent, or an ancestor of it
     // after which only this record's status and Closeout changed (R-60).
-    let Ok(second) = merge.parent_id(1) else {
+    let Ok(second) = history::parent_id(repo, &merge, 1) else {
         return unreadable("the landing merge");
     };
     if let Some(path) = completion {
@@ -1189,11 +1202,16 @@ const STAGE: u16 = 0x3000;
 
 /// Read `merge` against the clean automatic remerge of its two parents.
 pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeReading {
+    let _judgment = history::judgment();
     let id = merge.id();
-    if merge.parent_count() != 2 {
+    let parents = match history::parents(repo, merge) {
+        Ok(parents) => parents,
+        Err(error) => return MergeReading::Unknown(error.to_string()),
+    };
+    if parents.len() != 2 {
         return MergeReading::Unknown(format!(
             "merge {id:.9} has {} parents; only a two-parent merge can be read against the remerge of its parents, so redo it as two-parent merges",
-            merge.parent_count()
+            parents.len()
         ));
     }
     let unreadable = |error: git2::Error| {
@@ -1202,11 +1220,14 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
             error.message()
         ))
     };
-    let (first, second) = match (merge.parent(0), merge.parent(1)) {
+    let (first, second) = match (
+        history::parent(repo, merge, 0),
+        history::parent(repo, merge, 1),
+    ) {
         (Ok(first), Ok(second)) => (first, second),
         (Err(error), _) | (_, Err(error)) => return unreadable(error),
     };
-    let merged = match repo.merge_commits(&first, &second, None) {
+    let merged = match history::merge_commits(repo, &first, &second) {
         Ok(merged) => merged,
         Err(error) => return unreadable(error),
     };
@@ -1279,6 +1300,7 @@ pub fn owned_paths(
     head: &str,
     hide: &[&str],
 ) -> Result<Vec<String>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1287,7 +1309,7 @@ pub fn owned_paths(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let unreadable = |error: git2::Error| format!("cannot read the range: {}", error.message());
-    let mut walk = repo.revwalk().map_err(unreadable)?;
+    let mut walk = history::revwalk(&repo).map_err(unreadable)?;
     walk.push(oid(head)?).map_err(unreadable)?;
     for point in hide {
         walk.hide(oid(point)?).map_err(unreadable)?;
@@ -1297,7 +1319,8 @@ pub fn owned_paths(
         let commit = repo
             .find_commit(commit.map_err(unreadable)?)
             .map_err(unreadable)?;
-        if commit.parent_count() > 1 {
+        let parents = history::parents(&repo, &commit).map_err(unreadable)?;
+        if parents.len() > 1 {
             match read_merge(&repo, &commit) {
                 MergeReading::Clean => {}
                 MergeReading::Changed(changed) => {
@@ -1309,10 +1332,11 @@ pub fn owned_paths(
             }
             continue;
         }
-        let parent = match commit.parent(0) {
-            Ok(parent) => Some(parent.tree().map_err(unreadable)?),
-            Err(_) => None,
-        };
+        let parent = parents
+            .first()
+            .map(|id| repo.find_commit(*id).and_then(|parent| parent.tree()))
+            .transpose()
+            .map_err(unreadable)?;
         let tree = commit.tree().map_err(unreadable)?;
         let diff = repo
             .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
@@ -1675,7 +1699,7 @@ fn named_targets(
             range.anchor, range.head
         )
     };
-    let mut walk = repo.revwalk().map_err(unwalkable)?;
+    let mut walk = history::revwalk(repo).map_err(unwalkable)?;
     walk.push(range.head).map_err(unwalkable)?;
     walk.hide(range.anchor).map_err(unwalkable)?;
     let mut commits = walk.collect::<Result<Vec<_>, _>>().map_err(unwalkable)?;
@@ -1998,9 +2022,7 @@ fn waiver_problem(
         };
         let paths = super::lifecycle::changed_paths(
             repo,
-            &commit
-                .parent_id(0)
-                .map_or_else(|_| String::new(), |p| p.to_string()),
+            &history::parent_id(repo, &commit, 0).map_or_else(|_| String::new(), |p| p.to_string()),
             Some(&amendment.to_string()),
         );
         if paths.is_err()
@@ -2023,7 +2045,10 @@ fn waiver_problem(
     let Ok(commit) = repo.find_commit(amendment) else {
         return Some(format!("names {}, which cannot be read", evidence.trim()));
     };
-    let parent = commit.parent_id(0).ok();
+    let parent = match history::parents(repo, &commit) {
+        Ok(parents) => parents.first().copied(),
+        Err(error) => return Some(error.to_string()),
+    };
     // What the amendment brought onto the target (for a merge, against the
     // target-side parent) changes planning records only (R-52, R-60).
     match non_planning_change(repo, parent, amendment) {
@@ -2563,8 +2588,7 @@ pub fn records_correction(
     // What the range changes is read against the merge-base, never the
     // target tip: the target may have moved other records since the branch
     // point, or reached the same bytes the range did.
-    let anchor = repo
-        .merge_base(base_oid, head_oid)
+    let anchor = history::merge_base(&repo, base_oid, head_oid)
         .map_err(|error| error.message().to_string())?;
     let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
     let touched = |id: &str| match (at_anchor.records.get(id), at_head.records.get(id)) {
@@ -2691,6 +2715,7 @@ pub(super) fn reopened_ids(
 /// The tasks the range reopened with changed criteria, and the tasks
 /// `base` no longer holds whose history cannot tell, with the reason
 /// ([`reopened_ids`]).
+#[allow(clippy::too_many_lines)] // Reads target recovery and transitions in one judged range.
 fn reopened_judged(
     repo: &Repository,
     base: &str,
@@ -2703,6 +2728,7 @@ fn reopened_judged(
     ),
     String,
 > {
+    let _judgment = history::judgment();
     let target = Graph::from_revision(repo, base)?;
     let oid = |rev: &str| {
         repo.revparse_single(rev)
@@ -2718,7 +2744,7 @@ fn reopened_judged(
     // range, whatever the target tip holds (R-119, as `records_correction`
     // judges a correction). Without a merge-base nothing is excluded; a
     // merge-base that cannot be read is an error, never none (issue 79).
-    let at_anchor = match repo.merge_base(base_oid, oid(head)?) {
+    let at_anchor = match history::merge_base(repo, base_oid, oid(head)?) {
         Ok(anchor) => Some(Graph::from_revision(repo, &anchor.to_string())?),
         Err(error) if error.code() == git2::ErrorCode::NotFound => None,
         Err(error) => {
@@ -2770,7 +2796,7 @@ fn reopened_judged(
     if candidates.is_empty() {
         return Ok((std::collections::BTreeSet::new(), unknown));
     }
-    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    let mut walk = history::revwalk(repo).map_err(|e| e.to_string())?;
     walk.push(oid(head)?).map_err(|e| e.to_string())?;
     walk.hide(base_oid).map_err(|e| e.to_string())?;
     let mut reopened = std::collections::BTreeSet::new();
@@ -2796,7 +2822,9 @@ fn reopened_judged(
                 if then.status != "complete" {
                     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
                     let mut transitioned = false;
-                    for parent in commit.parent_ids() {
+                    for parent in
+                        history::parents(repo, &commit).map_err(|error| error.to_string())?
+                    {
                         if record_at(repo, parent, record)?
                             .is_some_and(|prior| prior.status == "complete")
                         {
@@ -2841,6 +2869,7 @@ pub fn completions_in_range(
     line: Option<&str>,
     stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
+    let _judgment = history::judgment();
     let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
     // record-only amendment in its own range (TSK-184); no other record may.
@@ -2856,8 +2885,7 @@ pub fn completions_in_range(
     };
     let head_oid = oid(head)?;
     let base_oid = oid(base)?;
-    let anchor = repo
-        .merge_base(base_oid, head_oid)
+    let anchor = history::merge_base(repo, base_oid, head_oid)
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
@@ -2976,17 +3004,27 @@ pub(super) fn source_landing_base(
     source: Oid,
     introduced: Oid,
 ) -> Result<Option<Oid>, String> {
+    let _judgment = history::judgment();
     let mut at = source;
     while at != introduced {
         let commit = repo
             .find_commit(at)
             .map_err(|error| format!("cannot read the source landing at {at}: {error}"))?;
-        let Some(first) = commit.parent_ids().next() else {
+        let Some(first) = history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .next()
+        else {
             return Ok(None);
         };
         if !is_ancestor_or_same(repo, introduced, first)? {
-            if commit.parent_count() == 2 {
-                let second = commit.parent_id(1).map_err(|error| error.to_string())?;
+            if history::parents(repo, &commit)
+                .map_err(|error| error.to_string())?
+                .len()
+                == 2
+            {
+                let second =
+                    history::parent_id(repo, &commit, 1).map_err(|error| error.to_string())?;
                 if is_ancestor_or_same(repo, introduced, second)? {
                     return common_base(repo, first, introduced);
                 }
@@ -3009,13 +3047,18 @@ pub(super) fn introduced_at(
     block: &AcceptanceBlock,
     head: Oid,
 ) -> Result<Oid, String> {
+    let _judgment = history::judgment();
     let mut at = head;
     loop {
         let commit = repo
             .find_commit(at)
             .map_err(|error| format!("cannot read completion history at {at}: {error}"))?;
         let mut previous = None;
-        for parent in commit.parent_ids().take(2) {
+        for parent in history::parents(repo, &commit)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .take(2)
+        {
             if record_at(repo, parent, task)?.is_some_and(|record| {
                 record.status == "complete"
                     && active_block(&record).as_ref() == Some(block)
@@ -3170,8 +3213,7 @@ pub fn pull_request_findings_judged(
     // range's class allows.
     let mut found = reopened_criteria(&repo, base, head, &at_head)?;
     if *criteria != Criteria::Amendable {
-        let anchor = repo
-            .merge_base(target_tip, head_tip)
+        let anchor = history::merge_base(&repo, target_tip, head_tip)
             .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
         let at_target = Graph::from_revision(&repo, base)?;
@@ -3259,9 +3301,8 @@ fn bind_stacked(
     stacking: &StackingTips,
     criteria: &CriteriaBases,
 ) -> Result<Vec<Finding>, String> {
-    let own_anchor = repo
-        .merge_base(base, stack.pin)
-        .map_err(|error| error.message().to_string())?;
+    let own_anchor =
+        history::merge_base(repo, base, stack.pin).map_err(|error| error.message().to_string())?;
     let mut findings = vec![Finding {
         epic_record: None,
         rule: BINDING_RULE,

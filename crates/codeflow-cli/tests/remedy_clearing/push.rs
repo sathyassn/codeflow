@@ -1673,7 +1673,7 @@ fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
             "{overlay}: {out}"
         );
         // AC-10: unproven history refuses before any commit-body judgment.
-        assert!(out.contains("cannot prove history"), "{out}");
+        assert!(out.contains("cannot verify history"), "{out}");
         not_landed(&dest, &out, "feat/x", &head_sha(&root));
     }
 }

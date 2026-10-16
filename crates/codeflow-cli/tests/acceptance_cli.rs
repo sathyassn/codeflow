@@ -2845,13 +2845,24 @@ fn local_refs_and_overlays_never_make_a_merge_the_target() {
             ],
         );
         let merge = head(root);
-        let needle = if case == "graft" {
-            "overlays its recorded history with the graft file".to_string()
-        } else {
-            format!("merge {merge} brings {foreign}, which is not on the first-parent line of the target tip this run is judged against ({published})")
-        };
+        let result = ci_on(root, &published, BRANCH, "Task: TSK-001");
+        if case == "graft" {
+            // An overlay now refuses before CI can trust the range enough
+            // to make an acceptance or target-containment judgment.
+            assert_eq!(result.0, 2, "grafted history: {}", result.1);
+            assert!(result.1.contains("cannot verify history"), "{}", result.1);
+            assert!(
+                result
+                    .1
+                    .contains("overlays its recorded history with the graft file"),
+                "{}",
+                result.1
+            );
+            continue;
+        }
+        let needle = format!("merge {merge} brings {foreign}, which is not on the first-parent line of the target tip this run is judged against ({published})");
         assert_blocks(
-            &ci_on(root, &published, BRANCH, "Task: TSK-001"),
+            &result,
             case,
             &[
                 "work.acceptance_binding",

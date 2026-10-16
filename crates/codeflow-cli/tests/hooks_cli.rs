@@ -8081,7 +8081,8 @@ fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
     .unwrap();
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("not the checked-out commit"), "{err}");
+    assert!(err.contains("cannot verify history"), "{err}");
+    assert!(err.contains("graft file"), "{err}");
     assert!(!err.contains("already on the destination"), "{err}");
     let linked = tempfile::tempdir().unwrap();
     let checkout = linked.path().join("checkout");
@@ -8097,7 +8098,8 @@ fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
     );
     let (code, err) = push_hook(&checkout, "upstream", &[("feat/good", &good)]);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("not the checked-out commit"), "{err}");
+    assert!(err.contains("cannot verify history"), "{err}");
+    assert!(err.contains("graft file"), "{err}");
     assert!(!err.contains("already on the destination"), "{err}");
     std::fs::write(dir.path().join(".git/info/grafts"), "").unwrap();
     let (code, err) = push_hook(&checkout, "upstream", &[("feat/known", &bad)]);

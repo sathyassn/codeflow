@@ -415,6 +415,19 @@ fn blocks(result: &(i32, String), what: &str, needles: &[&str]) {
     }
 }
 
+// Unreadable history stops CI before any policy judgment, with exit 2.
+fn cannot_verify(result: &(i32, String), what: &str, needles: &[&str]) {
+    assert_eq!(result.0, 2, "{what}:\n{}", result.1);
+    assert!(result.1.contains("cannot verify history"), "{}", result.1);
+    for needle in needles {
+        assert!(
+            result.1.contains(needle),
+            "{what}: missing {needle:?}: {}",
+            result.1
+        );
+    }
+}
+
 /// The acceptance findings of one run: each rule with its message line.
 fn findings(result: &(i32, String)) -> Vec<String> {
     let lines: Vec<&str> = result.1.lines().collect();
@@ -995,10 +1008,10 @@ fn a_shallow_default_history_is_never_read_as_unadopted() {
         .run();
     let shallow = parent.join("shallow");
     let cut = [
-        "this clone's history is shallow at",
+        "cannot verify history: this clone is shallow",
         "git fetch --unshallow",
     ];
-    blocks(&ci_empty_at(&shallow, &url), "shallow CI", &cut);
+    cannot_verify(&ci_empty_at(&shallow, &url), "shallow CI", &cut);
     let tip = run_git(&shallow, &["rev-parse", "HEAD"]);
     run_git(
         &shallow,
@@ -1045,11 +1058,11 @@ fn a_shallow_boundary_in_the_range_is_named() {
     ]);
     fx.git(&["switch", "-q", "--detach", &head]);
     fx.write(".git/shallow", &format!("{boundary}\n"));
-    blocks(
+    cannot_verify(
         &fx.ci(&default, &head, RELEASE, None),
         "a boundary inside the range",
         &[
-            "this clone's history is shallow, so the release range's history cannot be read",
+            "cannot verify history: this clone is shallow",
             "git fetch --unshallow",
         ],
     );
@@ -1109,7 +1122,7 @@ fn a_graft_never_stands_in_for_recorded_history() {
     for graft in [format!("{removal}\n"), format!("{removal} {before}\n")] {
         std::fs::write(&grafts, &graft).unwrap();
         let needle = ["overlays its recorded history with the graft file"];
-        blocks(&ci_empty_at(&fx.root, &url), "grafted CI", &needle);
+        cannot_verify(&ci_empty_at(&fx.root, &url), "grafted CI", &needle);
         fx.git(&["switch", "-q", LINE_A]);
         blocks(
             &pre_push_new(&fx.root, &url, RELEASE, &removal),
@@ -1139,7 +1152,7 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
     passes(&ci_empty_at(&fx.root, &url), "a kept marker, no overlay");
     fx.git(&["replace", "--graft", &tip]);
     let replacement = fx.git(&["rev-parse", &format!("refs/replace/{tip}")]);
-    blocks(
+    cannot_verify(
         &ci_empty_at(&fx.root, &url),
         "a replace ref",
         &[&format!("the replace ref refs/replace/{tip}")],
@@ -1157,7 +1170,7 @@ fn a_replace_ref_never_stands_in_for_recorded_history() {
         &format!("refs/other-replace/{tip}"),
         &replacement,
     ]);
-    blocks(
+    cannot_verify(
         &ci_empty_with(
             &fx.root,
             &url,
@@ -1194,20 +1207,25 @@ fn a_replace_ref_base_is_a_literal_prefix() {
             .current_dir(&fx.root)
             .output()
             .unwrap();
-        let judged = |result: &(i32, String), what: &str| {
+        let judged = |result: &(i32, String), what: &str, is_ci: bool| {
             if read.status.success() {
-                blocks(result, what, &[&format!("the replace ref {name}")]);
+                if is_ci {
+                    cannot_verify(result, what, &[&format!("the replace ref {name}")]);
+                } else {
+                    blocks(result, what, &[&format!("the replace ref {name}")]);
+                }
             } else {
                 assert_ne!(result.0, 0, "{what}: git refuses the base:\n{}", result.1);
                 // A git that stops on the base can leave its index lock.
                 let _ = std::fs::remove_file(fx.root.join(".git/index.lock"));
             }
         };
-        judged(&ci_empty_with(&fx.root, &url, &env), base);
+        judged(&ci_empty_with(&fx.root, &url, &env), base, true);
         fx.git(&["switch", "-q", LINE_A]);
         judged(
             &pre_push_new_with(&fx.root, &url, RELEASE, &tip, &env),
             &format!("{base} at pre-push"),
+            false,
         );
         fx.git(&["switch", "-q", "main"]);
         fx.git(&["update-ref", "-d", &name]);
