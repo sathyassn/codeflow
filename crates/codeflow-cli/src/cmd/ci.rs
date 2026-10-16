@@ -251,6 +251,7 @@ fn ci_environment(
 
 #[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
+    let _judgment = codeflow_core::workgraph::history::judgment();
     if args.read_release_impact {
         return read_release_impact();
     }
@@ -348,6 +349,12 @@ pub fn run(args: &CiArgs) -> i32 {
             return 2;
         }
     };
+    // Every range reader below, including body-less, task-less CI, shares
+    // this refusal. A history error is never a skipped check or clean range.
+    if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
+        eprintln!("codeflow ci: {error}");
+        return 2;
+    }
     let split = match split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
         Ok(value) => value,
         Err(error) => {
@@ -1168,7 +1175,7 @@ fn protected_base(root: &Path, git: &GitPolicy, base: &str) -> Result<bool, Stri
     let remote = if let Some(name) = base.strip_prefix("refs/remotes/") {
         Some(name)
     } else {
-        let out = codeflow_core::git::command()
+        let out = codeflow_core::workgraph::history::command()
             .arg("-C")
             .arg(root)
             .args(["show-ref", "--verify", "--quiet"])
@@ -2349,7 +2356,7 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["remote", "get-url", "origin"])
@@ -2442,7 +2449,7 @@ fn resolve_base(root: &Path, candidates: &[String]) -> Result<Option<String>, St
 /// `GIT_REPLACE_REF_BASE` git 2.55 refuses.
 fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
     candidates.iter().find_map(|candidate| {
-        let out = codeflow_core::git::command()
+        let out = codeflow_core::workgraph::history::command()
             .arg("-C")
             .arg(root)
             .args(["rev-parse", "--verify", "--quiet"])
@@ -2458,7 +2465,7 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
 /// `git rev-parse --verify --quiet <rev>^{commit}` — returns the resolved sha,
 /// or `None` when the rev does not name a commit.
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--verify", "--quiet"])
@@ -2487,7 +2494,7 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
 /// message) records flagged merge or not. Git log supplies revision identities;
 /// messages come from stored objects so Git cannot recode their bytes.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(["log", "-z", "--format=%H %P%n"])
@@ -2659,7 +2666,10 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
 /// deadlock the pipes.
 fn git_with_stdin(root: &Path, args: &[&str], input: &str) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::output_with_input(
-        codeflow_core::git::command().arg("-C").arg(root).args(args),
+        codeflow_core::workgraph::history::command()
+            .arg("-C")
+            .arg(root)
+            .args(args),
         input.as_bytes(),
     )
     .map_err(|e| e.to_string())?;
@@ -2703,7 +2713,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// [`git_stdout`] as the exact bytes, for output that holds paths.
 fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = codeflow_core::git::command()
+    let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
         .args(args)

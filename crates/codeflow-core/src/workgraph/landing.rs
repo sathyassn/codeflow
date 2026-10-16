@@ -27,6 +27,8 @@
 //! Readiness (whether a predecessor is complete now) is not decided here:
 //! it reads the current status at the execution base (D3a).
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
@@ -199,23 +201,17 @@ impl<'r> RecordStore<'r> {
     /// history overlay (a graft file or a replace ref, wherever git reads
     /// them), makes every proof of absence unknown.
     pub(super) fn new(repo: &'r Repository) -> Self {
-        let (boundary, mut overlay) = match super::release_line::shallow_boundary(repo) {
+        let (boundary, boundary_problem) = match super::release_line::shallow_boundary(repo) {
             Ok(boundary) => (boundary, None),
-            Err(reason) => (HashSet::new(), Some(reason)),
+            Err(reason) => (
+                HashSet::new(),
+                Some(format!("cannot verify history: {reason}")),
+            ),
         };
-        match super::release_line::history_overlay(repo) {
-            Ok(None) => {}
-            Ok(Some(found)) => {
-                overlay.get_or_insert_with(|| {
-                    format!("this clone has {found}, so its history may not be the history the target holds")
-                });
-            }
-            Err(reason) => {
-                overlay.get_or_insert_with(|| {
-                    format!("whether this clone overlays its history cannot be told: {reason}")
-                });
-            }
-        }
+        let overlay = history::check(repo)
+            .err()
+            .map(|error| error.to_string())
+            .or(boundary_problem);
         Self {
             repo,
             entries: HashMap::new(),
@@ -387,9 +383,7 @@ impl<'r> RecordStore<'r> {
         found.doubt.clone_from(&self.overlay);
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let walk = match self
-            .repo
-            .revwalk()
+        let walk = match history::revwalk(self.repo)
             .map_err(unreadable)
             .and_then(|mut walk| {
                 walk.set_sorting(git2::Sort::TOPOLOGICAL)
@@ -456,6 +450,9 @@ impl<'r> RecordStore<'r> {
         judged: &[Oid],
         outside: &Outside<'_>,
     ) -> TaskJudgement {
+        if let Some(reason) = &self.overlay {
+            return TaskJudgement::unreadable(reason.clone());
+        }
         // The criteria at the judged points: the newest point's version.
         let mut points = Vec::new();
         for point in judged {
@@ -760,7 +757,7 @@ impl<'r> RecordStore<'r> {
         }
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
         walk.push(holder).map_err(unreadable)?;
         let mut introduced = Vec::new();
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
@@ -772,12 +769,11 @@ impl<'r> RecordStore<'r> {
             if !version.held(&held, &mut holds) {
                 continue;
             }
-            let parents: Vec<Oid> = self
-                .repo
-                .find_commit(commit)
-                .map_err(unreadable)?
-                .parent_ids()
-                .collect();
+            let parents = history::parents(
+                self.repo,
+                &self.repo.find_commit(commit).map_err(unreadable)?,
+            )
+            .map_err(unreadable)?;
             let mut decided = parents.is_empty();
             for parent in &parents {
                 let held = self.history_at(task, *parent, &mut uids)?;
@@ -830,7 +826,7 @@ impl<'r> RecordStore<'r> {
     ) -> Result<Option<(Oid, Oid, RecordView)>, String> {
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
         walk.set_sorting(git2::Sort::TOPOLOGICAL)
             .map_err(unreadable)?;
         for point in judged {
@@ -955,7 +951,7 @@ impl<'r> RecordStore<'r> {
             refs.push((name, short, commit.id()));
         }
         refs.sort();
-        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
         walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
             .map_err(unreadable)?;
         for (_, _, tip) in &refs {
@@ -968,12 +964,11 @@ impl<'r> RecordStore<'r> {
             if found.records.is_empty() {
                 continue;
             }
-            let parents: Vec<Oid> = self
-                .repo
-                .find_commit(commit)
-                .map_err(unreadable)?
-                .parent_ids()
-                .collect();
+            let parents = history::parents(
+                self.repo,
+                &self.repo.find_commit(commit).map_err(unreadable)?,
+            )
+            .map_err(unreadable)?;
             let mut inherited = HashSet::new();
             for parent in parents {
                 inherited.extend(
@@ -2264,5 +2259,64 @@ mod tests {
     fn a_recovered_merge_resolution_with_another_status_still_competes() {
         let dir = recovered_restore(true, other_status);
         refuses_both_orders(dir.path(), "different versions");
+    }
+
+    #[test]
+    fn landing_refuses_grafts_and_replace_refs() {
+        for replace in [false, true] {
+            let dir = history(UID, UID);
+            assert!(matches!(judge(dir.path(), UID).landing, Landing::Planned));
+            let repo = Repository::open(dir.path()).unwrap();
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            let base = head.parent_id(0).unwrap();
+            if replace {
+                repo.reference(&format!("refs/replace/{}", head.id()), base, false, "test")
+                    .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(
+                    repo.path().join("info/grafts"),
+                    format!("{} {base}\n", head.id()),
+                )
+                .unwrap();
+            }
+            match judge(dir.path(), UID).landing {
+                Landing::Unreadable(reason) => {
+                    assert!(reason.contains("cannot verify"), "{reason}");
+                }
+                _ => panic!("overlaid history proved a landing answer"),
+            }
+        }
+    }
+    #[test]
+    fn landed_evidence_refuses_grafts_and_replace_refs() {
+        for replace in [false, true] {
+            let dir = history(UID, UID);
+            let repo = Repository::open(dir.path()).unwrap();
+            let base = repo.head().unwrap().peel_to_commit().unwrap().id();
+            let completed = record(UID).replace("status: todo", "status: complete");
+            let head = crate::git::add_commit(
+                &repo,
+                &[(b"project-management/tasks/TSK-001.md", completed.as_bytes())],
+            );
+            assert!(matches!(
+                judge(dir.path(), UID).landing,
+                Landing::Landed { .. }
+            ));
+            if replace {
+                repo.reference(&format!("refs/replace/{head}"), base, false, "test")
+                    .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(repo.path().join("info/grafts"), format!("{head} {base}\n"))
+                    .unwrap();
+            }
+            match judge(dir.path(), UID).landing {
+                Landing::Unreadable(reason) => {
+                    assert!(reason.contains("cannot verify"), "{reason}");
+                }
+                _ => panic!("overlaid history proved a landing answer"),
+            }
+        }
     }
 }
