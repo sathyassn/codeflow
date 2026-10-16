@@ -665,9 +665,7 @@ fn an_approved_spec_is_amended_until_it_ships_and_frozen_after() {
         commit(&root, "chore: amend the shipped contract later");
         let ci = codeflow(
             &root,
-            &[
-                "ci", "--into", "main", "--base", base, "--head", "HEAD", "--branch", branch,
-            ],
+            &["ci", "--base", base, "--head", "HEAD", "--branch", branch],
         );
         let ci_err = String::from_utf8_lossy(&ci.stderr);
         assert!(!ci.status.success(), "{branch}: {ci_err}");
@@ -804,8 +802,6 @@ created: 2026-09-29\n---\n\n# SPC-001: Contract\n\n## Summary\n\nA contract.\n\n
         &root,
         &[
             "ci",
-            "--into",
-            "main",
             "--base",
             &reopened,
             "--head",

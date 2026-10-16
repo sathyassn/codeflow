@@ -867,8 +867,6 @@ fn ci_refuses_a_different_record_that_reuses_a_registered_number() {
         &root,
         &[
             "ci",
-            "--into",
-            "main",
             "--base",
             &deleted,
             "--head",

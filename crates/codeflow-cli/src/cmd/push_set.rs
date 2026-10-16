@@ -337,6 +337,14 @@ fn run_ci_ranges(
                 "--run-level",
                 &running,
             ];
+            // Range boundaries can be unnamed merge bases. Pass destination
+            // intent separately so CI does not infer it from coincident refs.
+            let into = ci_target(root, r, branch, &judged)?;
+            if base != r.local_sha {
+                if let Some(into) = &into {
+                    args.extend(["--into", into]);
+                }
+            }
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
             // which can be another line's tip. A new branch keeps the base.
@@ -365,6 +373,24 @@ fn run_ci_ranges(
         }
     }
     Ok(())
+}
+
+fn ci_target(
+    root: &Path,
+    pushed: &PushRef,
+    branch: &str,
+    judged: &Judged,
+) -> Result<Option<String>, String> {
+    let declared = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+        root,
+        branch,
+        &pushed.local_sha,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(declared.or_else(|| match judged {
+        Judged::Target { target, .. } => Some(target.clone()),
+        _ => None,
+    }))
 }
 
 fn refuse_authority(

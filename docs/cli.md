@@ -187,7 +187,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
-| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, then the branch's declared target, then branches at the resolved base commit). Ambiguous acceptance context requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or integration branch at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
@@ -389,10 +389,12 @@ are a task's `integration_target`, a `plan/EPC-NNN-*` branch's epic line,
 or an integration line's default branch. An unresolved declared target warns
 before findings and names `--base`.
 
-Acceptance uses `--into`, CI target metadata, the declared target, or branches
-at the base commit, preferring protected and integration branches over other
-aliases. Missing or ambiguous tracked context requires `--into` or `--branch`.
-Untracked ranges and empty pushes without a PR body need no acceptance target.
+Acceptance uses `--into`, CI target metadata, the declared target, a named
+`--base`, a unique protected or integration branch at the base commit, then
+the repository default. A commit-ID base at several destinations requires
+`--into` or `--branch`. A named protected base retains protected PR checks.
+Declared targets that name the head branch or contain its head cannot supply
+a fallback base; pass `--base` explicitly. Pre-push passes its target as `--into`.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,

@@ -21,6 +21,9 @@ fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
         match key {
             "GITHUB_HEAD_REF" => command.env("GITHUB_HEAD_REF", value),
             "CI_COMMIT_REF_NAME" => command.env("CI_COMMIT_REF_NAME", value),
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME" => {
+                command.env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", value)
+            }
             "CI_MERGE_REQUEST_DIFF_BASE_SHA" => {
                 command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", value)
             }
@@ -129,6 +132,14 @@ fn planning_branch_uses_its_epic_line_before_protected_fallback() {
         "{text}"
     );
     assert!(!text.contains("work.criteria_frozen"), "{text}");
+    let findings = |out: &Output| {
+        output(out)
+            .lines()
+            .filter(|line| line.contains("work."))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(findings(&automatic), findings(&explicit));
 }
 
 #[test]
@@ -143,7 +154,7 @@ fn help_explains_base_selection_and_acceptance_mode() {
 }
 
 #[test]
-fn unknown_commit_target_refuses_and_explicit_into_resolves_it() {
+fn unknown_commit_target_uses_repository_default() {
     let f = Line::new();
     let base = f.git(&["rev-parse", "HEAD"]);
     f.write("notes.md", "Line notes.\n");
@@ -153,12 +164,11 @@ fn unknown_commit_target_refuses_and_explicit_into_resolves_it() {
     f.commit("docs: main notes");
     let out = ci(&f, &["--base", &base, "--branch", "feat/unbound"], None);
     let text = output(&out);
-    assert_eq!(out.status.code(), Some(2), "{text}");
+    passes(&out);
     assert!(
-        text.contains("--into") && text.contains("--branch"),
+        text.contains("target 'main' (repository default)"),
         "{text}"
     );
-    assert!(!text.contains("reopen"), "{text}");
     passes(&ci(
         &f,
         &[
@@ -190,9 +200,8 @@ fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
             "{text}"
         );
         let guidance = text.find("pass --branch").expect(&text);
-        if let Some(finding) = text.find("reopen") {
-            assert!(guidance < finding, "{text}");
-        }
+        let finding = text.find("reopen").expect(&text);
+        assert!(guidance < finding, "{text}");
     }
 }
 
@@ -285,8 +294,7 @@ fn commit_base_can_infer_the_same_target_as_named_base() {
         let out = ci(&f, &["--base", spelling], None);
         passes(&out);
         assert!(
-            output(&out)
-                .contains("acceptance target 'main' (branches at the resolved base commit)"),
+            output(&out).contains("acceptance target 'main'"),
             "{}",
             output(&out)
         );
@@ -312,23 +320,28 @@ fn several_planning_lines_require_an_explicit_target() {
 }
 
 #[test]
-fn branches_sharing_a_base_refuse_both_spellings_until_into_is_given() {
+fn branches_sharing_a_base_accept_named_base_and_refuse_ambiguous_commit() {
     let f = Line::new();
     let base = f.git(&["rev-parse", "main"]);
     f.git(&["switch", "-qc", "feat/unbound"]);
     f.write("notes.md", "Notes.\n");
     f.commit("docs: write notes");
-    for spelling in [LINE, &base] {
-        let out = ci(&f, &["--base", spelling], None);
-        assert_eq!(out.status.code(), Some(2), "{}", output(&out));
-        assert!(
-            output(&out).contains("several branches"),
-            "{}",
-            output(&out)
-        );
-        assert!(output(&out).contains("--into"), "{}", output(&out));
-        passes(&ci(&f, &["--base", spelling, "--into", LINE], None));
-    }
+    let named = ci(&f, &["--base", LINE], None);
+    passes(&named);
+    assert!(
+        output(&named).contains(&format!("acceptance target '{LINE}' (named --base)")),
+        "{}",
+        output(&named)
+    );
+    let out = ci(&f, &["--base", &base], None);
+    assert_eq!(out.status.code(), Some(2), "{}", output(&out));
+    assert!(
+        output(&out).contains("several branches"),
+        "{}",
+        output(&out)
+    );
+    assert!(output(&out).contains("--into"), "{}", output(&out));
+    passes(&ci(&f, &["--base", &base, "--into", LINE], None));
 }
 
 #[test]
@@ -348,4 +361,146 @@ fn a_protected_target_wins_over_an_ordinary_branch_alias() {
             output(&out)
         );
     }
+}
+
+#[test]
+fn ordinary_alias_at_base_cannot_become_the_acceptance_target() {
+    let f = Line::new();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["branch", "docs/unrelated", &base]);
+    f.write("line.md", "Line advances.\n");
+    f.commit("docs: advance line");
+    f.git(&["switch", "-q", "main"]);
+    f.write("main.md", "Main advances.\n");
+    f.commit("docs: advance main");
+    f.git(&["switch", "-qc", "docs/unbound"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    let out = ci(&f, &["--base", &base], None);
+    passes(&out);
+    assert!(
+        output(&out).contains("target 'main' (repository default)"),
+        "{}",
+        output(&out)
+    );
+}
+
+#[test]
+fn named_base_wins_over_an_unrelated_integration_tip() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "plan/EPC-002-new"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    let out = ci(&f, &["--base", "main"], None);
+    passes(&out);
+    assert!(
+        output(&out).contains("acceptance target 'main' (named --base)"),
+        "{}",
+        output(&out)
+    );
+}
+
+#[test]
+fn named_protected_base_still_requires_release_impact_with_declared_line() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn changed() {}\n");
+    f.commit("fix: change work");
+    let body = "Task: TSK-001\n\n## Summary\nFix work.\n\n- Repair work\n\n## Changes\n- Repair work\n\n## Testing\nTests pass.\nNot tested: hosted CI.\n\n## Reviews\nNone: independent review follows\n";
+    let out = ci(&f, &["--base", "main", "--pr-body", body], None);
+    assert!(
+        output(&out).contains("git.pr_release_impact"),
+        "{}",
+        output(&out)
+    );
+}
+
+#[test]
+fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
+    for variant in ["self", "equal", "descendant"] {
+        let f = Line::new();
+        let branch = "fix/TSK-002-self";
+        f.git(&["switch", "-qc", branch]);
+        let target = if variant == "self" {
+            branch
+        } else {
+            "integration/contains-head"
+        };
+        f.write(
+            "project-management/tasks/TSK-002.md",
+            &super::planned_task("TSK-002", "").replace(
+                "integration_target: main",
+                &format!("integration_target: {target}"),
+            ),
+        );
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(f.root().join(path))
+            .unwrap()
+            .replace("AC-1 Work runs.", "AC-1 Changed another task.");
+        f.write(path, &record);
+        let head = f.commit("docs: change another criterion");
+        if variant != "self" {
+            f.git(&["switch", "-qc", target]);
+            if variant == "descendant" {
+                f.write("later.md", "Later.\n");
+                f.commit("docs: later notes");
+            }
+            f.git(&["switch", "-q", branch]);
+        }
+        let explicit = ci(&f, &["--base", "main"], None);
+        assert!(
+            output(&explicit).contains("work.criteria_frozen"),
+            "{}",
+            output(&explicit)
+        );
+        let out = ci(&f, &[], None);
+        assert_eq!(out.status.code(), Some(2), "{variant}: {}", output(&out));
+        assert!(
+            output(&out).contains("declared target")
+                && output(&out).contains("--base")
+                && output(&out).contains(&head[..8]),
+            "{}",
+            output(&out)
+        );
+    }
+}
+
+#[test]
+fn unresolved_explicit_and_ci_targets_name_their_source() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "docs/unbound"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    for (args, env, source) in [
+        (vec!["--into", "integration/missing"], None, "--into"),
+        (
+            vec![],
+            Some(("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", "integration/missing")),
+            "CI target metadata",
+        ),
+    ] {
+        let out = ci(&f, &args, env);
+        passes(&out);
+        let text = output(&out);
+        assert!(
+            text.contains(&format!("{source} 'integration/missing' does not resolve")),
+            "{text}"
+        );
+        assert!(!text.contains("declared target"), "{text}");
+    }
+}
+
+#[test]
+fn bare_undeclared_branch_uses_default_when_base_has_several_destinations() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "docs/unbound"]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    let out = ci(&f, &[], None);
+    passes(&out);
+    assert!(
+        output(&out).contains("target 'main' (repository default)"),
+        "{}",
+        output(&out)
+    );
 }

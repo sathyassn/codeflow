@@ -7490,3 +7490,34 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         "git.hook_integrity",
     );
 }
+
+#[test]
+fn first_push_without_declared_target_survives_default_branch_advancing() {
+    let (bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        true,
+    );
+    let fork = rev(local.path(), "feat/x");
+    git(local.path(), &["switch", "-q", "main"]);
+    git(local.path(), &["branch", "-d", "feat/x"]);
+    commit_file(
+        local.path(),
+        "main.txt",
+        "advanced\n",
+        "docs: advance default",
+    );
+    receive(bare.path(), local.path(), "main:stable");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    for branch in [
+        "fix/unbound",
+        "docs/unbound",
+        "chore/unbound",
+        "plan/non-epic",
+    ] {
+        git(local.path(), &["switch", "-q", "-C", branch, &fork]);
+        let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+        let (code, err) = push_hook(local.path(), "dest", &[(branch, &head)]);
+        assert_eq!(code, Some(0), "{branch}: {err}");
+        assert!(err.contains("push not stopped"), "{err}");
+    }
+}

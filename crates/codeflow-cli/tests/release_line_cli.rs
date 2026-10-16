@@ -308,9 +308,7 @@ impl Fx {
             "--destination",
             self.origin.to_str().unwrap(),
         ];
-        // The fixture's main shares its initial commit with several lines.
-        // Name the intended destination instead of guessing from that commit.
-        if let Some(into) = into.or_else(|| (base == "main").then_some("main")) {
+        if let Some(into) = into {
             args.extend(["--into", into]);
         }
         args.extend(extra);
@@ -2738,7 +2736,7 @@ fn a_records_only_criterion_is_frozen_on_every_release_path() {
     fx.git(&["switch", "-q", "-C", "plan/amend", LINE_A]);
     loosen(&fx);
     fx.commit("docs(records): loosen a criterion");
-    let line = fx.ci(LINE_A, "HEAD", "plan/amend", Some(LINE_A));
+    let line = fx.ci(LINE_A, "HEAD", "plan/amend", None);
     passes(&line, "an ordinary amendment on an epic line");
     assert!(!line.1.contains(SCOPE_LINE), "{}", line.1);
 }

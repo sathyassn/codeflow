@@ -11,6 +11,7 @@ pub(super) struct Context {
     pub head: String,
     pub base: Option<String>,
     pub base_candidates: Vec<String>,
+    pub named_base: Option<String>,
     pub range_source: String,
     pub branch: String,
     pub into: Option<String>,
@@ -25,15 +26,7 @@ pub(super) fn resolve(
 ) -> Result<Context, String> {
     let env = |key: &str| environment.get(key).cloned().filter(|v| !v.is_empty());
     let detected = detect_range(env, protected);
-    let head_ref = args.head.as_deref().unwrap_or(&detected.head);
-    let head = rev_parse(root, head_ref)?
-        .ok_or_else(|| format!("head '{head_ref}' does not name a commit; nothing was verified"))?;
-    let head_source = head_source(args.head.is_some(), env);
-    let (branch, branch_source) = branch(root, args, environment)?;
-    println!("codeflow ci: head {head} ({head_source}: {head_ref}); branch context '{}' ({branch_source})", if branch.is_empty() { "none" } else { &branch });
-    if args.head.is_some() && args.branch.is_none() {
-        println!("codeflow ci: context: pass --branch <name> if this head belongs to another line; branch context selects frozen or amendable acceptance binding");
-    }
+    let (head, branch) = head_context(root, args, environment, &detected)?;
     let explicit_target = args
         .into
         .clone()
@@ -44,12 +37,13 @@ pub(super) fn resolve(
     } else {
         None
     };
-    let mut range_source = detected.source;
+    let fallback = matches!(detected.source, super::RangeSource::ProtectedBranches);
+    let mut range_source = detected.source.to_string();
     let mut base_candidates = detected.base_candidates;
     if let Some(base) = &args.base {
         base_candidates = vec![base.clone()];
         range_source = "explicit --base flag".into();
-    } else if range_source == "policy protected branches (fallback)" {
+    } else if fallback {
         if let Some((target, source)) = explicit_target
             .as_ref()
             .map(|(name, source)| (name, *source))
@@ -60,18 +54,25 @@ pub(super) fn resolve(
             })
         {
             let candidates = target_candidates(target);
-            if resolve_base(root, &candidates)?.is_some() {
-                base_candidates = candidates;
+            if let Some(tip) = resolve_base(root, &candidates)? {
+                if explicit_target.is_none() {
+                    check_declared_base(root, target, &branch, &tip, &head)?;
+                }
+                base_candidates = vec![tip];
                 range_source = format!("{source} '{target}' for branch '{branch}'");
             } else {
                 let warning = codeflow_core::remedy::Finding::new(
-                    format!("declared target '{target}' does not resolve; base falls back to the policy protected branches"),
+                    format!("{source} '{target}' does not resolve; base falls back to the policy protected branches"),
                     codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
                 );
                 println!("{}", warning.line("codeflow ci", "warning"));
             }
         }
     }
+    let named_base = args.base.as_deref().and_then(named_branch);
+    let commit_base = base_candidates
+        .first()
+        .is_some_and(|base| named_branch(base).is_none());
     let base = resolve_base(root, &base_candidates).map_err(|error| base_refusal(&error))?;
     // Pin every downstream reader to the same object, even if a ref moves.
     if let Some(base) = &base {
@@ -90,19 +91,20 @@ pub(super) fn resolve(
         (Some(normalize(&name)), source)
     } else if let Some(target) = declared {
         (Some(normalize(&target)), "branch declared target")
+    } else if let Some(name) = &named_base {
+        (Some(name.clone()), "named --base")
     } else if empty_push {
         (None, "range without an acceptance target")
     } else {
         let inferred = base
             .as_deref()
-            .map(|base| target_at_commit(root, base, protected, tracked || has_body))
+            .map(|base| {
+                target_at_commit(root, base, protected, commit_base && (tracked || has_body))
+            })
             .transpose()?
             .flatten();
         (inferred, "branches at the resolved base commit")
     };
-    if into.is_none() && base.is_some() && tracked && !empty_push {
-        return Err("acceptance target cannot be derived from the resolved base commit; pass --into <target> or --branch <name> with a declared target; nothing was verified".into());
-    }
     let target = super::line_target(root, into.as_deref())?;
     if into.is_some() {
         println!("codeflow ci: acceptance target '{target}' ({source})");
@@ -113,11 +115,34 @@ pub(super) fn resolve(
         head,
         base,
         base_candidates,
+        named_base,
         range_source,
         branch,
         into,
         target,
     })
+}
+
+fn head_context(
+    root: &Path,
+    args: &CiArgs,
+    environment: &BTreeMap<String, String>,
+    detected: &super::DetectedRange,
+) -> Result<(String, String), String> {
+    let head_ref = args.head.as_deref().unwrap_or(&detected.head);
+    let head = rev_parse(root, head_ref)?
+        .ok_or_else(|| format!("head '{head_ref}' does not name a commit; nothing was verified"))?;
+    let head_source = if args.head.is_some() {
+        "--head"
+    } else {
+        detected.head_source
+    };
+    let (branch, branch_source) = branch(root, args, environment)?;
+    println!("codeflow ci: head {head} ({head_source}: {head_ref}); branch context '{}' ({branch_source})", if branch.is_empty() { "none" } else { &branch });
+    if args.head.is_some() && args.branch.is_none() {
+        println!("codeflow ci: context: pass --branch <name> if this head belongs to another line; branch context selects frozen or amendable acceptance binding");
+    }
+    Ok((head, branch))
 }
 
 fn base_refusal(error: &str) -> String {
@@ -139,17 +164,10 @@ fn branch(
     if let Some(name) = &args.branch {
         return Ok((name.clone(), "--branch".into()));
     }
-    let detected =
-        super::detect_branch(|key| environment.get(key).cloned().filter(|v| !v.is_empty()));
-    for key in [
-        "GITHUB_HEAD_REF",
-        "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
-        "CI_COMMIT_REF_NAME",
-        "BITBUCKET_BRANCH",
-    ] {
-        if environment.get(key).is_some_and(|value| !value.is_empty()) {
-            return Ok((detected.unwrap_or_default(), key.into()));
-        }
+    if let Some((name, source)) =
+        super::detect_branch(|key| environment.get(key).cloned().filter(|v| !v.is_empty()))
+    {
+        return Ok((name, source.into()));
     }
     let name = repo::open(root)?
         .map(|repo| repo::current_branch(&repo))
@@ -203,30 +221,24 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
     }
 }
 
-/// Infer by object identity, never by the spelling supplied by the caller.
+/// A commit can identify a destination only through protected or integration branches.
 fn target_at_commit(
     root: &Path,
     base: &str,
     protected: &[String],
     required: bool,
 ) -> Result<Option<String>, String> {
-    let mut names = branches(root)?
+    let policy = super::GitPolicy {
+        protected_branches: protected.to_vec(),
+        ..Default::default()
+    };
+    let names = branches(root)?
         .into_iter()
-        .filter(|(_, sha)| sha == base)
+        .filter(|(name, sha)| {
+            sha == base && (name.starts_with("integration/") || policy.branch_is_protected(name))
+        })
         .map(|(name, _)| name)
         .collect::<BTreeSet<_>>();
-    if names.len() > 1 {
-        let targets = names
-            .iter()
-            .filter(|name| {
-                name.starts_with("integration/") || protected.iter().any(|p| normalize(p) == **name)
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if !targets.is_empty() {
-            names = targets;
-        }
-    }
     if names.len() > 1 {
         if !required {
             return Ok(None);
@@ -259,19 +271,31 @@ fn branches(root: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(names)
 }
 
-fn head_source(explicit: bool, env: impl Fn(&str) -> Option<String>) -> &'static str {
-    if explicit {
-        "--head"
-    } else if env("CI_MERGE_REQUEST_DIFF_BASE_SHA").is_some() && env("CI_COMMIT_SHA").is_some() {
-        "CI_COMMIT_SHA"
-    } else if env("CI_MERGE_REQUEST_DIFF_BASE_SHA").is_none()
-        && env("BITBUCKET_PR_DESTINATION_COMMIT").is_some()
-        && env("BITBUCKET_COMMIT").is_some()
+fn check_declared_base(
+    root: &Path,
+    target: &str,
+    branch: &str,
+    tip: &str,
+    head: &str,
+) -> Result<(), String> {
+    let repository = repo::open(root)?.ok_or("repository is absent")?;
+    let tip_id = repository
+        .revparse_single(tip)
+        .map_err(|e| e.to_string())?
+        .id();
+    let head_id = repository
+        .revparse_single(head)
+        .map_err(|e| e.to_string())?
+        .id();
+    if normalize(target) == normalize(branch)
+        || tip_id == head_id
+        || repository
+            .graph_descendant_of(tip_id, head_id)
+            .map_err(|e| e.to_string())?
     {
-        "BITBUCKET_COMMIT"
-    } else {
-        "checkout HEAD"
+        return Err(format!("declared target '{target}' is the head's branch or contains head {head}; pass --base <ref> for the intended range; nothing was verified"));
     }
+    Ok(())
 }
 
 fn tracked_range(root: &Path, base: Option<&str>, head: &str) -> Result<bool, String> {

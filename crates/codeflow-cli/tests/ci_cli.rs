@@ -419,8 +419,6 @@ fn ci_scales_the_pr_body_sections_to_the_change_class() {
                 "ci",
                 "--base",
                 "integration/line",
-                "--into",
-                "integration/line",
                 "--branch",
                 "feat/x",
                 "--pr-body",

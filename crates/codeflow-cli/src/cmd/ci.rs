@@ -130,9 +130,10 @@ pub struct CiArgs {
     pub read_release_impact: bool,
 
     /// The branch a pull request merges into (default: the CI-provided
-    /// target branch, then the branch's declared target, then branches at the
-    /// resolved base commit). Ambiguous acceptance context requires --into or
-    /// --branch. A range whose head or target matches the release pattern is judged as a
+    /// target branch, the branch's declared target, a named --base, a unique protected
+    /// or integration branch at the base commit, then the repository default).
+    /// An ambiguous commit-ID base requires --into or --branch. A range whose head
+    /// or target matches the release pattern is judged as a
     /// release range (SPC-013 R-120).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
@@ -181,8 +182,26 @@ struct DetectedRange {
     base_candidates: Vec<String>,
     /// Head ref.
     head: String,
-    /// Human description of how the range was derived.
-    source: String,
+    head_source: &'static str,
+    source: RangeSource,
+}
+
+enum RangeSource {
+    Platform(&'static str),
+    DefaultBranch(String),
+    ProtectedBranches,
+}
+
+impl std::fmt::Display for RangeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Platform(source) => f.write_str(source),
+            Self::DefaultBranch(branch) => {
+                write!(f, "CODEFLOW_DEFAULT_BRANCH '{branch}' (fallback)")
+            }
+            Self::ProtectedBranches => f.write_str("policy protected branches (fallback)"),
+        }
+    }
 }
 
 struct CommitRangeEvaluation {
@@ -310,6 +329,7 @@ pub fn run(args: &CiArgs) -> i32 {
         head,
         base: base_sha,
         base_candidates,
+        named_base,
         range_source,
         branch,
         into,
@@ -612,7 +632,7 @@ pub fn run(args: &CiArgs) -> i32 {
         // The hosted workflows pass the base as a commit id, so the branch
         // the pull request merges into (`--into`, or the host's PR-target
         // environment) decides protection as much as a named base does.
-        let protected = match base_candidates.iter().try_fold(false, |found, base| {
+        let protected = match named_base.iter().try_fold(false, |found, base| {
             if found {
                 Ok(true)
             } else {
@@ -1016,8 +1036,8 @@ fn record_checks(
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
-/// The resolved target for the line proof, with the repository default for
-/// an untracked or empty range that needs no inferred acceptance target.
+/// The resolved target for the line proof, using the repository default
+/// when no explicit, declared, named or unique inferred target exists.
 fn line_target(root: &Path, into: Option<&str>) -> Result<String, String> {
     if let Some(target) = into {
         return Ok(target.to_string());
@@ -2210,18 +2230,22 @@ fn is_empty_table_row(t: &str) -> bool {
 fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> DetectedRange {
     // GitLab merge-request pipeline: an exact base sha is provided.
     if let Some(base) = env("CI_MERGE_REQUEST_DIFF_BASE_SHA") {
+        let (head, head_source) = detected_head(&env, "CI_COMMIT_SHA");
         return DetectedRange {
             base_candidates: vec![base],
-            head: env("CI_COMMIT_SHA").unwrap_or_else(|| "HEAD".to_string()),
-            source: "GitLab CI_MERGE_REQUEST_DIFF_BASE_SHA".to_string(),
+            head,
+            head_source,
+            source: RangeSource::Platform("GitLab CI_MERGE_REQUEST_DIFF_BASE_SHA"),
         };
     }
     // Bitbucket pull-request pipeline: destination-branch commit hash.
     if let Some(base) = env("BITBUCKET_PR_DESTINATION_COMMIT") {
+        let (head, head_source) = detected_head(&env, "BITBUCKET_COMMIT");
         return DetectedRange {
             base_candidates: vec![base],
-            head: env("BITBUCKET_COMMIT").unwrap_or_else(|| "HEAD".to_string()),
-            source: "Bitbucket BITBUCKET_PR_DESTINATION_COMMIT".to_string(),
+            head,
+            head_source,
+            source: RangeSource::Platform("Bitbucket BITBUCKET_PR_DESTINATION_COMMIT"),
         };
     }
     // GitHub Actions pull_request: base is a branch NAME — prefer the
@@ -2231,7 +2255,8 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
         return DetectedRange {
             base_candidates: vec![format!("origin/{base_ref}"), base_ref],
             head: "HEAD".to_string(),
-            source: "GitHub GITHUB_BASE_REF".to_string(),
+            head_source: "checkout HEAD",
+            source: RangeSource::Platform("GitHub GITHUB_BASE_REF"),
         };
     }
     // Explicit escape hatch for hosts with none of the variables above:
@@ -2241,7 +2266,8 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
         return DetectedRange {
             base_candidates: vec![format!("origin/{base}"), base.clone()],
             head: "HEAD".to_string(),
-            source: format!("CODEFLOW_DEFAULT_BRANCH '{base}' (fallback)"),
+            head_source: "checkout HEAD",
+            source: RangeSource::DefaultBranch(base),
         };
     }
     // Terminal fallback: the policy's protected branches — the default branch
@@ -2262,7 +2288,8 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
     DetectedRange {
         base_candidates,
         head: "HEAD".to_string(),
-        source: "policy protected branches (fallback)".to_string(),
+        head_source: "checkout HEAD",
+        source: RangeSource::ProtectedBranches,
     }
 }
 
@@ -2347,11 +2374,22 @@ fn origin_url(root: &Path) -> Result<Option<String>, String> {
 /// Auto-detect the head branch context. Verified variable names:
 /// GitHub `GITHUB_HEAD_REF`; GitLab `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` then
 /// `CI_COMMIT_REF_NAME`; Bitbucket `BITBUCKET_BRANCH`.
-fn detect_branch<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
-    env("GITHUB_HEAD_REF")
-        .or_else(|| env("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"))
-        .or_else(|| env("CI_COMMIT_REF_NAME"))
-        .or_else(|| env("BITBUCKET_BRANCH"))
+fn detect_branch<F: Fn(&str) -> Option<String>>(env: F) -> Option<(String, &'static str)> {
+    [
+        "GITHUB_HEAD_REF",
+        "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
+        "CI_COMMIT_REF_NAME",
+        "BITBUCKET_BRANCH",
+    ]
+    .into_iter()
+    .find_map(|key| env(key).map(|name| (name, key)))
+}
+
+fn detected_head(
+    env: impl Fn(&str) -> Option<String>,
+    key: &'static str,
+) -> (String, &'static str) {
+    env(key).map_or_else(|| ("HEAD".into(), "checkout HEAD"), |head| (head, key))
 }
 
 // ---------------------------------------------------------------------------
@@ -4339,7 +4377,8 @@ mod tests {
         );
         assert_eq!(r.base_candidates, vec!["abc123"]);
         assert_eq!(r.head, "def456");
-        assert!(r.source.contains("GitLab"));
+        assert_eq!(r.head_source, "CI_COMMIT_SHA");
+        assert!(r.source.to_string().contains("GitLab"));
     }
 
     #[test]
@@ -4353,7 +4392,8 @@ mod tests {
         );
         assert_eq!(r.base_candidates, vec!["dest99"]);
         assert_eq!(r.head, "head99");
-        assert!(r.source.contains("Bitbucket"));
+        assert_eq!(r.head_source, "BITBUCKET_COMMIT");
+        assert!(r.source.to_string().contains("Bitbucket"));
     }
 
     #[test]
@@ -4361,7 +4401,7 @@ mod tests {
         let r = detect_range(env_from(&[("GITHUB_BASE_REF", "main")]), &protected());
         assert_eq!(r.base_candidates, vec!["origin/main", "main"]);
         assert_eq!(r.head, "HEAD");
-        assert!(r.source.contains("GitHub"));
+        assert!(r.source.to_string().contains("GitHub"));
     }
 
     #[test]
@@ -4374,7 +4414,7 @@ mod tests {
         );
         assert_eq!(r.base_candidates, vec!["origin/trunk", "trunk"]);
         assert_eq!(r.head, "HEAD");
-        assert!(r.source.contains("CODEFLOW_DEFAULT_BRANCH"));
+        assert!(r.source.to_string().contains("CODEFLOW_DEFAULT_BRANCH"));
     }
 
     #[test]
@@ -4387,7 +4427,7 @@ mod tests {
             vec!["origin/main", "main", "origin/master", "master"]
         );
         assert_eq!(r.head, "HEAD");
-        assert!(r.source.contains("fallback"));
+        assert!(r.source.to_string().contains("fallback"));
     }
 
     #[test]
@@ -4410,6 +4450,7 @@ mod tests {
             &protected(),
         );
         assert_eq!(r.base_candidates, vec!["gl-base"]);
+        assert_eq!(r.head_source, "checkout HEAD");
     }
 
     // -- branch detection -------------------------------------------------
@@ -4418,24 +4459,31 @@ mod tests {
     fn detect_branch_github_then_gitlab_then_bitbucket() {
         assert_eq!(
             detect_branch(env_from(&[("GITHUB_HEAD_REF", "feat/gh")])),
-            Some("feat/gh".to_string())
+            Some(("feat/gh".to_string(), "GITHUB_HEAD_REF"))
         );
         assert_eq!(
             detect_branch(env_from(&[(
                 "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
                 "feat/gl"
             )])),
-            Some("feat/gl".to_string())
+            Some(("feat/gl".to_string(), "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"))
         );
         assert_eq!(
             detect_branch(env_from(&[("CI_COMMIT_REF_NAME", "feat/gl-branch")])),
-            Some("feat/gl-branch".to_string())
+            Some(("feat/gl-branch".to_string(), "CI_COMMIT_REF_NAME"))
         );
         assert_eq!(
             detect_branch(env_from(&[("BITBUCKET_BRANCH", "feat/bb")])),
-            Some("feat/bb".to_string())
+            Some(("feat/bb".to_string(), "BITBUCKET_BRANCH"))
         );
         assert_eq!(detect_branch(env_from(&[])), None);
+        assert_eq!(
+            detect_branch(env_from(&[
+                ("GITHUB_HEAD_REF", "feat/gh"),
+                ("BITBUCKET_BRANCH", "feat/bb")
+            ])),
+            Some(("feat/gh".into(), "GITHUB_HEAD_REF"))
+        );
     }
 
     // -- log parsing ------------------------------------------------------

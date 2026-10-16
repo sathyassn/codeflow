@@ -58,8 +58,6 @@ fn ci_with(dir: &Path, body: &str, path_env: Option<&std::ffi::OsStr>) -> Output
         "ci",
         "--base",
         "integration/line",
-        "--into",
-        "integration/line",
         "--head",
         "HEAD",
         "--branch",

@@ -96,8 +96,6 @@ fn pull_request(root: &Path, branch: &str, target: &str, task_line: &str) -> (i3
         root,
         &[
             "ci",
-            "--into",
-            target,
             "--base",
             target,
             "--head",
