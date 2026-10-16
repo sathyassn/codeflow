@@ -19,7 +19,9 @@ pub const FETCH_DEADLINE: Duration = Duration::from_secs(120);
 pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
 /// `git ls-remote <args>`, never interactive and bounded by
-/// [`LS_REMOTE_DEADLINE`] and [`MAX_ANSWER_BYTES`].
+/// [`LS_REMOTE_DEADLINE`] per attempt and [`MAX_ANSWER_BYTES`]. A default
+/// advertisement (`--symref`) retries only timeouts, at most twice, with a
+/// 100 ms backoff. Every other failure returns immediately.
 ///
 /// # Errors
 ///
@@ -28,19 +30,48 @@ pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 pub fn ls_remote(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
-    match run(root, &all, LS_REMOTE_DEADLINE) {
-        Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
-            Err("`git ls-remote --exit-code` returned success without a matching ref".into())
+    let retries = if args.contains(&"--symref") { 2 } else { 0 };
+    ls_remote_attempts(args, retries, || run(root, &all, LS_REMOTE_DEADLINE))
+}
+
+fn ls_remote_attempts(
+    args: &[&str],
+    retries: usize,
+    mut attempt: impl FnMut() -> Result<String, Failure>,
+) -> Result<String, String> {
+    for number in 0..=retries {
+        match attempt() {
+            Err(Failure::Timeout(_)) if number < retries => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(Failure::Timeout(deadline)) => {
+                return Err(format!(
+                    "timeout: no answer within {}s per attempt ({} attempts)",
+                    deadline.as_secs(),
+                    number + 1
+                ))
+            }
+            Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
+                return Err(
+                    "`git ls-remote --exit-code` returned success without a matching ref".into(),
+                );
+            }
+            Ok(answer) => return Ok(answer),
+            // With --exit-code, no matching refs is still a complete answer.
+            Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => {
+                return Ok(String::new())
+            }
+            Err(Failure::Exit(_)) => {
+                return Err(
+                    "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
+                        .into(),
+                )
+            }
+            Err(Failure::Authentication) => return Err("remote authentication failed".into()),
+            Err(Failure::Other(why)) => return Err(why),
         }
-        Ok(answer) => Ok(answer),
-        // With --exit-code, Git distinguishes an empty advertisement from a
-        // transport failure. No matching refs is still a complete answer.
-        Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => Ok(String::new()),
-        Err(Failure::Exit(_)) => Err(
-            "`git ls-remote` failed (unreachable, no credentials, or no such repository)".into(),
-        ),
-        Err(Failure::Other(why)) => Err(why),
     }
+    unreachable!("the last attempt always returns")
 }
 
 /// Fetch `refs` from `url` into the object store only: no tracking ref,
@@ -64,6 +95,8 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
         .map(|_| ())
         .map_err(|why| match why {
             Failure::Exit(_) => format!("`git fetch {url}` failed"),
+            Failure::Authentication => "remote authentication failed".into(),
+            Failure::Timeout(deadline) => format!("no answer within {}s", deadline.as_secs()),
             Failure::Other(why) => why,
         })
 }
@@ -71,6 +104,8 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
 enum Failure {
     /// Git ran and exited unsuccessfully.
     Exit(Option<i32>),
+    Authentication,
+    Timeout(Duration),
     Other(String),
 }
 
@@ -80,6 +115,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .arg("-C")
         .arg(root)
         .args(args)
+        .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
@@ -87,7 +123,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_SSH_COMMAND", batch_ssh_command(root)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -100,6 +136,16 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         kill_group(&mut child);
         return Err(Failure::Other("could not read its answer".to_string()));
     };
+    // Read diagnostics only to classify authentication failures. Never return
+    // remote stderr: a helper or URL could include credential material.
+    let stderr = child.stderr.take();
+    let diagnostics = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(stderr) = stderr {
+            let _ = stderr.take(64 << 10).read_to_end(&mut bytes);
+        }
+        bytes
+    });
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -109,7 +155,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         let _ = sender.send(read.map(|_| bytes));
     });
     let until = Instant::now() + deadline;
-    let timed_out = || Failure::Other(format!("no answer within {}s", deadline.as_secs()));
+    let timed_out = || Failure::Timeout(deadline);
     let bytes = loop {
         match receiver.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => break bytes,
@@ -143,10 +189,37 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
             }
         }
     };
+    // A descendant may retain stderr after git exits. Do not wait for it
+    // beyond the same deadline.
+    while !diagnostics.is_finished() {
+        if Instant::now() >= until {
+            kill_group(&mut child);
+            return Err(timed_out());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let diagnostics = diagnostics.join().unwrap_or_default();
     if !status.success() {
+        if authentication_failed(&diagnostics) {
+            return Err(Failure::Authentication);
+        }
         return Err(Failure::Exit(status.code()));
     }
     text_answer(&bytes)
+}
+
+fn authentication_failed(diagnostics: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(diagnostics).to_ascii_lowercase();
+    [
+        "authentication failed",
+        "permission denied",
+        "could not read username",
+        "terminal prompts disabled",
+        "http basic: access denied",
+        "returned error: 401",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 /// The answer as text, one line per advertised ref.
@@ -243,6 +316,46 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_lookup_retries_only_timeouts_and_stops_at_its_bound() {
+        for (timeouts, expected, success) in [(0, 1, true), (1, 2, true), (3, 3, false)] {
+            let mut calls = 0;
+            let result = ls_remote_attempts(&["--symref"], 2, || {
+                calls += 1;
+                if calls <= timeouts {
+                    Err(Failure::Timeout(LS_REMOTE_DEADLINE))
+                } else {
+                    Ok("answer".into())
+                }
+            });
+            assert_eq!(calls, expected);
+            assert_eq!(result.is_ok(), success);
+        }
+        let mut calls = 0;
+        let result = ls_remote_attempts(&["--symref"], 2, || {
+            calls += 1;
+            Err(Failure::Authentication)
+        });
+        assert_eq!(calls, 1);
+        assert!(result.unwrap_err().contains("authentication"));
+
+        // A complete but unusable advertisement is a final answer, never
+        // another network attempt, whether malformed or missing a default.
+        for answer in [
+            "malformed",
+            "1111111111111111111111111111111111111111\trefs/heads/main\n",
+        ] {
+            let mut calls = 0;
+            let result = ls_remote_attempts(&["--symref"], 2, || {
+                calls += 1;
+                Ok(answer.into())
+            })
+            .unwrap();
+            assert!(crate::workgraph::release_line::from_advertisement("stub", &result).is_err());
+            assert_eq!(calls, 1);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

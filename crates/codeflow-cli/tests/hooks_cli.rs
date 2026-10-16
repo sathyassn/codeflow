@@ -5343,7 +5343,7 @@ fn push_hook_over_http(
 #[test]
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
-    // one that never answers is abandoned at the deadline; either way the
+    // one that never answers is abandoned after bounded timeout retries; either way the
     // hook says why, and refuses the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
@@ -5366,7 +5366,7 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     assert!(!marker.exists(), "askpass was invoked: {err}");
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
     );
 
@@ -5375,7 +5375,8 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("no answer within 10s"), "{err}");
-    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(err.contains("3 attempts"), "{err}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}");
 }
 
 #[test]

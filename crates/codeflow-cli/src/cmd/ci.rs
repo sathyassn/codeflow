@@ -522,25 +522,44 @@ pub fn run(args: &CiArgs) -> i32 {
         },
         release: std::cell::OnceCell::new(),
     };
+    // Resolve the shared scope before either dependent check. An unreadable
+    // destination refuses once; records and acceptance cannot judge it.
+    let scope_range = base_sha.as_deref().map(|base| classification::Range {
+        base,
+        head: &head,
+        target: &line_target,
+    });
+    let scope_ready = match release_of(&root, &names, scope_range.as_ref()) {
+        Ok(_) => true,
+        Err(violation) => {
+            tagged.push(TaggedViolation {
+                sha: None,
+                violation,
+            });
+            false
+        }
+    };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
-    record_checks(
-        &root,
-        &base_candidates,
-        &head,
-        args.baseline_from.as_deref(),
-        match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("codeflow ci: {error}");
-                return 2;
-            }
-        },
-        &names,
-        &line_target,
-        &mut tagged,
-        &mut ran,
-    );
+    if scope_ready {
+        record_checks(
+            &root,
+            &base_candidates,
+            &head,
+            args.baseline_from.as_deref(),
+            match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("codeflow ci: {error}");
+                    return 2;
+                }
+            },
+            &names,
+            &line_target,
+            &mut tagged,
+            &mut ran,
+        );
+    }
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -599,20 +618,21 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
-    let tracked_claim = work_checks(
-        &root,
-        git,
-        pr_body.as_deref(),
-        pr_context,
-        change.is_some_and(|class| class.light),
-        &names,
-        &base_candidates,
-        &head,
-        &line_target,
-        &stacked,
-        &mut tagged,
-        &mut ran,
-    );
+    let tracked_claim = scope_ready
+        && work_checks(
+            &root,
+            git,
+            pr_body.as_deref(),
+            pr_context,
+            change.is_some_and(|class| class.light),
+            &names,
+            &base_candidates,
+            &head,
+            &line_target,
+            &stacked,
+            &mut tagged,
+            &mut ran,
+        );
 
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
@@ -2315,13 +2335,13 @@ pub(super) struct Names<'a> {
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
     /// The release scope, asked once per run and shared by the checks.
-    pub release: std::cell::OnceCell<
+    release: std::cell::OnceCell<
         Result<
             Option<(
                 codeflow_core::workgraph::release_line::Destination,
                 codeflow_core::workgraph::release_line::Scope,
             )>,
-            String,
+            acceptance::ScopeError,
         >,
     >,
 }

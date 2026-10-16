@@ -268,6 +268,9 @@ fn run_ci_ranges(
     if let Some(why) = &destination.fork {
         report.status.push(format!("note: {why}"));
     }
+    if !destination_available(root, destination, report) {
+        return Ok(());
+    }
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
         let judged = match judged_by(root, destination, steps) {
@@ -365,6 +368,28 @@ fn run_ci_ranges(
         }
     }
     Ok(())
+}
+
+/// Refuse the shared acquisition error once before any ref check starts.
+fn destination_available(
+    root: &Path,
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> bool {
+    let unavailable = match destination.answer(root) {
+        Ok(Ok(_)) => None,
+        Ok(Err(why)) => Some(why.as_str()),
+        Err(why) => Some(why),
+    };
+    if let Some(why) = unavailable {
+        report.violations.push(Violation::always_blocking(
+            release_line::DESTINATION_RULE,
+            format!("cannot prove push inputs: the destination cannot be read, so no pushed range is judged: {why}"),
+            &remedy::DESTINATION_UNAVAILABLE.remedy(),
+        ));
+        return false;
+    }
+    true
 }
 
 fn refuse_authority(
@@ -1069,6 +1094,20 @@ fn release_base(
     // Not judging a release push is never a warning (R-80): the refusal
     // keeps its block whatever `git.test_gate_on_push` is, as CI's own
     // refusal of an unreadable release scope does.
+    let asked = match destination
+        .answer(root)
+        .and_then(|answer| answer.as_ref().map_err(String::as_str))
+    {
+        Ok(asked) => asked,
+        Err(why) => {
+            report.violations.push(Violation::always_blocking(
+                release_line::DESTINATION_RULE,
+                format!("cannot prove push inputs: the destination cannot be read: {why}"),
+                &remedy::DESTINATION_UNAVAILABLE.remedy(),
+            ));
+            return Scoped::Refused;
+        }
+    };
     let mut refuse = |message: String, sanctioned: &str| {
         report.violations.push(Violation::always_blocking(
             codeflow_core::workgraph::acceptance::FROZEN_RULE,
@@ -1076,27 +1115,6 @@ fn release_base(
             sanctioned,
         ));
         Scoped::Refused
-    };
-    let asked = match destination.answer(root) {
-        Ok(Ok(asked)) => asked,
-        Ok(Err(why)) => {
-            return refuse(
-                format!("whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"),
-                "fix what the message names at the destination, then push again",
-            )
-        }
-        Err(why) => {
-            // Never a warning (R-80), with the catalogued step that clears it.
-            let mut silent = Violation::new(
-                codeflow_core::workgraph::acceptance::FROZEN_RULE,
-                codeflow_core::hooks::PolicyLevel::Block,
-                format!("the destination did not answer, so whether '{branch}' is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): asking the destination for its branches failed ({why})"),
-                remedy::PUSH_DESTINATION_SILENT.remedy(),
-            );
-            silent.level_fixed = true;
-            report.violations.push(silent);
-            return Scoped::Refused;
-        }
     };
     // Both release-scope reads below need the default target's tip; when
     // the authority's fetch of it already failed, neither fetches again.

@@ -52,6 +52,9 @@ use super::classify::is_planning_path;
 use super::lifecycle::{Brought, Graph, RecordView};
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 
+/// A destination lookup failure, independent of work-record lifecycle rules.
+pub const DESTINATION_RULE: &str = "ci.destination_unavailable";
+
 /// The `role` value of the task that owns direct release work.
 pub const RELEASE_ROLE: &str = "release-integration";
 /// The release branch pattern when the default target's policy sets none.
@@ -175,8 +178,9 @@ pub fn ask(repo_root: &Path, url: Option<&str>) -> Result<Result<Destination, St
 }
 
 /// What `url` advertises: its default branch, branches and tags (peeled),
-/// in one bounded `git ls-remote --symref`. A caller that already holds
-/// it, such as the pre-push hook, passes it on instead of asking again.
+/// in one bounded lookup (`git ls-remote --symref`, with timeout retries).
+/// A caller that already holds it, such as pre-push, passes it on instead
+/// of asking again.
 ///
 /// # Errors
 ///
