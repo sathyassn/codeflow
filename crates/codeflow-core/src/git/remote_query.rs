@@ -18,6 +18,25 @@ pub const FETCH_DEADLINE: Duration = Duration::from_secs(120);
 /// How much a remote may say.
 pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 
+/// `url` as it may be shown: the userinfo of a `scheme://` URL (a user, or
+/// `user:token`) becomes `***`, keeping the scheme, host and path. A URL may
+/// carry a credential, and every message and printed command can reach a
+/// log or a transcript. Only git itself receives the real URL. Other forms,
+/// such as a path or scp-style `host:path`, carry no userinfo and are
+/// returned unchanged.
+#[must_use]
+pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
+    let Some(start) = url.find("://").map(|at| at + 3) else {
+        return std::borrow::Cow::Borrowed(url);
+    };
+    let rest = &url[start..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &rest[at..])),
+        None => std::borrow::Cow::Borrowed(url),
+    }
+}
+
 /// `git ls-remote <args>`, never interactive and bounded by
 /// [`LS_REMOTE_DEADLINE`] per attempt and [`MAX_ANSWER_BYTES`]. A default
 /// advertisement (`--symref`) retries only timeouts, at most twice, with a
@@ -94,7 +113,7 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
     run(root, &all, FETCH_DEADLINE)
         .map(|_| ())
         .map_err(|why| match why {
-            Failure::Exit(_) => format!("`git fetch {url}` failed"),
+            Failure::Exit(_) => format!("`git fetch {}` failed", display_url(url)),
             Failure::Authentication => "remote authentication failed".into(),
             Failure::Timeout(deadline) => format!("no answer within {}s", deadline.as_secs()),
             Failure::Other(why) => why,
@@ -413,6 +432,27 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&out.stdout)
         );
+    }
+
+    #[test]
+    fn display_url_hides_userinfo_and_keeps_scheme_host_and_path() {
+        for (url, shown) in [
+            (
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git",
+                "https://***@h.invalid/x.git",
+            ),
+            ("https://FAKE_TOKEN_3b9@h.invalid", "https://***@h.invalid"),
+            (
+                "ssh://git@h.invalid:22/x.git?q=a@b",
+                "ssh://***@h.invalid:22/x.git?q=a@b",
+            ),
+            ("https://a@b:FAKE@h.invalid/x", "https://***@h.invalid/x"),
+            ("https://h.invalid/u@x.git", "https://h.invalid/u@x.git"),
+            ("git@h.invalid:x.git", "git@h.invalid:x.git"),
+            ("/srv/destination.git", "/srv/destination.git"),
+        ] {
+            assert_eq!(display_url(url), shown, "{url}");
+        }
     }
 
     #[test]

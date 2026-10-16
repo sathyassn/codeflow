@@ -116,6 +116,10 @@ Local tracking refs, including `origin/HEAD`, never replace that answer.
 A destination with no branches yet keeps the existing bootstrap behavior;
 a release push still needs a default target to judge against.
 
+Messages and printed commands name a destination without credentials: the
+userinfo of a URL such as `https://user:token@host/path` is shown as
+`https://***@host/path`. Only git receives the real URL.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It

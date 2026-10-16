@@ -62,6 +62,10 @@ impl Stub {
     }
 
     fn ci(&self, root: &Path) -> Output {
+        self.ci_to(root, self.remote.to_str().unwrap())
+    }
+
+    fn ci_to(&self, root: &Path, url: &str) -> Output {
         codeflow()
             .current_dir(root)
             .env("PATH", &self.path)
@@ -74,7 +78,7 @@ impl Stub {
                 "--branch",
                 "feat/x",
                 "--destination",
-                self.remote.to_str().unwrap(),
+                url,
             ])
             .output()
             .unwrap()
@@ -183,6 +187,10 @@ fn timeout_is_one_destination_refusal_and_ignores_stale_local_default() {
 
 impl Stub {
     fn pre_push(&self, root: &Path) -> Output {
+        self.pre_push_to(root, self.remote.to_str().unwrap())
+    }
+
+    fn pre_push_to(&self, root: &Path, url: &str) -> Output {
         use std::io::Write as _;
         use std::process::Stdio;
         let out = std::process::Command::new("git")
@@ -196,12 +204,7 @@ impl Stub {
         let mut child = codeflow()
             .current_dir(root)
             .env("PATH", &self.path)
-            .args([
-                "git-hook",
-                "pre-push",
-                "origin",
-                self.remote.to_str().unwrap(),
-            ])
+            .args(["git-hook", "pre-push", "origin", url])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -326,4 +329,71 @@ fn installed_pre_push_refuses_timeout_then_allows_the_same_task_push() {
     println!("answering journey:\n{}", combined(&accepted));
     assert!(accepted.status.success(), "{}", combined(&accepted));
     assert_eq!(stub.attempts(), 4);
+}
+
+/// A synthetic credential: it must never reach any output.
+const TOKEN: &str = "FAKE_TOKEN_5d2e81";
+
+fn credential_urls(root: &Path) -> String {
+    git(
+        root,
+        &[
+            "config",
+            "remote.upstream.url",
+            &format!("https://{TOKEN}@upstream.invalid/y.git"),
+        ],
+    );
+    format!("https://u:{TOKEN}@h.invalid/x.git")
+}
+
+#[test]
+fn a_credential_in_the_destination_url_is_never_printed_in_a_refusal() {
+    let dir = fixture();
+    let stub = Stub::new(dir.path(), "echo malformed; exit 0");
+    let url = credential_urls(dir.path());
+    for out in [
+        stub.ci_to(dir.path(), &url),
+        stub.pre_push_to(dir.path(), &url),
+    ] {
+        let text = combined(&out);
+        destination_refusal(&out, "https://***@h.invalid/x.git");
+        assert_eq!(text.matches(TOKEN).count(), 0, "{text}");
+    }
+}
+
+#[test]
+fn a_credential_in_the_destination_url_is_never_printed_in_a_judged_push() {
+    let dir = fixture();
+    // Answer every lookup with the real advertisement of the stub's remote.
+    let stub = Stub::new(
+        dir.path(),
+        "PATH=${PATH#*:} git ls-remote --symref \"$(dirname \"$0\")/remote.git\" HEAD 'refs/heads/*' 'refs/tags/*'; exit $?",
+    );
+    let url = credential_urls(dir.path());
+    let out = stub.pre_push_to(dir.path(), &url);
+    let text = combined(&out);
+    println!("judged push:\n{text}");
+    assert!(out.status.success(), "{text}");
+    assert_eq!(text.matches("`codeflow ci` judges ").count(), 2, "{text}");
+    assert!(
+        text.contains("the push goes to https://***@h.invalid/x.git, not the configured upstream https://***@upstream.invalid/y.git"),
+        "{text}"
+    );
+    assert_eq!(text.matches(TOKEN).count(), 0, "{text}");
+
+    // A failing child check prints the command to rerun, destination included.
+    std::fs::write(dir.path().join("guide.md"), "again\n").unwrap();
+    git(
+        dir.path(),
+        &["commit", "-qam", "not a conventional subject"],
+    );
+    let out = stub.pre_push_to(dir.path(), &url);
+    let text = combined(&out);
+    println!("refused push:\n{text}");
+    assert!(!out.status.success(), "{text}");
+    assert!(
+        text.contains("--destination https://***@h.invalid/x.git"),
+        "{text}"
+    );
+    assert_eq!(text.matches(TOKEN).count(), 0, "{text}");
 }

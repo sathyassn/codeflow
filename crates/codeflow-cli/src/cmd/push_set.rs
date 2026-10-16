@@ -45,6 +45,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+use codeflow_core::git::remote_query;
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
@@ -727,17 +728,19 @@ fn run_check_with(
 ) {
     // The command a person reruns: the check at its own levels, as CI runs
     // it, without the push gate's level, and asking the destination itself
-    // instead of reading the hook's hand-off.
+    // instead of reading the hook's hand-off. A destination URL is shown
+    // without its credentials; the check itself receives the real one.
     let run_level = args.iter().position(|arg| *arg == "--run-level");
-    let rerun: Vec<&str> = args
+    let displayed: Vec<std::borrow::Cow<'_, str>> = args
         .iter()
         .enumerate()
         .filter(|(at, arg)| {
             **arg != "--advertisement-stdin"
                 && run_level.is_none_or(|level| *at != level && *at != level + 1)
         })
-        .map(|(_, arg)| *arg)
+        .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
+    let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
     let shown = format!("codeflow {}", rerun.join(" "));
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
@@ -988,7 +991,13 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
         return Ok(None);
     };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
-    Ok((url != Some(upstream)).then(|| format!("the push goes to {}, not the configured upstream {upstream}; a pull request may target the upstream", url.unwrap_or("an unnamed destination"))))
+    Ok((url != Some(upstream)).then(|| {
+        format!(
+            "the push goes to {}, not the configured upstream {}; a pull request may target the upstream",
+            url.map_or(std::borrow::Cow::Borrowed("an unnamed destination"), remote_query::display_url),
+            remote_query::display_url(upstream)
+        )
+    }))
 }
 
 /// What judges every pushed branch: the policy at the destination default
