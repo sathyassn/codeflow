@@ -74,7 +74,10 @@ pub(super) fn resolve(
     }
     let base = resolve_base(root, &base_candidates).map_err(|error| {
         codeflow_core::remedy::Finding::new(
-            format!("cannot resolve the base because git refused it: {error}"),
+            format!(
+                "cannot resolve the base because git refused it: {}",
+                error.trim_end().replace('\n', "\n  ")
+            ),
             codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
         )
         .to_string()
@@ -89,10 +92,9 @@ pub(super) fn resolve(
     }
     // A body-less push with no changed commits has no acceptance or PR-body
     // decision that depends on a target. Several refs may share its tip.
-    let empty_push = base.as_deref() == Some(head.as_str())
-        && args.pr_body.is_none()
-        && args.pr_body_file.is_none()
-        && env("CODEFLOW_PR_BODY").is_none();
+    let has_body =
+        args.pr_body.is_some() || args.pr_body_file.is_some() || env("CODEFLOW_PR_BODY").is_some();
+    let empty_push = base.as_deref() == Some(head.as_str()) && !has_body;
     let (into, source) = if let Some((name, source)) = explicit_target {
         (Some(normalize(&name)), source)
     } else if let Some(target) = declared {
@@ -102,7 +104,7 @@ pub(super) fn resolve(
     } else {
         let inferred = base
             .as_deref()
-            .map(|base| target_at_commit(root, base, protected, tracked))
+            .map(|base| target_at_commit(root, base, protected, tracked || has_body))
             .transpose()?
             .flatten();
         (inferred, "branches at the resolved base commit")
@@ -204,7 +206,7 @@ fn target_at_commit(
     root: &Path,
     base: &str,
     protected: &[String],
-    tracked: bool,
+    required: bool,
 ) -> Result<Option<String>, String> {
     let mut names = branches(root)?
         .into_iter()
@@ -224,7 +226,7 @@ fn target_at_commit(
         }
     }
     if names.len() > 1 {
-        if !tracked {
+        if !required {
             return Ok(None);
         }
         return Err(format!("resolved base commit names several branches: {}; pass --into <target> or --branch <name> with a declared target", names.into_iter().collect::<Vec<_>>().join(", ")));
