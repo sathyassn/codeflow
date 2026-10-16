@@ -9,6 +9,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
+#[path = "support/own_repository.rs"]
+mod own_repository;
+
 fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -58,13 +61,26 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
 }
 
-/// Spawn with piped stderr, returning the child and a line receiver.
-fn spawn(mut cmd: Command) -> (Child, Receiver<String>) {
+/// What a spawned gate has written to stdout, read to the end on its own
+/// thread (`join` returns the bytes once the gate has exited).
+type Stdout = std::thread::JoinHandle<Vec<u8>>;
+
+/// Spawn with both outputs piped and drained while the gate runs, so a gate
+/// whose output outgrows a small pipe buffer is never stalled by the test
+/// (issue 100). Returns the child, a receiver of its stderr lines and its
+/// stdout.
+fn spawn(mut cmd: Command) -> (Child, Receiver<String>, Stdout) {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("codeflow spawns");
+    let mut out = child.stdout.take().unwrap();
+    let stdout = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut out, &mut bytes);
+        bytes
+    });
     let err = child.stderr.take().unwrap();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
@@ -74,7 +90,7 @@ fn spawn(mut cmd: Command) -> (Child, Receiver<String>) {
             }
         }
     });
-    (child, rx)
+    (child, rx, stdout)
 }
 
 /// Wait for a stderr line containing `needle`; panics after 20 s.
@@ -103,7 +119,7 @@ const TWO_SLEEPERS: &str = r#"{"schema_version": "1.0", "targets": [
 fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
     let dir = repo(TWO_SLEEPERS);
     let home = tempfile::tempdir().unwrap();
-    let (mut child, rx) = spawn(command(dir.path(), home.path(), &["test"]));
+    let (mut child, rx, out) = spawn(command(dir.path(), home.path(), &["test"]));
 
     assert_eq!(wait_for(&rx, "'first'"), start("first", "full"));
     assert!(
@@ -116,9 +132,9 @@ fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
         "the start line arrived before the second target finished"
     );
 
-    let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(0));
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.join().unwrap()).into_owned();
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3, "stdout: {stdout}");
     assert!(lines[0].starts_with("first: ok (exit 0, "), "{stdout}");
@@ -163,7 +179,7 @@ fn a_killed_gate_has_already_named_its_running_target() {
 ]}"#,
     );
     let home = tempfile::tempdir().unwrap();
-    let (mut child, rx) = spawn(command(dir.path(), home.path(), &["test"]));
+    let (mut child, rx, _stdout) = spawn(command(dir.path(), home.path(), &["test"]));
     let named = wait_for(&rx, "starting target");
     assert_eq!(named, start("sleeper", "full"));
     assert!(child.try_wait().unwrap().is_none(), "still running");
@@ -212,7 +228,7 @@ const QUICK_PASS: &str = r#"{"schema_version": "1.0", "targets": [
 fn a_second_full_gate_is_refused_naming_the_holder() {
     let home = tempfile::tempdir().unwrap();
     let first = repo(HOLDER);
-    let (child, rx) = spawn(command(
+    let (mut child, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),
         &["test", "--mode", "full"],
@@ -243,8 +259,8 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
     let q = run(quick.path(), home.path(), &["test", "--mode", "quick"]);
     assert_eq!(q.status.code(), Some(0), "{}", stderr(&q));
 
-    let done = child.wait_with_output().unwrap();
-    assert_eq!(done.status.code(), Some(0));
+    let done = child.wait().unwrap();
+    assert_eq!(done.code(), Some(0));
     let after = run(other.path(), home.path(), &["test", "--mode", "full"]);
     assert_eq!(after.status.code(), Some(0), "{}", stderr(&after));
 }
@@ -261,7 +277,7 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
    "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
 ]}"#,
     );
-    let (mut gate, rx) = spawn(command(
+    let (mut gate, rx, _stdout) = spawn(command(
         first.path(),
         home.path(),
         &["test", "--mode", "full"],
@@ -378,11 +394,12 @@ fn a_killed_full_gate_never_runs_beside_its_target_in_a_fresh_scaffold() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("proj");
     std::fs::create_dir(&root).unwrap();
+    own_repository::own_repository(&root);
     let init = run(&root, home.path(), &["init", "--yes", "--minimal"]);
     assert!(init.status.success(), "init: {}", stderr(&init));
     std::fs::write(root.join(".codeflow/test-config.json"), LONG_TARGET).unwrap();
 
-    let (mut gate, rx) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
+    let (mut gate, rx, _stdout) = spawn(command(&root, home.path(), &["test", "--mode", "full"]));
     wait_for(&rx, "starting target 'long'");
     let pid_file = root.join("pid.txt");
     let pid = (0..1200)

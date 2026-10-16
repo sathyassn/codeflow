@@ -2119,7 +2119,7 @@ mod tests {
 
     #[test]
     fn init_and_update_flush_the_device_once_per_run() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         let device = usize::from(cfg!(target_vendor = "apple"));
 
@@ -2203,7 +2203,7 @@ mod tests {
 
     #[test]
     fn an_init_or_update_stopped_by_an_error_leaves_no_torn_or_empty_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // A fresh init, stopped at writes spread across the run.
         interruption::arm(None);
         crate::scaffold::init(
@@ -2528,7 +2528,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_record_never_reaches_the_disk_ahead_of_its_files() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         interruption::arm(None);
         crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
@@ -2544,7 +2544,7 @@ mod tests {
     #[test]
     fn a_record_never_reaches_its_drive_ahead_of_files_on_another() {
         // T153-R2-1: a barrier on one drive orders nothing on another.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path().join("project");
         let skills = root.join(".agents");
         let device = two_devices(Some(skills.clone()));
@@ -2649,7 +2649,7 @@ mod tests {
     /// update installs the new version. With `second_drive`, `zzz/` is on a
     /// device of its own.
     fn assert_update_recovers_from_any_crash(second_drive: bool) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
         let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
         let upgrade = crate::scaffold::UpdateOptions {
@@ -2737,7 +2737,7 @@ mod tests {
             let _ = crate::scaffold::update(&shipped_assets(), &root, &force_update());
             std::process::exit(3); // not reached when the abort fires
         }
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let base = dir.path().join("base");
         crate::scaffold::init(&shipped_assets(), &base, &init_opts(Tier::Standard)).unwrap();
         assert!(edit_managed_skills(&base) > 5);

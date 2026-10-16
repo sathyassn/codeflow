@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/own_repository.rs"]
+mod own_repository;
+
 const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const REGISTRY: &str = "{\"schema_version\":1,\"repos\":[]}\n";
 const LIMITATION:&str="Checks supplied allocations and local evidence links only; does not establish source truth, authorization, quality completeness, or predictive accuracy.";
@@ -152,6 +155,7 @@ fn unreadable_report_is_golden_and_creates_no_user_or_project_state() {
 #[test]
 fn valid_json_report_and_existing_registry_are_stable() {
     let dir = tempfile::tempdir().unwrap();
+    own_repository::own_repository(dir.path());
     let home = dir.path().join("home");
     std::fs::create_dir(&home).unwrap();
     std::fs::write(home.join("registry.json"), REGISTRY).unwrap();

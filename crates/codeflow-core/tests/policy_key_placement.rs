@@ -36,6 +36,10 @@ use codeflow_core::scaffold::{
 };
 use serde_json::Value;
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
+
 /// The last released binary's schema: `key<TAB>kind` per line.
 const LAST_RELEASE_SCHEMA: &str = include_str!("fixtures/policy-schema-last-release.tsv");
 
@@ -267,14 +271,6 @@ impl AssetSource for Overlay {
     }
 }
 
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
-
 #[test]
 fn update_leaves_a_last_release_policy_accepted_by_the_last_release_schema() {
     isolate_git();
@@ -290,6 +286,7 @@ fn update_leaves_a_last_release_policy_accepted_by_the_last_release_schema() {
     // A project at the last release: its scaffold, with the policy file that
     // release shipped.
     let project = tempfile::tempdir().expect("project tempdir");
+    git_isolation::own_repository(project.path());
     scaffold::init(
         &last_release,
         project.path(),
