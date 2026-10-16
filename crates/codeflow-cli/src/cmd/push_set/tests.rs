@@ -680,28 +680,57 @@ fn r22_release_preflight_valid_empty_notes_stay_clear() {
 
 #[test]
 fn round_two_hook_and_local_plans_use_the_same_epic_target() {
-    let h = History::new();
     let line = "integration/EPC-001-outcome";
-    h.git(&["branch", line]);
     let branch = "plan/EPC-001-next";
-    let head = h.git(&["rev-parse", "HEAD"]);
-    let pushed = PushRef {
-        local_ref: format!("refs/heads/{branch}"),
-        local_sha: head.clone(),
-        remote_ref: format!("refs/heads/{branch}"),
-        remote_sha: NEW.into(),
-    };
-    let judged = Judged::Target {
-        target: "main".into(),
-        tip: head,
-        policy: Box::default(),
-    };
-    assert_eq!(
-        ci_target(h.local.path(), &pushed, branch, &judged)
-            .unwrap()
-            .as_deref(),
-        Some(line)
-    );
+    // Bound by records on the protected branch, then by none.
+    for (bound, expected) in [(true, line), (false, "main")] {
+        let h = History::new();
+        if bound {
+            h.commit(
+                "project-management/epics/EPC-001.md",
+                "---\nid: EPC-001\ntitle: Outcome\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-10-06\n---\n\n# Outcome\n",
+                "docs: plan the epic",
+            );
+            h.commit(
+                "project-management/tasks/TSK-001.md",
+                &format!("---\nid: TSK-001\nepic_id: EPC-001\ntitle: Work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {line}\ncreated: 2026-10-06\n---\n\n# Work\n"),
+                "docs: plan the task",
+            );
+        }
+        h.git(&["branch", line]);
+        let head = h.git(&["rev-parse", "HEAD"]);
+        let pushed = PushRef {
+            local_ref: format!("refs/heads/{branch}"),
+            local_sha: head.clone(),
+            remote_ref: format!("refs/heads/{branch}"),
+            remote_sha: NEW.into(),
+        };
+        let judged = Judged::Target {
+            target: "main".into(),
+            tip: head,
+            policy: Box::default(),
+        };
+        let mut report = StageReport::default();
+        let target = ci_target(
+            h.local.path(),
+            &pushed,
+            branch,
+            &judged,
+            &GitPolicy::default(),
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(target.as_deref(), Some(expected), "{:?}", report.status);
+        assert_eq!(
+            report
+                .status
+                .iter()
+                .any(|line| line.contains("destination's default")),
+            !bound,
+            "{:?}",
+            report.status
+        );
+    }
 }
 
 #[cfg(unix)]

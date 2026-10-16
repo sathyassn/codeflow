@@ -142,17 +142,28 @@ fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
     }
 }
 
-/// Whether a declared target may select the base and the acceptance target:
-/// a protected branch, or an epic line that the records on the protected
-/// branch bind to this branch's epic. A name alone binds nothing. A rejected
-/// target is reported once and selects neither.
-fn eligible_declared(
+/// A branch's declared target, judged once for every caller.
+pub(in crate::cmd) enum Declared {
+    /// It may select the base and the acceptance target.
+    Eligible(String),
+    /// It selects neither, for the reason given.
+    Rejected { target: String, reason: String },
+}
+
+/// Judge a branch's declared target the same way for `codeflow ci` and the
+/// pre-push hook. A protected branch counts. An epic line counts only when
+/// trusted records bind it to the branch's epic: those on the protected
+/// branch, or those at the line's own remote-tracking ref. A local branch
+/// never binds anything, because the change's author can create one at any
+/// commit; the remote is trusted only as far as the host protects
+/// `integration/*`.
+pub(in crate::cmd) fn judged_declared_target(
     root: &Path,
     branch: &str,
     head: &str,
     protected: &[String],
-    base_falls_back: bool,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Declared>, String> {
+    use codeflow_core::workgraph::{epic_line_binding, EpicLineBinding};
     let Some(target) = declared_target(root, branch, head)? else {
         return Ok(None);
     };
@@ -162,27 +173,56 @@ fn eligible_declared(
         ..Default::default()
     };
     let shape = name != normalize(branch) && codeflow_core::workgraph::is_stable_work_target(&name);
-    let refusal = if shape && policy.branch_is_protected(&name) {
-        None
-    } else if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
-        Some(format!(
-            "is not a protected branch or a valid epic line distinct from '{branch}'"
-        ))
-    } else {
-        let tips = detect_range(|_: &str| None, protected).base_candidates;
-        match resolve_base(root, &tips).map_err(|error| base_refusal(&error))? {
-            Some(anchor) => codeflow_core::workgraph::epic_line_binding_refusal(
-                root, branch, head, &name, &anchor,
-            )
-            .map_err(|error| error.to_string())?
-            .map(|reason| format!("{reason}, so it is not a bound epic line")),
-            None => Some(
-                "cannot be checked as an epic line because no protected branch resolves".into(),
-            ),
-        }
+    if shape && policy.branch_is_protected(&name) {
+        return Ok(Some(Declared::Eligible(target)));
+    }
+    if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
+        let reason =
+            format!("is not a protected branch or a valid epic line distinct from '{branch}'");
+        return Ok(Some(Declared::Rejected { target, reason }));
+    }
+    let bind = |anchor: &str, place: &str| {
+        epic_line_binding(root, branch, head, &name, anchor, place).map_err(|e| e.to_string())
     };
-    let Some(reason) = refusal else {
-        return Ok(Some(target));
+    let tips = detect_range(|_: &str| None, protected).base_candidates;
+    let first = match resolve_base(root, &tips).map_err(|error| base_refusal(&error))? {
+        Some(anchor) => bind(&anchor, "the protected branch")?,
+        None => EpicLineBinding::Unbound("has no protected branch to read records from".into()),
+    };
+    let unbound = match first {
+        EpicLineBinding::Bound => return Ok(Some(Declared::Eligible(target))),
+        EpicLineBinding::Refused(reason) => {
+            let reason = format!("{reason}, so it is not a bound epic line");
+            return Ok(Some(Declared::Rejected { target, reason }));
+        }
+        EpicLineBinding::Unbound(reason) => reason,
+    };
+    let remote = format!("origin/{name}");
+    let reason = match rev_parse(root, &format!("refs/remotes/{remote}"))? {
+        None => {
+            format!("{unbound}, and '{remote}' does not exist (a local-only line never counts)")
+        }
+        Some(tip) => match bind(&tip, &format!("'{remote}'"))? {
+            EpicLineBinding::Bound => return Ok(Some(Declared::Eligible(target))),
+            EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => reason,
+        },
+    };
+    let reason = format!("{reason}, so it is not a bound epic line");
+    Ok(Some(Declared::Rejected { target, reason }))
+}
+
+/// The eligible declared target, warning once when one is rejected.
+fn eligible_declared(
+    root: &Path,
+    branch: &str,
+    head: &str,
+    protected: &[String],
+    base_falls_back: bool,
+) -> Result<Option<String>, String> {
+    let (target, reason) = match judged_declared_target(root, branch, head, protected)? {
+        None => return Ok(None),
+        Some(Declared::Eligible(target)) => return Ok(Some(target)),
+        Some(Declared::Rejected { target, reason }) => (target, reason),
     };
     let effect = if base_falls_back {
         "base falls back to the policy protected branches and the acceptance target is chosen without it"
@@ -197,6 +237,9 @@ fn eligible_declared(
     Ok(None)
 }
 
+/// The tip of a target that bounds a bare run's range. A declared epic line
+/// resolves only through its remote-tracking ref: a local branch of that
+/// name is never the base, and one that differs is named.
 fn local_base(
     root: &Path,
     target: &str,
@@ -205,14 +248,38 @@ fn local_base(
     head: &str,
     explicit: bool,
 ) -> Result<Option<String>, String> {
-    if let Some(tip) = resolve_base(root, &target_candidates(target))? {
+    let name = normalize(target);
+    let line = !explicit && codeflow_core::workgraph::line_adoption::epic_id(&name).is_ok();
+    let candidates = if line {
+        vec![format!("refs/remotes/origin/{name}")]
+    } else {
+        target_candidates(target)
+    };
+    let local = if line {
+        rev_parse(root, &format!("refs/heads/{name}"))?
+    } else {
+        None
+    };
+    if let Some(tip) = resolve_base(root, &candidates)? {
+        if local.as_ref().is_some_and(|local| *local != tip) {
+            let notice = codeflow_core::remedy::Finding::new(
+                format!("local branch '{name}' differs from 'origin/{name}'; the remote-tracking ref is used"),
+                codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+            );
+            println!("{}", notice.line("codeflow ci", "note"));
+        }
         if !explicit {
             check_declared_base(root, target, branch, &tip, head)?;
         }
         return Ok(Some(tip));
     }
+    let reason = if local.is_some() {
+        "exists only as a local branch, and a local-only line never counts".to_string()
+    } else {
+        "does not resolve".to_string()
+    };
     let warning = codeflow_core::remedy::Finding::new(
-        format!("{source} '{target}' does not resolve; base falls back to the policy protected branches"),
+        format!("{source} '{target}' {reason}; base falls back to the policy protected branches"),
         codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
     );
     println!("{}", warning.line("codeflow ci", "warning"));
@@ -289,11 +356,7 @@ fn target_candidates(target: &str) -> Vec<String> {
     ]
 }
 
-pub(in crate::cmd) fn declared_target(
-    root: &Path,
-    branch: &str,
-    head: &str,
-) -> Result<Option<String>, String> {
+fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<String>, String> {
     if let Some(target) =
         declared_work_target_at_revision(root, branch, head).map_err(|e| e.to_string())?
     {

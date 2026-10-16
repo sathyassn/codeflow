@@ -24,7 +24,7 @@ mod change_class;
 mod classification;
 mod conflict_markers;
 mod context;
-pub(super) use context::declared_target;
+pub(super) use context::{judged_declared_target, Declared};
 mod id_registry;
 pub(crate) mod pr_body;
 mod work_records;
@@ -64,7 +64,10 @@ pub struct CiArgs {
     /// Defaults to CI metadata, then the checkout. Without --into, its declared target selects
     /// the base when no --base or CI base exists: a task's `integration_target`,
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
-    /// Only protected branches and bound epic lines may supply a declared target.
+    /// Only protected branches and bound epic lines may supply a declared target: records on a
+    /// protected branch or at the line's `origin/<line>` ref must bind the line to the branch's
+    /// epic, and a local-only line never counts. Host protection cannot be verified offline, so
+    /// protect integration/* on the host.
     /// Pass --branch when an explicit --head belongs to another line.
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,

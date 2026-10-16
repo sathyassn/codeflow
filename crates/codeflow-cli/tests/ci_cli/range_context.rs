@@ -114,6 +114,7 @@ fn detached_sync_merge_names_missing_branch_context_without_reopen_advice() {
 fn planning_branch_uses_its_epic_line_before_protected_fallback() {
     let f = Line::new();
     f.land_task();
+    f.git(&["update-ref", &format!("refs/remotes/origin/{LINE}"), LINE]);
     f.git(&["switch", "-qc", "plan/EPC-001-amend"]);
     f.write("project-management/notes.md", "Planning notes.\n");
     let head = f.commit("docs: record plan");
@@ -210,6 +211,7 @@ fn task_target_selects_base_from_flag_ci_or_checkout() {
     let f = Line::new();
     f.write("line.md", "Line notes.\n");
     let base = f.commit("docs: line notes");
+    f.git(&["update-ref", &format!("refs/remotes/origin/{LINE}"), &base]);
     let branch = "task/TSK-001-work";
     f.git(&["switch", "-qc", branch]);
     f.write("work.md", "Task notes.\n");
@@ -452,6 +454,11 @@ fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
                 f.write("later.md", "Later.\n");
                 f.commit("docs: later notes");
             }
+            f.git(&[
+                "update-ref",
+                &format!("refs/remotes/origin/{target}"),
+                target,
+            ]);
             f.git(&["switch", "-q", branch]);
         }
         let explicit = ci(&f, &["--base", "main"], None);
@@ -664,6 +671,114 @@ fn round_three_cancelled_epic_line_is_not_bound() {
     assert!(text.contains(&format!("range {}..", &main[..8])), "{text}");
     assert!(
         !text.contains(&format!("acceptance target '{LINE}'")),
+        "{text}"
+    );
+}
+
+/// The real workflow: the epic and its tasks are recorded only on the line,
+/// which exists on the remote, never on the protected branch.
+fn records_only_on_the_remote_line() -> (Line, String) {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.git(&["rm", "-q", "-r", "project-management"]);
+    f.write("project-management/README.md", "Records.\n");
+    f.commit("docs: keep line records on the line");
+    f.git(&["switch", "-q", LINE]);
+    f.write("line.md", "Line notes.\n");
+    let tip = f.commit("docs: line notes");
+    f.git(&["update-ref", &format!("refs/remotes/origin/{LINE}"), &tip]);
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("work.md", "Task notes.\n");
+    f.commit("docs: task notes");
+    (f, tip)
+}
+
+#[test]
+fn round_four_remote_line_records_bind_the_declared_line() {
+    let (f, tip) = records_only_on_the_remote_line();
+    let out = ci(&f, &[], None);
+    passes(&out);
+    let text = output(&out);
+    assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
+    assert!(
+        text.contains(&format!(
+            "acceptance target '{LINE}' (branch declared target)"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("warning: branch declared target"), "{text}");
+
+    // A stale local branch of the same name never replaces the remote ref.
+    f.git(&["branch", "-f", LINE, &format!("{tip}~1")]);
+    let out = ci(&f, &[], None);
+    passes(&out);
+    let text = output(&out);
+    assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
+    assert!(
+        text.contains(&format!(
+            "local branch '{LINE}' differs from 'origin/{LINE}'"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn round_four_local_only_line_never_counts() {
+    let (f, _) = records_only_on_the_remote_line();
+    f.git(&["update-ref", "-d", &format!("refs/remotes/origin/{LINE}")]);
+    let text = output(&ci(&f, &[], None));
+    assert!(
+        text.contains(&format!("declared target '{LINE}'"))
+            && text.contains("local-only line never counts")
+            && text.contains("base falls back to the policy protected branches"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("acceptance target '{LINE}'")),
+        "{text}"
+    );
+}
+
+#[test]
+fn round_four_remote_decoy_without_binding_records_falls_back() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "fix/TSK-002-prior"]);
+    let path = "project-management/tasks/TSK-001.md";
+    let record = std::fs::read_to_string(f.root().join(path))
+        .unwrap()
+        .replace("AC-1 Work runs.", "AC-1 Changed another task.");
+    f.write(path, &record);
+    let earlier = f.commit("docs: change another criterion");
+    let decoy = "integration/EPC-001-decoy";
+    f.git(&[
+        "update-ref",
+        &format!("refs/remotes/origin/{decoy}"),
+        &earlier,
+    ]);
+    f.write(
+        "project-management/tasks/TSK-002.md",
+        &super::planned_task("TSK-002", "")
+            .replace(
+                "epic_id: null\nstandalone_reason: bounded work",
+                "epic_id: EPC-001\nstandalone_reason: null",
+            )
+            .replace(
+                "integration_target: main",
+                &format!("integration_target: {decoy}"),
+            ),
+    );
+    f.write("src/lib.rs", "pub fn changed() {}\n");
+    f.commit("fix: change work");
+    let text = output(&ci(&f, &[], None));
+    assert!(text.contains("work.criteria_frozen"), "{text}");
+    assert!(
+        text.contains(&format!("declared target '{decoy}'"))
+            && text.contains(&format!("on 'origin/{decoy}'"))
+            && text.contains("base falls back to the policy protected branches"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&format!("acceptance target '{decoy}'")),
         "{text}"
     );
 }

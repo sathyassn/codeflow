@@ -339,7 +339,7 @@ fn run_ci_ranges(
             ];
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
-            let into = ci_target(root, r, branch, &judged)?;
+            let into = ci_target(root, r, branch, &judged, policy, report)?;
             let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -378,13 +378,33 @@ fn run_ci_ranges(
     Ok(())
 }
 
+/// The target the hook hands `codeflow ci`: the branch's declared target
+/// when the same judgement `codeflow ci` makes accepts it, otherwise the
+/// destination's default.
 fn ci_target(
     root: &Path,
     pushed: &PushRef,
     branch: &str,
     judged: &Judged,
+    policy: &GitPolicy,
+    report: &mut StageReport,
 ) -> Result<Option<String>, String> {
-    let declared = super::ci::declared_target(root, branch, &pushed.local_sha)?;
+    use super::ci::Declared;
+    let declared = match super::ci::judged_declared_target(
+        root,
+        branch,
+        &pushed.local_sha,
+        &policy.protected_branches,
+    )? {
+        Some(Declared::Eligible(target)) => Some(target),
+        Some(Declared::Rejected { target, reason }) => {
+            report.status.push(format!(
+                "declared target '{target}' {reason}; the check uses the destination's default target"
+            ));
+            None
+        }
+        None => None,
+    };
     let target = declared.or_else(|| match judged {
         Judged::Target { target, .. } => Some(target.clone()),
         _ => None,
