@@ -213,7 +213,7 @@ fn clears_push_destination_silent() {
     pushed(&root);
     let rewrite = reads_down(&root, &dest);
     commit(&root, "y.txt", "feat: add y");
-    let finding = "asking the destination for its branches failed";
+    let finding = "ci.destination_unavailable";
     let before = pushed(&root);
     let printed = block(&before, finding).to_string();
     assert_prints_row(&printed, "PUSH_DESTINATION_SILENT");

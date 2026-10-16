@@ -244,7 +244,7 @@ pub(super) fn scope_refusal(error: &ScopeError) -> Violation {
         return Violation::always_blocking(
             release_line::DESTINATION_RULE,
             unscoped(message),
-            &codeflow_core::remedy::DESTINATION_UNAVAILABLE.remedy(),
+            &codeflow_core::remedy::PUSH_DESTINATION_SILENT.remedy(),
         );
     }
     Violation::always_blocking(

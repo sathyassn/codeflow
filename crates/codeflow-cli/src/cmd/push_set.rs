@@ -385,7 +385,7 @@ fn destination_available(
         report.violations.push(Violation::always_blocking(
             release_line::DESTINATION_RULE,
             format!("cannot prove push inputs: the destination cannot be read, so no pushed range is judged: {why}"),
-            &remedy::DESTINATION_UNAVAILABLE.remedy(),
+            &remedy::PUSH_DESTINATION_SILENT.remedy(),
         ));
         return false;
     }
@@ -1103,7 +1103,7 @@ fn release_base(
             report.violations.push(Violation::always_blocking(
                 release_line::DESTINATION_RULE,
                 format!("cannot prove push inputs: the destination cannot be read: {why}"),
-                &remedy::DESTINATION_UNAVAILABLE.remedy(),
+                &remedy::PUSH_DESTINATION_SILENT.remedy(),
             ));
             return Scoped::Refused;
         }
