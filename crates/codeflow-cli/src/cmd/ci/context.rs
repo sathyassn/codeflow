@@ -124,7 +124,7 @@ fn base_refusal(error: &str) -> String {
     codeflow_core::remedy::Finding::new(
         format!(
             "cannot resolve the base because git refused it: {}",
-            error.trim_end().replace('\n', "\n  ")
+            error.replace('\n', "\n  ")
         ),
         codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
     )
