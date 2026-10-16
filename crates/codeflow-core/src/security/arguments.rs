@@ -147,12 +147,17 @@ pub(crate) fn evaluate(
         for composed in composed::composed_texts(line) {
             match composed {
                 composed::Composed::Resolved(value) => {
-                    for word in outward::literal_words(&value.render()) {
-                        reaches.extend(opaque_line_word(&word, PRINTF));
-                    }
-                    // A glob is judged whole, by what its pattern can name.
-                    for word in value.glob_words() {
-                        reaches.extend(opaque_line_word(&word, PRINTF));
+                    // As written, and with each unknown piece empty, which
+                    // joins the spelled pieces around it (review rounds 15
+                    // and 16): the value knows where its pieces are.
+                    for reading in [value.clone(), value.without_open()] {
+                        for word in outward::literal_words(&reading.render()) {
+                            reaches.extend(composed_word(&word));
+                        }
+                        // A glob is judged whole, by what its pattern can name.
+                        for word in reading.glob_words() {
+                            reaches.extend(composed_word(&word));
+                        }
                     }
                 }
                 composed::Composed::Unresolved(construct) => {
@@ -774,14 +779,17 @@ const QUOTED: &str = "a quoted string on a line where a shell or interpreter run
 /// in full, or a word of a quoted string where one runs, judged by its
 /// trailing components. A part filled in at run time may be empty, which
 /// joins the spelled pieces around it (TSK-302 review round 15): the word
-/// is judged with each such part removed too, for authority and for
-/// enforcement alike.
+/// is judged with each such part removed too, as the shell removes it,
+/// for authority and for enforcement alike.
 fn opaque_line_word(value: &str, why: &str) -> Option<Reach> {
-    tail_reach(value, value, why).or_else(|| {
-        empty_spans(value)
-            .iter()
-            .find_map(|joined| tail_reach(joined, value, why))
-    })
+    tail_reach(value, value, why)
+        .or_else(|| empty_spans(value).and_then(|joined| tail_reach(&joined, value, why)))
+}
+
+/// A word of a composed value's reading, judged by its trailing
+/// components; its unknown pieces are already read both ways.
+fn composed_word(word: &str) -> Option<Reach> {
+    tail_reach(word, word, PRINTF)
 }
 
 /// [`opaque_line_word`] for one reading of a word, shown as `shown`.
@@ -805,65 +813,59 @@ fn tail_reach(word: &str, shown: &str, why: &str) -> Option<Reach> {
     })
 }
 
-/// `value` with every part the shell fills in at run time removed, as
-/// it reads when each is empty: a `${...}`, `$(...)` or backquoted span,
-/// a substitution placeholder, and a `$` with the name it introduces or,
-/// read as a composed value's unknown piece, the `$` alone. The distinct
-/// readings other than `value` itself.
-fn empty_spans(value: &str) -> Vec<String> {
+/// A raw shell word with every part the shell fills in at run time
+/// removed whole, as it reads when each is empty: a `${...}`, `$(...)` or
+/// backquoted span, a `$` with the name it introduces, and a substitution
+/// placeholder. The parameter's name is never kept as spelled text
+/// (review round 16). `None` when nothing is removed.
+fn empty_spans(value: &str) -> Option<String> {
     if !value.contains(['$', '`', '\u{1}', '\u{2}']) {
-        return Vec::new();
+        return None;
     }
     let chars: Vec<char> = value.chars().collect();
-    let mut readings = Vec::new();
-    for named in [false, true] {
-        let mut out = String::new();
-        let mut at = 0;
-        while let Some(&c) = chars.get(at) {
-            at += 1;
-            match c {
-                '\u{1}' | '\u{2}' => {}
-                '`' => {
-                    while chars.get(at).is_some_and(|c| *c != '`') {
-                        at += 1;
-                    }
+    let mut out = String::new();
+    let mut at = 0;
+    while let Some(&c) = chars.get(at) {
+        at += 1;
+        match c {
+            '\u{1}' | '\u{2}' => {}
+            '`' => {
+                while chars.get(at).is_some_and(|c| *c != '`') {
                     at += 1;
                 }
-                '$' => match chars.get(at) {
-                    Some(open @ ('{' | '(')) => {
-                        let close = if *open == '{' { '}' } else { ')' };
-                        let mut depth = 0usize;
-                        while let Some(&d) = chars.get(at) {
-                            at += 1;
-                            if d == *open {
-                                depth += 1;
-                            } else if d == close {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
+                at += 1;
+            }
+            '$' => match chars.get(at) {
+                Some(open @ ('{' | '(')) => {
+                    let close = if *open == '{' { '}' } else { ')' };
+                    let mut depth = 0usize;
+                    while let Some(&d) = chars.get(at) {
+                        at += 1;
+                        if d == *open {
+                            depth += 1;
+                        } else if d == close {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
                             }
                         }
                     }
-                    Some(d) if named && (d.is_ascii_alphabetic() || *d == '_') => {
-                        while chars
-                            .get(at)
-                            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
-                        {
-                            at += 1;
-                        }
+                }
+                Some(d) if d.is_ascii_alphabetic() || *d == '_' => {
+                    while chars
+                        .get(at)
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    {
+                        at += 1;
                     }
-                    Some(d) if named && (d.is_ascii_digit() || "@*#?!-".contains(*d)) => at += 1,
-                    _ => {}
-                },
-                other => out.push(other),
-            }
-        }
-        if out != value && !out.is_empty() && !readings.contains(&out) {
-            readings.push(out);
+                }
+                Some(d) if d.is_ascii_digit() || "@*#?!-$".contains(*d) => at += 1,
+                _ => {}
+            },
+            other => out.push(other),
         }
     }
-    readings
+    (out != value && !out.is_empty()).then_some(out)
 }
 
 /// [`value_reach`] for a code literal: a word inside the interpreter's own

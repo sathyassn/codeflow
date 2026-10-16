@@ -1591,6 +1591,13 @@ mod tests {
                 "python3 lint.py \"$(echo ok src/*.py)\"",
                 "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo notes.txt \"$(/bin/cat /dev/null)\"; python3 src/app.py",
+                // Round 16: a quoted parameter named like a protected
+                // component is a name, not spelled text.
+                "echo \"$config\" | python3 -c 'import sys; print(sys.stdin.read())'",
+                "python3 -c 'import sys; print(sys.argv[1:])' \"$config\"",
+                "echo \"$hooks\" | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo \"$policy.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo \"$settings.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
             ],
         );
     }

@@ -177,6 +177,22 @@ impl Value {
         out
     }
 
+    /// The value with each unknown piece empty: the reading when outside
+    /// text or a program's output is empty, which joins the spelled
+    /// pieces around it. Globs and separators stay.
+    #[must_use]
+    pub fn without_open(&self) -> Self {
+        let mut out = Self::default();
+        for piece in &self.0 {
+            match piece {
+                Piece::Text(text) => out.push_text(text),
+                Piece::Open => {}
+                other => out.0.push(other.clone()),
+            }
+        }
+        out
+    }
+
     /// Each glob in the value as the whole word it sits in, with the text
     /// around it up to a blank, quote or shell operator: the pattern the
     /// guard judges as it judges a glob argument.
