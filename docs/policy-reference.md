@@ -109,7 +109,8 @@ task with `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its
 own task. Adding a record, a document or any other path keeps the range out
 of this class; `.gitleaksignore` remains outside planning amendments.
 The head entry must be a regular file. Deletions, type changes and mode
-changes do not qualify.
+changes do not qualify: such a range naming a task stays ordinary tracked
+work with its dependency check, and one naming an epic is refused.
 
 The class permits a task whose predecessor is incomplete at the planning
 anchor, including one complete only on an integration line. Task identity,
@@ -120,7 +121,7 @@ base; it cannot exempt a finding introduced by its own pull request.
 Repository approval rules, including code-owner review where configured,
 are unchanged. The class neither configures protection nor grants approval.
 
-Reviewers must verify that each entry uses `<commit>:<path>:<rule>:<line>`,
+Reviewers must verify that each added or changed entry uses `<commit>:<path>:<rule>:<line>`,
 that its commit is already on the named epic's integration line or task's
 branch, and that a linked review establishes the finding as a false positive.
 Refuse entries without a commit: they cover that location in every later

@@ -649,8 +649,8 @@ pub(super) fn dispatch(
         epic_problem: &epic_problem,
     };
     let class = match classify(&input)
-        .map(|class| release_class(release, class))
         .and_then(|class| exemption_entry(root, range, &changes, class))
+        .map(|class| release_class(release, class))
     {
         Ok(class) => class,
         Err(reason) => {
@@ -697,19 +697,27 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
 }
 
 /// An exemption adds or edits the regular file; it cannot remove or replace it.
+/// A task-named range of another shape stays ordinary tracked work, as it was
+/// before the class existed; an epic-named one is refused.
 fn exemption_entry(
     root: &Path,
     range: &Range<'_>,
     changes: &[(String, GitName)],
     class: Class,
 ) -> Result<Class, String> {
-    if class.is_secret_scan_exemption() {
-        if !matches!(changes, [(status, _)] if status == "A" || status == "M") {
-            return Err("a secret-scan exemption must add or modify .gitleaksignore; deletions and type changes are not exemptions".into());
-        }
-        validate_secret_scan_exemption_entry(root, range.base, range.head)?;
+    let Class::SecretScanExemption(work) = class else {
+        return Ok(class);
+    };
+    let shape = if matches!(changes, [(status, _)] if status == "A" || status == "M") {
+        validate_secret_scan_exemption_entry(root, range.base, range.head)
+    } else {
+        Err("a secret-scan exemption must add or modify .gitleaksignore; deletions and type changes are not exemptions".into())
+    };
+    match (shape, work) {
+        (Ok(()), work) => Ok(Class::SecretScanExemption(work)),
+        (Err(_), ExemptionWork::Task(task_id)) => Ok(Class::Tracked { task_id }),
+        (Err(problem), ExemptionWork::Epic(_)) => Err(problem),
     }
-    Ok(class)
 }
 
 /// Print the class and the direct commits its reviewer is accepting.

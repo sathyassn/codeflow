@@ -317,7 +317,8 @@ so work completed only on the integration line does not block the exemption.
 Adding any other path keeps the range out of the class. The ignore file
 remains outside planning amendments.
 The head entry must be a regular file. Deletions, type changes and mode
-changes do not qualify.
+changes do not qualify: such a range naming a task stays ordinary tracked
+work with its dependency check, and one naming an epic is refused.
 
 Commit standards, record and body checks, the secret scan and security review
 still apply. The repository's existing approval requirements, including
@@ -326,7 +327,7 @@ protection setting and grants no approval. The scanner reads the base's
 exemptions, so the new fingerprint cannot suppress a finding in its own pull
 request. Once the exemption lands, rerun the integration line's scan.
 
-Reviewers must verify that each entry uses `<commit>:<path>:<rule>:<line>`,
+Reviewers must verify that each added or changed entry uses `<commit>:<path>:<rule>:<line>`,
 that its commit is already on the named epic's integration line or task's
 branch, and that a linked review establishes the finding as a false positive.
 Refuse entries without a commit: they cover that location in every later

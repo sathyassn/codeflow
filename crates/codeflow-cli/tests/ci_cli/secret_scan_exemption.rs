@@ -167,14 +167,40 @@ fn change_ignore_entry(root: &Path, mode: Option<i32>, content_change: bool) {
     .unwrap();
 }
 
+const TRACKED: &str = "pull request class: tracked TSK-002";
+
+// An epic-named range of another shape is refused; a task-named one stays
+// ordinary tracked work, as before the class existed.
 fn refused_entry(mode: Option<i32>) {
     let dir = fixture(false);
     change_ignore_entry(dir.path(), mode, false);
-    for id in ["EPC-001", "TSK-002"] {
-        let out = ci(dir.path(), BRANCH, &body(id));
-        assert!(!out.status.success(), "{id}: {}", said(&out));
+    let out = ci(dir.path(), BRANCH, &body("EPC-001"));
+    assert!(!out.status.success(), "{}", said(&out));
+    assert!(!said(&out).contains(CLASS), "{}", said(&out));
+    assert!(said(&out).contains("work.classification"), "{}", said(&out));
+    tracked_entry(mode);
+}
+
+fn tracked_entry(mode: Option<i32>) {
+    let ready = fixture_with_record(false, &task("TSK-002", "", "todo"));
+    let unready = fixture(false);
+    for (dir, passes) in [(&ready, true), (&unready, false)] {
+        change_ignore_entry(dir.path(), mode, false);
+        let out = ci(dir.path(), BRANCH, &body("TSK-002"));
+        assert_eq!(out.status.success(), passes, "{}", said(&out));
+        assert!(said(&out).contains(TRACKED), "{}", said(&out));
         assert!(!said(&out).contains(CLASS), "{}", said(&out));
-        assert!(said(&out).contains("work.classification"), "{}", said(&out));
+        assert!(
+            !said(&out).contains("work.classification"),
+            "{}",
+            said(&out)
+        );
+        assert_eq!(
+            said(&out).contains("work.stable_planning_anchor"),
+            !passes,
+            "{}",
+            said(&out)
+        );
     }
 }
 
@@ -209,12 +235,13 @@ fn exemption_rejects_nonregular_additions_at_the_head() {
             .unwrap()
             .set_target(base, "keep the ignore file absent on the base")
             .unwrap();
-        for id in ["EPC-001", "TSK-002"] {
-            let out = ci(dir.path(), BRANCH, &body(id));
-            assert!(!out.status.success(), "{}", said(&out));
-            assert!(!said(&out).contains(CLASS), "{}", said(&out));
-            assert!(said(&out).contains("regular file"), "{}", said(&out));
-        }
+        let out = ci(dir.path(), BRANCH, &body("EPC-001"));
+        assert!(!out.status.success(), "{}", said(&out));
+        assert!(!said(&out).contains(CLASS), "{}", said(&out));
+        assert!(said(&out).contains("regular file"), "{}", said(&out));
+        let out = ci(dir.path(), BRANCH, &body("TSK-002"));
+        assert!(said(&out).contains(TRACKED), "{}", said(&out));
+        assert!(!said(&out).contains(CLASS), "{}", said(&out));
     }
 }
 
