@@ -133,7 +133,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -147,12 +147,13 @@ adrs: [ADR-0011, ADR-0019]
 - User-owned schema-versioned files gain new keys with defaults.
 
 Update also installs missing in-tier manifest entries. It never clobbers and
-never silently skips. Before writing project files, it refuses a binary
-older than the project's `scaffold_version` or an unparsable pin. The
-refusal preserves the pin, its release digests and managed files, and names
-the pinned version to install when the binary is older. Binaries released
-before this safeguard can still lower the pin. The update cases in
-`codeflow-core tests/scaffold_test.rs` verify this boundary.
+never silently skips.
+
+| Version case | What update does |
+|---|---|
+| Binary older than the project's `scaffold_version` | Refuses before writing project files, preserving the pin, release digests and managed files; names both versions and the pinned version to install |
+| Unparsable pin | Refuses before writing project files and shows the value |
+| Binary released before this safeguard | Can still lower the pin |
 
 | Policy scalar | On update |
 |---|---|
