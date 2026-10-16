@@ -12,6 +12,8 @@
 //! aid for agents, not a security boundary — CI + remote protection are
 //! the hard line (charter §6.5).
 
+use crate::workgraph::history;
+
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -253,9 +255,13 @@ pub fn integrate(
         });
     }
     let is_fast_forward = tested_oid == target_oid
-        || repo
-            .graph_descendant_of(tested_oid, target_oid)
-            .unwrap_or(false);
+        || history::descendant_of(&repo, tested_oid, target_oid).map_err(|error| {
+            let _ = restore_checkout(repo_root, &original);
+            IntegrateError::MergeFailed {
+                target: target.to_string(),
+                message: error.to_string(),
+            }
+        })?;
     if !is_fast_forward {
         let _ = restore_checkout(repo_root, &original);
         return Err(IntegrateError::MergeFailed {
@@ -593,7 +599,7 @@ fn count_commits(repo: &git2::Repository, old: git2::Oid, new: git2::Oid) -> usi
     if old == new {
         return 0;
     }
-    let Ok(mut walk) = repo.revwalk() else {
+    let Ok(mut walk) = history::revwalk(repo) else {
         return 0;
     };
     if walk.push(new).is_err() || walk.hide(old).is_err() {

@@ -226,7 +226,7 @@ fn clears_ci_range_unreadable() {
     };
     prove(
         "CI_RANGE_UNREADABLE",
-        "could not diff the range",
+        "cannot verify history: this clone is shallow",
         check,
         |printed| {
             let step = printed_command(printed, "CI_RANGE_UNREADABLE", None);

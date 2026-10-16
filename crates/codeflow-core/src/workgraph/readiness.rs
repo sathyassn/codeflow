@@ -8,6 +8,8 @@
 //! `work next` and `status` make no network call: they read the refs as last
 //! fetched and name that snapshot. `work claim` fetches first.
 
+use crate::workgraph::history;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::rc::Rc;
@@ -420,7 +422,7 @@ fn scope_scan<'a>(
 /// landing. Work lands with a merge commit, so a landed tip is off that line.
 /// Anything unproven is not landed.
 fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid) -> bool {
-    if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
+    if tip == target || history::descendant_of(repo, target, tip).unwrap_or(false) {
         return on_first_parent_line(repo, target, tip) == Some(false);
     }
     cherry_landed_in(repo, repo_root, target, tip)
@@ -467,6 +469,9 @@ fn cherry_landed_in(
 }
 
 fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
+    if history::check_command(repo_root).is_err() {
+        return false;
+    }
     let range = format!("{target}..{tip}");
     let merges = git(
         repo_root,
@@ -479,6 +484,9 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
 }
 
 fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
+    if history::check_command(repo_root).is_err() {
+        return false;
+    }
     git(repo_root, &["cherry", target, tip])
         .is_ok_and(|out| !out.is_empty() && out.split('\n').all(|line| line.starts_with("- ")))
 }
@@ -494,12 +502,12 @@ fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
 /// nothing: the spawned check then decides alone.
 fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
     let mut added = Vec::new();
-    let mut walk = repo.revwalk().ok()?;
+    let mut walk = history::revwalk(repo).ok()?;
     walk.push(tip).ok()?;
     walk.hide(target).ok()?;
     for oid in walk {
         let commit = repo.find_commit(oid.ok()?).ok()?;
-        if commit.parent_count() > 1 {
+        if history::parents(repo, &commit).ok()?.len() > 1 {
             return Some(false);
         }
         added.push(changed_paths(repo, &commit)?);
@@ -508,13 +516,13 @@ fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oi
         return Some(false);
     }
     let mut upstream = std::collections::HashSet::new();
-    let mut walk = repo.revwalk().ok()?;
+    let mut walk = history::revwalk(repo).ok()?;
     walk.push(target).ok()?;
     walk.hide(tip).ok()?;
     for oid in walk {
         let commit = repo.find_commit(oid.ok()?).ok()?;
         // `git cherry` compares against non-merge commits only.
-        if commit.parent_count() <= 1 {
+        if history::parents(repo, &commit).ok()?.len() <= 1 {
             if let Some(paths) = changed_paths(repo, &commit) {
                 upstream.insert(paths);
             }
@@ -538,14 +546,15 @@ thread_local! {
 /// nothing or cannot be read.
 fn changed_paths(repo: &Repository, commit: &git2::Commit<'_>) -> Option<u64> {
     use std::hash::{Hash, Hasher};
+    history::parents(repo, commit).ok()?;
     if let Some(known) = CHANGED_PATHS.with(|memo| memo.borrow().get(&commit.id()).copied()) {
         return known;
     }
     let digest = (|| {
         let tree = commit.tree().ok()?;
-        let parent = match commit.parent_count() {
+        let parent = match history::parents(repo, commit).ok()?.len() {
             0 => None,
-            _ => Some(commit.parent(0).ok()?.tree().ok()?),
+            _ => Some(history::parent(repo, commit, 0).ok()?.tree().ok()?),
         };
         let diff = repo
             .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
@@ -588,15 +597,16 @@ fn patch_id_path(path: &[u8]) -> Vec<u8> {
 /// alone (commit dates need not follow ancestry). `None` when the walk
 /// cannot be completed, which proves nothing.
 fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let _judgment = history::judgment();
     let mut current = repo.find_commit(target).ok()?;
     loop {
         if current.id() == tip {
             return Some(true);
         }
-        if current.parent_count() == 0 {
+        if history::parents(repo, &current).ok()?.is_empty() {
             return Some(false);
         }
-        current = current.parent(0).ok()?;
+        current = history::parent(repo, &current, 0).ok()?;
     }
 }
 
@@ -740,6 +750,7 @@ fn read_tips(
 ///
 /// Returns the reason when the repository or a target tip cannot be read.
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
@@ -859,7 +870,7 @@ pub struct Claim {
 
 /// `git <args>` with its output as exact bytes.
 fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -873,7 +884,7 @@ fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::git::command()
+    let out = history::command()
         .arg("-C")
         .arg(repo_root)
         .args(args)
@@ -1189,7 +1200,9 @@ fn standalone_claim_base(
     {
         return Err("a protected branch cannot be renamed into a task claim".into());
     }
-    if head.id() != target && !repo.graph_descendant_of(head.id(), target).unwrap_or(false) {
+    if head.id() != target
+        && !history::descendant_of(repo, head.id(), target).map_err(|error| error.to_string())?
+    {
         return Err("the standalone branch must contain its current target".into());
     }
     Ok(Some((head.id(), task.clone(), current)))
@@ -1420,8 +1433,7 @@ pub fn selections_in_range(
             .map_err(|error| format!("{revision}: {error}"))
     };
     let head = commit(head)?;
-    let base = repo
-        .merge_base(commit(base)?.id(), head.id())
+    let base = history::merge_base(&repo, commit(base)?.id(), head.id())
         .and_then(|oid| repo.find_commit(oid))
         .map_err(|error| error.to_string())?;
     let read = |commit: &git2::Commit<'_>| {
@@ -1523,7 +1535,7 @@ mod tests {
     use std::fs;
 
     fn run(root: &Path, args: &[&str]) -> String {
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -2003,7 +2015,7 @@ mod tests {
 
     fn commit_dated(root: &Path, message: &str, date: &str) -> String {
         run(root, &["add", "-A"]);
-        let out = crate::git::command()
+        let out = history::command()
             .arg("-C")
             .arg(root)
             .args(["commit", "-q", "-m", message])
