@@ -396,6 +396,7 @@ fn clears_push_set_by_hand() {
     let root = project(&dir);
     let dest = with_destination(&root);
     released(&root, &dest);
+    commit(&root, "notes.txt", "docs: record an unpublished note");
     let bin = vanishing_binary(&root);
     let row = "PUSH_SET_BY_HAND";
     let finding = "push set check could not run";
@@ -757,7 +758,7 @@ const POLICY: &str = ".codeflow/policy.json";
 const FOUR_BULLETS: &str = "feat: add y\n\n- one\n- two\n- three\n- four\n";
 
 /// Set `git.<key>` in the working copy's policy.
-fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
+pub(super) fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
     let mut policy: serde_json::Value = serde_json::from_str(&read(root, POLICY)).unwrap();
     for (key, value) in entries {
         policy["git"][*key] = value.clone();
@@ -1513,6 +1514,16 @@ fn empty_tree(root: &Path) -> String {
     text(&made).trim().to_string()
 }
 
+fn tree_at(root: &Path, revision: &str) -> String {
+    text(&run(
+        "git",
+        root,
+        &["rev-parse", &format!("{revision}^{{tree}}")],
+    ))
+    .trim()
+    .to_string()
+}
+
 /// `git commit-tree` of `tree` with `parents` and `message`: a commit no
 /// local hook judges, as a deployment tool or another clone makes it.
 fn commit_tree(root: &Path, tree: &str, parents: &[&str], message: &str) -> String {
@@ -1540,7 +1551,9 @@ fn deployment(root: &Path, entries: &[(&str, serde_json::Value)]) -> (PathBuf, S
         root,
         &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
     );
-    let tree = empty_tree(root);
+    // Keep the scaffold in the unrelated history so its checked-out tree can
+    // run the installed hooks and validation with the destination's policy.
+    let tree = tree_at(root, "HEAD");
     let old = commit_tree(root, &tree, &[], "Deployed old pages");
     git(root, &["branch", "gh-pages", &old]);
     git(
@@ -1565,9 +1578,10 @@ fn an_unrelated_deployment_branch_checks_only_its_own_new_commits() {
         let dir = scaffolded("--standard");
         let root = project(&dir);
         let (dest, old) = deployment(&root, &entries);
-        let tree = empty_tree(&root);
+        let tree = tree_at(&root, "gh-pages");
         let new = commit_tree(&root, &tree, &[&old], message);
         git(&root, &["branch", "-f", "gh-pages", &new]);
+        git(&root, &["switch", "-q", "gh-pages"]);
         let out = push(&root, &["origin", "gh-pages"]);
         let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
         assert_eq!(there.trim(), new, "{message}: {out}");
@@ -1683,7 +1697,7 @@ fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
             &root,
             &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
         );
-        let tree = empty_tree(&root);
+        let tree = tree_at(&root, "HEAD");
         let published = commit_tree(&root, &tree, &[], "docs: publish the pages");
         git(&root, &["tag", "pages-v1", &published]);
         git(
@@ -1702,6 +1716,7 @@ fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
             published
         };
         git(&root, &["branch", "gh-pages", &head]);
+        git(&root, &["switch", "-q", "gh-pages"]);
         let out = push(&root, &["origin", "gh-pages"]);
         let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
         assert_eq!(there.trim(), head, "{extra}: {out}");

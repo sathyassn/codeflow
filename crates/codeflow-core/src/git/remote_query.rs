@@ -110,7 +110,7 @@ enum Failure {
 }
 
 fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure> {
-    let mut command = crate::git::command();
+    let mut command = crate::git::judging_command();
     command
         .arg("-C")
         .arg(root)
@@ -329,6 +329,51 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_line_url_rewrite_cannot_redirect_judging_queries() {
+        const CHILD: &str = "CODEFLOW_REMOTE_REWRITE_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = Path::new(&root);
+            let destination = root.join("destination");
+            let url = destination.to_str().unwrap();
+            let answer = ls_remote(root, &[url, "refs/heads/expected"]).unwrap();
+            let fetched = fetch_objects(root, url, &["refs/heads/expected"]);
+            assert!(
+                answer.contains("refs/heads/expected"),
+                "query was redirected"
+            );
+            assert!(fetched.is_ok(), "fetch was redirected: {fetched:?}");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let destination = dir.path().join("destination");
+        let decoy = dir.path().join("decoy");
+        crate::git::repo_with_refs(&destination, &[b"refs/heads/expected"]);
+        crate::git::repo_with_refs(&decoy, &[b"refs/heads/decoy"]);
+        let parameters = format!(
+            "'url.{}.insteadOf={}'",
+            decoy.display(),
+            destination.display()
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::command_line_url_rewrite_cannot_redirect_judging_queries",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("GIT_CONFIG_PARAMETERS", parameters)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     #[cfg(unix)]
     #[test]

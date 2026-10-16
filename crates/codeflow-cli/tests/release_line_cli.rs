@@ -327,8 +327,10 @@ impl Fx {
     }
 
     /// The pre-push hook for pushing `local` to `branch`, which the
-    /// destination holds at `remote` (all zeros for a new branch). The
-    /// checkout moves off `local` first, so only `codeflow ci` runs.
+    /// destination holds at `remote` (all zeros for a new branch). A separate
+    /// fixture ref already holds the candidate, isolating range checks from
+    /// whole-tree validation of these intentionally minimal legacy records.
+    /// Keep another commit checked out; a checkable candidate must run targets.
     fn pre_push(&self, branch: &str, local: &str, remote: &str) -> (i32, String) {
         self.pre_push_to(self.origin.to_str().unwrap(), branch, local, remote)
     }
@@ -336,6 +338,8 @@ impl Fx {
     /// As [`Fx::pre_push`], pushing to `url` directly.
     fn pre_push_to(&self, url: &str, branch: &str, local: &str, remote: &str) -> (i32, String) {
         let back = self.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
+        let fixture_ref = format!("{local}:refs/heads/fixture/tree-{local}");
+        self.git(&["push", "-q", "origin", &fixture_ref]);
         self.git(&["switch", "-q", "--detach", "main"]);
         let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
             .args(["git-hook", "pre-push", url, url])
@@ -457,7 +461,13 @@ fn agree(fx: &Fx, what: &str) -> (i32, String) {
         ci.1,
         hook.1
     );
-    assert_eq!(ci.0 == 0, hook.0 == 0, "{what}: exit codes differ");
+    assert_eq!(
+        ci.0 == 0,
+        hook.0 == 0,
+        "{what}: exit codes differ\nCI:\n{}\npre-push:\n{}",
+        ci.1,
+        hook.1
+    );
     assert!(
         ci.1.contains(SCOPE_LINE),
         "{what}: not judged as a release range:\n{}",

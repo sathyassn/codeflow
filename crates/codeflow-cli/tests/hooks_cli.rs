@@ -4604,19 +4604,40 @@ fn sibling_repo() -> tempfile::TempDir {
 
 #[cfg(unix)]
 #[test]
+fn push_set_refuses_a_failing_commit_after_an_uncommitted_fix() {
+    let dir = quick_repo("test ! -f bad.txt");
+    let head = commit_file(dir.path(), "bad.txt", "bad\n", "feat: add bad");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "clean failing commit: {err}");
+    assert!(err.contains("push set failed for: lint"), "{err}");
+
+    std::fs::remove_file(dir.path().join("bad.txt")).unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(
+        code,
+        Some(1),
+        "uncommitted fix must not bypass the gate: {err}"
+    );
+    assert!(err.contains("tracked files differ"), "{err}");
+    assert!(err.contains("push from a clean"), "{err}");
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
 fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
     let dir = sibling_repo();
     let good = rev(dir.path(), "feat/good");
     let bad = rev(dir.path(), "feat/bad");
 
     // Multi-ref push from the clean `feat/good` checkout: the tree checks run
-    // for `feat/good` only, and say they did not run for `feat/bad`.
+    // for `feat/good` only, and the unchecked `feat/bad` refuses the push.
     let (code, err) = push_hook(
         dir.path(),
         "upstream",
         &[("feat/good", &good), ("feat/bad", &bad)],
     );
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
         err.contains("quick targets passed on the working checkout (1 target(s)"),
         "{err}"
@@ -4640,15 +4661,209 @@ fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
     assert!(err.contains("push set failed for: lint"), "{err}");
 
     // Uncommitted tracked changes cannot stand in for the pushed tree: a
-    // dirty checkout runs no tree checks and says so.
+    // dirty checkout runs no tree checks and refuses the push.
     std::fs::write(dir.path().join("base.txt"), "edited\n").unwrap();
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
         err.contains("did not run for 'feat/bad': tracked files differ"),
         "{err}"
     );
     assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_refuses_a_single_ref_other_than_head() {
+    let dir = sibling_repo();
+    let bad = rev(dir.path(), "feat/bad");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("is not the checked-out commit"), "{err}");
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_queries_the_destination_once_for_multiple_refs() {
+    let dir = sibling_repo();
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+    let trace = dir.path().join(".git/advertisement.trace");
+    let url = push_url(dir.path(), "upstream");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "upstream", &url])
+            .env("GIT_TRACE", &trace)
+            .current_dir(dir.path()),
+        &format!("refs/heads/feat/good {good} refs/heads/feat/good {ZERO_SHA}\nrefs/heads/feat/bad {bad} refs/heads/feat/bad {ZERO_SHA}\n"),
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    let calls = std::fs::read_to_string(trace).unwrap();
+    assert_eq!(
+        calls.matches("built-in: git ls-remote ").count(),
+        1,
+        "{calls}"
+    );
+}
+
+#[cfg(unix)]
+fn unchecked_shapes_keep_notes(level: &str) {
+    let dir = sibling_repo();
+    write_policy(
+        dir.path(),
+        &format!(r#"{{"git":{{"test_gate_on_push":"{level}"}}}}"#),
+    );
+    git(dir.path(), &["add", ".codeflow/policy.json"]);
+    git(dir.path(), &["commit", "-m", "chore: configure push gate"]);
+    let good = rev(dir.path(), "HEAD");
+    let bad = rev(dir.path(), "feat/bad");
+    let check = |refs: &[(&str, &str)], why: &str| {
+        let (code, err) = push_hook(dir.path(), "upstream", refs);
+        assert_eq!(code, Some(0), "{level}: {err}");
+        assert!(
+            err.contains("note: tree checks") && err.contains("did not run"),
+            "{err}"
+        );
+        let reason = if matches!(level, "off" | "allow") {
+            format!("the gate is {level}")
+        } else {
+            why.to_string()
+        };
+        assert!(err.contains(&reason), "{err}");
+        assert!(
+            err.contains("codeflow validate --docs") && err.contains("codeflow test --mode quick"),
+            "{err}"
+        );
+    };
+    check(&[("feat/bad", &bad)], "is not the checked-out commit");
+    check(
+        &[("feat/good", &good), ("feat/bad", &bad)],
+        "is not the checked-out commit",
+    );
+    std::fs::write(dir.path().join("good.txt"), "edited\n").unwrap();
+    check(&[("feat/good", &good)], "tracked files differ");
+    git(dir.path(), &["restore", "good.txt"]);
+    git(dir.path(), &["sparse-checkout", "init", "--cone"]);
+    git(dir.path(), &["sparse-checkout", "set", ".codeflow"]);
+    check(&[("feat/good", &good)], "the checkout is sparse");
+    git(dir.path(), &["sparse-checkout", "disable"]);
+
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    let head = rev(dir.path(), "HEAD");
+    // Advance only the submodule checkout, leaving the pushed gitlink intact.
+    let sub = dir.path().join("vendor");
+    git(&sub, &["config", "user.name", "t"]);
+    git(&sub, &["config", "user.email", "t@example.com"]);
+    commit_file(&sub, "new.txt", "new\n", "feat: advance vendor");
+    check(&[("feat/good", &head)], "is not at its recorded commit");
+    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
+    check(&[("feat/good", &head)], "is not initialized");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_warn_keeps_notes_for_unchecked_shapes() {
+    unchecked_shapes_keep_notes("warn");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_off_keeps_notes_for_unchecked_shapes() {
+    unchecked_shapes_keep_notes("off");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_refuses_a_submodule_at_another_commit() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    let old = rev(vendor.path(), "HEAD");
+    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
+    let dir = quick_repo("test ! -f vendor/bad.txt");
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    let head = rev(dir.path(), "HEAD");
+    git(&dir.path().join("vendor"), &["checkout", &old]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("submodule vendor is not at its recorded commit"),
+        "{err}"
+    );
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_push_hook_refuses_an_uncommitted_fix_and_leaves_remote_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", dir.path(), &["switch", "-c", "feat/probe"]);
+    std::fs::write(dir.path().join(".codeflow/test-config.json"), r#"{"schema_version":"1.0","targets":[{"name":"lint","runner":"custom","modes":{"quick":{"command":"test ! -f bad.txt"}}}]}"#).unwrap();
+    std::fs::write(dir.path().join("bad.txt"), "bad\n").unwrap();
+    ok(
+        "git",
+        dir.path(),
+        &["add", ".codeflow/test-config.json", "bad.txt"],
+    );
+    ok(
+        "git",
+        dir.path(),
+        &["commit", "-m", "feat: add failing input"],
+    );
+    answering_destination(dir.path(), "upstream");
+    let before = ok("git", dir.path(), &["ls-remote", "upstream"]);
+    let clean = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    assert_eq!(clean.status.code(), Some(1), "{}", both_streams(&clean));
+    assert!(both_streams(&clean).contains("push set failed for: lint"));
+    std::fs::remove_file(dir.path().join("bad.txt")).unwrap();
+    let dirty = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    let output = both_streams(&dirty);
+    assert_eq!(dirty.status.code(), Some(1), "{output}");
+    assert!(output.contains("tracked files differ"), "{output}");
+    let after = ok("git", dir.path(), &["ls-remote", "upstream"]);
+    assert_eq!(before, after, "the refused push must transfer no ref");
+    assert!(after.is_empty(), "{after}");
+    eprintln!("installed-hook journey: {output}\ngit ls-remote upstream before={before:?} after={after:?}");
 }
 
 /// Push one ref whose destination currently holds `remote_sha`.
@@ -5547,7 +5762,7 @@ fn push_set_does_not_run_tree_checks_on_a_sparse_checkout() {
     git(dir.path(), &["sparse-checkout", "set", ".codeflow"]);
     assert!(!dir.path().join("omitted/bad.txt").exists());
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
         err.contains("did not run for 'feat/t': the checkout is sparse"),
         "{err}"
@@ -5581,7 +5796,7 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
     assert_eq!(code, Some(1), "complete control blocks: {err}");
     git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
         err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
         "{err}"
@@ -5617,7 +5832,7 @@ fn r23_push_set_reads_submodules_whatever_gitmodules_is() {
     // The control: a readable mapping names the uninitialized submodule.
     let head = rev(dir.path(), "HEAD");
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
         err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
         "{err}"
@@ -7520,4 +7735,570 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         ],
         "git.hook_integrity",
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_advertised_tips_and_ancestors_pass_under_new_names() {
+    let dir = sibling_repo();
+    let bare = dir.path().join(".git/upstream-destination.git");
+    receive(&bare, dir.path(), "feat/bad:refs/heads/seen");
+    receive(&bare, dir.path(), "main:refs/heads/main");
+    for revision in ["feat/bad", "main"] {
+        let sha = rev(dir.path(), revision);
+        let (code, err) = push_hook(dir.path(), "upstream", &[("feat/new-name", &sha)]);
+        assert_eq!(code, Some(0), "{err}");
+        assert!(err.contains("already on the destination"), "{err}");
+    }
+    let new = commit_file(dir.path(), "new.txt", "new\n", "feat: new commit");
+    git(dir.path(), &["checkout", "main"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/new", &new)]);
+    assert_eq!(code, Some(1), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_epic_integration_from_ahead_plan_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    answering_destination(dir.path(), "origin");
+    let main = rev(dir.path(), "HEAD");
+    receive(
+        &dir.path().join(".git/origin-destination.git"),
+        dir.path(),
+        "HEAD:refs/heads/main",
+    );
+    let plan = dir.path().join(".worktrees/plan-probe");
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "plan/probe",
+            plan.to_str().unwrap(),
+        ],
+    );
+    ok(
+        "git",
+        &plan,
+        &["commit", "--allow-empty", "-m", "docs: record planning"],
+    );
+    let out = with_installed_hooks(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &plan,
+        &["epic", "new", "Probe epic", "--integration"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", both_streams(&out));
+    let remote = ok(
+        "git",
+        &plan,
+        &[
+            "ls-remote",
+            "origin",
+            "refs/heads/integration/EPC-001-probe-epic",
+        ],
+    );
+    assert_eq!(
+        remote.trim(),
+        format!("{main}\trefs/heads/integration/EPC-001-probe-epic")
+    );
+    eprintln!("epic integration journey: {}\n{remote}", both_streams(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_dirty_policy_cannot_lower_block() {
+    let dir = quick_repo("test ! -f bad.txt");
+    write_policy(dir.path(), r#"{"git":{"test_gate_on_push":"block"}}"#);
+    git(dir.path(), &["add", ".codeflow/policy.json"]);
+    git(dir.path(), &["commit", "-m", "chore: configure block"]);
+    let head = commit_file(dir.path(), "bad.txt", "bad\n", "feat: bad input");
+    write_policy(dir.path(), r#"{"git":{"test_gate_on_push":"warn"}}"#);
+    std::fs::remove_file(dir.path().join("bad.txt")).unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+fn hidden_index_edit_refuses(bit: &str) {
+    let dir = quick_repo("test ! -f bad.txt");
+    let head = commit_file(dir.path(), "bad.txt", "bad\n", "feat: bad input");
+    git(dir.path(), &["update-index", bit, "bad.txt"]);
+    std::fs::remove_file(dir.path().join("bad.txt")).unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains(bit.trim_start_matches("--")), "{err}");
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_assume_unchanged_refuses() {
+    hidden_index_edit_refuses("--assume-unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_skip_worktree_refuses() {
+    hidden_index_edit_refuses("--skip-worktree");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_initialized_submodule_can_run_quick_targets() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    let dir = quick_repo("test -f vendor/base.txt");
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_inspection_errors_respect_inactive_levels() {
+    for level in ["off", "allow", "block"] {
+        let dir = quick_repo("true");
+        write_policy(
+            dir.path(),
+            &format!(r#"{{"git":{{"test_gate_on_push":"{level}"}}}}"#),
+        );
+        git(dir.path(), &["add", ".codeflow/policy.json"]);
+        let oid = rev(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{oid},vendor"),
+            ],
+        );
+        git(dir.path(), &["commit", "-m", "chore: add unmapped gitlink"]);
+        let head = rev(dir.path(), "HEAD");
+        let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+        assert_eq!(code, Some(i32::from(level == "block")), "{level}: {err}");
+        if level != "block" {
+            assert!(err.contains(&format!("the gate is {level}")), "{err}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_submodule_path_keeps_spaces_and_escapes_controls() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    let dir = quick_repo("true");
+    let name = "vendor space\x1b[31m";
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            name,
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    git(dir.path(), &["submodule", "deinit", "-q", "-f", name]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("vendor space\\x1b[31m is not initialized"),
+        "{err}"
+    );
+    assert!(!err.contains('\x1b'), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_destination_policy_cannot_be_lowered_by_head() {
+    let dir = quick_repo("true");
+    write_policy(dir.path(), r#"{"git":{"test_gate_on_push":"block"}}"#);
+    git(dir.path(), &["add", ".codeflow/policy.json"]);
+    git(dir.path(), &["commit", "-m", "chore: configure block"]);
+    receive(
+        &dir.path().join(".git/upstream-destination.git"),
+        dir.path(),
+        "HEAD:refs/heads/main",
+    );
+    write_policy(dir.path(), r#"{"git":{"test_gate_on_push":"off"}}"#);
+    git(dir.path(), &["add", ".codeflow/policy.json"]);
+    git(dir.path(), &["commit", "-m", "chore: configure off"]);
+    let head = rev(dir.path(), "HEAD");
+    std::fs::write(dir.path().join("base.txt"), "edited\n").unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/t': tracked files differ"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_snapshot_detects_changes_inside_submodules() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    let dir = quick_repo("echo changed > vendor/base.txt; touch generated.txt");
+    let config = dir.path().join(".codeflow/test-config.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    value["targets"][0]["outputs"] = serde_json::json!(["generated.txt"]);
+    std::fs::write(config, serde_json::to_string(&value).unwrap()).unwrap();
+    git(dir.path(), &["add", ".codeflow/test-config.json"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("generation changed the candidate"), "{err}");
+    assert!(!err.contains("cannot snapshot"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_review_replacement_cannot_invent_destination_ancestry() {
+    let dir = sibling_repo();
+    receive(
+        &dir.path().join(".git/upstream-destination.git"),
+        dir.path(),
+        "feat/bad:refs/heads/seen",
+    );
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+    // Manufacture a substitute for the remote tip with the new commit as parent.
+    let tree = rev(dir.path(), "feat/bad^{tree}");
+    let substitute = Command::new("git")
+        .args(["commit-tree", &tree, "-p", &good, "-m", "feat: substitute"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(substitute.status.success());
+    let substitute = String::from_utf8(substitute.stdout).unwrap();
+    git(dir.path(), &["replace", &bad, substitute.trim()]);
+    git(dir.path(), &["checkout", "main"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_tag_then_branch_still_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", dir.path(), &["switch", "-c", "feat/probe"]);
+    std::fs::write(dir.path().join(".codeflow/test-config.json"), r#"{"schema_version":"1.0","targets":[{"name":"lint","runner":"custom","modes":{"quick":{"command":"test ! -f bad.txt"}}}]}"#).unwrap();
+    std::fs::write(dir.path().join("bad.txt"), "bad\n").unwrap();
+    ok(
+        "git",
+        dir.path(),
+        &["add", ".codeflow/test-config.json", "bad.txt"],
+    );
+    ok(
+        "git",
+        dir.path(),
+        &["commit", "-m", "feat: add failing input"],
+    );
+    answering_destination(dir.path(), "upstream");
+    let first = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(first.status.code(), Some(1), "{}", both_streams(&first));
+    assert!(both_streams(&first).contains("push set failed for: lint"));
+    let tag = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "feat/probe:refs/tags/scratch"],
+    );
+    assert!(tag.status.success(), "{}", both_streams(&tag));
+    ok("git", dir.path(), &["switch", "-c", "feat/other", "HEAD~1"]);
+    let other = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(other.status.code(), Some(1), "{}", both_streams(&other));
+    assert!(both_streams(&other).contains("not the checked-out commit"));
+    ok("git", dir.path(), &["switch", "feat/probe"]);
+    let clean = with_installed_hooks("git", dir.path(), &["push", "upstream", "feat/probe"]);
+    assert_eq!(clean.status.code(), Some(1), "{}", both_streams(&clean));
+    assert!(both_streams(&clean).contains("push set failed for: lint"));
+    let branch = ok(
+        "git",
+        dir.path(),
+        &["ls-remote", "upstream", "refs/heads/feat/probe"],
+    );
+    assert!(branch.is_empty(), "{branch}");
+    eprintln!(
+        "tag-then-branch journey: {}\n{}\nbranch advertisement={branch:?}",
+        both_streams(&other),
+        both_streams(&clean)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_clean_advertised_commit_runs_targets() {
+    let dir = sibling_repo();
+    receive(
+        &dir.path().join(".git/upstream-destination.git"),
+        dir.path(),
+        "feat/bad:refs/heads/seen",
+    );
+    git(dir.path(), &["checkout", "feat/bad"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/new-name", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set failed for: lint"), "{err}");
+    assert!(!err.contains("tree checks not needed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_two_grafts_cannot_invent_destination_ancestry() {
+    let dir = sibling_repo();
+    let bare = dir.path().join(".git/upstream-destination.git");
+    receive(&bare, dir.path(), "main:refs/heads/main");
+    git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    receive(&bare, dir.path(), "feat/bad:refs/heads/seen");
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+    let parent = rev(dir.path(), "main");
+    git(dir.path(), &["checkout", "main"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    std::fs::write(
+        dir.path().join(".git/info/grafts"),
+        format!("{bad} {parent} {good}\n"),
+    )
+    .unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("cannot verify history"), "{err}");
+    assert!(err.contains("graft file"), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+    let linked = tempfile::tempdir().unwrap();
+    let checkout = linked.path().join("checkout");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            checkout.to_str().unwrap(),
+            "main",
+        ],
+    );
+    let (code, err) = push_hook(&checkout, "upstream", &[("feat/good", &good)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("cannot verify history"), "{err}");
+    assert!(err.contains("graft file"), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+    std::fs::write(dir.path().join(".git/info/grafts"), "").unwrap();
+    let (code, err) = push_hook(&checkout, "upstream", &[("feat/known", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("already on the destination"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_commit_graph_cannot_invent_destination_ancestry() {
+    let dir = sibling_repo();
+    let bare = dir.path().join(".git/upstream-destination.git");
+    receive(&bare, dir.path(), "main:refs/heads/main");
+    git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    receive(&bare, dir.path(), "feat/good:refs/heads/seen");
+    let bad = rev(dir.path(), "feat/bad");
+    let tip = rev(dir.path(), "feat/good");
+    git(dir.path(), &["checkout", "main"]);
+    // libgit2 supports the original chunks, but not the newer GDA2 chunk.
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "commitGraph.generationVersion=1",
+            "commit-graph",
+            "write",
+            "--reachable",
+        ],
+    );
+    // Legitimate graphs must not prevent the advertised-branch exemption.
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/known", &tip)]);
+    assert_eq!(code, Some(0), "{err}");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+
+    // Change the graph's parent data, leaving real commit objects intact.
+    // Graph readers use these chunks without checking the trailing checksum.
+    let path = dir.path().join(".git/objects/info/commit-graph");
+    let mut graph = std::fs::read(&path).unwrap();
+    assert_eq!(&graph[..6], b"CGPH\x01\x01");
+    let chunk = |id: &[u8]| {
+        graph[8..8 + usize::from(graph[6]) * 12]
+            .chunks_exact(12)
+            .find(|entry| &entry[..4] == id)
+            .map(|entry| {
+                usize::try_from(u64::from_be_bytes(entry[4..12].try_into().unwrap())).unwrap()
+            })
+            .unwrap()
+    };
+    let lookup = chunk(b"OIDL");
+    let data = chunk(b"CDAT");
+    let position = |sha: &str| {
+        let oid: Vec<_> = (0..sha.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&sha[at..at + 2], 16).unwrap())
+            .collect();
+        graph[lookup..data]
+            .chunks_exact(20)
+            .position(|bytes| bytes == oid)
+            .unwrap()
+    };
+    let bad_position = position(&bad);
+    let tip_position = position(&tip);
+    let record = data + tip_position * 36;
+    graph[record + 20..record + 24]
+        .copy_from_slice(&u32::try_from(bad_position).unwrap().to_be_bytes());
+    graph[record + 28..record + 32].copy_from_slice(&(100_u32 << 2).to_be_bytes());
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(path, graph).unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(!err.contains("already on the destination"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_inherited_git_config_cannot_steer_inspection() {
+    let dir = quick_repo("true");
+    let head = rev(dir.path(), "HEAD");
+    let url = push_url(dir.path(), "upstream");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", "upstream", &url])
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.sparseCheckout")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .current_dir(dir.path()),
+        &format!("refs/heads/feat/t {head} refs/heads/feat/t {ZERO_SHA}\n"),
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("quick targets passed"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_round_three_status_does_not_ignore_submodule_edits() {
+    let dir = quick_repo("true");
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    commit_file(
+        vendor.path(),
+        "tracked.txt",
+        "committed\n",
+        "feat: add tracked input",
+    );
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            vendor.path().to_str().unwrap(),
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-m", "chore: add vendor"]);
+    git(dir.path(), &["config", "diff.ignoreSubmodules", "all"]);
+    std::fs::write(dir.path().join("vendor/tracked.txt"), "dirty\n").unwrap();
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("tracked files differ"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn push_tree_committed_submodule_ignore_cannot_hide_tracked_edits() {
+    for ignore in ["all", "dirty"] {
+        let dir = quick_repo("true");
+        let vendor = tempfile::tempdir().unwrap();
+        init_repo(vendor.path(), "main");
+        commit_file(
+            vendor.path(),
+            "tracked.txt",
+            "committed\n",
+            "feat: add input",
+        );
+        git(
+            dir.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                vendor.path().to_str().unwrap(),
+                "vendor",
+            ],
+        );
+        git(
+            dir.path(),
+            &[
+                "config",
+                "--file",
+                ".gitmodules",
+                "submodule.vendor.ignore",
+                ignore,
+            ],
+        );
+        git(dir.path(), &["add", ".gitmodules"]);
+        git(dir.path(), &["commit", "-m", "chore: add ignored vendor"]);
+        std::fs::write(dir.path().join("vendor/tracked.txt"), "dirty\n").unwrap();
+        let head = rev(dir.path(), "HEAD");
+        let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+        assert_eq!(code, Some(1), "ignore={ignore}: {err}");
+        assert!(err.contains("tracked files differ"), "{err}");
+    }
 }
