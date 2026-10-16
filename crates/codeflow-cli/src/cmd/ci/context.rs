@@ -53,8 +53,17 @@ pub(super) fn resolve(
                     .map(|name| (name, "branch declared target"))
             })
         {
+            let allowed = explicit_target.is_some()
+                || (normalize(target) != normalize(&branch)
+                    && eligible_target(target, &branch, protected));
             let candidates = target_candidates(target);
-            if let Some(tip) = resolve_base(root, &candidates)? {
+            if !allowed {
+                let warning = codeflow_core::remedy::Finding::new(
+                    format!("{source} '{target}' is not a protected branch or a valid epic line distinct from '{branch}'; base falls back to the policy protected branches"),
+                    codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+                );
+                println!("{}", warning.line("codeflow ci", "warning"));
+            } else if let Some(tip) = resolve_base(root, &candidates)? {
                 if explicit_target.is_none() {
                     check_declared_base(root, target, &branch, &tip, &head)?;
                 }
@@ -70,6 +79,11 @@ pub(super) fn resolve(
         }
     }
     let named_base = args.base.as_deref().and_then(named_branch);
+    if let (Some(target), Some(base)) = (&declared, &named_base) {
+        if normalize(target) != *base {
+            println!("codeflow ci: notice: declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding");
+        }
+    }
     let commit_base = base_candidates
         .first()
         .is_some_and(|base| named_branch(base).is_none());
@@ -99,7 +113,13 @@ pub(super) fn resolve(
         let inferred = base
             .as_deref()
             .map(|base| {
-                target_at_commit(root, base, protected, commit_base && (tracked || has_body))
+                target_at_commit(
+                    root,
+                    base,
+                    &branch,
+                    protected,
+                    commit_base && (tracked || has_body),
+                )
             })
             .transpose()?
             .flatten();
@@ -193,7 +213,11 @@ fn target_candidates(target: &str) -> Vec<String> {
     ]
 }
 
-fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<String>, String> {
+pub(in crate::cmd) fn declared_target(
+    root: &Path,
+    branch: &str,
+    head: &str,
+) -> Result<Option<String>, String> {
     if let Some(target) =
         declared_work_target_at_revision(root, branch, head).map_err(|e| e.to_string())?
     {
@@ -211,7 +235,9 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
     };
     let names = branches(root)?
         .into_iter()
-        .filter(|(name, _)| name.starts_with(&format!("integration/{epic}-")))
+        .filter(|(name, _)| {
+            codeflow_core::workgraph::line_adoption::epic_id(name).is_ok_and(|id| id == epic)
+        })
         .map(|(name, _)| name)
         .collect::<BTreeSet<_>>();
     match names.len() {
@@ -225,18 +251,13 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
 fn target_at_commit(
     root: &Path,
     base: &str,
+    branch: &str,
     protected: &[String],
     required: bool,
 ) -> Result<Option<String>, String> {
-    let policy = super::GitPolicy {
-        protected_branches: protected.to_vec(),
-        ..Default::default()
-    };
     let names = branches(root)?
         .into_iter()
-        .filter(|(name, sha)| {
-            sha == base && (name.starts_with("integration/") || policy.branch_is_protected(name))
-        })
+        .filter(|(name, sha)| sha == base && eligible_target(name, branch, protected))
         .map(|(name, _)| name)
         .collect::<BTreeSet<_>>();
     if names.len() > 1 {
@@ -246,6 +267,27 @@ fn target_at_commit(
         return Err(format!("resolved base commit names several branches: {}; pass --into <target> or --branch <name> with a declared target", names.into_iter().collect::<Vec<_>>().join(", ")));
     }
     Ok(names.into_iter().next())
+}
+
+fn eligible_target(target: &str, branch: &str, protected: &[String]) -> bool {
+    let name = normalize(target);
+    if !codeflow_core::workgraph::is_stable_work_target(&name) {
+        return false;
+    }
+    let policy = super::GitPolicy {
+        protected_branches: protected.to_vec(),
+        ..Default::default()
+    };
+    let epic = codeflow_core::workgraph::line_adoption::epic_id(&name);
+    if let (Ok(epic), Some(plan)) = (&epic, branch.strip_prefix("plan/")) {
+        let plan = format!("integration/{plan}");
+        if codeflow_core::workgraph::line_adoption::epic_id(&plan)
+            .is_ok_and(|planned| planned != *epic)
+        {
+            return false;
+        }
+    }
+    policy.branch_is_protected(&name) || epic.is_ok()
 }
 
 fn branches(root: &Path) -> Result<Vec<(String, String)>, String> {

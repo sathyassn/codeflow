@@ -340,11 +340,7 @@ fn run_ci_ranges(
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
             let into = ci_target(root, r, branch, &judged)?;
-            if base != r.local_sha {
-                if let Some(into) = &into {
-                    args.extend(["--into", into]);
-                }
-            }
+            let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
             // which can be another line's tip. A new branch keeps the base.
@@ -366,6 +362,13 @@ fn run_ci_ranges(
                 args.extend(["--destination", url]);
                 if let Ok(listed) = destination.listing(root) {
                     args.push("--advertisement-stdin");
+                    // --into alone denotes a landing check. Supply the
+                    // hook target only with the push-context hand-off.
+                    if base != r.local_sha {
+                        if let Some(into) = &into_arg {
+                            args.push(into);
+                        }
+                    }
                     input = Some(listed);
                 }
             }
@@ -381,16 +384,20 @@ fn ci_target(
     branch: &str,
     judged: &Judged,
 ) -> Result<Option<String>, String> {
-    let declared = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
-        root,
-        branch,
-        &pushed.local_sha,
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(declared.or_else(|| match judged {
+    let declared = super::ci::declared_target(root, branch, &pushed.local_sha)?;
+    let target = declared.or_else(|| match judged {
         Judged::Target { target, .. } => Some(target.clone()),
         _ => None,
-    }))
+    });
+    if let Some(target) = &target {
+        if !codeflow_core::workgraph::is_stable_work_target(target) {
+            return Err(format!(
+                "target '{target}' must name a stable non-task branch"
+            ));
+        }
+        codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
+    }
+    Ok(target)
 }
 
 fn refuse_authority(
@@ -678,7 +685,7 @@ fn run_check_with(
             }
             // A check run at the push gate's level (R-80) that still fails
             // holds a finding that keeps its block: it stops the push.
-            let kept_block = run_level.is_some() && out.status.code() == Some(1);
+            let kept_block = run_level.is_some() && matches!(out.status.code(), Some(1 | 2));
             let mut failed = violation(
                 policy,
                 format!("push set check failed: `{shown}` (output above)"),
@@ -686,9 +693,14 @@ fn run_check_with(
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
                 failed.level = codeflow_core::hooks::PolicyLevel::Block;
+                let reason = if out.status.code() == Some(2) {
+                    "the CI context could not be verified"
+                } else {
+                    "a finding there keeps its block level"
+                };
                 let _ = write!(
                     failed.message,
-                    "; a finding there keeps its block level, so the push stops although \
+                    "; {reason}, so the push stops although \
                      git.test_gate_on_push is {}",
                     policy.test_gate_on_push
                 );

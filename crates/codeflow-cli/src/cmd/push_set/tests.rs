@@ -677,3 +677,105 @@ fn r22_release_preflight_valid_empty_notes_stay_clear() {
     assert!(report.notes.is_empty());
     assert!(report.violations.is_empty());
 }
+
+#[test]
+fn round_two_hook_and_local_plans_use_the_same_epic_target() {
+    let h = History::new();
+    let line = "integration/EPC-001-outcome";
+    h.git(&["branch", line]);
+    let branch = "plan/EPC-001-next";
+    let head = h.git(&["rev-parse", "HEAD"]);
+    let pushed = PushRef {
+        local_ref: format!("refs/heads/{branch}"),
+        local_sha: head.clone(),
+        remote_ref: format!("refs/heads/{branch}"),
+        remote_sha: NEW.into(),
+    };
+    let judged = Judged::Target {
+        target: "main".into(),
+        tip: head,
+        policy: Box::default(),
+    };
+    assert_eq!(
+        ci_target(h.local.path(), &pushed, branch, &judged)
+            .unwrap()
+            .as_deref(),
+        Some(line)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn round_two_hook_supplied_ci_context_errors_keep_their_block() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("ci-fixture");
+    std::fs::write(&exe, "#!/bin/sh\nexit 2\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let policy = GitPolicy {
+        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Warn,
+        ..Default::default()
+    };
+    let mut report = StageReport::default();
+    run_check_with(
+        &exe,
+        dir.path(),
+        &["ci", "--run-level", "warn", "--into=main"],
+        None,
+        &policy,
+        &mut report,
+        &mut Vec::new(),
+    );
+    assert_eq!(report.violations.len(), 1);
+    assert_eq!(
+        report.violations[0].level,
+        codeflow_core::hooks::PolicyLevel::Block
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn round_two_unavailable_destination_refuses_before_ci() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = History::new();
+    let base = h.git(&["rev-parse", "HEAD"]);
+    h.task("main");
+    let branch = "task/TSK-001-work";
+    let pushed = PushRef {
+        local_ref: format!("refs/heads/{branch}"),
+        local_sha: h.git(&["rev-parse", "HEAD"]),
+        remote_ref: format!("refs/heads/{branch}"),
+        remote_sha: base,
+    };
+    let listing = OnceCell::from(Err("fixture: destination unavailable".into()));
+    let advertised = OnceCell::new();
+    let answer = OnceCell::new();
+    let anchor = OnceCell::new();
+    let fetch_failed = OnceCell::new();
+    let destination = Destination {
+        listing: &listing,
+        answer: &answer,
+        anchor: &anchor,
+        fetch_failed: &fetch_failed,
+        fork: None,
+        url: None,
+        advertised: &advertised,
+        namespace: None,
+        policy: &GitPolicy::default(),
+    };
+    let exe = h.local.path().join("ci-fixture");
+    std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > arguments.txt\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut report = StageReport::default();
+    let error = run_ci_ranges(
+        &exe,
+        h.local.path(),
+        &[&pushed],
+        &destination,
+        &mut report,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("destination unavailable"), "{error}");
+    assert!(!h.local.path().join("arguments.txt").exists());
+}

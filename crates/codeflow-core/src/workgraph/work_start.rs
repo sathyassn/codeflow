@@ -426,6 +426,7 @@ fn local_or_upstream(
 #[must_use]
 pub fn is_stable_work_target(target: &str) -> bool {
     target_reference_names(target).is_some()
+        && !logical_target(target).starts_with('-')
         && !looks_like_full_object_id(target)
         && !logical_target(target).starts_with("task/")
 }

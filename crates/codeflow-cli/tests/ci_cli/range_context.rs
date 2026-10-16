@@ -424,7 +424,7 @@ fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
         let target = if variant == "self" {
             branch
         } else {
-            "integration/contains-head"
+            "integration/EPC-001-contains-head"
         };
         f.write(
             "project-management/tasks/TSK-002.md",
@@ -454,6 +454,20 @@ fn declared_target_cannot_hide_the_head_or_its_criteria_change() {
             output(&explicit)
         );
         let out = ci(&f, &[], None);
+        if variant == "self" {
+            assert_eq!(out.status.code(), Some(1), "{}", output(&out));
+            assert!(
+                output(&out).contains("base falls back to the policy protected branches"),
+                "{}",
+                output(&out)
+            );
+            assert!(
+                output(&out).contains("work.criteria_frozen"),
+                "{}",
+                output(&out)
+            );
+            continue;
+        }
         assert_eq!(out.status.code(), Some(2), "{variant}: {}", output(&out));
         assert!(
             output(&out).contains("declared target")
@@ -503,4 +517,165 @@ fn bare_undeclared_branch_uses_default_when_base_has_several_destinations() {
         "{}",
         output(&out)
     );
+}
+
+#[test]
+fn round_two_default_target_keeps_release_impact_checks() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "docs/unbound"]);
+    f.write("src/lib.rs", "pub fn changed() {}\n");
+    f.commit("fix: change work");
+    let body = "Task: TSK-001\n\n## Summary\nFix work.\n\n- Repair work\n\n## Changes\n- Repair work\n\n## Testing\nNot tested: hosted CI.\n\n## Reviews\nNone: independent review follows\n";
+    let out = ci(&f, &["--pr-body", body], None);
+    let text = output(&out);
+    assert!(
+        text.contains("target 'main' (repository default)"),
+        "{text}"
+    );
+    assert!(text.contains("git.pr_release_impact"), "{text}");
+}
+
+#[test]
+fn round_two_declared_decoy_cannot_hide_an_earlier_change() {
+    for target in ["feat/decoy", "integration/decoy"] {
+        let f = Line::new();
+        f.git(&["switch", "-qc", "fix/TSK-002-prior"]);
+        f.write(
+            "project-management/tasks/TSK-002.md",
+            &super::planned_task("TSK-002", "").replace(
+                "integration_target: main",
+                &format!("integration_target: {target}"),
+            ),
+        );
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(f.root().join(path))
+            .unwrap()
+            .replace("AC-1 Work runs.", "AC-1 Changed another task.");
+        f.write(path, &record);
+        f.commit("docs: change another criterion");
+        f.git(&["branch", target]);
+        f.write("src/lib.rs", "pub fn changed() {}\n");
+        f.commit("fix: change work");
+        let out = ci(&f, &[], None);
+        let text = output(&out);
+        assert!(text.contains("work.criteria_frozen"), "{target}: {text}");
+        assert!(
+            text.contains("warning") && text.contains("protected branches"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn round_two_planning_inference_ignores_another_epics_line() {
+    let f = Line::new();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-q", "main"]);
+    f.write("later.md", "Later.\n");
+    f.commit("docs: advance main");
+    f.git(&["switch", "-qc", "plan/EPC-002-new", &base]);
+    f.write("notes.md", "Notes.\n");
+    f.commit("docs: add notes");
+    let out = ci(&f, &["--base", &base], None);
+    let text = output(&out);
+    assert!(
+        text.contains("target 'main' (repository default)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("acceptance target 'integration/EPC-001"),
+        "{text}"
+    );
+}
+
+#[test]
+fn round_two_named_base_disagreement_is_visible() {
+    let f = Line::new();
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn changed() {}\n");
+    f.commit("fix: change work");
+    let out = ci(&f, &["--base", "main"], None);
+    let text = output(&out);
+    assert!(
+        text.contains("declared target") && text.contains("differs from named --base 'main'"),
+        "{text}"
+    );
+}
+
+fn declared_target_push(target: &str) -> (Line, Output) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.write(".codeflow/policy.json", "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/**\"],\"test_gate_on_push\":\"warn\"}}\n");
+    f.write(
+        "project-management/tasks/TSK-002.md",
+        &super::planned_task("TSK-002", ""),
+    );
+    f.commit("docs: plan successor");
+    f.git(&["push", "-q", "origin", "main"]);
+    let branch = "fix/TSK-002-work";
+    f.git(&["switch", "-qc", branch]);
+    f.write(
+        "project-management/tasks/TSK-002.md",
+        &super::planned_task("TSK-002", "").replace(
+            "integration_target: main",
+            &format!("integration_target: '{target}'"),
+        ),
+    );
+    let path = "project-management/tasks/TSK-001.md";
+    let record = std::fs::read_to_string(f.root().join(path))
+        .unwrap()
+        .replace("AC-1 Work runs.", "AC-1 Changed another task.");
+    f.write(path, &record);
+    let head = f.commit("docs: change another criterion");
+    let url = f.git(&["remote", "get-url", "origin"]);
+    let mut child = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["git-hook", "pre-push", "origin", &url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/{branch} {head} refs/heads/{branch} {}",
+        super::line_adoption::fixture::ZERO
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (f, out)
+}
+
+#[test]
+fn round_two_option_shaped_target_cannot_downgrade_the_real_push_hook() {
+    for target in ["main", "-x", "--help", "bad..branch", "task/TSK-002-self"] {
+        let (_, out) = declared_target_push(target);
+        assert_eq!(out.status.code(), Some(1), "{target}: {}", output(&out));
+        assert!(
+            !output(&out).contains("unexpected argument"),
+            "{}",
+            output(&out)
+        );
+    }
+}
+
+#[test]
+fn round_two_docs_validation_rejects_option_shaped_targets() {
+    for target in ["-x", "refs/heads/-x", "origin/-x"] {
+        let (f, _) = declared_target_push(target);
+        let out = f
+            .command(env!("CARGO_BIN_EXE_codeflow"))
+            .args(["validate", "--docs"])
+            .output()
+            .unwrap();
+        let text = output(&out);
+        assert!(
+            !out.status.success()
+                && text.contains("integration_target")
+                && text.contains("stable non-task branch"),
+            "{target}: {text}"
+        );
+    }
 }

@@ -24,6 +24,7 @@ mod change_class;
 mod classification;
 mod conflict_markers;
 mod context;
+pub(super) use context::declared_target;
 mod id_registry;
 pub(crate) mod pr_body;
 mod work_records;
@@ -50,7 +51,7 @@ use crate::embedded::EmbeddedAssets;
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
-    /// protected branches. An unresolved declared target warns; pass --base to
+    /// protected branches. An unresolved or unsuitable declared target warns; pass --base to
     /// select the intended range.
     #[arg(long, value_name = "REF")]
     pub base: Option<String>,
@@ -63,6 +64,7 @@ pub struct CiArgs {
     /// Defaults to CI metadata, then the checkout. Without --into, its declared target selects
     /// the base when no --base or CI base exists: a task's `integration_target`,
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
+    /// Only protected branches and valid epic lines may supply a declared base.
     /// Pass --branch when an explicit --head belongs to another line.
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
@@ -131,7 +133,7 @@ pub struct CiArgs {
 
     /// The branch a pull request merges into (default: the CI-provided
     /// target branch, the branch's declared target, a named --base, a unique protected
-    /// or integration branch at the base commit, then the repository default).
+    /// or eligible epic line at the base commit, then the repository default).
     /// An ambiguous commit-ID base requires --into or --branch. A range whose head
     /// or target matches the release pattern is judged as a
     /// release range (SPC-013 R-120).
@@ -645,9 +647,7 @@ pub fn run(args: &CiArgs) -> i32 {
                 eprintln!("codeflow ci: {error}");
                 return 2;
             }
-        } || into
-            .as_deref()
-            .is_some_and(|name| git.branch_is_protected(name));
+        } || git.branch_is_protected(&line_target);
         tagged.extend(evaluate_pr_checks(
             git,
             &body,
