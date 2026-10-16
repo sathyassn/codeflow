@@ -149,6 +149,34 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Acceptance waivers and redactions
+
+A completed task can have personal or customer names removed from its
+criteria wording and acceptance evidence without losing its results.
+`codeflow task redact TSK-NNN --replacement <file> --review <reference>`
+reads an edited copy outside the repository and writes the record with its
+original SHA-256 digest, source commit and separate redaction review.
+
+- The pull request changes only that task record, on a `plan/` branch from
+  its integration target, and names the task on its `Task:` line.
+- Status, criterion identifiers and tags, every result, `reviewed`, original
+  review provenance and verdict remain unchanged. Superseded blocks can be
+  redacted too, and unrelated commits already on the line do not prevent it.
+- A reviewer confirms unchanged meaning. The original text remains in Git
+  history; the command removes it from the current record only.
+
+A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
+`acceptance.criteria` records a changed criterion result. The amendment
+changes that criterion and planning records only, and the completion
+contains it. A task may name an amendment on its target. Before its first
+landing, its own record-only amendment may also be after the range's
+merge-base and strictly before `reviewed` in ancestry, never equal to either
+endpoint. Reopened ranges do not use that own-range allowance.
+
+The installed `cf-method/references/project-organization.md` section
+"Acceptance waivers and redactions" owns the field definitions and workflow.
+ADR-0084 records the redaction exception to the frozen-record rule.
+
 ### When something changes midway
 
 | Situation | What happens |

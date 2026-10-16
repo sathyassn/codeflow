@@ -891,16 +891,15 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
-    if let (Some(body), Some(classification::Class::Tracked { task_id })) =
-        (pr_body, class.as_ref())
-    {
-        if let Some(violation) = review_row_check(root, git, body, head, task_id, light) {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation,
-            });
-        }
-    }
+    tagged.extend(tracked_review(
+        root,
+        git,
+        pr_body,
+        class.as_ref(),
+        range_parts.as_ref(),
+        head,
+        light,
+    ));
     matches!(
         class,
         Some(
@@ -926,6 +925,34 @@ fn range_tracks_work(root: &Path, range: &classification::Range<'_>) -> Result<b
 /// `review_names_revision` (the full commit, a verdict cell of exactly
 /// `approved` or `approve`); `work claim --on` reads its pin with the
 /// permissive `reviewed_revisions` (prose verdicts, abbreviations).
+fn tracked_review(
+    root: &Path,
+    git: &GitPolicy,
+    body: Option<&str>,
+    class: Option<&classification::Class>,
+    range: Option<&classification::Range<'_>>,
+    head: &str,
+    light: bool,
+) -> Option<TaggedViolation> {
+    let (Some(body), Some(classification::Class::Tracked { task_id })) = (body, class) else {
+        return None;
+    };
+    // A redaction records its own review and preserves the original
+    // completion's provenance; it does not claim a new completion.
+    let redaction = range.is_some_and(|range| {
+        codeflow_core::workgraph::acceptance::records_redaction(root, range.base, head, task_id)
+            .unwrap_or(false)
+    });
+    if redaction {
+        None
+    } else {
+        review_row_check(root, git, body, head, task_id, light).map(|violation| TaggedViolation {
+            sha: None,
+            violation,
+        })
+    }
+}
+
 fn review_row_check(
     root: &Path,
     git: &GitPolicy,

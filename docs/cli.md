@@ -107,6 +107,10 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<ID>` | Spec id. |
 | | `<STATUS>` | The new status. One of `approved`, `superseded`. |
 | | `--by <SPC-NNN>` | The new revision that supersedes this spec. |
+| `codeflow task redact <ID>` | | Redact acceptance and criteria text without changing results or review provenance |
+| | `<ID>` | Task id. |
+| | `--replacement <REPLACEMENT>` | Entire replacement record, in a file outside the repository. Required. |
+| | `--review <REVIEW>` | Recheckable reference to the review of this redaction. Required. |
 | `codeflow task new [TITLE]` | | Allocate the next independent `TSK-NNN` and scaffold it |
 | | `-e, --epic <EPC-NNN>` | Parent epic id. Mutually exclusive with --standalone-reason. |
 | | `--standalone-reason <REASON>` | Why this durable task does not belong to an epic; may run on its task branch. |
