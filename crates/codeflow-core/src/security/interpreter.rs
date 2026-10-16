@@ -1532,6 +1532,10 @@ mod tests {
                 "n=p; p=.claude/settings.json; python3 -c \"open('${!n}','w')\"",
                 // A command substitution over a modelled builtin.
                 "python3 -c \"open('$(printf .cla)ude/settings.json','w')\"",
+                // Round 12: a path-qualified program's output is outside
+                // text, never its spelled arguments, so a fixed absolute
+                // argument no longer hides the path the shell builds.
+                "python3 -c \"open('$(/bin/cat /tmp/dir.txt)/.claude/settings.json','w')\"",
             ],
             false,
         );

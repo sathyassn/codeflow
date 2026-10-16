@@ -664,6 +664,56 @@ const CASES: &[(&str, &str, &str)] = &[
         "R",
         r#"IFS=: read a < /dev/null; arr=(1733 02); printf '%s173302\n' "${arr[*]}""#,
     ),
+    // A program named by a path runs as itself: outside text unless it is
+    // `printf` or `echo`, read in its external form.
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/usr/bin/true)"173302"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/bin/cat /dev/null)"173302"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/bin/cat <<< 1733)"02"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/usr/bin/basename /x/1733)"02"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/usr/bin/env cat /dev/null)"173302"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/bin/echo 1733)"02"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/usr/bin/printf 1733)"02"#,
+    ),
+    (
+        "path program",
+        "R",
+        r#"printf '%s\n' "$(/usr/bin/printf '%s%s' 17 33)"02"#,
+    ),
+    ("path program", "R", r"/usr/bin/printf '%s%s\n' 1733 02"),
+    ("path program", "U", r"/usr/bin/printf '%b\n' 173302"),
+    (
+        "path program",
+        "U",
+        r#"arr=(* x); printf '%s173302\n' "${arr[1]}""#,
+    ),
+    ("path program", "U", r#"echo "$(/bin/pwd)"/* 173302"#),
     // Globs, braces and tildes.
     ("expansion", "U", r"printf '%s\n' 1733{02,} 173302"),
     ("expansion", "U", r"printf '%s\n' ~ 173302"),

@@ -57,7 +57,13 @@
 //! `find` supplies, and the output of any program other than the modelled
 //! builtins (operator boundary, 2026-10-15: the guard models shell grammar;
 //! text a program produces at run time is the stated residual), with what
-//! `read` takes from it. Code from outside the line (`source`, `eval` of
+//! `read` takes from it. A program runs as itself whether named bare or by
+//! a path; only `printf` and `echo` by path are read, in their external
+//! form. A word that joins a substitution's output with text the line
+//! spells is a composition and is judged; a glob argument stands for
+//! outside names, and since zsh does not run a command whose glob matches
+//! nothing, that command's output is judged but not claimed. Code from
+//! outside the line (`source`, `eval` of
 //! outside text) is that residual too: what it may change keeps its value
 //! for judging, but an output built from such a value is not claimed exact.
 //! The differential test `tests/shell_resolution_differential.rs` runs the
@@ -234,7 +240,7 @@ pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
             if event.exact {
                 event.value
             } else {
-                Composed::Unresolved("a value code from outside the line may have changed")
+                Composed::Unresolved("an output the guard judges but does not claim exact")
             }
         })
 }
@@ -1276,6 +1282,8 @@ struct Run<'e> {
     special: bool,
     /// Whether a value the line may have changed fed the command.
     approx: std::cell::Cell<bool>,
+    /// Whether the command has a glob argument, so may not run.
+    glob_arg: bool,
     /// Open alias expansions, whose outputs are not claimed exact.
     inexact: usize,
     /// The line feeds text it spells to a program's stdin.
@@ -1308,6 +1316,7 @@ fn new_run(
         silent: false,
         special: false,
         approx: std::cell::Cell::new(false),
+        glob_arg: false,
         inexact: 0,
         stdin_literal: false,
         body_pending: false,
@@ -1332,6 +1341,9 @@ struct Eval {
     /// bash splits an unquoted outside value into fields the guard cannot
     /// count.
     loose: bool,
+    /// An unquoted glob: zsh does not run the command when it matches
+    /// nothing.
+    globbed: bool,
 }
 
 /// One parameter's value.
@@ -2343,6 +2355,7 @@ impl Run<'_> {
     fn word(&mut self, word: &Word, ctx: Ctx) -> Eval {
         let mut online = false;
         let mut loose = false;
+        let mut globbed = false;
         let mut err: Option<&'static str> = None;
         let mut fields: Vec<Value> = Vec::new();
         let mut cur = Value::default();
@@ -2367,9 +2380,7 @@ impl Run<'_> {
         };
         let fields_ctx = ctx != Ctx::Assign;
         if fields_ctx {
-            if ctx == Ctx::Fields && unquoted.contains(['*', '?', '[']) {
-                err = Some("a glob pattern");
-            } else if unquoted.contains('{')
+            if unquoted.contains('{')
                 && unquoted.contains('}')
                 && (unquoted.contains(',') || unquoted.contains(".."))
             {
@@ -2394,7 +2405,11 @@ impl Run<'_> {
             // One value and whether it is quoted, for the parts that give one.
             let (value, quoted) = match part {
                 Part::Lit { text, quoted } => {
-                    if ctx == Ctx::List && !*quoted {
+                    // A glob stands for the names it matches, outside text;
+                    // as an argument, how many is unknown.
+                    if fields_ctx && !*quoted && text.contains(['*', '?', '[']) {
+                        loose |= ctx == Ctx::Fields;
+                        globbed = true;
                         push_glob(&mut cur, text);
                     } else {
                         cur.push_text(text);
@@ -2425,8 +2440,10 @@ impl Run<'_> {
                     continue;
                 }
                 Part::Subst { body, quoted } => {
-                    let (value, on) = self.capture(body);
-                    online |= on;
+                    // The word joins the substitution's output with what
+                    // the line spells around it: a composition, judged.
+                    let (value, _) = self.capture(body);
+                    online = true;
                     (value, *quoted)
                 }
                 Part::ProcSubst(_) => (Ok(Value::open()), false),
@@ -2463,7 +2480,7 @@ impl Run<'_> {
                                         fields.push(value);
                                     }
                                 }
-                                return self.finish(err, fields, online, loose, ctx);
+                                return self.finish(err, fields, (online, loose, globbed), ctx);
                             } else if values.is_empty() {
                                 if !single {
                                     err = err.or(Some("an empty array inside a word"));
@@ -2502,7 +2519,7 @@ impl Run<'_> {
         if err.is_none() && (!fields_ctx || started || !cur.is_empty()) {
             fields.push(cur);
         }
-        self.finish(err, fields, online, loose, ctx)
+        self.finish(err, fields, (online, loose, globbed), ctx)
     }
 
     /// A word's result. In a `for` list a field bash may split stands for
@@ -2512,8 +2529,7 @@ impl Run<'_> {
         &self,
         err: Option<&'static str>,
         fields: Vec<Value>,
-        online: bool,
-        loose: bool,
+        (online, loose, globbed): (bool, bool, bool),
         ctx: Ctx,
     ) -> Eval {
         let fields = match err {
@@ -2525,6 +2541,7 @@ impl Run<'_> {
             fields,
             online,
             loose,
+            globbed,
         }
     }
 
@@ -2970,6 +2987,7 @@ struct Arg {
     fields: Result<Vec<Value>, &'static str>,
     /// bash may split it into fields the guard cannot count.
     loose: bool,
+    globbed: bool,
 }
 
 impl Arg {
@@ -3057,11 +3075,13 @@ impl Run<'_> {
                     Arg {
                         fields: eval.fields,
                         loose: eval.loose,
+                        globbed: eval.globbed,
                     }
                 }
                 _ => Arg {
                     fields: Err("an array assignment as an argument"),
                     loose: false,
+                    globbed: false,
                 },
             })
             .collect();
@@ -3107,6 +3127,7 @@ impl Run<'_> {
         self.wrote = false;
         self.silent = standalone;
         self.special = false;
+        self.glob_arg = args.iter().any(|arg| arg.globbed);
         if !standalone {
             self.command(&operands, &args, &assigned, stdin_code.as_ref(), certain);
             // Assignments in front of a special builtin or a function may
@@ -3206,6 +3227,10 @@ impl Run<'_> {
                     let eval = self.word(element, Ctx::Fields);
                     self.emit_eval(&eval);
                     match eval.fields {
+                        // How many elements a glob or a split makes is unknown.
+                        Ok(_) if eval.loose => {
+                            failure = failure.or(Some("an array of fields the guard cannot count"));
+                        }
                         Ok(fields) => values.extend(fields),
                         Err(reason) => failure = failure.or(Some(reason)),
                     }
@@ -3571,8 +3596,11 @@ impl Run<'_> {
             (Some(reason), _) | (None, Err(reason)) => Composed::Unresolved(reason),
             (None, Ok(value)) => Composed::Resolved(value),
         };
-        let exact = !self.approx.get() && self.inexact == 0;
+        // A glob that matches nothing stops zsh before the command runs:
+        // the value is judged, but what reaches stdout is not claimed.
+        let exact = !self.approx.get() && self.inexact == 0 && !self.glob_arg;
         self.record(match &value {
+            Composed::Resolved(_) if self.glob_arg => Ok(Value::open()),
             Composed::Resolved(v) => Ok(v.clone()),
             Composed::Unresolved(reason) => Err(*reason),
         });
@@ -3998,8 +4026,12 @@ impl Run<'_> {
                 return;
             };
             found
-        } else {
+        } else if ["printf", "echo"].contains(&base) || SHELLS.iter().any(|(s, _)| *s == base) {
             (base.to_string(), 0)
+        } else {
+            // Any other program named by a path runs as itself: what it
+            // writes is outside text, as its bare name's would be.
+            return;
         };
         let mut args: Vec<Arg> = Vec::new();
         let mut more = supplier && base != "find";
@@ -4012,10 +4044,12 @@ impl Run<'_> {
                 Some("{}") if base == "find" => args.push(Arg {
                     fields: Ok(vec![Value::open()]),
                     loose: false,
+                    globbed: false,
                 }),
                 _ => args.push(Arg {
                     fields: arg.fields.clone(),
                     loose: arg.loose,
+                    globbed: arg.globbed,
                 }),
             }
         }
@@ -4042,7 +4076,8 @@ impl Run<'_> {
                 let (format, values) = fields.split_first().ok_or("a printf without a format")?;
                 printf_output(self.dialect, true, format, values)
             }
-            _ => self.echo(&fields, true),
+            "echo" => self.echo(&fields, true),
+            _ => Err("a program the guard does not model"),
         });
         self.output(value);
     }
@@ -4358,6 +4393,32 @@ mod tests {
             final_output("n=v; v=1; printf '%s\\n' \"${!n}\"", Dialect::Zsh),
             Some(Composed::Unresolved(_))
         ));
+    }
+
+    /// Grok round 12: a program named by a path runs as itself, so what
+    /// it writes is outside text, never its arguments read as `echo`.
+    #[test]
+    fn a_path_program_writes_outside_text() {
+        for d in [Dialect::Bash, Dialect::Zsh] {
+            for line in [
+                "printf '%s\\n' \"$(/usr/bin/basename /x/.claude)\"",
+                "printf '%s\\n' \"$(/bin/cat /tmp/x)\"",
+                "printf '%s\\n' \"$(nohup /usr/bin/tr x y)\"",
+            ] {
+                let Some(Composed::Resolved(value)) = final_output(line, d) else {
+                    panic!("{d:?}: {line}");
+                };
+                assert_eq!(
+                    value.pieces(),
+                    &[Piece::Open, Piece::Text("\n".into())],
+                    "{d:?}: {line}"
+                );
+            }
+            assert_eq!(
+                out("printf '%s\\n' \"$(/bin/echo 17)\"", d).as_deref(),
+                Some("17\n")
+            );
+        }
     }
 
     #[test]
