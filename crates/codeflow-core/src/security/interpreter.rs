@@ -1443,4 +1443,67 @@ mod tests {
             ],
         );
     }
+
+    /// Grok round 10: a shell construct that composes a path from pieces
+    /// the guard sees apart. Exact where cheap (printf escapes and `%b`,
+    /// `echo -e`/`print` decoding, empty-separator joins of on-line
+    /// assignments); cannot-verify otherwise on a line that runs a shell
+    /// or interpreter.
+    #[test]
+    fn composed_shell_text_is_resolved_or_refused_as_cannot_verify() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "printf '%b' '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "printf -v p '%b' '.cla\\x75de/settings.json'; python3 tool.py \"$p\"",
+                "printf '%s%b' '.cla' '\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "printf '.cla\\x75de/settings.json\\n' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "printf '%q%s' '.cla' 'ude/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "IFS=; arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${arr[*]}\\\",\\\"w\\\")\"",
+                "a='.cla'; b='ude/settings.json'; python3 -c \"open(\\\"${a}${b}\\\",\\\"w\\\")\"",
+                "arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${(j::)arr}\\\",\\\"w\\\")\"",
+                "echo -e '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "print '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+            ],
+            false,
+        );
+        assert_public_refused(
+            &repo,
+            &[
+                "printf '%b' '.gi\\x74/config'; python3 tool.py \"$p\"",
+                "printf '.gi\\x74/config\\n' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+                "IFS=; arr=('.gi' 't/config'); python3 -c \"print(open(\\\"${arr[*]}\\\").read())\"",
+                "a='.gi'; b='t/config'; python3 -c \"print(open(\\\"${a}${b}\\\").read())\"",
+                "echo -e '.gi\\x74/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+            ],
+            true,
+        );
+        // A text-composing construct the guard cannot resolve, on a line
+        // that runs an interpreter: cannot-verify.
+        assert_public_refused(
+            &repo,
+            &[
+                "printf '%d' 1 | python3 -c 'import sys; print(sys.stdin.read())'",
+                "p=.claude; python3 -c \"open('${p/clau/cla}')\"",
+                "x=abcdef; python3 -c \"print('${x:0:3}')\"",
+                "arr=(a b); python3 -c \"print('${(U)arr}')\"",
+            ],
+            false,
+        );
+        assert_public_allowed(
+            &repo,
+            &[
+                "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+                "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
+                "printf -v p '%s%s' 'no' 'tes.txt'; python3 tool.py \"$p\"",
+                "echo -e \"python3 tool.py .claude/settings.json\"",
+                "print -r '.cla\\x75de/settings.json'",
+                "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+                "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+                "python3 tool.py \"$ROOT/$NAME\"",
+                "python3 tool.py \"$ROOT/notes.txt\"",
+            ],
+        );
+    }
 }

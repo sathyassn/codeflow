@@ -48,7 +48,12 @@
 //! operands of other programs stay data (review round 8). Quoted strings
 //! are read as the shell builds them: `$'...'` decoded, adjacent quoted
 //! pieces joined into one word, and a `printf` of `%s` pieces read as the
-//! value it joins (review round 9). A word is also
+//! value it joins (review round 9). A text any construct composes from
+//! pieces, a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode,
+//! or a join of on-line assignments, is resolved exactly where the guard
+//! can and judged by the tail rule, and on a running line a composing
+//! construct it cannot resolve refuses as cannot-verify, naming it (review
+//! round 10). A word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
 //! backstop. The guard stops at shell grammar: a path the interpreter's own
@@ -126,11 +131,22 @@ pub(crate) fn evaluate(
     // writer, a literal `-c` that runs its stdin), so each is judged the
     // same way (TSK-302 review round 8). Unquoted operands stay data.
     if runs {
-        // What `printf` joins from `%s` pieces is one value the next
-        // command may expand (review round 9).
-        for value in outward::printf_values(line) {
-            for word in outward::literal_words(&value) {
-                reaches.extend(opaque_line_word(&word, PRINTF));
+        // A text some construct composes from pieces seen apart: a resolved
+        // value (a `printf`, an `echo -e`/`print` operand, a join of on-line
+        // assignments) is judged by the tail rule; one the guard cannot
+        // resolve refuses as cannot-verify, naming it (review rounds 9, 10).
+        for composed in outward::composed_texts(line) {
+            match composed {
+                outward::Composed::Resolved(value) => {
+                    for word in outward::literal_words(&value) {
+                        reaches.extend(opaque_line_word(&word, PRINTF));
+                    }
+                }
+                outward::Composed::Unverified(construct) => {
+                    reaches.push(Reach::Enforcement(format!(
+                        "a path is composed with {construct} on a line where a shell or interpreter runs"
+                    )));
+                }
             }
         }
         for text in outward::quoted_texts(line) {

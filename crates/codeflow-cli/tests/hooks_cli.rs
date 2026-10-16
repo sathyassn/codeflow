@@ -7613,6 +7613,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 /dev/stdin <<< 'print(1)'",
         "source <(echo 'python3 tool.py notes.txt')",
         "python3 <<< $'print(17330\\x32)'",
+        "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+        "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+        "print -r '.cla\\x75de/settings.json'",
     ];
     let mut wrong = Vec::new();
     for command in &refused {
@@ -7644,6 +7647,10 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         // Round 9: `$'...'` decoded, `printf` joins.
         "python3 <<< $'open(\".gi\\x74/config\").read()'",
         "printf -v p '%s%s' '.cla' 'ude/settings.json'; python3 tool.py \"$p\"",
+        // Round 10: printf escapes, empty-separator joins, echo -e decode.
+        "printf '%b' '.gi\\x74/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+        "IFS=; arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${arr[*]}\\\",\\\"w\\\")\"",
+        "echo -e '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
     ] {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);

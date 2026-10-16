@@ -238,7 +238,12 @@ pub const SCHEMA: [KeySpec; 68] = [
                 operands of other programs stay data. Quoted strings are \
                 read as the shell builds them: `$'...'` decoded, adjacent \
                 quoted pieces joined, and a `printf` of `%s` pieces read as \
-                the value it joins. A word is also read \
+                the value it joins. A composed text (a `printf` escape or \
+                `%b`/`%q`, an `echo -e` or `print` decode, or a join of \
+                on-line assignments) is resolved exactly where the guard \
+                can and judged by the tail rule, and on a running line a \
+                composing construct it cannot resolve refuses as \
+                cannot-verify, naming it. A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \
                 it does not understand. The model is conservative, so an odd shape like \
