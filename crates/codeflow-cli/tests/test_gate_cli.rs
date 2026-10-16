@@ -3,14 +3,16 @@
 //! time on a machine, and a warning for a cargo target directory outside the
 //! worktree.
 
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
 #[path = "support/own_repository.rs"]
 mod own_repository;
+use drain_pipe::{drain_lines, drain_pipe};
 
 fn git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -75,22 +77,39 @@ fn spawn(mut cmd: Command) -> (Child, Receiver<String>, Stdout) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("codeflow spawns");
-    let mut out = child.stdout.take().unwrap();
-    let stdout = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut out, &mut bytes);
-        bytes
-    });
-    let err = child.stderr.take().unwrap();
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(err).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
-            }
-        }
-    });
+    let stdout = drain_pipe(child.stdout.take());
+    let rx = drain_lines(child.stderr.take());
     (child, rx, stdout)
+}
+
+/// The helper that every gate test spawns through reads both streams while
+/// the child runs: a child that writes a mebibyte to each, far past any pipe
+/// buffer, still exits. With a reader missing, it blocks in `write` and the
+/// bound below fails the test (issue 100).
+#[cfg(unix)]
+#[test]
+fn the_spawn_helper_drains_both_streams_past_a_pipe_buffer() {
+    let mut cmd = Command::new("sh");
+    cmd.args([
+        "-c",
+        "yes out | head -c 1048576; yes err | head -c 1048576 >&2",
+    ]);
+    let (mut child, rx, stdout) = spawn(cmd);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("the child blocked on a pipe: a stream is not drained while the test waits");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert_eq!(stdout.join().unwrap().len(), 1_048_576);
+    assert_eq!(rx.iter().count(), 1_048_576 / 4);
 }
 
 /// Wait for a stderr line containing `needle`; panics after 20 s.

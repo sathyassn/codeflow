@@ -3,8 +3,12 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
 #[path = "support/own_repository.rs"]
 mod own_repository;
+use drain_pipe::drain_pipe;
 
 const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const REGISTRY: &str = "{\"schema_version\":1,\"repos\":[]}\n";
@@ -86,27 +90,8 @@ fn unrelated_project_state_symlink_and_fifo_are_never_opened() {
     // Drain both pipes while waiting: a host under pipe memory pressure
     // gives a new pipe a 512-byte buffer, which the report outgrows, so an
     // undrained pipe would stall the child and read as the FIFO block.
-    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                std::io::Read::read_to_end(&mut pipe, &mut bytes).unwrap();
-            }
-            bytes
-        })
-    };
-    let stdout = drain(
-        child
-            .stdout
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
-    let stderr = drain(
-        child
-            .stderr
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
+    let stdout = drain_pipe(child.stdout.take());
+    let stderr = drain_pipe(child.stderr.take());
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(5) {
@@ -223,4 +208,21 @@ fn malformed_input_is_redacted_and_no_other_verbs_exist() {
             .status
             .success()
     );
+}
+
+/// A project reached through a link into a repository's folder still gets a
+/// repository of its own (issue 104): its lexical parents hold no `.git`.
+#[cfg(unix)]
+#[test]
+fn own_repository_judges_a_project_by_its_physical_path() {
+    let repository = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repository.path().join(".git")).unwrap();
+    let inside = repository.path().join("tmp");
+    std::fs::create_dir(&inside).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+    let project = alias.path().join("link/proj");
+    std::fs::create_dir(&project).unwrap();
+    own_repository::own_repository(&project);
+    assert!(project.join(".git").exists());
 }

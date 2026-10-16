@@ -8,36 +8,56 @@
 //! This test parses the Rust test code under `crates/` with `syn`: every file
 //! under a `tests` directory, a file named `tests.rs` or `*_tests.rs`, and the
 //! items marked `#[cfg(test)]` or `#[test]` elsewhere. In each function it
-//! reads, a stream the function sends to `Stdio::piped()` with `.stdout(..)`
-//! or `.stderr(..)` must be taken from the child (`child.stdout.take()`,
-//! `.as_mut()`, `.by_ref()`) when the same function also
+//! reads, every `let child = <command chain>.spawn()` whose chain sends
+//! `.stdout(..)` or `.stderr(..)` to `Stdio::piped()` must keep this contract
+//! for each piped stream:
 //!
-//! - calls `.wait()` with no arguments, or
-//! - calls `.try_wait()` inside a loop or a closure (a poll).
+//! 1. The stream is read to the end or handed to a named drain helper in the
+//!    same function, before the function's first `child.wait()` or
+//!    `child.try_wait()` poll (a poll is a `try_wait` inside a loop or a
+//!    closure). A drain is `drain_pipe(child.stdout.take())` or
+//!    `drain_lines(child.stderr.take())` (the helpers in
+//!    `crates/codeflow-cli/tests/support/drain_pipe.rs`; the list is
+//!    [`DRAIN_HELPERS`]), or a call chain that starts at the field and ends in
+//!    `.read_to_end(..)` or `.read_to_string(..)`
+//!    (`child.stdout.take().unwrap().read_to_end(&mut bytes)`).
+//! 2. A function with no wait or poll of that child must still drain the
+//!    stream, or call `child.wait_with_output()`, so a helper that returns the
+//!    child hands on a child whose output is already being read.
 //!
-//! `wait_with_output` earns no credit: it reads the pipes only after the
-//! function has already waited or polled. Output sent to `Stdio::null()`, to
-//! a file or left inherited needs nothing, and `.output()` drains for itself.
+//! Borrowing or taking a stream without handing it to a helper or reading it
+//! earns no credit, and neither does `wait_with_output` after a wait or poll,
+//! because it reads the pipes only after the function has already waited.
+//! Children are told apart by the name they are bound to, so draining one
+//! child does not excuse another, and a command run with `.output()` is not a
+//! child.
 //!
 //! Limits, stated rather than hidden:
 //!
-//! - The check reads one function at a time. A helper that spawns with piped
-//!   output and returns the child is judged by what it does itself; the caller
-//!   that waits is judged by what it pipes. TSK-282's sweep table covers
-//!   those splits by hand.
-//! - Taking a stream counts as draining it. Reading it only after the wait is
-//!   not seen.
-//! - Output set through a variable (`.stdout(mode)`) or through
-//!   `Command::stdout(&mut c, ..)` is not seen as piped.
+//! - A function is judged by its own body. A helper that spawns and returns a
+//!   child must drain the pipes itself (rule 2); a caller that spawns through
+//!   a helper is not seen.
+//! - Pipes set outside the spawn chain (`cmd.stdout(Stdio::piped());` as its
+//!   own statement), through a variable, or through `Command::stdout(&mut c,
+//!   ..)` are not seen as piped.
+//! - A stream moved into a local before it is read (`let out =
+//!   child.stdout.take(); ... out.read_to_end(..)`) is not a drain; hand the
+//!   `take()` to a helper or chain the read.
+//! - A child rebound under another name is not followed, and a child inside a
+//!   struct field is not seen.
 //! - Macro bodies are read only when they parse as comma-separated
 //!   expressions (`assert!`, `assert_eq!`, `vec!`); others, and
 //!   `macro_rules!` bodies, are not parsed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use syn::ext::IdentExt;
+use syn::spanned::Spanned;
 use syn::visit::Visit;
+
+/// The functions that read a stream handed to them until the child closes it.
+const DRAIN_HELPERS: &[&str] = &["drain_pipe", "drain_lines"];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -120,13 +140,123 @@ fn stream(name: &syn::Ident) -> Option<&'static str> {
     }
 }
 
-/// What one function does with a child and its output.
+/// The name of a plain single-segment path (`child`), if the expression is one.
+fn path_name(expr: &syn::Expr) -> Option<String> {
+    let syn::Expr::Path(path) = expr else {
+        return None;
+    };
+    if path.qself.is_some() || path.path.segments.len() != 1 {
+        return None;
+    }
+    Some(path.path.segments[0].ident.unraw().to_string())
+}
+
+/// Whether an expression is `<chain>.spawn()` followed only by `unwrap`,
+/// `expect` or `?`.
+fn is_spawn_result(expr: &syn::Expr) -> bool {
+    let mut expr = expr;
+    loop {
+        match expr {
+            syn::Expr::MethodCall(call) => {
+                let name = call.method.unraw().to_string();
+                if name == "spawn" && call.args.is_empty() {
+                    return true;
+                }
+                if name == "unwrap" || name == "expect" {
+                    expr = &call.receiver;
+                } else {
+                    return false;
+                }
+            }
+            syn::Expr::Try(inner) => expr = &inner.expr,
+            syn::Expr::Paren(inner) => expr = &inner.expr,
+            _ => return false,
+        }
+    }
+}
+
+type Position = (usize, usize);
+
+fn position(span: proc_macro2::Span) -> Position {
+    let start = span.start();
+    (start.line, start.column)
+}
+
+/// Every `name.stdout` or `name.stderr` field read in an expression.
+#[derive(Default)]
+struct Fields {
+    found: Vec<(String, &'static str)>,
+}
+
+impl<'ast> Visit<'ast> for Fields {
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let (Some(name), syn::Member::Named(member)) = (path_name(&field.base), &field.member) {
+            if let Some(stream) = stream(member) {
+                self.found.push((name, stream));
+            }
+        }
+        syn::visit::visit_expr_field(self, field);
+    }
+}
+
+fn fields_in(expr: &syn::Expr) -> Vec<(String, &'static str)> {
+    let mut fields = Fields::default();
+    fields.visit_expr(expr);
+    fields.found
+}
+
+/// Every `name.stdout.take()` or `name.stderr.take()` in an expression.
+#[derive(Default)]
+struct Takes {
+    found: Vec<(String, &'static str)>,
+}
+
+impl<'ast> Visit<'ast> for Takes {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method.unraw() == "take" && call.args.is_empty() {
+            if let syn::Expr::Field(field) = &*call.receiver {
+                if let (Some(name), syn::Member::Named(member)) =
+                    (path_name(&field.base), &field.member)
+                {
+                    if let Some(stream) = stream(member) {
+                        self.found.push((name, stream));
+                    }
+                }
+            }
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn takes_in(expr: &syn::Expr) -> Vec<(String, &'static str)> {
+    let mut takes = Takes::default();
+    takes.visit_expr(expr);
+    takes.found
+}
+
+/// A child spawned with at least one piped output stream.
+struct Child {
+    name: Option<String>,
+    piped: BTreeSet<&'static str>,
+    line: usize,
+    /// Where each stream is first drained.
+    drained: BTreeMap<&'static str, Position>,
+}
+
+/// A `.wait()` or `try_wait()` poll.
+struct Wait {
+    name: Option<String>,
+    at: Position,
+    what: &'static str,
+}
+
+/// What one function does with its children.
 #[derive(Default)]
 struct Frame {
-    piped: BTreeSet<&'static str>,
-    taken: BTreeSet<&'static str>,
-    /// (line, what) of each wait or poll.
-    waits: Vec<(usize, &'static str)>,
+    children: Vec<Child>,
+    waits: Vec<Wait>,
+    /// The receiver name of each `wait_with_output` call.
+    with_output: Vec<Option<String>>,
     in_test: bool,
 }
 
@@ -137,6 +267,8 @@ struct Scan {
     test_depth: usize,
     /// Open loops and closures around the current expression.
     loop_depth: usize,
+    /// The name a `let` binds, until its first spawn takes it.
+    pending_name: Option<String>,
     found: Vec<(usize, String)>,
 }
 
@@ -155,46 +287,92 @@ impl Scan {
         }
     }
 
-    fn enter_function(&mut self) {
-        // A nested function starts outside its parent's loops.
-        self.loop_depth = 0;
+    fn function(&mut self, visit: impl FnOnce(&mut Self)) {
+        let outer_loops = std::mem::take(&mut self.loop_depth);
+        let outer_name = self.pending_name.take();
         self.frames.push(Frame {
             in_test: self.test_depth > 0,
             ..Frame::default()
         });
-    }
-
-    fn leave_function(&mut self, outer_loops: usize) {
+        visit(self);
         let frame = self.frames.pop().unwrap();
         self.loop_depth = outer_loops;
-        if !frame.in_test {
-            return;
-        }
-        let undrained: Vec<&str> = frame
-            .piped
-            .iter()
-            .filter(|stream| !frame.taken.contains(*stream))
-            .copied()
-            .collect();
-        if undrained.is_empty() {
-            return;
-        }
-        if let Some((line, what)) = frame.waits.first() {
-            self.found.push((
-                *line,
-                format!(
-                    "{what} while the child's piped {} is not drained",
-                    undrained.join(" and ")
-                ),
-            ));
+        self.pending_name = outer_name;
+        if frame.in_test {
+            self.judge(&frame);
         }
     }
 
-    fn function(&mut self, visit: impl FnOnce(&mut Self)) {
-        let outer_loops = self.loop_depth;
-        self.enter_function();
-        visit(self);
-        self.leave_function(outer_loops);
+    fn judge(&mut self, frame: &Frame) {
+        let named: BTreeSet<&str> = frame
+            .children
+            .iter()
+            .filter_map(|child| child.name.as_deref())
+            .collect();
+        // A wait or output read belongs to the named child it is called on;
+        // one called on anything else belongs to the unnamed children.
+        let is_theirs = |child: &Child, name: &Option<String>| match (&child.name, name) {
+            (Some(own), Some(other)) => own == other,
+            (None, None) => true,
+            (None, Some(other)) => !named.contains(other.as_str()),
+            (Some(_), None) => false,
+        };
+        for child in &frame.children {
+            let first_wait = frame
+                .waits
+                .iter()
+                .filter(|wait| is_theirs(child, &wait.name))
+                .min_by_key(|wait| wait.at);
+            let read_by_output = frame.with_output.iter().any(|name| is_theirs(child, name));
+            // The streams this child leaves unread when it is first waited on.
+            let unread: Vec<&str> = child
+                .piped
+                .iter()
+                .copied()
+                .filter(|stream| match (first_wait, child.drained.get(stream)) {
+                    (Some(wait), Some(at)) => *at >= wait.at,
+                    (Some(_), None) => true,
+                    (None, drained) => drained.is_none() && !read_by_output,
+                })
+                .collect();
+            if unread.is_empty() {
+                continue;
+            }
+            let streams = unread.join(" and ");
+            match first_wait {
+                Some(wait) => self.found.push((
+                    wait.at.0,
+                    format!(
+                        "{} before the child's piped {streams} is drained or read to the end",
+                        wait.what
+                    ),
+                )),
+                None => self.found.push((
+                    child.line,
+                    format!(
+                        "a child is spawned with piped {streams} that this function neither \
+                         drains nor reads with wait_with_output"
+                    ),
+                )),
+            }
+        }
+    }
+
+    fn drained(&mut self, name: &str, stream: &'static str, at: Position) {
+        let Some(frame) = self.frames.last_mut() else {
+            return;
+        };
+        if let Some(child) = frame
+            .children
+            .iter_mut()
+            .rev()
+            .find(|child| child.name.as_deref() == Some(name))
+        {
+            let earliest = child.drained.entry(stream).or_insert(at);
+            if at < *earliest {
+                *earliest = at;
+            }
+        }
     }
 }
 
@@ -256,6 +434,27 @@ impl<'ast> Visit<'ast> for Scan {
         self.function(|scan| syn::visit::visit_trait_item_fn(scan, item));
     }
 
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        let name = match &local.pat {
+            syn::Pat::Ident(ident) => Some(ident.ident.unraw().to_string()),
+            syn::Pat::Type(typed) => match &*typed.pat {
+                syn::Pat::Ident(ident) => Some(ident.ident.unraw().to_string()),
+                _ => None,
+            },
+            _ => None,
+        };
+        // The name is the child's only when the binding holds the spawn
+        // result itself, not something derived from it.
+        let holds_child = local
+            .init
+            .as_ref()
+            .is_some_and(|init| is_spawn_result(&init.expr));
+        let name = if holds_child { name } else { None };
+        let outer = std::mem::replace(&mut self.pending_name, name);
+        syn::visit::visit_local(self, local);
+        self.pending_name = outer;
+    }
+
     fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
         self.loop_depth += 1;
         syn::visit::visit_expr_while(self, expr);
@@ -291,33 +490,78 @@ impl<'ast> Visit<'ast> for Scan {
         }
     }
 
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*call.func {
+            let helper = path.path.segments.last().is_some_and(|segment| {
+                DRAIN_HELPERS.contains(&segment.ident.unraw().to_string().as_str())
+            });
+            if helper {
+                let at = position(call.func.span());
+                let taken: Vec<_> = call.args.iter().flat_map(takes_in).collect();
+                for (name, stream) in taken {
+                    self.drained(&name, stream, at);
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.unraw().to_string();
-        if let Some(frame) = self.frames.last_mut() {
-            let line = call.method.span().start().line;
-            match name.as_str() {
-                "stdout" | "stderr" if call.args.len() == 1 && is_piped(&call.args[0]) => {
-                    if let Some(stream) = stream(&call.method) {
-                        frame.piped.insert(stream);
-                    }
-                }
-                "take" | "as_mut" | "by_ref" | "as_deref_mut" => {
-                    if let syn::Expr::Field(field) = &*call.receiver {
-                        if let syn::Member::Named(member) = &field.member {
-                            if let Some(stream) = stream(member) {
-                                frame.taken.insert(stream);
-                            }
+        let at = position(call.method.span());
+        match name.as_str() {
+            "spawn" if call.args.is_empty() => {
+                let mut piped = BTreeSet::new();
+                let mut chain = &*call.receiver;
+                while let syn::Expr::MethodCall(link) = chain {
+                    if let Some(stream) = stream(&link.method) {
+                        if link.args.len() == 1 && is_piped(&link.args[0]) {
+                            piped.insert(stream);
                         }
                     }
+                    chain = &link.receiver;
                 }
-                "wait" if call.args.is_empty() => {
-                    frame.waits.push((line, "`.wait()`"));
+                let bound = self.pending_name.take();
+                if let Some(frame) = self.frames.last_mut() {
+                    if !piped.is_empty() {
+                        frame.children.push(Child {
+                            name: bound,
+                            piped,
+                            line: at.0,
+                            drained: BTreeMap::new(),
+                        });
+                    }
                 }
-                "try_wait" if self.loop_depth > 0 => {
-                    frame.waits.push((line, "a `.try_wait()` poll"));
-                }
-                _ => {}
             }
+            "read_to_end" | "read_to_string" => {
+                for (child, stream) in fields_in(&call.receiver) {
+                    self.drained(&child, stream, at);
+                }
+            }
+            "wait" if call.args.is_empty() => {
+                if let Some(frame) = self.frames.last_mut() {
+                    frame.waits.push(Wait {
+                        name: path_name(&call.receiver),
+                        at,
+                        what: "`.wait()`",
+                    });
+                }
+            }
+            "try_wait" if self.loop_depth > 0 => {
+                if let Some(frame) = self.frames.last_mut() {
+                    frame.waits.push(Wait {
+                        name: path_name(&call.receiver),
+                        at,
+                        what: "a `.try_wait()` poll",
+                    });
+                }
+            }
+            "wait_with_output" => {
+                if let Some(frame) = self.frames.last_mut() {
+                    frame.with_output.push(path_name(&call.receiver));
+                }
+            }
+            _ => {}
         }
         syn::visit::visit_expr_method_call(self, call);
     }
@@ -369,8 +613,8 @@ fn no_test_waits_for_a_child_before_draining_its_piped_output() {
     let offenders = offenders_in(&root);
     assert!(
         offenders.is_empty(),
-        "drain a piped child's stdout and stderr (take each handle and read it on its own \
-         thread) or send them to files before waiting or polling; see the doc comment of \
+        "drain a piped child's stdout and stderr with drain_pipe or drain_lines, or read each \
+         to the end, before waiting or polling; see the doc comment of \
          crates/codeflow-core/tests/pipe_drain_rule.rs; found:\n{}",
         offenders.join("\n")
     );
@@ -391,12 +635,40 @@ fn the_scan_flags_each_wait_that_leaves_piped_output_unread() {
         ),
         (
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();\n\
-             let _ = c.stdout.take(); for _ in 0..9 { c.try_wait().unwrap(); } }",
-            "stderr piped and stdout taken",
+             drain_pipe(c.stdout.take());\n\
+             for _ in 0..9 { c.try_wait().unwrap(); } }",
+            "stderr piped and only stdout drained",
         ),
         (
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap(); c.wait().unwrap(); }",
             "a blocking wait",
+        ),
+        (
+            "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let out = c.stdout.as_mut().unwrap(); c.wait().unwrap(); }",
+            "a stream borrowed with as_mut and not read",
+        ),
+        (
+            "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let out = c.stdout.take(); c.wait().unwrap(); }",
+            "a stream taken into a variable and not read",
+        ),
+        (
+            "fn f() { let mut c = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();\n\
+             let a = c.stdout.take(); let b = c.stderr.take();\n\
+             while c.try_wait().unwrap().is_none() {} }",
+            "both streams taken and not read",
+        ),
+        (
+            "fn f() { let mut a = x.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let mut b = y.stdout(Stdio::piped()).spawn().unwrap();\n\
+             drain_pipe(b.stdout.take()); a.wait().unwrap(); }",
+            "another child's drain does not excuse this one",
+        ),
+        (
+            "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
+             c.wait().unwrap(); drain_pipe(c.stdout.take()); }",
+            "a drain after the wait",
         ),
         (
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
@@ -413,6 +685,14 @@ fn the_scan_flags_each_wait_that_leaves_piped_output_unread() {
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
              assert!(c.wait().unwrap().success(), \"failed\"); }",
             "a wait inside assert!",
+        ),
+        (
+            "fn spawn() -> Child { let c = cmd.stdout(Stdio::piped()).spawn().unwrap(); c }",
+            "a helper that returns a child whose output nobody reads",
+        ),
+        (
+            "fn f() { cmd.stdout(Stdio::piped()).spawn().unwrap().wait().unwrap(); }",
+            "a chained wait on an unnamed child",
         ),
         (
             "#[test] fn t() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap(); c.wait().unwrap(); }",
@@ -443,14 +723,28 @@ fn the_scan_passes_output_that_is_drained_discarded_or_read_by_the_call() {
     for (source, what) in [
         (
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();\n\
-             let a = c.stdout.take(); let b = c.stderr.take();\n\
+             let a = drain_pipe(c.stdout.take()); let b = drain_lines(c.stderr.take());\n\
              while c.try_wait().unwrap().is_none() {} }",
-            "both taken",
+            "both handed to the drain helpers",
         ),
         (
             "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
-             let a = c.stdout.as_mut().unwrap(); c.wait().unwrap(); }",
-            "as_mut",
+             let mut bytes = Vec::new();\n\
+             c.stdout.take().unwrap().read_to_end(&mut bytes).unwrap(); c.wait().unwrap(); }",
+            "a chained read to the end",
+        ),
+        (
+            "fn f() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let mut text = String::new();\n\
+             c.stdout.as_mut().unwrap().read_to_string(&mut text).unwrap(); c.wait().unwrap(); }",
+            "a read to the end through as_mut",
+        ),
+        (
+            "fn spawn(mut cmd: Command) -> (Child, Receiver<String>, JoinHandle<Vec<u8>>) {\n\
+             let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();\n\
+             let out = drain_pipe(child.stdout.take()); let rx = drain_lines(child.stderr.take());\n\
+             (child, rx, out) }",
+            "a helper that drains both streams and returns the child",
         ),
         (
             "fn f() { let mut c = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();\n\
@@ -475,8 +769,31 @@ fn the_scan_passes_output_that_is_drained_discarded_or_read_by_the_call() {
             "one liveness check, then wait_with_output",
         ),
         (
+            "fn f() { let blob = cmd.stdout(Stdio::piped()).spawn()\n\
+             .and_then(|mut child| child.wait_with_output()).unwrap(); }",
+            "an unnamed child read by wait_with_output in a closure",
+        ),
+        (
             "fn f() { let out = cmd.stdout(Stdio::piped()).output().unwrap(); }",
             "output()",
+        ),
+        (
+            "fn f() { let out = a.stdout(Stdio::piped()).stderr(Stdio::piped()).output().unwrap();\n\
+             let mut c = b.spawn().unwrap(); c.wait().unwrap(); }",
+            "independent children: output() on one command, wait() on another",
+        ),
+        (
+            "fn f() { let mut a = x.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let mut b = y.spawn().unwrap();\n\
+             drain_pipe(a.stdout.take()); a.wait().unwrap(); b.wait().unwrap(); }",
+            "a drained child beside an unpiped one",
+        ),
+        (
+            "fn f() { let mut a = x.stdout(Stdio::piped()).spawn().unwrap();\n\
+             let mut b = y.stdout(Stdio::piped()).spawn().unwrap();\n\
+             drain_pipe(a.stdout.take()); drain_pipe(b.stdout.take());\n\
+             a.wait().unwrap(); b.wait().unwrap(); }",
+            "two children each drained",
         ),
         (
             "fn f() { let b = std::sync::Barrier::new(2); b.wait(); }",
@@ -496,16 +813,6 @@ fn the_scan_passes_output_that_is_drained_discarded_or_read_by_the_call() {
 }
 
 #[test]
-fn the_scan_judges_each_function_by_its_own_body() {
-    let source = "fn spawn() -> Child { cmd.stdout(Stdio::piped()).spawn().unwrap() }\n\
-        fn waits(c: &mut Child) { while c.try_wait().unwrap().is_none() {} }\n\
-        fn both() { let mut c = cmd.stdout(Stdio::piped()).spawn().unwrap();\n\
-        fn inner() { let mut d = cmd.stdout(Stdio::null()).spawn().unwrap(); d.wait().unwrap(); }\n\
-        let _ = c.stdout.take(); c.wait().unwrap(); }";
-    assert!(undrained_waits(source, true).is_empty());
-}
-
-#[test]
 fn a_planted_undrained_loop_fails_the_tree_scan() {
     let dir = tempfile::tempdir().unwrap();
     let tests = dir.path().join("crates/planted/tests");
@@ -516,6 +823,7 @@ fn a_planted_undrained_loop_fails_the_tree_scan() {
          #[test]\n\
          fn planted() {\n\
          \x20   let mut child = Command::new(\"true\").stdout(Stdio::piped()).spawn().unwrap();\n\
+         \x20   let out = child.stdout.take();\n\
          \x20   while child.try_wait().unwrap().is_none() {}\n\
          }\n",
     )
@@ -526,7 +834,7 @@ fn a_planted_undrained_loop_fails_the_tree_scan() {
          #[test]\n\
          fn drained() {\n\
          \x20   let mut child = Command::new(\"true\").stdout(Stdio::piped()).spawn().unwrap();\n\
-         \x20   let out = child.stdout.take();\n\
+         \x20   let out = drain_pipe(child.stdout.take());\n\
          \x20   while child.try_wait().unwrap().is_none() {}\n\
          }\n",
     )
@@ -534,7 +842,7 @@ fn a_planted_undrained_loop_fails_the_tree_scan() {
     let offenders = offenders_in(dir.path());
     assert_eq!(offenders.len(), 1, "{offenders:?}");
     assert!(
-        offenders[0].starts_with("crates/planted/tests/undrained.rs:5:"),
+        offenders[0].starts_with("crates/planted/tests/undrained.rs:6:"),
         "{offenders:?}"
     );
 }
