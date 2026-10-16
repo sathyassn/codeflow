@@ -547,9 +547,10 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    // A pull request context: `--into`, or a host's pull request variables,
-    // whether or not the host supplied the body.
-    let pr_context = args.into.is_some() || is_pr_event(|key| environment.get(key).cloned());
+    // The hook also supplies --into, with its advisory advertisement hand-off.
+    // That remains a push, not a landing. Hosted PR metadata always wins.
+    let pr_context = (args.into.is_some() && !args.advertisement_stdin)
+        || is_pr_event(|key| environment.get(key).cloned());
     // A push of a task branch stacked on reviewed predecessor heads (SPC-013
     // R-42, issue #69); a pull request check keeps the landing rule.
     let stacked = if pr_body.is_none() && !pr_context {
