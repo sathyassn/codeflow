@@ -72,16 +72,7 @@ pub(super) fn resolve(
             }
         }
     }
-    let base = resolve_base(root, &base_candidates).map_err(|error| {
-        codeflow_core::remedy::Finding::new(
-            format!(
-                "cannot resolve the base because git refused it: {}",
-                error.trim_end().replace('\n', "\n  ")
-            ),
-            codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
-        )
-        .to_string()
-    })?;
+    let base = resolve_base(root, &base_candidates).map_err(base_refusal)?;
     // Pin every downstream reader to the same object, even if a ref moves.
     if let Some(base) = &base {
         base_candidates = vec![base.clone()];
@@ -127,6 +118,17 @@ pub(super) fn resolve(
         into,
         target,
     })
+}
+
+fn base_refusal(error: String) -> String {
+    codeflow_core::remedy::Finding::new(
+        format!(
+            "cannot resolve the base because git refused it: {}",
+            error.trim_end().replace('\n', "\n  ")
+        ),
+        codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
+    )
+    .to_string()
 }
 
 fn branch(
