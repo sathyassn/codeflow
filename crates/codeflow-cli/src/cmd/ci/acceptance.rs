@@ -55,6 +55,16 @@ pub(super) fn dispatch(
     let found = match judge(root, range, names) {
         Some(judged) => judged,
         None => criteria(root, range, branch, class).and_then(|criteria| {
+            println!(
+                "codeflow ci: acceptance binding: {} (branch '{}', target '{}')",
+                if criteria.amends() {
+                    "amendable"
+                } else {
+                    "frozen"
+                },
+                branch,
+                range.target
+            );
             pull_request_findings_judged(
                 root,
                 range.base,

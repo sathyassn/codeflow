@@ -670,6 +670,8 @@ fn release_impact_depends_on_base_or_breaking_commit() {
                 "ci",
                 "--base",
                 base,
+                "--into",
+                base,
                 "--head",
                 "HEAD",
                 "--branch",
@@ -725,7 +727,9 @@ fn release_impact_depends_on_base_or_breaking_commit() {
         command.output().unwrap()
     };
     for (extra, env, accepted) in [
-        (&[][..], &[][..], true),
+        // Several destination branches share this commit; no spelling may
+        // silently choose the unprotected one.
+        (&[][..], &[][..], false),
         (&["--into", "main"][..], &[][..], false),
         (&["--into", "integration/line"][..], &[][..], true),
         (&[][..], &[("GITHUB_BASE_REF", "main")][..], false),
@@ -770,6 +774,8 @@ fn release_impact_depends_on_base_or_breaking_commit() {
             "ci",
             "--base",
             "integration/line",
+            "--into",
+            "integration/line",
             "--head",
             "HEAD",
             "--branch",
@@ -799,6 +805,8 @@ fn mapped_release_heading_is_optional_on_line_but_validated_when_present() {
             &[
                 "ci",
                 "--base",
+                base,
+                "--into",
                 base,
                 "--branch",
                 "feat/test",

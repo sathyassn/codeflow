@@ -126,6 +126,8 @@ fn ci_into(root: &Path, base: &str, branch: &str, pr_body: &str) -> (i32, String
             "ci",
             "--base",
             base,
+            "--into",
+            base,
             "--head",
             "HEAD",
             "--branch",

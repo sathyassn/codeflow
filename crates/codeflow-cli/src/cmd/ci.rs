@@ -22,6 +22,7 @@ mod adopter;
 mod change_class;
 mod classification;
 mod conflict_markers;
+mod context;
 mod id_registry;
 pub(crate) mod pr_body;
 mod work_records;
@@ -30,8 +31,7 @@ use change_class::ChangeClass;
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
-    adoption, any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel,
-    Violation,
+    adoption, any_blocking, git_hook, policy_schema, standards, GitPolicy, PolicyLevel, Violation,
 };
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
@@ -47,7 +47,10 @@ use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
 pub struct CiArgs {
-    /// Base ref of the range (exclusive). Auto-detected from CI env when omitted.
+    /// Base ref of the range (exclusive). When omitted: CI base metadata,
+    /// `CODEFLOW_DEFAULT_BRANCH`, then the branch's declared target, then policy
+    /// protected branches. An unresolved declared target warns; pass --base to
+    /// select the intended range.
     #[arg(long, value_name = "REF")]
     pub base: Option<String>,
 
@@ -55,8 +58,11 @@ pub struct CiArgs {
     #[arg(long, value_name = "REF")]
     pub head: Option<String>,
 
-    /// Branch name to check against the naming policy (default: the CI-provided
-    /// or current HEAD branch).
+    /// Branch context for naming policy and acceptance binding (frozen or amendable).
+    /// Defaults to CI metadata, then the checkout. Its declared target selects
+    /// the base when no --base or CI base exists: a task's `integration_target`,
+    /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
+    /// Pass --branch when an explicit --head belongs to another line.
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
 
@@ -123,8 +129,9 @@ pub struct CiArgs {
     pub read_release_impact: bool,
 
     /// The branch a pull request merges into (default: the CI-provided
-    /// target branch, else the branch an explicit `--base` names). A range
-    /// whose head or target matches the release pattern is judged as a
+    /// target branch, then the branch's declared target, then branches at the
+    /// resolved base commit). Ambiguous acceptance context requires --into or
+    /// --branch. A range whose head or target matches the release pattern is judged as a
     /// release range (SPC-013 R-120).
     #[arg(long, value_name = "BRANCH")]
     pub into: Option<String>,
@@ -289,44 +296,27 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
 
-    // --- resolve the range ------------------------------------------------
-    let detected = detect_range(
-        |k| environment.get(k).cloned().filter(|v| !v.is_empty()),
-        &working.git.protected_branches,
-    );
-    let base_spec = args
-        .base
-        .clone()
-        .map(|b| (vec![b], "explicit --base flag".to_string()));
-    let head = args.head.clone().unwrap_or_else(|| detected.head.clone());
+    // Resolve names and pin revisions once before any range rule runs.
+    let context = match context::resolve(&root, args, &environment, &working.git.protected_branches)
+    {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("codeflow ci: {error}");
+            return 2;
+        }
+    };
+    let context::Context {
+        head,
+        base: base_sha,
+        base_candidates,
+        range_source,
+        branch,
+        into,
+        target: line_target,
+    } = context;
     if let Some(code) = adopter::check_head_config(&root, &head) {
         return code;
     }
-
-    let (base_candidates, range_source) = match base_spec {
-        Some((cands, src)) => (cands, src),
-        None => (detected.base_candidates.clone(), detected.source.clone()),
-    };
-
-    let branch = match args.branch.clone().or_else(|| {
-        detect_branch(|key| {
-            environment
-                .get(key)
-                .cloned()
-                .filter(|value| !value.is_empty())
-        })
-    }) {
-        Some(branch) => branch,
-        None => match repo::open(&root)
-            .and_then(|repo| repo.map(|repo| repo::current_branch(&repo)).transpose())
-        {
-            Ok(branch) => branch.unwrap_or_default(),
-            Err(error) => {
-                eprintln!("codeflow ci: cannot read current branch: {error}");
-                return 2;
-            }
-        },
-    };
 
     let pr_body = match resolve_pr_body(args, &environment) {
         Ok(body) => body,
@@ -338,17 +328,6 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
 
-    let base_sha = match resolve_base(&root, &base_candidates) {
-        Ok(value) => value,
-        Err(error) => {
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("cannot resolve the base: git refused it: {error}; nothing was verified"),
-                codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
-            );
-            eprintln!("{}", finding.line("codeflow ci", "error"));
-            return 2;
-        }
-    };
     // Every range reader below, including body-less, task-less CI, shares
     // this refusal. A history error is never a skipped check or clean range.
     if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
@@ -475,20 +454,6 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
-    // The branch a pull request merges into: `--into`, the host's target
-    // variable, else a named `--base`. A SHA base names no branch.
-    let into = args
-        .into
-        .clone()
-        .or_else(|| detect_target(|k| environment.get(k).cloned().filter(|v| !v.is_empty())))
-        .or_else(|| args.base.as_deref().and_then(named_branch));
-    let line_target = match line_target(&root, into.as_deref()) {
-        Ok(target) => target,
-        Err(error) => {
-            eprintln!("codeflow ci: {error}");
-            return 2;
-        }
-    };
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
         None => match origin_url(&root) {

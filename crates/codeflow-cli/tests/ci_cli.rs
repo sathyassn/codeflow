@@ -17,6 +17,8 @@ mod base_policy;
 mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
+#[path = "ci_cli/range_context.rs"]
+mod range_context;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -416,6 +418,8 @@ fn ci_scales_the_pr_body_sections_to_the_change_class() {
             &[
                 "ci",
                 "--base",
+                "integration/line",
+                "--into",
                 "integration/line",
                 "--branch",
                 "feat/x",
