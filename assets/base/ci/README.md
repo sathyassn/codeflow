@@ -309,13 +309,15 @@ and waits for the fresh run first.
 
 When an integration line's scan needs a new fingerprint in `.gitleaksignore`,
 land that fingerprint on the trusted base first in a separate pull request.
-`codeflow ci` classifies a range that changes only the root `.gitleaksignore`
+`codeflow ci` classifies a range that adds or modifies only the root `.gitleaksignore`
 as a **secret-scan exemption** when its body names one existing epic or task:
 `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its own task.
 This class permits a predecessor that is incomplete at the planning anchor,
 so work completed only on the integration line does not block the exemption.
 Adding any other path keeps the range out of the class. The ignore file
 remains outside planning amendments.
+The head entry must be a regular file. Deletions, type changes and mode
+changes do not qualify.
 
 Commit standards, record and body checks, the secret scan and security review
 still apply. The repository's existing approval requirements, including
@@ -323,6 +325,12 @@ code-owner review where configured, also apply; classification changes no
 protection setting and grants no approval. The scanner reads the base's
 exemptions, so the new fingerprint cannot suppress a finding in its own pull
 request. Once the exemption lands, rerun the integration line's scan.
+
+Reviewers must verify that each entry uses `<commit>:<path>:<rule>:<line>`,
+that its commit is already on the named epic's integration line or task's
+branch, and that a linked review establishes the finding as a false positive.
+Refuse entries without a commit: they cover that location in every later
+commit.
 
 ### Scanner configuration
 

@@ -16,7 +16,8 @@ use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
 use codeflow_core::workgraph::classify::{
-    is_secret_scan_exemption, is_spike_path, path_sets, ProjectPaths,
+    is_secret_scan_exemption, is_spike_path, path_sets, validate_secret_scan_exemption_entry,
+    ProjectPaths,
 };
 use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
@@ -647,7 +648,10 @@ pub(super) fn dispatch(
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
-    let class = match classify(&input).map(|class| release_class(release, class)) {
+    let class = match classify(&input)
+        .map(|class| release_class(release, class))
+        .and_then(|class| exemption_entry(root, range, &changes, class))
+    {
         Ok(class) => class,
         Err(reason) => {
             push(
@@ -690,6 +694,22 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .as_ref()
         .map(|(epic, _)| epic.clone())
         .map_err(Clone::clone)
+}
+
+/// An exemption adds or edits the regular file; it cannot remove or replace it.
+fn exemption_entry(
+    root: &Path,
+    range: &Range<'_>,
+    changes: &[(String, GitName)],
+    class: Class,
+) -> Result<Class, String> {
+    if class.is_secret_scan_exemption() {
+        if !matches!(changes, [(status, _)] if status == "A" || status == "M") {
+            return Err("a secret-scan exemption must add or modify .gitleaksignore; deletions and type changes are not exemptions".into());
+        }
+        validate_secret_scan_exemption_entry(root, range.base, range.head)?;
+    }
+    Ok(class)
 }
 
 /// Print the class and the direct commits its reviewer is accepting.

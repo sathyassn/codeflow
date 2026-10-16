@@ -380,7 +380,8 @@ does not by itself mean enforcement succeeded.
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
-A pull request changing only `.gitleaksignore` may name one existing epic or
+A pull request adding or modifying only the regular file `.gitleaksignore`
+without changing its mode may name one existing epic or
 task for the [secret-scan exemption class](policy-reference.md#secret-scan-exemption-pull-requests).
 It skips dependency readiness while retaining other checks and repository
 approval requirements.

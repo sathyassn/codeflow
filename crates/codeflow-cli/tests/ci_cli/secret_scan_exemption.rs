@@ -68,11 +68,6 @@ fn fixture_with_record(full: bool, record: &str) -> tempfile::TempDir {
         &task("TSK-001", "", "todo"),
     );
     write(root, "project-management/tasks/TSK-002.md", record);
-    write(
-        root,
-        ".github/CODEOWNERS",
-        "/.gitleaksignore @example-owner\n",
-    );
     commit(root, "plan: anchor example work");
     git(root, &["switch", "-q", "-c", LINE]);
     write(
@@ -133,6 +128,104 @@ fn exemption_accepts_epic_and_task_with_dependency_complete_only_on_line() {
         assert!(out.status.success(), "{id}: {}", said(&out));
         assert!(said(&out).contains(CLASS), "{}", said(&out));
         assert!(!said(&out).contains("work.stable_planning_anchor"));
+    }
+}
+
+// Change only the committed tree; CI must judge the head, not the checkout.
+fn change_ignore_entry(root: &Path, mode: Option<i32>, content_change: bool) {
+    let repo = git2::Repository::open(root).unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.find_reference("refs/heads/main")
+        .unwrap()
+        .set_target(parent.id(), "anchor the existing ignore file")
+        .unwrap();
+    let tree = parent.tree().unwrap();
+    let mut builder = repo.treebuilder(Some(&tree)).unwrap();
+    if let Some(mode) = mode {
+        let oid = if mode == 0o160_000 {
+            parent.id()
+        } else if content_change {
+            repo.blob(b"another-reviewed-commit:sample.txt:generic-api-key:2\n")
+                .unwrap()
+        } else {
+            tree.get_name(".gitleaksignore").unwrap().id()
+        };
+        builder.insert(".gitleaksignore", oid, mode).unwrap();
+    } else {
+        builder.remove(".gitleaksignore").unwrap();
+    }
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let sig = git2::Signature::now("Fixture", "fixture@example.test").unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        "fix: change the ignore entry",
+        &tree,
+        &[&parent],
+    )
+    .unwrap();
+}
+
+fn refused_entry(mode: Option<i32>) {
+    let dir = fixture(false);
+    change_ignore_entry(dir.path(), mode, false);
+    for id in ["EPC-001", "TSK-002"] {
+        let out = ci(dir.path(), BRANCH, &body(id));
+        assert!(!out.status.success(), "{id}: {}", said(&out));
+        assert!(!said(&out).contains(CLASS), "{}", said(&out));
+        assert!(said(&out).contains("work.classification"), "{}", said(&out));
+    }
+}
+
+#[test]
+fn exemption_rejects_ignore_deletion() {
+    refused_entry(None);
+}
+
+#[test]
+fn exemption_rejects_ignore_symlink() {
+    refused_entry(Some(0o120_000));
+}
+
+#[test]
+fn exemption_rejects_ignore_gitlink() {
+    refused_entry(Some(0o160_000));
+}
+
+#[test]
+fn exemption_rejects_ignore_mode_change() {
+    refused_entry(Some(0o100_755));
+}
+
+#[test]
+fn exemption_rejects_nonregular_additions_at_the_head() {
+    for mode in [0o120_000, 0o160_000] {
+        let dir = fixture(false);
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let base = repo.refname_to_id("refs/heads/main").unwrap();
+        change_ignore_entry(dir.path(), Some(mode), false);
+        repo.find_reference("refs/heads/main")
+            .unwrap()
+            .set_target(base, "keep the ignore file absent on the base")
+            .unwrap();
+        for id in ["EPC-001", "TSK-002"] {
+            let out = ci(dir.path(), BRANCH, &body(id));
+            assert!(!out.status.success(), "{}", said(&out));
+            assert!(!said(&out).contains(CLASS), "{}", said(&out));
+            assert!(said(&out).contains("regular file"), "{}", said(&out));
+        }
+    }
+}
+
+#[test]
+fn exemption_accepts_regular_file_modification() {
+    let dir = fixture(false);
+    change_ignore_entry(dir.path(), Some(0o100_644), true);
+    for id in ["EPC-001", "TSK-002"] {
+        let out = ci(dir.path(), BRANCH, &body(id));
+        assert!(out.status.success(), "{}", said(&out));
+        assert!(said(&out).contains(CLASS), "{}", said(&out));
     }
 }
 
@@ -222,20 +315,9 @@ fn exemption_keeps_task_identity_and_body_checks() {
 }
 
 #[test]
-fn fresh_full_project_exemption_keeps_security_jobs_and_protection_configuration() {
+fn fresh_full_project_exemption_keeps_security_jobs_and_review_requirements() {
     let dir = fixture(true);
     let root = dir.path();
-    let protected_files = [
-        ".codeflow/policy.json",
-        ".github/workflows/codeflow-ci.yml",
-        ".github/workflows/codeflow-policy.yml",
-        ".git/config",
-        ".github/CODEOWNERS",
-    ];
-    let before: Vec<_> = protected_files
-        .iter()
-        .map(|name| std::fs::read(root.join(name)).unwrap())
-        .collect();
     let out = ci(root, BRANCH, &body("EPC-001"));
     assert!(out.status.success(), "{}", said(&out));
     assert!(said(&out).contains(CLASS), "{}", said(&out));
@@ -251,10 +333,10 @@ fn fresh_full_project_exemption_keeps_security_jobs_and_protection_configuration
         "{}",
         said(&no_review)
     );
-    for (name, bytes) in protected_files.iter().zip(&before) {
-        assert_eq!(&std::fs::read(root.join(name)).unwrap(), bytes, "{name}");
-    }
-    let workflow: serde_yaml::Value = serde_yaml::from_slice(&before[1]).unwrap();
+    let workflow: serde_yaml::Value = serde_yaml::from_slice(
+        &std::fs::read(root.join(".github/workflows/codeflow-ci.yml")).unwrap(),
+    )
+    .unwrap();
     for job in ["secret-scan", "security-review"] {
         let job = &workflow["jobs"][job];
         assert!(

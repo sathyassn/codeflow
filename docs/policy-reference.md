@@ -103,11 +103,13 @@ trusted base. When an integration line contains a reviewed false positive,
 land its fingerprint on the base in a separate pull request first, then
 rerun the line's scan.
 
-`codeflow ci` gives a range that changes only the root `.gitleaksignore`
+`codeflow ci` gives a range that adds or modifies only the root `.gitleaksignore`
 the **secret-scan exemption** class. Its body names one existing epic or
 task with `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its
 own task. Adding a record, a document or any other path keeps the range out
 of this class; `.gitleaksignore` remains outside planning amendments.
+The head entry must be a regular file. Deletions, type changes and mode
+changes do not qualify.
 
 The class permits a task whose predecessor is incomplete at the planning
 anchor, including one complete only on an integration line. Task identity,
@@ -117,6 +119,12 @@ levels. The new fingerprint takes effect only after it lands on the trusted
 base; it cannot exempt a finding introduced by its own pull request.
 Repository approval rules, including code-owner review where configured,
 are unchanged. The class neither configures protection nor grants approval.
+
+Reviewers must verify that each entry uses `<commit>:<path>:<rule>:<line>`,
+that its commit is already on the named epic's integration line or task's
+branch, and that a linked review establishes the finding as a false positive.
+Refuse entries without a commit: they cover that location in every later
+commit.
 
 ## Where a new key goes
 
