@@ -2005,21 +2005,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Reads submodule status LF records; the unmodified status byte decides incompleteness.
+    // Reads NUL-separated index entries and LF-separated submodule status records;
+    // the unchanged leading status byte decides incompleteness in both formats.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "incomplete_checkout",
         "split_terminator",
-        1,
-        "framing:submodule-status-lines",
-    ),
-    // Literal LF separates status rows. Whitespace splitting extracts a displayed path only. The unchanged first status byte decides incompleteness.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-        "split_whitespace",
-        1,
-        "grammar:git-submodule-status",
+        2,
+        "framing:index-and-submodule-status-records",
     ),
     // Formats already-emitted finding text only, without establishing guard verdicts or rewriting operands.
     (
@@ -5660,7 +5653,7 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "shell_words",
     ),
     (
-        "submodule-status-lines",
+        "index-and-submodule-status-records",
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "incomplete_checkout",
     ),

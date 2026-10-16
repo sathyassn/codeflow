@@ -86,8 +86,8 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/git/remote_query.rs",
         "std::env::current_exe().unwrap()",
-        2,
-        "a test re-running its own binary with an isolated process environment",
+        3,
+        "tests re-running their own binary for empty answers, SSH config and URL rewrites",
     ),
     (
         "codeflow-present/src/responses.rs",

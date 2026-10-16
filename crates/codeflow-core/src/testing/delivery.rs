@@ -101,6 +101,21 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
         Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(BTreeMap::new()),
         Err(error) => return Err(invalid(root, format!("cannot discover repository: {error}; repair repository metadata before rerunning the gate"))),
     };
+    tracked_repository(root, &repo, &mut BTreeSet::new())
+}
+
+fn tracked_repository(
+    root: &Path,
+    repo: &git2::Repository,
+    visiting: &mut BTreeSet<PathBuf>,
+) -> Result<BTreeMap<String, String>, TestingError> {
+    let identity = repo.path().canonicalize().map_err(TestingError::Io)?;
+    if !visiting.insert(identity.clone()) {
+        return Err(invalid(
+            root,
+            "submodule metadata forms a cycle; repair it before rerunning the gate",
+        ));
+    }
     let mut result = BTreeMap::new();
     for entry in repo
         .index()
@@ -115,6 +130,10 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
             );
             continue;
         };
+        if entry.mode == 0o160_000 {
+            result.insert(name, submodule_snapshot(&path, entry.id, visiting)?);
+            continue;
+        }
         let unreadable = |error: std::io::Error| {
             TestingError::Io(std::io::Error::new(error.kind(), format!("cannot snapshot {}: {error}; restore a readable tracked path before rerunning the gate", path.display())))
         };
@@ -147,7 +166,47 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
         );
     }
+    visiting.remove(&identity);
     Ok(result)
+}
+
+/// A gitlink is a repository, not a file. Include both its checked-out
+/// revision and recursively tracked bytes, so edits during a target run
+/// cannot hide behind an unchanged gitlink or an already-dirty status.
+fn submodule_snapshot(
+    path: &Path,
+    recorded: git2::Oid,
+    visiting: &mut BTreeSet<PathBuf>,
+) -> Result<String, TestingError> {
+    let repo = match git2::Repository::open_ext(
+        path,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        std::iter::empty::<&Path>(),
+    ) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Ok(digest(format!("{recorded}:<uninitialized>").as_bytes()));
+        }
+        Err(error) => {
+            return Err(invalid(
+                path,
+                format!(
+                "cannot snapshot submodule metadata: {error}; repair it before rerunning the gate"
+            ),
+            ))
+        }
+    };
+    let head = repo
+        .head()
+        .map_err(|error| invalid(path, format!("cannot snapshot submodule HEAD: {error}")))?;
+    let files = tracked_repository(path, &repo, visiting)?;
+    let bytes = serde_json::to_vec(&(
+        recorded.to_string(),
+        head.target().map(|id| id.to_string()),
+        files,
+    ))
+    .map_err(|error| invalid(path, format!("cannot encode submodule snapshot: {error}")))?;
+    Ok(digest(&bytes))
 }
 
 #[must_use]
