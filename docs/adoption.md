@@ -28,7 +28,7 @@ much working method comes with it.
 - The tier is recorded in `.codeflow/project.toml`.
 - Running `init` again at a higher tier is an idempotent additive upgrade. A
   lower-tier request is ignored, so the recorded tier stays active and no
-  files are removed.
+  files are removed. The binary must be at least the pinned version.
 - Each tier is a clean
   superset of the one below, and the enforcement floor is the same at all three
   (architecture decision record ADR-0019).
@@ -341,8 +341,8 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 
 | Case | What `update` does |
 |---|---|
-| Binary older than the project's `scaffold_version` | Refuses before changing project files, including with `--force`. Install the pinned version named in the error and retry |
-| Unparsable `scaffold_version` | Refuses and shows the value to correct |
+| Binary older than the project's `scaffold_version` | Both `update` and a repeated `init` refuse before changing project files, including with `--force`. Install the pinned version named in the error and retry |
+| Unparsable `scaffold_version` | Both commands refuse and name the value and `.codeflow/project.toml`; correct it and retry |
 | Binary released before this safeguard | Can still lower the pin and replace managed files with older assets |
 | Unmodified managed file | Replaced |
 | Managed file you changed | 3-way merged from the baseline; anything that cannot merge is written beside it as `<name>.new` with a report entry, never clobbered or skipped. `--force` replaces instead of merging |

@@ -59,7 +59,7 @@ use super::state::{
     write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
     SyncBatch, PROJECT_TOML,
 };
-use super::version::{is_older, is_parseable};
+use super::version::check_write_version;
 use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
@@ -305,28 +305,7 @@ fn update_writes(
     opts: &UpdateOptions,
 ) -> Result<Report, ScaffoldError> {
     let mut state = ProjectState::load(root)?;
-    for (name, value) in [
-        ("scaffold_version", state.scaffold_version.as_str()),
-        ("binary version", opts.binary_version.as_str()),
-    ] {
-        if !is_parseable(value) {
-            return Err(ScaffoldError::InvalidState {
-                what: name.to_string(),
-                detail: format!(
-                    "{value:?} is not a parseable version; update wrote no project files"
-                ),
-            });
-        }
-    }
-    if is_older(&opts.binary_version, &state.scaffold_version) {
-        return Err(ScaffoldError::InvalidState {
-            what: "update version".to_string(),
-            detail: format!(
-                "binary {} is older than scaffold_version {} in {PROJECT_TOML}; install the pinned version {} and retry; update wrote no project files",
-                opts.binary_version, state.scaffold_version, state.scaffold_version
-            ),
-        });
-    }
+    check_write_version(&state.scaffold_version, &opts.binary_version, "update")?;
     let ignore = ScaffoldConfig::load(root)?;
     let manifest = ScaffoldManifest::load(source)?;
     let mut installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;

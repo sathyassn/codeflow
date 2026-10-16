@@ -40,8 +40,49 @@ fn valid_identifiers(value: &str, prerelease: bool) -> bool {
     })
 }
 
-pub(super) fn is_parseable(version: &str) -> bool {
+fn is_parseable(version: &str) -> bool {
     parse(version).is_some()
+}
+
+/// Check an existing pin before init or update writes any project file.
+pub(super) fn check_write_version(
+    pinned: &str,
+    binary: &str,
+    command: &str,
+) -> Result<(), super::ScaffoldError> {
+    let project_file = super::state::PROJECT_TOML;
+    for (name, value, location, remedy) in [
+        (
+            "scaffold_version",
+            pinned,
+            format!(" in {project_file}"),
+            "correct it",
+        ),
+        (
+            "binary version",
+            binary,
+            String::new(),
+            "install a build with a valid version",
+        ),
+    ] {
+        if !is_parseable(value) {
+            return Err(super::ScaffoldError::InvalidState {
+                what: name.to_string(),
+                detail: format!(
+                    "{value:?}{location} is not a parseable version; {remedy} and retry; {command} wrote no project files"
+                ),
+            });
+        }
+    }
+    if is_older(binary, pinned) {
+        return Err(super::ScaffoldError::InvalidState {
+            what: format!("{command} version"),
+            detail: format!(
+                "binary {binary} is older than scaffold_version {pinned} in {project_file}; install the pinned version {pinned} and retry; {command} wrote no project files"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn prerelease_cmp(a: &str, b: &str) -> std::cmp::Ordering {

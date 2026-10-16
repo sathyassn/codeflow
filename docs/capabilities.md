@@ -149,10 +149,10 @@ adrs: [ADR-0011, ADR-0019]
 Update also installs missing in-tier manifest entries. It never clobbers and
 never silently skips.
 
-| Version case | What update does |
+| Version case | What update and a repeated init do |
 |---|---|
 | Binary older than the project's `scaffold_version` | Refuses before writing project files, preserving the pin, release digests and managed files; names both versions and the pinned version to install |
-| Unparsable pin | Refuses before writing project files and shows the value |
+| Unparsable pin | Refuses before writing project files and names the value, file and correction to make |
 | Binary released before this safeguard | Can still lower the pin |
 
 | Policy scalar | On update |

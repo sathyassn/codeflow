@@ -904,6 +904,58 @@ fn tree_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+fn init_tier_upgrade_refuses_an_older_binary_without_writing_any_file() {
+    isolate_git();
+    for (force, has_repo) in [(false, true), (true, true), (false, false)] {
+        let (_p, root) = project_dir();
+        let (_a1, assets_v1) = fixture_assets(false);
+        scaffold::init(&assets_v1, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+        let state_path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml");
+        std::fs::write(&state_path, format!("{state}\n[scaffold_sha256]\nversion = \"2.0.0\"\nx86_64-unknown-linux-gnu = \"{}\"\n", "a".repeat(64))).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let mut options = opts(Some(Tier::Standard), "1.9.0");
+        options.force = force;
+        if !has_repo {
+            std::fs::remove_dir_all(root.join(".git")).unwrap();
+        }
+        let before = tree_bytes(&root);
+        let result = scaffold::init(&assets_v2, &root, &options);
+        assert_eq!(
+            tree_bytes(&root),
+            before,
+            "init refusal must leave every byte intact"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("1.9.0"), "{message}");
+        assert!(message.contains("2.0.0"), "{message}");
+        assert!(message.contains("install the pinned version"), "{message}");
+    }
+}
+
+#[test]
+fn init_tier_upgrade_refuses_an_unparsable_pin_without_writing_any_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let (_a, assets) = fixture_assets(false);
+    scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    let path = root.join(".codeflow/project.toml");
+    let state = read(&root, ".codeflow/project.toml").replace(
+        "scaffold_version = \"2.0.0\"",
+        "scaffold_version = \"broken\"",
+    );
+    std::fs::write(path, state).unwrap();
+    let before = tree_bytes(&root);
+    let result = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.1.0"));
+    assert_eq!(tree_bytes(&root), before);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("\"broken\""), "{message}");
+    assert!(message.contains(".codeflow/project.toml"), "{message}");
+    assert!(message.contains("correct it and retry"), "{message}");
+    assert!(!message.contains("older"), "{message}");
+}
+
+#[test]
 fn update_refuses_an_older_binary_without_writing_any_file() {
     isolate_git();
     for force in [false, true] {
@@ -958,6 +1010,8 @@ fn update_refuses_an_unparsable_pin_without_writing_any_file() {
         let message = result.unwrap_err().to_string();
         assert!(message.contains(&format!("{pin:?}")), "{message}");
         assert!(message.contains("scaffold_version"), "{message}");
+        assert!(message.contains(".codeflow/project.toml"), "{message}");
+        assert!(message.contains("correct it and retry"), "{message}");
         assert!(!message.contains("older"), "{message}");
     }
 }

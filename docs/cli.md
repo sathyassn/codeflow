@@ -335,10 +335,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 
 ### Scaffold notes
 
-Before refreshing files, `codeflow update` refuses when the running binary
-is older than `scaffold_version` in `.codeflow/project.toml`. It names both
-versions and asks you to install the pinned version. An unparsable pin also
-refuses with its value. Neither refusal changes project files, even with
+Before writing files, `codeflow update` and `codeflow init` on an initialized
+project refuse when the binary is older than `scaffold_version` in
+`.codeflow/project.toml`. The refusal names both versions and asks you to install
+the pinned version. An unparsable pin also refuses with its value, file and
+correction to make. Neither refusal changes project files, even with
 `--force` or `--diff`. Binaries released before this safeguard can still
 lower the pin.
 
