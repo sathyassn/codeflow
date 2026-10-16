@@ -416,21 +416,7 @@ fn redaction_command_and_pre_push_accept_the_record_only_journey() {
         .path()
         .join(format!("codeflow{}", std::env::consts::EXE_SUFFIX));
     std::fs::copy(env!("CARGO_BIN_EXE_codeflow"), &binary).unwrap();
-    let installed = || {
-        let template = super::codeflow();
-        let mut cmd = std::process::Command::new(&binary);
-        for (key, value) in template.get_envs() {
-            match value {
-                Some(value) => {
-                    cmd.env(key, value);
-                }
-                None => {
-                    cmd.env_remove(key);
-                }
-            }
-        }
-        cmd
-    };
+    let installed = || super::codeflow_at(&binary);
     let (dir, old, source) = redaction_fixture(false);
     let replacement = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(replacement.path(), old.replace("customer-name", "customer")).unwrap();

@@ -30,7 +30,11 @@ fn isolated_home() -> &'static Path {
 }
 
 fn codeflow() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    codeflow_at(Path::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+fn codeflow_at(binary: &Path) -> Command {
+    let mut cmd = Command::new(binary);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
