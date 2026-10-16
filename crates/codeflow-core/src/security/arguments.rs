@@ -148,6 +148,10 @@ pub(crate) fn evaluate(
                     for word in outward::literal_words(&value.render()) {
                         reaches.extend(opaque_line_word(&word, PRINTF));
                     }
+                    // A glob is judged whole, by what its pattern can name.
+                    for word in value.glob_words() {
+                        reaches.extend(opaque_line_word(&word, PRINTF));
+                    }
                 }
                 composed::Composed::Unresolved(construct) => {
                     reaches.push(Reach::Enforcement(format!(

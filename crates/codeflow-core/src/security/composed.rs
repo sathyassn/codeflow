@@ -61,8 +61,10 @@
 //! a path; only `printf` and `echo` by path are read, in their external
 //! form. A word that joins a substitution's output with text the line
 //! spells is a composition and is judged; a glob argument stands for
-//! outside names, and since zsh does not run a command whose glob matches
-//! nothing, that command's output is judged but not claimed. Code from
+//! outside names and is judged by its pattern, whole, as a glob argument
+//! to any program is, so a glob an output builtin writes refuses when it
+//! can match a protected path; since zsh does not run a command whose
+//! glob matches nothing, that command's output is judged but not claimed. Code from
 //! outside the line (`source`, `eval` of
 //! outside text) is that residual too: what it may change keeps its value
 //! for judging, but an output built from such a value is not claimed exact.
@@ -90,6 +92,9 @@ pub enum Piece {
     Text(String),
     /// The text of a variable the line never assigns.
     Open,
+    /// The names an unquoted glob matches: unknown text, judged by its
+    /// pattern.
+    Glob(String),
 }
 
 /// A value the line composes: literal text and unknown outside text.
@@ -127,6 +132,7 @@ impl Value {
                         self.0.push(Piece::Open);
                     }
                 }
+                Piece::Glob(pattern) => self.0.push(Piece::Glob(pattern.clone())),
             }
         }
     }
@@ -144,24 +150,72 @@ impl Value {
         for piece in &self.0 {
             match piece {
                 Piece::Text(text) => out.push_str(text),
-                Piece::Open => return None,
+                Piece::Open | Piece::Glob(_) => return None,
             }
         }
         Some(out)
     }
 
     /// The text the guard judges: an unknown piece is written `$`, which
-    /// the trailing-component rule reads as a part filled in at run time.
+    /// the trailing-component rule reads as a part filled in at run time;
+    /// a glob is written as its pattern, which that rule matches against
+    /// the protected paths, as it does a glob argument.
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
         for piece in &self.0 {
             match piece {
-                Piece::Text(text) => out.push_str(text),
+                Piece::Text(text) | Piece::Glob(text) => out.push_str(text),
                 Piece::Open => out.push('$'),
             }
         }
         out
+    }
+
+    /// Each glob in the value as the whole word it sits in, with the text
+    /// around it up to a blank, quote or shell operator: the pattern the
+    /// guard judges as it judges a glob argument.
+    #[must_use]
+    pub fn glob_words(&self) -> Vec<String> {
+        let breaks = |c: char| c.is_ascii_whitespace() || "'\"`(){};,|&<>".contains(c);
+        let mut words = Vec::new();
+        for (at, piece) in self.0.iter().enumerate() {
+            let Piece::Glob(pattern) = piece else {
+                continue;
+            };
+            let mut left = String::new();
+            for before in self.0[..at].iter().rev() {
+                let text = match before {
+                    Piece::Text(t) | Piece::Glob(t) => t.clone(),
+                    Piece::Open => "$".to_string(),
+                };
+                let kept: String = text.chars().rev().take_while(|c| !breaks(*c)).collect();
+                let whole = kept.chars().count() == text.chars().count();
+                left = kept.chars().rev().collect::<String>() + &left;
+                if !whole {
+                    break;
+                }
+            }
+            let mut right = String::new();
+            for after in &self.0[at + 1..] {
+                let text = match after {
+                    Piece::Text(t) | Piece::Glob(t) => t.clone(),
+                    Piece::Open => "$".to_string(),
+                };
+                let kept: String = text.chars().take_while(|c| !breaks(*c)).collect();
+                let whole = kept.chars().count() == text.chars().count();
+                right.push_str(&kept);
+                if !whole {
+                    break;
+                }
+            }
+            for word in format!("{left}{pattern}{right}").split(breaks) {
+                if !word.is_empty() && !words.iter().any(|w| w == word) {
+                    words.push(word.to_string());
+                }
+            }
+        }
+        words
     }
 
     /// Whether `text` is one the value can stand for: each unknown piece
@@ -174,7 +228,7 @@ impl Value {
                 Some((Piece::Text(head), rest)) => text
                     .strip_prefix(head.as_str())
                     .is_some_and(|tail| at(rest, tail)),
-                Some((Piece::Open, rest)) => text
+                Some((Piece::Open | Piece::Glob(_), rest)) => text
                     .char_indices()
                     .map(|(i, _)| i)
                     .chain(std::iter::once(text.len()))
@@ -189,13 +243,15 @@ impl Value {
     }
 
     fn has_open(&self) -> bool {
-        self.0.contains(&Piece::Open)
+        self.0
+            .iter()
+            .any(|piece| matches!(piece, Piece::Open | Piece::Glob(_)))
     }
 
     fn any_text(&self, test: impl Fn(char) -> bool) -> bool {
         self.0.iter().any(|piece| match piece {
             Piece::Text(chunk) => chunk.chars().any(&test),
-            Piece::Open => false,
+            Piece::Open | Piece::Glob(_) => false,
         })
     }
 }
@@ -1030,28 +1086,20 @@ fn arith_unary(tokens: &[Arith], at: &mut usize) -> Option<i64> {
     }
 }
 
-/// Unquoted `for`-list text: each glob construct stands for the names it
-/// matches, text from outside the line.
+/// Unquoted text holding a glob: it stands for the names it matches,
+/// outside text, and is judged by its pattern. Text without a glob
+/// construct stays text.
 fn push_glob(value: &mut Value, text: &str) {
     let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    let mut run = String::new();
-    while let Some(&c) = chars.get(i) {
-        i += 1;
-        let close = (c == '[')
-            .then(|| chars[i..].iter().position(|d| *d == ']'))
-            .flatten();
-        if c == '*' || c == '?' || close.is_some() {
-            value.push_text(&std::mem::take(&mut run));
-            value.append(&Value::open());
-            if let Some(close) = close {
-                i += close + 1;
-            }
-        } else {
-            run.push(c);
-        }
+    let globs = chars
+        .iter()
+        .enumerate()
+        .any(|(at, c)| *c == '*' || *c == '?' || (*c == '[' && chars[at + 1..].contains(&']')));
+    if globs {
+        value.0.push(Piece::Glob(text.to_string()));
+    } else {
+        value.push_text(text);
     }
-    value.push_text(&run);
 }
 
 fn push_lit(parts: &mut Vec<Part>, c: char, quoted: bool) {
@@ -3598,9 +3646,11 @@ impl Run<'_> {
         };
         // A glob that matches nothing stops zsh before the command runs:
         // the value is judged, but what reaches stdout is not claimed.
-        let exact = !self.approx.get() && self.inexact == 0 && !self.glob_arg;
+        if self.glob_arg {
+            self.approx.set(true);
+        }
+        let exact = !self.approx.get() && self.inexact == 0;
         self.record(match &value {
-            Composed::Resolved(_) if self.glob_arg => Ok(Value::open()),
             Composed::Resolved(v) => Ok(v.clone()),
             Composed::Unresolved(reason) => Err(*reason),
         });
@@ -4172,9 +4222,18 @@ fn word_has_unquoted_param(tok: &Tok) -> bool {
 }
 
 fn join(fields: &[Value], sep: &str, newline: bool) -> Value {
+    // A field of unknown text alone may expand to nothing, or to several
+    // words: it takes the separators around it.
+    let unknown = |field: &Value| {
+        !field.0.is_empty()
+            && field
+                .0
+                .iter()
+                .all(|p| matches!(p, Piece::Open | Piece::Glob(_)))
+    };
     let mut out = Value::default();
     for (at, field) in fields.iter().enumerate() {
-        if at > 0 {
+        if at > 0 && !unknown(field) && !unknown(&fields[at - 1]) {
             out.push_text(sep);
         }
         out.append(field);

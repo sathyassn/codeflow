@@ -1536,6 +1536,11 @@ mod tests {
                 // text, never its spelled arguments, so a fixed absolute
                 // argument no longer hides the path the shell builds.
                 "python3 -c \"open('$(/bin/cat /tmp/dir.txt)/.claude/settings.json','w')\"",
+                // Round 13: a glob an output builtin writes is judged by
+                // its pattern, directly and through a substitution.
+                "echo .cl?ude/settings.js?n | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+                "echo .cla* | python3 -c 'import sys; open(sys.stdin.read().strip()+\"/settings.json\",\"w\")'",
+                "python3 -c \"open('$(echo .[c]laude)'+'/settings.json','w')\"",
             ],
             false,
         );
@@ -1558,6 +1563,10 @@ mod tests {
                 "source venv/bin/activate && echo ok && python3 src/app.py",
                 "echo \"Done $(date)\"; python3 src/app.py",
                 "while read f; do python3 lint.py \"$f\"; done < files.txt",
+                // Ordinary globs an output builtin writes.
+                "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
+                "echo *.txt; python3 src/app.py",
+                "python3 lint.py \"$(echo src/*.py)\"",
             ],
         );
     }

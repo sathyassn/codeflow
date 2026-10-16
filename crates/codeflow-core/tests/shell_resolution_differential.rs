@@ -714,6 +714,12 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"arr=(* x); printf '%s173302\n' "${arr[1]}""#,
     ),
     ("path program", "U", r#"echo "$(/bin/pwd)"/* 173302"#),
+    ("path program", "U", r"echo .cla* 173302"),
+    (
+        "path program",
+        "U",
+        r#"printf '%s\n' "$(echo .cla*)"173302"#,
+    ),
     // Globs, braces and tildes.
     ("expansion", "U", r"printf '%s\n' 1733{02,} 173302"),
     ("expansion", "U", r"printf '%s\n' ~ 173302"),
