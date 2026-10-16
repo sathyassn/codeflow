@@ -58,7 +58,9 @@
 //! exactly through a construct the guard models, and the value equals what
 //! bash and zsh produce, checked against both shells by a differential
 //! test; any other construct feeding it is unresolved, named by its
-//! family, never read by its spelling. A word is also
+//! family, never read by its spelling. The output of a program other than
+//! the modelled builtins is outside text, as an unassigned variable is. A
+//! word is also
 //! judged with one surrounding `{}` pair removed, as Tcl runs it. Code in a
 //! file the guard does not read stays past the guard; the OS sandbox is the
 //! backstop. The guard stops at shell grammar: a path the interpreter's own
@@ -635,6 +637,13 @@ fn call_reaches(
             continue;
         }
         for value in argument_values(word) {
+            // A descriptor names what the line's shell has open when the
+            // interpreter runs, never a file the hook can inspect: reading
+            // it would read the hook's own descriptor. The redirection that
+            // opens it is the writer rule's to judge.
+            if outward::descriptor_program(value) {
+                continue;
+            }
             // One finding per value is enough; its strongest is kept on
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.

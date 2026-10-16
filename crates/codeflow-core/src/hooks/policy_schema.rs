@@ -293,6 +293,9 @@ pub const SCHEMA: [KeySpec; 68] = [
                 read exactly through a construct the guard models and the \
                 result equals what bash and zsh produce; any other \
                 construct feeding it is unresolved, named by its family. \
+                The output of a program other than the modelled builtins is \
+                outside text, judged by its trailing components as an \
+                unassigned variable is. \
                 A word is also read \
                 without one surrounding `{}` pair; every known word is then judged by its trailing \
                 components at the same levels: it never fails open on grammar \

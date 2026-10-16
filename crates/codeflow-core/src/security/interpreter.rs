@@ -1530,6 +1530,8 @@ mod tests {
                 "printf '.cla\\u0075de/settings.json' | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
                 // Indirect expansion.
                 "n=p; p=.claude/settings.json; python3 -c \"open('${!n}','w')\"",
+                // A command substitution over a modelled builtin.
+                "python3 -c \"open('$(printf .cla)ude/settings.json','w')\"",
             ],
             false,
         );
@@ -1547,6 +1549,11 @@ mod tests {
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+                // Program output is outside text (operator boundary, 2026-10-15).
+                "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
+                "source venv/bin/activate && echo ok && python3 src/app.py",
+                "echo \"Done $(date)\"; python3 src/app.py",
+                "while read f; do python3 lint.py \"$f\"; done < files.txt",
             ],
         );
     }

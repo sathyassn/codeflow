@@ -163,17 +163,17 @@ const CASES: &[(&str, &str, &str)] = &[
     ),
     (
         "assignment from expansion",
-        "U",
+        "R",
         r#"a=$(printf 1733); printf '%s02\n' "$a""#,
     ),
     (
         "assignment from expansion",
-        "U",
+        "R",
         r#"a=`printf 1733`; printf '%s02\n' "$a""#,
     ),
     (
         "assignment from expansion",
-        "U",
+        "R",
         r#"a=1733$((0)); printf '%s\n' "$a"2"#,
     ),
     (
@@ -431,11 +431,19 @@ const CASES: &[(&str, &str, &str)] = &[
         "R",
         r#"bash <<< 'a=1733; printf "%s02\n" "$a"'"#,
     ),
-    ("scope", "U", r"source /dev/null; printf '%s\n' 173302"),
-    ("scope", "U", r"alias x=y; printf '%s\n' 173302"),
+    ("scope", "R", r"source /dev/null; printf '%s\n' 173302"),
+    ("scope", "R", r"alias x=y; printf '%s\n' 173302"),
     ("scope", "U", r"printf() { echo 173302; }; printf '%s\n' x"),
-    ("scope", "U", r#"eval "$CF_PART"; printf '%s\n' 173302"#),
-    ("scope", "U", r"shopt -s xpg_echo; echo '\x31' 173302"),
+    (
+        "scope",
+        "R",
+        r#"eval "$CF_PART" 2>/dev/null; printf '%s\n' 173302"#,
+    ),
+    (
+        "scope",
+        "Rz",
+        r"shopt -s xpg_echo 2>/dev/null; echo '\x31' 173302",
+    ),
     // Escape edges both shells agree on, and ones they do not.
     ("escape edge", "R", r"printf '%s\n' $'\e'173302"),
     ("escape edge", "R", r"printf '\e%s\n' 173302"),
@@ -458,7 +466,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ("outside value", "R", r#"printf '%s\n' "${CF_PART%33}"3302"#),
     ("outside value", "R", r#"echo "$CF_PART"02"#),
     ("outside value", "U", r#"printf '%s\n' "${a:-173302}""#),
-    ("outside value", "U", r#"printf '%s\n' "$(printf 1733)"02"#),
+    ("outside value", "R", r#"printf '%s\n' "$(printf 1733)"02"#),
     // Arrays at their edges.
     (
         "array edge",
@@ -529,7 +537,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ),
     (
         "scope edge",
-        "U",
+        "R",
         r#"f() { :; }; a=173302; printf '%s\n' "$a""#,
     ),
     // zsh-only readings.
@@ -546,6 +554,115 @@ const CASES: &[(&str, &str, &str)] = &[
         "declaration",
         "R",
         r#"a=173302; readonly a; b=$a; printf '%s\n' "$b""#,
+    ),
+    // Command substitution over modelled builtins, and program output as
+    // outside text.
+    ("substitution", "R", r#"printf '%s\n' "$(printf 1733)02""#),
+    ("substitution", "R", r#"printf '%s\n' "$(echo 1733)"02"#),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(printf '1733\n\n')"02"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"a=$(echo -n 17; printf 33); printf '%s02\n' "$a""#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(printf 17; true)"3302"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(a=1733; printf "$a")"02"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"a=1733; printf '%s\n' "$(printf "$a")"02"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(printf 1733 >/dev/null)"173302"#,
+    ),
+    ("substitution", "R", r"printf '%s\n' $(printf 1733)02"),
+    ("substitution", "R", r"echo $(printf 1733)02"),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(printf 1733 | cat)"02"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(cat /dev/null)"173302"#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"printf '%s\n' "$(bash -c 'printf 1733')"02"#,
+    ),
+    ("substitution", "R", r#"echo "Done $(date)" 173302"#),
+    ("substitution", "R", r"echo $(date) 173302"),
+    ("substitution", "Rz", r"printf '%s\n' $(date) 173302"),
+    (
+        "substitution",
+        "R",
+        r#"x=$(date); printf '%s173302\n' "$x""#,
+    ),
+    (
+        "substitution",
+        "R",
+        r#"ROOT=$(cd / && pwd); printf '%s\n' "$ROOT"173302"#,
+    ),
+    (
+        "substitution",
+        "U",
+        r#"printf '%s\n' "$(printf '%q' 'a b')"173302"#,
+    ),
+    (
+        "substitution",
+        "U",
+        r#"printf '%s\n' "$(printf '\u0031')"73302"#,
+    ),
+    // Arithmetic.
+    ("arithmetic", "R", r#"printf '%s\n' "$((1733))"02"#),
+    ("arithmetic", "R", r#"printf '%s\n' "$((1700+33))"02"#),
+    ("arithmetic", "R", r#"printf '%s\n' "$((2*(3+4)))"173302"#),
+    ("arithmetic", "R", r#"printf '%s\n' "$((-7/2))"173302"#),
+    ("arithmetic", "R", r#"a=1733; printf '%s\n' "$((a))"02"#),
+    ("arithmetic", "R", r#"printf '%s\n' "$((CF_PART))"02"#),
+    ("arithmetic", "U", r#"printf '%s\n' "$((010))"173302"#),
+    ("arithmetic", "U", r#"printf '%s\n' "$((2**3))"173302"#),
+    // What read takes, and assignments in front of a command.
+    (
+        "read",
+        "R",
+        r#"read a < /dev/null; printf '%s173302\n' "$a""#,
+    ),
+    (
+        "read",
+        "R",
+        r"while read f; do :; done < /dev/null; printf '%s\n' 173302",
+    ),
+    (
+        "read",
+        "U",
+        r#"printf x | read a; printf '%s173302\n' "$a""#,
+    ),
+    (
+        "assignment",
+        "R",
+        r#"a=1733; a=x true; printf '%s02\n' "$a""#,
+    ),
+    (
+        "assignment",
+        "R",
+        r#"IFS=: read a < /dev/null; arr=(1733 02); printf '%s173302\n' "${arr[*]}""#,
     ),
     // Globs, braces and tildes.
     ("expansion", "U", r"printf '%s\n' 1733{02,} 173302"),

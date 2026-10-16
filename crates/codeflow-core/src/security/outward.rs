@@ -260,7 +260,7 @@ pub(crate) fn quoted_texts(line: &str) -> Vec<String> {
 
 /// Whether a program operand is a descriptor the guard does not read:
 /// `/dev/stdin`, `/dev/fd/N` or `/proc/self/fd/N`.
-fn descriptor_program(operand: &str) -> bool {
+pub(crate) fn descriptor_program(operand: &str) -> bool {
     operand == "/dev/stdin"
         || ["/dev/fd/", "/proc/self/fd/"].iter().any(|prefix| {
             operand

@@ -34,7 +34,9 @@
 //!   and a heredoc or here-string a shell reads, with the variables it
 //!   inherits and the positional parameters its parent passes;
 //! - loops: a `for` variable takes each value its list gives, the line read
-//!   once per value; a glob in the list stands for outside names.
+//!   once per value; a glob in the list stands for outside names;
+//! - command substitution whose body runs only the modelled builtins, its
+//!   trailing newlines removed, and arithmetic over decimal integers.
 //!
 //! Unresolved, by family: an assignment whose value holds a construct
 //! outside that list, a declaration builtin with options, an array element
@@ -43,14 +45,21 @@
 //! `-e` and `-E`, a `printf` conversion other than those above, an escape
 //! outside the decoded set (`\u`, `\U`, `\c`, a byte above 0x7f or NUL), an
 //! indirect expansion that does not name an assigned value, a parameter
-//! operator on an assigned name, command substitution and arithmetic inside
-//! a value, and every expansion after the line runs code that may redefine
-//! the shell (`source`, `eval` of unresolved text, `alias`, option changes,
-//! a function named like a builtin).
+//! operator on an assigned name, `read` from text the line spells, and a
+//! construct whose meaning a change the line makes leaves unknowable: an
+//! output builtin a function, alias or disable redefines, `echo` after an
+//! option that changes its decoding, an expansion after one that changes
+//! word expansion.
 //!
-//! A variable the line never assigns, a positional parameter the line does
-//! not set and a name a glob or `find` supplies are read as unknown text
-//! (`$` in the judged value), as before: they come from outside the line.
+//! Text from outside the line is unknown text (`$` in the judged value),
+//! judged by the trailing-component rule as before: a variable the line
+//! never assigns, a positional parameter it does not set, a name a glob or
+//! `find` supplies, and the output of any program other than the modelled
+//! builtins (operator boundary, 2026-10-15: the guard models shell grammar;
+//! text a program produces at run time is the stated residual), with what
+//! `read` takes from it. Code from outside the line (`source`, `eval` of
+//! outside text) is that residual too: what it may change keeps its value
+//! for judging, but an output built from such a value is not claimed exact.
 //! The differential test `tests/shell_resolution_differential.rs` runs the
 //! host's bash and zsh over a corpus and checks each resolved value byte
 //! for byte.
@@ -221,7 +230,13 @@ pub fn final_output(line: &str, dialect: Dialect) -> Option<Composed> {
         .into_iter()
         .rev()
         .find(|event| event.output && event.depth == 0)
-        .map(|event| event.value)
+        .map(|event| {
+            if event.exact {
+                event.value
+            } else {
+                Composed::Unresolved("a value code from outside the line may have changed")
+            }
+        })
 }
 
 /// Every composed text on the line in one dialect.
@@ -233,17 +248,7 @@ pub fn texts_in(line: &str, dialect: Dialect) -> Vec<Composed> {
 
 fn events(line: &str, dialect: Dialect) -> Vec<Event> {
     let mut events = Vec::new();
-    let mut run = Run {
-        dialect,
-        state: State::default(),
-        events: &mut events,
-        depth: 0,
-        nesting: 0,
-        uncertain: 0,
-        frames: vec![Frame::default()],
-        log: Vec::new(),
-        loops: Vec::new(),
-    };
+    let mut run = new_run(dialect, State::default(), &mut events, 0, 0);
     run.run_text(line);
     events
 }
@@ -268,9 +273,11 @@ enum Part {
         zsh_tail: bool,
     },
     /// Command or process substitution, with its body.
-    Subst(String),
+    Subst { body: String, quoted: bool },
+    /// Process substitution: a path the shell makes up.
+    ProcSubst(String),
     /// `$((...))` or `$[...]`, with its text.
-    Arith(String),
+    Arith { body: String, quoted: bool },
     /// A construct read differently by the shells, never resolved.
     Unmodelled(&'static str),
 }
@@ -404,7 +411,7 @@ impl Lexer {
                     self.at += 2;
                     let body = self.balanced(1)?;
                     let mut word = Word::default();
-                    word.parts.push(Part::Subst(body));
+                    word.parts.push(Part::ProcSubst(body));
                     self.toks.push(Tok::Word(word));
                 }
                 '<' | '>' => self.redirection()?,
@@ -605,6 +612,11 @@ impl Lexer {
                     if let Some(tok) = self.array(&parts)? {
                         return Ok(tok);
                     }
+                    // `name()`: a function definition, the name one word.
+                    let named = matches!(parts.as_slice(), [Part::Lit { text, quoted: false }] if is_identifier(text) || text.chars().all(|c| c.is_ascii_alphanumeric() || "_-.:".contains(c)));
+                    if named && self.peek_at(1) == Some(')') {
+                        break;
+                    }
                     return Err("a parenthesis inside a word");
                 }
                 '\'' => {
@@ -646,7 +658,10 @@ impl Lexer {
                 '`' => {
                     self.at += 1;
                     let body = self.backtick(false)?;
-                    parts.push(Part::Subst(body));
+                    parts.push(Part::Subst {
+                        body,
+                        quoted: false,
+                    });
                 }
                 _ => {
                     self.at += 1;
@@ -748,7 +763,7 @@ impl Lexer {
                 '`' => {
                     self.at += 1;
                     let body = self.backtick(true)?;
-                    parts.push(Part::Subst(body));
+                    parts.push(Part::Subst { body, quoted: true });
                 }
                 _ => {
                     self.at += 1;
@@ -806,9 +821,9 @@ impl Lexer {
                 self.at += 1;
                 let body = self.balanced(1)?;
                 if body.starts_with('(') {
-                    parts.push(Part::Arith(body));
+                    parts.push(Part::Arith { body, quoted });
                 } else {
-                    parts.push(Part::Subst(body));
+                    parts.push(Part::Subst { body, quoted });
                 }
             }
             Some('[') => {
@@ -823,7 +838,7 @@ impl Lexer {
                     self.at += 1;
                 }
                 self.at += 1;
-                parts.push(Part::Arith(body));
+                parts.push(Part::Arith { body, quoted });
             }
             Some('\'') if !quoted => {
                 self.at += 1;
@@ -945,6 +960,67 @@ impl Lexer {
             body.push(c);
         }
         Err(GRAMMAR)
+    }
+}
+
+/// One token of shell arithmetic.
+#[derive(Clone, Copy)]
+enum Arith {
+    Num(i64),
+    Op(char),
+}
+
+/// `expr := term (('+'|'-') term)*`, with checked integer arithmetic.
+fn arith_expr(tokens: &[Arith], at: &mut usize) -> Option<i64> {
+    let mut value = arith_term(tokens, at)?;
+    while let Some(Arith::Op(op @ ('+' | '-'))) = tokens.get(*at) {
+        *at += 1;
+        let rhs = arith_term(tokens, at)?;
+        value = if *op == '+' {
+            value.checked_add(rhs)?
+        } else {
+            value.checked_sub(rhs)?
+        };
+    }
+    Some(value)
+}
+
+/// `term := unary (('*'|'/'|'%') unary)*`; division truncates, as C does.
+fn arith_term(tokens: &[Arith], at: &mut usize) -> Option<i64> {
+    let mut value = arith_unary(tokens, at)?;
+    while let Some(Arith::Op(op @ ('*' | '/' | '%'))) = tokens.get(*at) {
+        *at += 1;
+        let rhs = arith_unary(tokens, at)?;
+        value = match op {
+            '*' => value.checked_mul(rhs)?,
+            '/' => value.checked_div(rhs)?,
+            _ => value.checked_rem(rhs)?,
+        };
+    }
+    Some(value)
+}
+
+fn arith_unary(tokens: &[Arith], at: &mut usize) -> Option<i64> {
+    match tokens.get(*at)? {
+        Arith::Op('-') => {
+            *at += 1;
+            arith_unary(tokens, at)?.checked_neg()
+        }
+        Arith::Op('+') => {
+            *at += 1;
+            arith_unary(tokens, at)
+        }
+        Arith::Op('(') => {
+            *at += 1;
+            let value = arith_expr(tokens, at)?;
+            matches!(tokens.get(*at), Some(Arith::Op(')'))).then(|| *at += 1)?;
+            Some(value)
+        }
+        Arith::Num(n) => {
+            *at += 1;
+            Some(*n)
+        }
+        Arith::Op(_) => None,
     }
 }
 
@@ -1118,10 +1194,23 @@ enum Positional {
 #[derive(Clone, Debug, Default)]
 struct State {
     vars: BTreeMap<String, Var>,
+    /// Names an assignment cannot change: `readonly`, or set by a trap
+    /// that may run again.
     readonly: BTreeSet<String>,
     exported: BTreeSet<String>,
-    functions: BTreeSet<String>,
-    /// The line ran code that may change any modelled construct.
+    /// Functions the line defines, with the names their bodies may set.
+    functions: BTreeMap<String, Vec<String>>,
+    /// Aliases the line defines: their text, or `None` when unreadable.
+    aliases: BTreeMap<String, Option<String>>,
+    /// Values outside code (a sourced file, `eval` of outside text) may
+    /// have replaced: still judged, but not claimed exact.
+    changed: BTreeSet<String>,
+    /// An option change that makes `echo` and `print` decoding unknown.
+    opt_echo: Option<&'static str>,
+    /// An option change that makes word expansion unknown.
+    opt_words: Option<&'static str>,
+    /// A name reference whose target the guard cannot read: any variable
+    /// may change.
     world: Option<&'static str>,
     positional: Positional,
 }
@@ -1129,6 +1218,9 @@ struct State {
 struct Event {
     depth: usize,
     output: bool,
+    /// Whether an output's value is claimed exact: not when a value the
+    /// line may have changed fed it.
+    exact: bool,
     value: Composed,
 }
 
@@ -1154,8 +1246,11 @@ struct Frame {
     /// The parent's list context when the frame opened.
     parent_first: bool,
     parent_uncertain: bool,
+    /// The body of a function definition.
+    function_body: bool,
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent facts about the command being read
 struct Run<'e> {
     dialect: Dialect,
     state: State,
@@ -1170,6 +1265,53 @@ struct Run<'e> {
     log: Vec<String>,
     /// The open loops: the `for` variable of each.
     loops: Vec<Option<String>>,
+    /// What a command substitution's body writes, when this run reads one.
+    capture: Option<Vec<Result<Value, &'static str>>>,
+    /// Whether the command being read writes to the captured stdout.
+    stdout_here: bool,
+    /// Whether the command being read wrote a modelled output.
+    wrote: bool,
+    /// Whether the command being read was silent, or a special builtin.
+    silent: bool,
+    special: bool,
+    /// Whether a value the line may have changed fed the command.
+    approx: std::cell::Cell<bool>,
+    /// Open alias expansions, whose outputs are not claimed exact.
+    inexact: usize,
+    /// The line feeds text it spells to a program's stdin.
+    stdin_literal: bool,
+    /// A function definition whose `{` body opens next.
+    body_pending: bool,
+}
+
+/// A run over `events` in `state`.
+fn new_run(
+    dialect: Dialect,
+    state: State,
+    events: &mut Vec<Event>,
+    depth: usize,
+    nesting: usize,
+) -> Run<'_> {
+    Run {
+        dialect,
+        state,
+        events,
+        depth,
+        nesting,
+        uncertain: 0,
+        frames: vec![Frame::default()],
+        log: Vec::new(),
+        loops: Vec::new(),
+        capture: None,
+        stdout_here: true,
+        wrote: false,
+        silent: false,
+        special: false,
+        approx: std::cell::Cell::new(false),
+        inexact: 0,
+        stdin_literal: false,
+        body_pending: false,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1187,6 +1329,9 @@ enum Ctx {
 struct Eval {
     fields: Result<Vec<Value>, &'static str>,
     online: bool,
+    /// bash splits an unquoted outside value into fields the guard cannot
+    /// count.
+    loose: bool,
 }
 
 /// One parameter's value.
@@ -1301,26 +1446,32 @@ const READERS: &[&str] = &[
     "zregexparse",
     "pcre_match",
 ];
-/// Builtins after which the guard cannot say what any modelled construct
-/// does.
-const REDEFINERS: &[&str] = &[
-    "source",
-    ".",
-    "alias",
+/// Builtins that write nothing to stdout.
+const SILENT: &[&str] = &[
+    ":",
+    "true",
+    "false",
+    "test",
+    "[",
+    "wait",
+    "exit",
+    "return",
+    "break",
+    "continue",
+    "unset",
+    "shift",
+    "let",
     "unalias",
-    "shopt",
-    "setopt",
-    "unsetopt",
-    "emulate",
-    "enable",
-    "disable",
-    "trap",
-    "autoload",
-    "functions",
-    "zmodload",
-    "bindkey",
-    "hash",
-    "fc",
+    "read",
+    "mapfile",
+    "readarray",
+    "getopts",
+];
+/// POSIX special builtins and declarations: an assignment in front of one
+/// may outlast it.
+const SPECIAL_BUILTINS: &[&str] = &[
+    ":", ".", "source", "eval", "exec", "export", "readonly", "set", "shift", "trap", "unset",
+    "return", "exit", "break", "continue", "times", "declare", "typeset", "local",
 ];
 const DECLARERS: &[&str] = &[
     "export", "declare", "typeset", "local", "readonly", "integer", "float", "private",
@@ -1459,47 +1610,59 @@ fn value_parts(word: &Word) -> Word {
     }
 }
 
-/// A superset of the names a token run may assign.
-fn assigned_names(toks: &[Tok]) -> Vec<String> {
+/// A superset of the names a token run may assign, each marked when only
+/// `read` and its kin assign it, from what they read.
+fn assigned_names(toks: &[Tok]) -> Vec<(String, bool)> {
+    const OUTSIDE: &[&str] = &["read", "mapfile", "readarray", "getopts"];
     let mut names = Vec::new();
-    let mut taking = false;
+    let mut taking: Option<bool> = None;
     let mut loop_var = false;
     for tok in toks {
         match tok {
-            Tok::Op(_) => taking = false,
-            Tok::Array { name, .. } => names.push(name.clone()),
-            Tok::ArithCmd(text) => names.extend(arith_assigned(text)),
+            Tok::Op(_) => taking = None,
+            Tok::Array { name, .. } => names.push((name.clone(), false)),
+            Tok::ArithCmd(text) => {
+                names.extend(arith_assigned(text).into_iter().map(|n| (n, false)));
+            }
             Tok::Redir { .. } => {}
             Tok::Word(word) => {
                 if let Some(Shape::Scalar { name, .. } | Shape::Element(name)) =
                     assignment_shape(word)
                 {
-                    names.push(name);
+                    names.push((name, false));
                 }
                 for part in &word.parts {
                     match part {
-                        Part::Arith(text) => names.extend(arith_assigned(text)),
+                        Part::Arith { body: text, .. } => {
+                            names.extend(arith_assigned(text).into_iter().map(|n| (n, false)));
+                        }
                         Part::Param {
                             body, braced: true, ..
-                        } => names.extend(default_assigned(body)),
+                        } => names.extend(default_assigned(body).map(|n| (n, false))),
                         _ => {}
                     }
                 }
                 let text = word.plain().unwrap_or_default();
-                if (loop_var || taking) && is_identifier(text) {
-                    names.push(text.to_string());
+                if is_identifier(text) {
+                    if loop_var {
+                        names.push((text.to_string(), false));
+                    } else if let Some(outside) = taking {
+                        names.push((text.to_string(), outside));
+                    }
                 }
                 loop_var = matches!(text, "for" | "select" | "foreach");
-                if READERS.contains(&text)
+                if OUTSIDE.contains(&text) {
+                    taking = Some(true);
+                } else if READERS.contains(&text)
                     || DECLARERS.contains(&text)
                     || matches!(text, "unset" | "let" | "printf" | "print")
                 {
-                    taking = true;
+                    taking = Some(false);
                 }
             }
         }
     }
-    names.extend(["REPLY", "reply", "OPTARG", "OPTIND", "MAPFILE"].map(String::from));
+    names.extend(["REPLY", "reply", "OPTARG", "OPTIND", "MAPFILE"].map(|n| (n.to_string(), true)));
     names
 }
 
@@ -1517,6 +1680,7 @@ impl Run<'_> {
         self.events.push(Event {
             depth: self.depth + usize::from(self.uncertain > 0),
             output,
+            exact: true,
             value,
         });
     }
@@ -1539,18 +1703,16 @@ impl Run<'_> {
         match lex(text) {
             Ok((toks, _)) if self.dialect == Dialect::Sh && toks.iter().any(bash_only) => {
                 // A POSIX shell refuses the whole text: nothing in it runs.
-                self.emit(
-                    true,
-                    Composed::Unresolved("bash or zsh grammar in a POSIX shell"),
-                );
+                self.output(Err("bash or zsh grammar in a POSIX shell"));
             }
             Ok((toks, heredocs)) => self.run_tokens(&toks, &heredocs),
             Err(reason) => {
                 if ["$", "`", "printf", "echo", "print", "<<", "eval"]
                     .iter()
                     .any(|t| text.contains(t))
+                    || self.capture.is_some()
                 {
-                    self.emit(true, Composed::Unresolved(reason));
+                    self.output(Err(reason));
                 }
             }
         }
@@ -1567,17 +1729,8 @@ impl Run<'_> {
             );
             return;
         }
-        let mut run = Run {
-            dialect,
-            state,
-            events: &mut *self.events,
-            depth: self.depth + usize::from(captured),
-            nesting: self.nesting + 1,
-            uncertain: 0,
-            frames: vec![Frame::default()],
-            log: Vec::new(),
-            loops: Vec::new(),
-        };
+        let depth = self.depth + usize::from(captured);
+        let mut run = new_run(dialect, state, &mut *self.events, depth, self.nesting + 1);
         run.run_text(text);
     }
 
@@ -1615,6 +1768,7 @@ impl Run<'_> {
         } else {
             var
         };
+        self.state.changed.remove(name);
         self.state.vars.insert(name.to_string(), var);
         self.log.push(name.to_string());
         let list = &mut self.frame().list;
@@ -1643,6 +1797,7 @@ impl Run<'_> {
 
     #[allow(clippy::too_many_lines)] // one walk over the command grammar
     fn run_tokens(&mut self, toks: &[Tok], heredocs: &[Heredoc]) {
+        self.stdin_literal |= feeds_literal_stdin(toks);
         let mut i = 0;
         let mut prev_op = "\n";
         let mut case_patterns: Vec<bool> = Vec::new();
@@ -1739,7 +1894,8 @@ impl Run<'_> {
             if let ([Tok::Word(name)], Some(Tok::Op("(")), Some(Tok::Op(")"))) =
                 (cmd, toks.get(i), toks.get(i + 1))
             {
-                self.define_function(name.plain().unwrap_or_default(), &toks[i..]);
+                let braced = toks.get(i + 2).and_then(tok_plain) == Some("{");
+                self.define_function(name.plain().unwrap_or_default(), &toks[i..], braced);
                 i += 2;
                 continue;
             }
@@ -1749,7 +1905,9 @@ impl Run<'_> {
             };
             let piped = matches!(prev_op, "|" | "|&") || matches!(term, "|" | "|&");
             self.frame().list.commands += 1;
-            self.each_choice(cmd, heredocs, &mut |run| run.simple(cmd, heredocs, piped));
+            self.each_choice(cmd, heredocs, &mut |run| {
+                run.simple(cmd, heredocs, piped, term);
+            });
             prev_op = "";
         }
         self.end_list(false);
@@ -1818,13 +1976,14 @@ impl Run<'_> {
                     .and_then(tok_plain)
                     .unwrap_or_default()
                     .to_string();
-                self.define_function(&name, &toks[i..]);
                 let mut j = i + 2;
                 if matches!(toks.get(j), Some(Tok::Op("(")))
                     && matches!(toks.get(j + 1), Some(Tok::Op(")")))
                 {
                     j += 2;
                 }
+                let braced = toks.get(j).and_then(tok_plain) == Some("{");
+                self.define_function(&name, &toks[i..], braced);
                 Some(j)
             }
             "repeat" | "foreach" | "coproc" => {
@@ -1853,10 +2012,12 @@ impl Run<'_> {
                     .is_some_and(|f| f.list.after_or || f.parent_uncertain);
                 self.frame().list.commands += 1;
                 let log_at = self.log.len();
+                let function_body = std::mem::take(&mut self.body_pending);
                 self.frames.push(Frame {
                     log_at,
                     parent_first,
                     parent_uncertain,
+                    function_body,
                     ..Frame::default()
                 });
                 Some(i + 1)
@@ -1866,6 +2027,9 @@ impl Run<'_> {
                 {
                     self.end_list(false);
                     if let Some(frame) = self.frames.pop() {
+                        if frame.function_body {
+                            self.uncertain = self.uncertain.saturating_sub(1);
+                        }
                         let names: Vec<String> =
                             self.log[frame.log_at.min(self.log.len())..].to_vec();
                         let piped = matches!(toks.get(i + 1), Some(Tok::Op("|" | "|&" | "&")));
@@ -2060,27 +2224,54 @@ impl Run<'_> {
 
     fn enter_compound(&mut self, rest: &[Tok]) {
         let names = assigned_names(rest);
-        self.mark_unknown(names, "a variable a compound command may set");
+        self.mark_assigned(&names, "a variable a compound command may set");
         self.uncertain = self.uncertain.saturating_add(1);
     }
 
-    fn define_function(&mut self, name: &str, rest: &[Tok]) {
+    /// A function definition: its body is read now, as code that may run
+    /// later; a call marks what it may set unknown. `braced` when a `{`
+    /// body follows, which ends at its `}`.
+    fn define_function(&mut self, name: &str, rest: &[Tok], braced: bool) {
         let names = assigned_names(rest);
-        self.mark_unknown(names, "a variable a function may set");
-        self.uncertain = usize::MAX;
-        self.state.functions.insert(name.to_string());
-        let shadows = name.is_empty()
-            || [
-                "printf", "echo", "print", "eval", "command", "builtin", "read", "set", "cd",
-            ]
-            .contains(&name)
-            || DECLARERS.contains(&name)
-            || REDEFINERS.contains(&name)
-            || SHELLS.iter().any(|(shell, _)| *shell == name);
-        if shadows {
-            self.state.world = Some("a function that redefines a command the guard models");
+        self.mark_assigned(&names, "a variable a function may set");
+        self.state.functions.insert(
+            name.to_string(),
+            names.into_iter().map(|(n, _)| n).collect(),
+        );
+        if braced {
+            self.uncertain = self.uncertain.saturating_add(1);
+            self.body_pending = true;
+        } else {
+            self.uncertain = usize::MAX;
         }
     }
+}
+
+/// Whether the line gives a program's stdin text it spells: a heredoc, a
+/// here-string, or a pipe from `printf`, `echo` or `print`.
+fn feeds_literal_stdin(toks: &[Tok]) -> bool {
+    let mut command_start = 0;
+    for (at, tok) in toks.iter().enumerate() {
+        match tok {
+            Tok::Redir { op, heredoc, .. } if op.ends_with("<<<") || heredoc.is_some() => {
+                return true;
+            }
+            Tok::Op(op) => {
+                if matches!(*op, "|" | "|&") {
+                    let first = toks[command_start..at].iter().find_map(|t| match t {
+                        Tok::Word(word) if assignment_shape(word).is_none() => word.plain(),
+                        _ => None,
+                    });
+                    if first.is_some_and(|w| matches!(basename(w), "printf" | "echo" | "print")) {
+                        return true;
+                    }
+                }
+                command_start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Grammar a POSIX `sh` does not parse.
@@ -2128,11 +2319,11 @@ impl Run<'_> {
     fn word_side_effects(&mut self, word: &Word) {
         for part in &word.parts {
             match part {
-                Part::Subst(body) => {
+                Part::Subst { body, .. } | Part::ProcSubst(body) => {
                     let state = self.state.clone();
                     self.nested(body, state, self.dialect, true);
                 }
-                Part::Arith(text) => {
+                Part::Arith { body: text, .. } => {
                     let names = arith_assigned(text);
                     self.mark_unknown(names, "an arithmetic assignment");
                 }
@@ -2151,6 +2342,7 @@ impl Run<'_> {
     #[allow(clippy::too_many_lines)] // one pass over a word's parts
     fn word(&mut self, word: &Word, ctx: Ctx) -> Eval {
         let mut online = false;
+        let mut loose = false;
         let mut err: Option<&'static str> = None;
         let mut fields: Vec<Value> = Vec::new();
         let mut cur = Value::default();
@@ -2190,9 +2382,17 @@ impl Run<'_> {
         } else if first_unquoted == Some('~') || unquoted.contains(":~") {
             err = Some("a tilde expansion");
         }
+        if let Some(reason) = self.state.opt_words {
+            // An option may change quoting, globbing or any expansion.
+            let expands = word.parts.iter().any(|p| !matches!(p, Part::Lit { .. }));
+            if expands || word.raw.contains("''") || unquoted.contains(['^', '#', '~']) {
+                err = err.or(Some(reason));
+            }
+        }
         let single = word.parts.len() == 1;
         for part in &word.parts {
-            match part {
+            // One value and whether it is quoted, for the parts that give one.
+            let (value, quoted) = match part {
                 Part::Lit { text, quoted } => {
                     if ctx == Ctx::List && !*quoted {
                         push_glob(&mut cur, text);
@@ -2200,6 +2400,7 @@ impl Run<'_> {
                         cur.push_text(text);
                     }
                     started |= *quoted || !text.is_empty();
+                    continue;
                 }
                 Part::Ansi(raw) => {
                     online |= raw.contains('\\');
@@ -2216,6 +2417,23 @@ impl Run<'_> {
                             err = err.or(Some(reason));
                         }
                     }
+                    continue;
+                }
+                Part::Unmodelled(reason) => {
+                    online = true;
+                    err = err.or(Some(reason));
+                    continue;
+                }
+                Part::Subst { body, quoted } => {
+                    let (value, on) = self.capture(body);
+                    online |= on;
+                    (value, *quoted)
+                }
+                Part::ProcSubst(_) => (Ok(Value::open()), false),
+                Part::Arith { body, quoted } => {
+                    let (value, on) = self.arith_value(body);
+                    online |= on;
+                    (value, *quoted)
                 }
                 Part::Param {
                     body,
@@ -2226,16 +2444,8 @@ impl Run<'_> {
                     let eval = self.param(body, *braced, *quoted, *zsh_tail);
                     online |= eval.online;
                     match eval.value {
-                        Err(reason) => err = err.or(Some(reason)),
-                        Ok(Param::One(value)) => {
-                            if *quoted || !fields_ctx {
-                                started |= *quoted;
-                            } else if let Err(reason) = self.unquoted_ok(&value) {
-                                err = err.or(Some(reason));
-                            }
-                            started |= !value.is_empty();
-                            cur.append(&value);
-                        }
+                        Err(reason) => (Err(reason), *quoted),
+                        Ok(Param::One(value)) => (Ok(value), *quoted),
                         Ok(Param::Many(values)) => {
                             if !fields_ctx {
                                 err = err.or(Some("an array expansion in an assignment"));
@@ -2245,17 +2455,15 @@ impl Run<'_> {
                                     continue;
                                 }
                                 for value in values {
-                                    if let Err(reason) = self.unquoted_ok(&value) {
-                                        err = err.or(Some(reason));
+                                    match self.unquoted_ok(&value) {
+                                        Ok(split) => loose |= split,
+                                        Err(reason) => err = err.or(Some(reason)),
                                     }
                                     if !value.is_empty() {
                                         fields.push(value);
                                     }
                                 }
-                                return Eval {
-                                    fields: err.map_or(Ok(fields), Err),
-                                    online,
-                                };
+                                return self.finish(err, fields, online, loose, ctx);
                             } else if values.is_empty() {
                                 if !single {
                                     err = err.or(Some("an empty array inside a word"));
@@ -2270,40 +2478,63 @@ impl Run<'_> {
                                 }
                                 started = true;
                             }
+                            continue;
                         }
                     }
                 }
-                Part::Subst(_) => err = err.or(Some("a command substitution")),
-                Part::Arith(_) => err = err.or(Some("an arithmetic expansion")),
-                Part::Unmodelled(reason) => {
-                    online = true;
-                    err = err.or(Some(reason));
+            };
+            match value {
+                Err(reason) => err = err.or(Some(reason)),
+                Ok(value) => {
+                    if quoted || !fields_ctx {
+                        started |= quoted;
+                    } else {
+                        match self.unquoted_ok(&value) {
+                            Ok(split) => loose |= split,
+                            Err(reason) => err = err.or(Some(reason)),
+                        }
+                    }
+                    started |= !value.is_empty();
+                    cur.append(&value);
                 }
             }
         }
-        if let Some(reason) = err {
-            return Eval {
-                fields: Err(reason),
-                online,
-            };
-        }
-        if !fields_ctx || started || !cur.is_empty() {
+        if err.is_none() && (!fields_ctx || started || !cur.is_empty()) {
             fields.push(cur);
         }
+        self.finish(err, fields, online, loose, ctx)
+    }
+
+    /// A word's result. In a `for` list a field bash may split stands for
+    /// outside names as a whole.
+    #[allow(clippy::unused_self)] // a method beside `word`
+    fn finish(
+        &self,
+        err: Option<&'static str>,
+        fields: Vec<Value>,
+        online: bool,
+        loose: bool,
+        ctx: Ctx,
+    ) -> Eval {
+        let fields = match err {
+            Some(reason) => Err(reason),
+            None if loose && ctx == Ctx::List => Ok(vec![Value::open()]),
+            None => Ok(fields),
+        };
         Eval {
-            fields: Ok(fields),
+            fields,
             online,
+            loose,
         }
     }
 
     /// Whether an unquoted expansion's text reaches the command as written:
-    /// bash splits it on IFS and globs it, zsh does neither.
-    fn unquoted_ok(&self, value: &Value) -> Result<(), &'static str> {
+    /// bash splits it on IFS and globs it, zsh does neither. `Ok(true)`
+    /// when bash may split text from outside the line into fields the
+    /// guard cannot count.
+    fn unquoted_ok(&self, value: &Value) -> Result<bool, &'static str> {
         if self.dialect == Dialect::Zsh {
-            return Ok(());
-        }
-        if value.has_open() {
-            return Err("an unquoted expansion the shell may split");
+            return Ok(false);
         }
         let Some(ifs) = self.ifs() else {
             return Err("an IFS the guard cannot resolve");
@@ -2314,7 +2545,139 @@ impl Run<'_> {
         if value.any_text(|c| matches!(c, '*' | '?' | '[')) {
             return Err("an unquoted expansion the shell globs");
         }
-        Ok(())
+        Ok(value.has_open())
+    }
+
+    /// The text a command substitution's body writes, trailing newlines
+    /// removed: what the modelled builtins write, and outside text for any
+    /// other program. Also whether it holds text the line spells.
+    fn capture(&self, body: &str) -> (Result<Value, &'static str>, bool) {
+        if self.nesting >= 8 {
+            return (Err("nesting deeper than the guard reads"), true);
+        }
+        let mut scratch = Vec::new();
+        let mut run = new_run(
+            self.dialect,
+            self.state.clone(),
+            &mut scratch,
+            self.depth + 1,
+            self.nesting + 1,
+        );
+        run.capture = Some(Vec::new());
+        run.run_text(body);
+        let records = run.capture.take().unwrap_or_default();
+        if run.approx.get() {
+            self.approx.set(true);
+        }
+        let mut value = Value::default();
+        for record in records {
+            match record {
+                Ok(piece) => value.append(&piece),
+                Err(reason) => return (Err(reason), true),
+            }
+        }
+        while let Some(Piece::Text(text)) = value.0.last_mut() {
+            while text.ends_with('\n') {
+                text.pop();
+            }
+            if text.is_empty() {
+                value.0.pop();
+            } else {
+                break;
+            }
+        }
+        let online = value.0.iter().any(|piece| matches!(piece, Piece::Text(_)));
+        (Ok(value), online)
+    }
+
+    /// `$((...))` and `$[...]`: integer arithmetic over decimal literals
+    /// and values the line assigns; a name the line never assigns makes
+    /// it outside text. Also whether it reads a value the line assigns.
+    fn arith_value(&self, text: &str) -> (Result<Value, &'static str>, bool) {
+        const ARITH: &str = "an arithmetic expansion the guard cannot resolve";
+        let chars: Vec<char> = text.chars().collect();
+        let mut tokens: Vec<Arith> = Vec::new();
+        let mut outside = false;
+        let mut online = false;
+        let mut i = 0;
+        while let Some(&c) = chars.get(i) {
+            if matches!(c, ' ' | '\t' | '\n') {
+                i += 1;
+            } else if c.is_ascii_digit() {
+                let start = i;
+                while chars.get(i).is_some_and(char::is_ascii_digit) {
+                    i += 1;
+                }
+                let digits: String = chars[start..i].iter().collect();
+                // A leading zero is octal in bash and decimal in zsh.
+                match digits.parse::<i64>() {
+                    Ok(n) if digits.len() == 1 || !digits.starts_with('0') => {
+                        tokens.push(Arith::Num(n));
+                    }
+                    _ => return (Err(ARITH), online),
+                }
+            } else if c == '$' || c.is_ascii_alphabetic() || c == '_' {
+                i += usize::from(c == '$');
+                let braced = chars.get(i) == Some(&'{');
+                i += usize::from(braced);
+                let start = i;
+                while chars
+                    .get(i)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    i += 1;
+                }
+                let name: String = chars[start..i].iter().collect();
+                if braced {
+                    if chars.get(i) != Some(&'}') {
+                        return (Err(ARITH), online);
+                    }
+                    i += 1;
+                }
+                if !is_identifier(&name) {
+                    return (Err(ARITH), online);
+                }
+                match self.state.vars.get(&name) {
+                    None => {
+                        outside = true;
+                        tokens.push(Arith::Num(0));
+                    }
+                    Some(Var::Scalar(value)) => {
+                        online = true;
+                        if self.state.changed.contains(&name) {
+                            self.approx.set(true);
+                        }
+                        let number = value.exact().and_then(|t| {
+                            let digits = t.strip_prefix('-').unwrap_or(&t);
+                            let plain = !digits.is_empty()
+                                && digits.chars().all(|c| c.is_ascii_digit())
+                                && (digits.len() == 1 || !digits.starts_with('0'));
+                            plain.then(|| t.parse::<i64>().ok()).flatten()
+                        });
+                        match number {
+                            Some(n) => tokens.push(Arith::Num(n)),
+                            None => return (Err(ARITH), true),
+                        }
+                    }
+                    Some(_) => return (Err(ARITH), true),
+                }
+            } else if "+-*/%()".contains(c) {
+                if c == '*' && chars.get(i + 1) == Some(&'*') {
+                    return (Err(ARITH), online);
+                }
+                tokens.push(Arith::Op(c));
+                i += 1;
+            } else {
+                return (Err(ARITH), online);
+            }
+        }
+        let mut at = 0;
+        let result = arith_expr(&tokens, &mut at).filter(|_| at == tokens.len());
+        match result {
+            _ if outside => (Ok(Value::open()), online),
+            Some(n) => (Ok(Value::text(&n.to_string())), online),
+            None => (Err(ARITH), online),
+        }
     }
 
     fn param(&mut self, body: &str, braced: bool, quoted: bool, zsh_tail: bool) -> ParamEval {
@@ -2361,6 +2724,13 @@ impl Run<'_> {
         self.operator(body)
     }
 
+    /// Note a read of a value outside code may have replaced.
+    fn note_changed(&self, name: &str) {
+        if self.state.changed.contains(name) {
+            self.approx.set(true);
+        }
+    }
+
     fn plain(&self, name: &str, quoted: bool) -> ParamEval {
         if name == "_" {
             return ParamEval::err("the last-argument parameter", true);
@@ -2375,6 +2745,7 @@ impl Run<'_> {
         if let Some(reason) = self.state.world {
             return ParamEval::err(reason, true);
         }
+        self.note_changed(name);
         match var {
             Var::Scalar(value) => ParamEval::one(value.clone(), true),
             Var::Array(values) => match self.dialect {
@@ -2431,6 +2802,7 @@ impl Run<'_> {
             if let Some(reason) = self.state.world {
                 return ParamEval::err(reason, true);
             }
+            self.note_changed(name);
         }
         match (var, subscript) {
             (None, "*") if quoted => ParamEval::open(),
@@ -2501,6 +2873,7 @@ impl Run<'_> {
         if let Some(reason) = self.state.world {
             return ParamEval::err(reason, true);
         }
+        self.note_changed(name);
         match self.state.vars.get(name) {
             Some(Var::Array(values)) => {
                 let mut joined = Value::default();
@@ -2534,6 +2907,8 @@ impl Run<'_> {
         let Some(target) = target.exact().filter(|t| is_identifier(t)) else {
             return ParamEval::err(INDIRECT, true);
         };
+        self.note_changed(rest);
+        self.note_changed(&target);
         match self.state.vars.get(&target) {
             Some(Var::Scalar(value)) => ParamEval::one(value.clone(), true),
             _ => ParamEval::err(INDIRECT, true),
@@ -2593,6 +2968,8 @@ impl Run<'_> {
 /// One argument of a command: its fields, or why they cannot be read.
 struct Arg {
     fields: Result<Vec<Value>, &'static str>,
+    /// bash may split it into fields the guard cannot count.
+    loose: bool,
 }
 
 impl Arg {
@@ -2616,7 +2993,8 @@ fn flatten(args: &[Arg]) -> Result<Vec<Value>, &'static str> {
 
 impl Run<'_> {
     #[allow(clippy::too_many_lines)] // the simple-command grammar, in order
-    fn simple(&mut self, cmd: &[Tok], heredocs: &[Heredoc], piped: bool) {
+    fn simple(&mut self, cmd: &[Tok], heredocs: &[Heredoc], piped: bool, term: &str) {
+        self.approx.set(false);
         let certain = self.certain(piped);
         let mut prefix: Vec<&Tok> = Vec::new();
         let mut operands: Vec<&Tok> = Vec::new();
@@ -2678,10 +3056,12 @@ impl Run<'_> {
                     self.emit_eval(&eval);
                     Arg {
                         fields: eval.fields,
+                        loose: eval.loose,
                     }
                 }
                 _ => Arg {
                     fields: Err("an array assignment as an argument"),
+                    loose: false,
                 },
             })
             .collect();
@@ -2718,10 +3098,96 @@ impl Run<'_> {
                 }
             }
         }
+        // What the command writes reaches a captured stdout unless a pipe,
+        // a background `&` or a redirection takes it.
+        let outer_here = self.stdout_here;
+        self.stdout_here = outer_here
+            && !matches!(term, "|" | "|&" | "&")
+            && !redirs.iter().any(|tok| stdout_redirect(tok));
+        self.wrote = false;
+        self.silent = standalone;
+        self.special = false;
         if !standalone {
             self.command(&operands, &args, &assigned, stdin_code.as_ref(), certain);
-            for (name, _) in &assigned {
-                self.set_unknown(name, "a variable set for one command");
+            // Assignments in front of a special builtin or a function may
+            // outlast it; in front of anything else they end with it.
+            if self.special {
+                for (name, _) in &assigned {
+                    self.set_unknown(name, "a variable set for one command");
+                }
+            }
+        }
+        if !self.wrote && !self.silent {
+            self.record(Ok(Value::open()));
+        }
+        self.stdout_here = outer_here;
+        if term == "&" && !self.silent {
+            self.record(Ok(Value::open()));
+        }
+    }
+
+    /// Add what a command writes to the captured stdout.
+    fn record(&mut self, value: Result<Value, &'static str>) {
+        if !self.stdout_here {
+            return;
+        }
+        let uncertain = self.uncertain > 0;
+        if let Some(capture) = &mut self.capture {
+            capture.push(match value {
+                // A command that may not run, or may run again.
+                Ok(_) if uncertain => Ok(Value::open()),
+                other => other,
+            });
+        }
+    }
+
+    /// Every value the line assigned may since have been replaced by code
+    /// from outside it.
+    fn changed_all(&mut self) {
+        let names: Vec<String> = self.state.vars.keys().cloned().collect();
+        self.state.changed.extend(names);
+    }
+
+    /// `name` takes text from outside the line, or text the line spells
+    /// (`from_line`), which the guard does not read.
+    fn outside(&mut self, name: &str, from_line: bool) {
+        if from_line {
+            self.set_unknown(name, "a variable read from text the line spells");
+            return;
+        }
+        match self.state.vars.get(name) {
+            None => {}
+            Some(Var::Scalar(value)) if value.pieces() == [Piece::Open] => {
+                self.state.vars.remove(name);
+            }
+            Some(_) => self.set_unknown(name, "a variable a read may replace"),
+        }
+    }
+
+    /// Names a construct may assign: outside text for what `read` and its
+    /// kin take, unknown for anything else.
+    fn mark_assigned(&mut self, names: &[(String, bool)], reason: &'static str) {
+        for (name, outside) in names {
+            let only_outside = *outside && !names.iter().any(|(n, o)| n == name && !o);
+            if only_outside {
+                self.outside(name, self.stdin_literal);
+            } else {
+                self.set_unknown(name, reason);
+            }
+        }
+    }
+
+    /// An option change: what it may make unknown.
+    fn options(&mut self, names: &[Option<String>]) {
+        for name in names {
+            let (echo, words) = name
+                .as_deref()
+                .map_or((true, true), |n| option_effect(self.dialect, n));
+            if echo {
+                self.state.opt_echo = Some("an option change that may change echo decoding");
+            }
+            if words {
+                self.state.opt_words = Some("an option change that may change word expansion");
             }
         }
     }
@@ -2809,11 +3275,16 @@ impl Run<'_> {
         stdin_code: Option<&Value>,
         certain: bool,
     ) {
+        if self.alias_call(operands) {
+            return;
+        }
         let mut at = 0;
+        let mut bypass = false;
         while let Some(word) = args.get(at).and_then(Arg::literal) {
             match word.as_str() {
                 "command" => {
                     at += 1;
+                    bypass = true;
                     match args.get(at).and_then(Arg::literal).as_deref() {
                         Some("-p") => at += 1,
                         Some("-v" | "-V") => return,
@@ -2823,6 +3294,7 @@ impl Run<'_> {
                 "builtin" if self.dialect == Dialect::Sh => return,
                 "builtin" => {
                     at += 1;
+                    bypass = true;
                     if args.get(at).and_then(Arg::literal).as_deref() == Some("--") {
                         at += 1;
                     }
@@ -2844,8 +3316,16 @@ impl Run<'_> {
         let operands = &operands[(at + 1).min(operands.len())..];
         let base = basename(&program).to_string();
         let builtin = !program.contains('/');
-        if builtin && self.state.functions.contains(&program) {
-            return;
+        if builtin && !bypass {
+            if let Some(names) = self.state.functions.get(&program).cloned() {
+                // A function the line defines, or a builtin it disables.
+                self.mark_unknown(names, "a variable a function may set");
+                self.special = true;
+                if matches!(program.as_str(), "printf" | "echo" | "print") {
+                    self.output(Err("a function that redefines a command the guard models"));
+                }
+                return;
+            }
         }
         if let Some((_, dialect)) = SHELLS.iter().find(|(shell, _)| *shell == base) {
             self.child_shell(*dialect, rest, prefix, stdin_code, false);
@@ -2855,27 +3335,21 @@ impl Run<'_> {
             self.external(&base, rest, prefix, stdin_code);
             return;
         }
+        self.special = SPECIAL_BUILTINS.contains(&program.as_str());
+        self.silent = SILENT.contains(&program.as_str())
+            || (!rest.is_empty()
+                && (DECLARERS.contains(&program.as_str())
+                    || matches!(program.as_str(), "set" | "shopt" | "trap" | "alias")));
         match program.as_str() {
             "printf" => self.printf(rest, certain),
             "echo" => {
-                let value = flatten(rest).and_then(|fields| self.echo(&fields, false));
+                let value = match self.state.opt_echo {
+                    Some(reason) => Err(reason),
+                    None => flatten(rest).and_then(|fields| self.echo(&fields, false)),
+                };
                 self.output(value);
             }
-            "print" if self.dialect == Dialect::Zsh => {
-                // `print -v NAME` assigns; any option outside `-r`, `-n`
-                // and `-l` may.
-                let unmodelled = rest.iter().map_while(Arg::literal).any(|word| {
-                    word.strip_prefix('-').is_some_and(|flags| {
-                        flags.chars().any(|c| !matches!(c, 'r' | 'n' | 'l' | '-'))
-                    })
-                });
-                if unmodelled {
-                    self.state.world = Some("a print option the guard does not model");
-                }
-                let value = flatten(rest).and_then(|fields| print_output(&fields));
-                self.output(value);
-            }
-            "print" => {}
+            "print" if self.dialect == Dialect::Zsh => self.print(rest),
             "eval" => self.eval(rest),
             "set" => self.set(rest),
             "shift" => {
@@ -2896,11 +3370,14 @@ impl Run<'_> {
                             self.set_unknown(&name, "a variable the line unsets");
                         }
                         Some(option) if option.starts_with('-') => {}
-                        _ => self.state.world = Some("an unset of a name the guard cannot read"),
+                        _ => self.changed_all(),
                     }
                 }
             }
             "cd" | "pushd" | "popd" | "chdir" => {
+                self.silent = program != "pushd"
+                    && program != "popd"
+                    && rest.first().and_then(Arg::literal).as_deref() != Some("-");
                 for name in ["PWD", "OLDPWD", "DIRSTACK", "dirstack"] {
                     self.set_unknown(name, "a directory variable the line changes");
                 }
@@ -2911,13 +3388,82 @@ impl Run<'_> {
                         let names = arith_assigned(&text);
                         self.mark_unknown(names, "an arithmetic assignment");
                     } else {
-                        self.state.world = Some("a let the guard cannot read");
+                        self.changed_all();
                     }
                 }
             }
             name if DECLARERS.contains(&name) => self.declare(name, operands, rest, certain),
-            name if REDEFINERS.contains(&name) => {
-                self.state.world = Some("a command that may redefine the shell");
+            // Code from outside the line: what it sets is judged as it was.
+            "source" | "." => self.changed_all(),
+            "alias" => {
+                for arg in rest {
+                    match arg.literal() {
+                        Some(word) => {
+                            if let Some((name, text)) = word.split_once('=') {
+                                self.state
+                                    .aliases
+                                    .insert(name.to_string(), Some(text.to_string()));
+                            }
+                        }
+                        None => self.changed_all(),
+                    }
+                }
+            }
+            "unalias" => {
+                for arg in rest {
+                    if let Some(name) = arg.literal() {
+                        self.state.aliases.remove(&name);
+                    }
+                }
+            }
+            "shopt" if self.dialect == Dialect::Bash => {
+                let names: Vec<Option<String>> = rest
+                    .iter()
+                    .map(Arg::literal)
+                    .filter(|w| !w.as_deref().is_some_and(|w| w.starts_with('-')))
+                    .collect();
+                self.options(&names);
+            }
+            "setopt" | "unsetopt" | "emulate" if self.dialect == Dialect::Zsh => {
+                self.silent = true;
+                let names: Vec<Option<String>> = if program == "emulate" {
+                    vec![None]
+                } else {
+                    rest.iter().map(Arg::literal).collect()
+                };
+                self.options(&names);
+            }
+            "enable" | "disable" => {
+                // A builtin turned off runs some other program.
+                self.silent = true;
+                for arg in rest {
+                    match arg.literal() {
+                        Some(name) if !name.starts_with('-') => {
+                            self.state.functions.insert(name, Vec::new());
+                        }
+                        Some(_) => {}
+                        None => {
+                            for name in ["printf", "echo", "print"] {
+                                self.state.functions.insert(name.to_string(), Vec::new());
+                            }
+                        }
+                    }
+                }
+            }
+            "trap" => self.trap(rest),
+            "read" | "mapfile" | "readarray" | "getopts" => {
+                self.silent = true;
+                let from_line = stdin_code.is_some() || self.stdin_literal;
+                for arg in rest {
+                    match arg.literal() {
+                        Some(name) if is_identifier(&name) => self.outside(&name, from_line),
+                        Some(_) => {}
+                        None => self.changed_all(),
+                    }
+                }
+                for name in ["REPLY", "reply", "OPTARG", "OPTIND", "MAPFILE"] {
+                    self.outside(name, from_line);
+                }
             }
             name if READERS.contains(&name) => {
                 for arg in rest {
@@ -2926,26 +3472,116 @@ impl Run<'_> {
                             self.set_unknown(&name, "a variable a builtin reads into");
                         }
                         Some(_) => {}
-                        None => {
-                            self.state.world =
-                                Some("a builtin that assigns a name the guard cannot read");
-                        }
+                        None => self.changed_all(),
                     }
-                }
-                for name in ["REPLY", "reply", "OPTARG", "OPTIND", "MAPFILE"] {
-                    self.set_unknown(name, "a variable a builtin reads into");
                 }
             }
             _ => {}
         }
     }
 
+    /// A command whose first word is an alias the line defines: its text,
+    /// read as the shell expands it, outputs not claimed exact.
+    fn alias_call(&mut self, operands: &[&Tok]) -> bool {
+        let Some(Tok::Word(first)) = operands.first() else {
+            return false;
+        };
+        let Some(text) = first
+            .plain()
+            .and_then(|n| self.state.aliases.get(n))
+            .cloned()
+        else {
+            return false;
+        };
+        self.special = true;
+        match text {
+            Some(text) => {
+                let rest: Vec<&str> = operands[1..]
+                    .iter()
+                    .filter_map(|tok| match tok {
+                        Tok::Word(word) => Some(word.raw.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                self.inexact += 1;
+                self.eval_text(&format!("{text} {}", rest.join(" ")));
+                self.inexact -= 1;
+                self.silent = true;
+            }
+            None => self.changed_all(),
+        }
+        true
+    }
+
+    /// zsh `print`; `-v NAME` assigns what it would write.
+    fn print(&mut self, rest: &[Arg]) {
+        let mut taking = false;
+        for arg in rest {
+            let Some(word) = arg.literal() else {
+                if taking {
+                    self.changed_all();
+                }
+                break;
+            };
+            if taking {
+                self.set_unknown(&word, "a variable print assigns");
+                break;
+            }
+            match word.strip_prefix('-') {
+                Some(flags) if !flags.is_empty() && flags != "-" => taking = flags.contains('v'),
+                _ => break,
+            }
+        }
+        let value = match self.state.opt_echo {
+            Some(reason) => Err(reason),
+            None => flatten(rest).and_then(|fields| print_output(&fields)),
+        };
+        self.output(value);
+    }
+
+    /// `trap CODE SIGNAL...`: the code may run at any later point, so what
+    /// it assigns stays unknown.
+    fn trap(&mut self, rest: &[Arg]) {
+        let Some(first) = rest.first() else {
+            return;
+        };
+        if rest.len() < 2 {
+            return;
+        }
+        match first.literal() {
+            Some(code) => {
+                let log_at = self.log.len();
+                self.uncertain = self.uncertain.saturating_add(1);
+                self.eval_text(&code);
+                self.uncertain = self.uncertain.saturating_sub(1);
+                let names: Vec<String> = self.log[log_at.min(self.log.len())..].to_vec();
+                for name in names {
+                    self.set_unknown(&name, "a variable a trap may set");
+                    self.state.readonly.insert(name);
+                }
+                self.silent = true;
+            }
+            None => self.changed_all(),
+        }
+    }
+
     fn output(&mut self, value: Result<Value, &'static str>) {
+        self.wrote = true;
         let value = match (self.state.world, value) {
             (Some(reason), _) | (None, Err(reason)) => Composed::Unresolved(reason),
             (None, Ok(value)) => Composed::Resolved(value),
         };
-        self.emit(true, value);
+        let exact = !self.approx.get() && self.inexact == 0;
+        self.record(match &value {
+            Composed::Resolved(v) => Ok(v.clone()),
+            Composed::Unresolved(reason) => Err(*reason),
+        });
+        self.events.push(Event {
+            depth: self.depth + usize::from(self.uncertain > 0),
+            output: true,
+            exact,
+            value,
+        });
     }
 
     fn printf(&mut self, rest: &[Arg], certain: bool) {
@@ -2956,7 +3592,7 @@ impl Run<'_> {
                 Some("-v") => {
                     target = rest.get(at + 1).and_then(Arg::literal);
                     if target.as_deref().is_none_or(|t| !is_identifier(t)) {
-                        self.state.world = Some("a printf -v the guard cannot read");
+                        self.changed_all();
                         self.output(Err("a printf -v the guard cannot read"));
                         return;
                     }
@@ -2973,7 +3609,11 @@ impl Run<'_> {
                 _ => break,
             }
         }
-        let value = flatten(&rest[at.min(rest.len())..]).and_then(|fields| {
+        let operands = &rest[at.min(rest.len())..];
+        let value = flatten(operands).and_then(|fields| {
+            if operands.iter().any(|arg| arg.loose) {
+                return Err("an unquoted expansion the shell may split");
+            }
             let (format, values) = fields.split_first().ok_or("a printf without a format")?;
             if format
                 .exact()
@@ -3052,17 +3692,25 @@ impl Run<'_> {
     }
 
     fn eval(&mut self, rest: &[Arg]) {
-        let text = flatten(rest).ok().and_then(|fields| {
-            fields
-                .iter()
-                .map(Value::exact)
-                .collect::<Option<Vec<_>>>()
-                .map(|words| words.join(" "))
-        });
-        let Some(text) = text else {
-            self.state.world = Some("an eval of text the guard cannot resolve");
-            return;
+        self.silent = true;
+        let fields = match flatten(rest) {
+            Ok(fields) => fields,
+            Err(reason) => {
+                // Code the line composes in a way the guard cannot read.
+                self.emit(false, Composed::Unresolved(reason));
+                self.changed_all();
+                return;
+            }
         };
+        match fields.iter().map(Value::exact).collect::<Option<Vec<_>>>() {
+            Some(words) => self.eval_text(&words.join(" ")),
+            // Code from outside the line, as `source` runs.
+            None => self.changed_all(),
+        }
+    }
+
+    /// Run `text` in this shell, as `eval` does: a group of its own.
+    fn eval_text(&mut self, text: &str) {
         if self.nesting >= 8 {
             self.emit(
                 false,
@@ -3070,7 +3718,6 @@ impl Run<'_> {
             );
             return;
         }
-        // The body runs in this shell: a group of its own.
         let parent_first = self.frames.last().is_some_and(|f| f.list.commands <= 1);
         let parent_uncertain = !self.certain(false);
         let log_at = self.log.len();
@@ -3083,10 +3730,16 @@ impl Run<'_> {
                 ..Frame::default()
             }],
         );
+        let (here, wrote, silent, special) =
+            (self.stdout_here, self.wrote, self.silent, self.special);
         self.nesting += 1;
-        self.run_text(&text);
+        self.run_text(text);
         self.nesting -= 1;
         self.frames = frames;
+        self.stdout_here = here;
+        self.wrote = wrote;
+        self.silent = silent;
+        self.special = special;
         let names: Vec<String> = self.log[log_at.min(self.log.len())..].to_vec();
         if parent_uncertain {
             self.mark_unknown(names, MAY_ASSIGN);
@@ -3101,7 +3754,6 @@ impl Run<'_> {
             "nounset",
             "xtrace",
             "verbose",
-            "pipefail",
             "noglob",
             "noclobber",
             "errtrace",
@@ -3113,7 +3765,8 @@ impl Run<'_> {
         let mut at = 0;
         while let Some(arg) = rest.get(at) {
             let Some(word) = arg.literal() else {
-                self.state.world = Some("a set the guard cannot read");
+                self.options(&[None]);
+                self.state.positional = Positional::Unknown("a positional parameter the line sets");
                 return;
             };
             if word == "--" || !(word.starts_with('-') || word.starts_with('+')) {
@@ -3128,22 +3781,20 @@ impl Run<'_> {
                 return;
             }
             if word == "-o" || word == "+o" {
-                if self.dialect == Dialect::Sh {
-                    // An option a POSIX shell lacks ends the whole line.
-                    self.state.world = Some("a shell option a POSIX shell may refuse");
-                    return;
-                }
                 let name = rest.get(at + 1).and_then(Arg::literal);
-                if !name.is_some_and(|n| OPTIONS.contains(&n.as_str())) {
-                    self.state.world = Some("a shell option the guard does not model");
-                    return;
+                if !name.as_deref().is_some_and(|n| OPTIONS.contains(&n)) {
+                    if self.dialect == Dialect::Sh {
+                        // An option a POSIX shell lacks ends the whole line.
+                        self.state.world = Some("a shell option a POSIX shell may refuse");
+                        return;
+                    }
+                    self.options(&[name]);
                 }
                 at += 2;
                 continue;
             }
             if word.len() < 2 || !word[1..].chars().all(|c| "euxvfCBhT".contains(c)) {
-                self.state.world = Some("a shell option the guard does not model");
-                return;
+                self.options(&[None]);
             }
             at += 1;
         }
@@ -3159,9 +3810,8 @@ impl Run<'_> {
         let foreign =
             self.dialect == Dialect::Sh && !matches!(name, "export" | "readonly" | "local");
         let option_text: String = rest[..options].iter().filter_map(Arg::literal).collect();
-        if option_text.contains(['n', 'T']) {
-            self.state.world = Some("a name reference or tied variable");
-        }
+        // A name reference or tied variable writes another name.
+        let reference = option_text.contains(['n', 'T']);
         for (at, tok) in operands.iter().enumerate() {
             if at < options {
                 continue;
@@ -3178,12 +3828,22 @@ impl Run<'_> {
                 _ => None,
             };
             let Some(operand_name) = operand_name else {
-                self.state.world = Some("a declaration of a name the guard cannot read");
+                self.changed_all();
                 continue;
             };
             let is_assignment = matches!(tok, Tok::Array { .. })
                 || matches!(tok, Tok::Word(w) if assignment_shape(w).is_some());
             if options > 0 || foreign {
+                if reference && is_assignment {
+                    let target = self.assignment(tok).and_then(|(_, var)| match var {
+                        Var::Scalar(value) => value.exact().filter(|t| is_identifier(t)),
+                        _ => None,
+                    });
+                    match target {
+                        Some(target) => self.set_unknown(&target, OPTIONED),
+                        None => self.state.world = Some("a name reference the guard cannot read"),
+                    }
+                }
                 self.set_unknown(&operand_name, OPTIONED);
                 continue;
             }
@@ -3205,7 +3865,7 @@ impl Run<'_> {
             let var = match var {
                 Var::Scalar(value)
                     if self.dialect != Dialect::Zsh
-                        && self.unquoted_ok(&value).is_err()
+                        && !matches!(self.unquoted_ok(&value), Ok(false))
                         && word_has_unquoted_param(tok) =>
                 {
                     Var::Unknown("a declaration operand the shell may split")
@@ -3351,9 +4011,11 @@ impl Run<'_> {
                 }
                 Some("{}") if base == "find" => args.push(Arg {
                     fields: Ok(vec![Value::open()]),
+                    loose: false,
                 }),
                 _ => args.push(Arg {
                     fields: arg.fields.clone(),
+                    loose: arg.loose,
                 }),
             }
         }
@@ -3384,6 +4046,90 @@ impl Run<'_> {
         });
         self.output(value);
     }
+}
+
+/// What changing option `name` may make unknown: `echo`/`print` decoding,
+/// and word expansion. Options that touch neither are listed; any other
+/// may touch both.
+fn option_effect(dialect: Dialect, name: &str) -> (bool, bool) {
+    const HARMLESS: &[&str] = &[
+        "errexit",
+        "errreturn",
+        "nounset",
+        "unset",
+        "xtrace",
+        "verbose",
+        "pipefail",
+        "nullglob",
+        "nomatch",
+        "globdots",
+        "dotglob",
+        "caseglob",
+        "nocaseglob",
+        "interactivecomments",
+        "localoptions",
+        "localtraps",
+        "clobber",
+        "noclobber",
+        "notify",
+        "monitor",
+        "hup",
+        "checkjobs",
+        "beep",
+        "promptsubst",
+        "promptpercent",
+        "autocd",
+        "correct",
+        "correctall",
+        "warncreateglobal",
+        "extglob",
+        "failglob",
+        "globstar",
+        "nocasematch",
+        "expandaliases",
+        "lastpipe",
+        "checkwinsize",
+        "histappend",
+        "cmdhist",
+        "inheriterrexit",
+        "sourcepath",
+        "cdspell",
+        "dirspell",
+        "huponexit",
+        "promptvars",
+        "errtrace",
+        "functrace",
+        "hashall",
+    ];
+    const ECHO: &[&str] = &["xpgecho", "bsdecho"];
+    let key: String = name
+        .chars()
+        .filter(|c| *c != '_')
+        .flat_map(char::to_lowercase)
+        .collect();
+    let known = |k: &str| HARMLESS.contains(&k) || ECHO.contains(&k);
+    // zsh reads `noNAME` as NAME turned off.
+    let key = match key.strip_prefix("no") {
+        Some(rest) if dialect == Dialect::Zsh && !known(&key) && known(rest) => rest.to_string(),
+        _ => key,
+    };
+    if HARMLESS.contains(&key.as_str()) {
+        (false, false)
+    } else if ECHO.contains(&key.as_str()) {
+        (true, false)
+    } else {
+        (true, true)
+    }
+}
+
+/// Whether a redirection sends the command's stdout somewhere else.
+fn stdout_redirect(tok: &Tok) -> bool {
+    let Tok::Redir { op, .. } = tok else {
+        return false;
+    };
+    let digits = op.chars().take_while(char::is_ascii_digit).count();
+    let (fd, rest) = op.split_at(digits);
+    (fd.is_empty() || fd == "1") && (rest.starts_with('>') || rest.starts_with("&>"))
 }
 
 fn word_has_unquoted_param(tok: &Tok) -> bool {
@@ -3598,7 +4344,7 @@ mod tests {
             "arr=(a b); arr[0]=x; printf '%s\\n' \"${arr[0]}\"",
             "echo -eE '\\x31'",
             "printf '\\u0031\\n'",
-            "a=$(true)x; printf '%s\\n' \"$a\"",
+            "a=$(printf x | tr x y); b=${a%y}; printf '%s\\n' \"$b\"",
             "false && a=1; printf '%s\\n' \"$a\"",
         ] {
             for d in [Dialect::Bash, Dialect::Zsh] {
