@@ -4,24 +4,28 @@ use std::process::Output;
 
 fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
     let mut command = f.command(env!("CARGO_BIN_EXE_codeflow"));
-    for key in [
-        "CI_MERGE_REQUEST_DIFF_BASE_SHA",
-        "CI_COMMIT_SHA",
-        "BITBUCKET_PR_DESTINATION_COMMIT",
-        "BITBUCKET_COMMIT",
-        "GITHUB_BASE_REF",
-        "CODEFLOW_DEFAULT_BRANCH",
-        "GITHUB_HEAD_REF",
-        "CI_MERGE_REQUEST_SOURCE_BRANCH_NAME",
-        "CI_COMMIT_REF_NAME",
-        "BITBUCKET_BRANCH",
-        "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
-        "BITBUCKET_PR_DESTINATION_BRANCH",
-    ] {
-        command.env_remove(key);
-    }
+    command
+        .env_remove("CI_MERGE_REQUEST_DIFF_BASE_SHA")
+        .env_remove("CI_COMMIT_SHA")
+        .env_remove("BITBUCKET_PR_DESTINATION_COMMIT")
+        .env_remove("BITBUCKET_COMMIT")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CODEFLOW_DEFAULT_BRANCH")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")
+        .env_remove("CI_COMMIT_REF_NAME")
+        .env_remove("BITBUCKET_BRANCH")
+        .env_remove("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+        .env_remove("BITBUCKET_PR_DESTINATION_BRANCH");
     if let Some((key, value)) = env {
-        command.env(key, value);
+        match key {
+            "GITHUB_HEAD_REF" => command.env("GITHUB_HEAD_REF", value),
+            "CI_COMMIT_REF_NAME" => command.env("CI_COMMIT_REF_NAME", value),
+            "CI_MERGE_REQUEST_DIFF_BASE_SHA" => {
+                command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", value)
+            }
+            _ => panic!("unsupported fixture CI variable: {key}"),
+        };
     }
     command.arg("ci").args(args).output().unwrap()
 }
