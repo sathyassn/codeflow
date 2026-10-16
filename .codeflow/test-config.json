@@ -50,7 +50,8 @@
       "scripts/coverage-test-times.json",
       "scripts/coverage-merge.py",
       "scripts/test_coverage_merge.py",
-      "scripts/fixtures/coverage-merge/**"
+      "scripts/fixtures/coverage-merge/**",
+      "scripts/test_gate_portal_windows.py"
     ]
   },
   "defaults": {
@@ -273,6 +274,23 @@
           "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
         }
       }
+    },
+    {
+      "name": "docs-portal-windows",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        },
+        "full": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        }
+      },
+      "requires": [
+        "docs-portal"
+      ],
+      "timeout_seconds": 300
     },
     {
       "name": "model-eval-kit",

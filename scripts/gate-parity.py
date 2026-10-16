@@ -847,6 +847,21 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
 REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
 
 
+def script_uses_codeflow_bin(command: str, cwd: Path) -> bool:
+    """Inspect literal script operands, including those inside launcher strings."""
+    # These two files inspect references and construct synthetic controls.
+    # The runtime Windows portal test has its own binary-dependent target.
+    structural = {ROOT / "scripts/gate-parity.py", ROOT / "scripts/test_gate_parity.py"}
+    scripts = re.findall(
+        r'''(?<![\w./-])([/\w.-]+\.(?:py|mjs|cjs|js|sh|bash|ps1))(?=$|[\s"';&|()<>])''',
+        command)
+    for name in scripts:
+        path = (cwd / name).resolve()
+        if path not in structural and path.is_file() and re.search(r"\bCODEFLOW_BIN\b", path.read_text()):
+            return True
+    return False
+
+
 def gate_binary_problems(cfg: dict) -> list[str]:
     problems = []
     targets = {t["name"]: t for t in cfg.get("targets", [])}
@@ -861,11 +876,12 @@ def gate_binary_problems(cfg: dict) -> list[str]:
     for target in targets.values():
         for mode, settings in target.get("modes", {}).items():
             cmd = norm(settings.get("command", ""))
-            # These script entry points consume CODEFLOW_BIN indirectly.
+            # The browser uses the coordinator's CF_PRESENT_CODEFLOW alias.
+            # CODEFLOW_BIN consumers are discovered from named scripts.
             consumer = (re.search(r"check:real-browser(\s|$)", cmd)
-                        or "evals/model-artifacts/test_eval_kit.py" in cmd
-                        or "$CODEFLOW_BIN" in cmd)
-            inputs = set(re.findall(r"target/(?:debug|release)/codeflow(?:\.exe)?", cmd))
+                        or re.search(r"\bCODEFLOW_BIN\b", cmd)
+                        or script_uses_codeflow_bin(cmd, ROOT / target.get("cwd", ".")))
+            inputs = set(re.findall(r'''target/(?:debug|release)/codeflow(?:\.exe)?(?=$|[\s"';&|()<>])''', cmd))
             if consumer:
                 inputs.add("target/debug/codeflow")
             dependencies = closure(target["name"]) - {target["name"]}

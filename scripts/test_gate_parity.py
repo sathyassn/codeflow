@@ -154,18 +154,6 @@ class NodePinControls(unittest.TestCase):
                 problems = self.problems(mutated(old_form))
                 self.assert_problem(problems, name, "double quotes")
 
-    @unittest.skipUnless(os.name == "nt", "requires cmd.exe and the Windows CI Node install")
-    def test_docs_portal_target_runs_through_cmd_on_windows(self):
-        # The target ends with `$CODEFLOW_BIN validate --portal`, which
-        # `codeflow test` supplies; run directly, the caller must.
-        if not os.environ.get("CODEFLOW_BIN"):
-            self.fail("set CODEFLOW_BIN to a built codeflow: the docs-portal target validates the portal with it")
-        command = full_command(CONFIG, PORTAL)
-        run = subprocess.run(f'cmd.exe /D /S /C "{command}"', cwd=ROOT,
-                             capture_output=True, text=True, check=False)
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn("with-node: Node 24.18.0", run.stderr)
-
     def test_each_node_target_runs_through_its_version_file(self):
         for name, pin in ((PORTAL, "docs-portal/.node-version"),
                           (PRESENT, "crates/codeflow-present/web/.node-version")):
@@ -274,6 +262,40 @@ class GateBinaryControls(unittest.TestCase):
         self.assertTrue(any("target/release/codeflow" in p for p in parity.gate_binary_problems(cfg)))
         target(cfg, "codeflow-bin")["outputs"] = ["target/release/codeflow"]
         self.assertEqual([p for p in parity.gate_binary_problems(cfg) if "model-eval-kit" in p], [])
+
+    def test_a_longer_binary_name_is_not_a_codeflow_input(self):
+        for name in ("codeflow-present", "codeflow.exe-wrapper", "codeflow_extra", "codeflow/helper"):
+            with self.subTest(name=name):
+                cfg = copy.deepcopy(CONFIG)
+                consumer = target(cfg, "model-eval-kit")
+                consumer["requires"] = []
+                consumer["modes"] = {"full": {"command": f"target/debug/{name} status"}}
+                self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_an_unlisted_script_using_the_binary_needs_a_producer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "scripts" / "new-consumer.py"
+            script.parent.mkdir()
+            script.write_text('import os\nprint(os.environ["CODEFLOW_BIN"])\n')
+            cfg = copy.deepcopy(CONFIG)
+            consumer = target(cfg, "model-eval-kit")
+            consumer["modes"] = {"full": {"command": f'python3 -B "{script}"'}}
+            consumer["requires"] = []
+            self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+            consumer["requires"] = ["codeflow-bin"]
+            self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_windows_portal_check_has_its_own_binary_prerequisite(self):
+        portal = target(CONFIG, "docs-portal-windows")
+        self.assertEqual(set(portal["modes"]), {"essential", "full"})
+        self.assertEqual(portal["requires"], ["docs-portal"])
+        self.assertTrue({"codeflow-bin", "docs-portal-deps"} <=
+                        parity.requires_closure(CONFIG, {"docs-portal-windows"}))
+        for settings in portal["modes"].values():
+            self.assertEqual(settings["command"], "python3 -B scripts/test_gate_portal_windows.py")
+        self.assertIn('python scripts/test_gate_parity.py && CODEFLOW_BIN=', WORKFLOW)
+        self.assertIn('python scripts/test_gate_portal_windows.py', WORKFLOW)
 
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
