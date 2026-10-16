@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use codeflow_core::hooks::repo;
-use codeflow_core::workgraph::{declared_work_target_at_revision, default_work_target};
+use codeflow_core::workgraph::{declared_work_target_at_revision, default_work_target, history};
 
 use super::{detect_range, detect_target, named_branch, resolve_base, rev_parse, CiArgs};
 
@@ -289,9 +289,7 @@ fn check_declared_base(
         .id();
     if normalize(target) == normalize(branch)
         || tip_id == head_id
-        || repository
-            .graph_descendant_of(tip_id, head_id)
-            .map_err(|e| e.to_string())?
+        || history::descendant_of(&repository, tip_id, head_id).map_err(|e| e.to_string())?
     {
         return Err(format!("declared target '{target}' is the head's branch or contains head {head}; pass --base <ref> for the intended range; nothing was verified"));
     }
