@@ -1,0 +1,11 @@
+id = "TSK-331"
+uid = "a15cdd25-73cf-4ccd-869e-c01c002de940"
+kind = "TSK"
+title = "Essential gate runs are serialized like full runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-16T13:34:53Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
