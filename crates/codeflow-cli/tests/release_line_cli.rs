@@ -1302,7 +1302,7 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     blocks(
         &hook,
         "a dangling destination",
-        &["cannot be decided", "default branch"],
+        &["ci.destination_unavailable", "default branch"],
     );
 
     // An empty destination: no default target to judge the release against.
@@ -1321,7 +1321,11 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     // makes release branches (Codex R145-R2-2): every name is refused.
     for name in [RELEASE, "feat/any", "feat/release-probe"] {
         let hook = fx.pre_push_to("/nonexistent/destination.git", name, &head, zero);
-        blocks(&hook, "an unreachable destination", &["did not answer"]);
+        blocks(
+            &hook,
+            "an unreachable destination",
+            &["ci.destination_unavailable", "`git ls-remote` failed"],
+        );
     }
 }
 
