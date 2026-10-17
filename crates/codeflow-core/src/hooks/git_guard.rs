@@ -11577,7 +11577,7 @@ mod tests {
             std::env::set_current_dir(dir.path()).unwrap();
             std::fs::remove_dir(dir.path()).unwrap();
             let policy = default_policy();
-            let result = evaluate_report("git status", &ctx(&policy, "feat/x"));
+            let result = super::evaluate_report("git status", &ctx(&policy, "feat/x"));
             assert!(result
                 .violations
                 .iter()
@@ -12068,6 +12068,23 @@ mod tests {
         assert!(!find_name_matches(Some(&literal), &odd));
         let star = vec![("*".to_string(), false)];
         assert!(find_name_matches(Some(&star), &odd));
+    }
+
+    // Injected contexts judge commands in an owned, unborn repository with no
+    // remote authority. Tests of actual refs and policy use evaluate_report_at
+    // with their own populated fixtures. Never consult this source checkout.
+    fn evaluate_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init_opts(
+            dir.path(),
+            git2::RepositoryInitOptions::new().initial_head("main"),
+        )
+        .unwrap();
+        evaluate_report_at(command, context, dir.path())
+    }
+
+    fn evaluate(command: &str, context: &GuardContext<'_>) -> Vec<Violation> {
+        evaluate_report(command, context).violations
     }
 
     fn ctx<'a>(policy: &'a GitPolicy, branch: &'a str) -> GuardContext<'a> {

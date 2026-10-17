@@ -2005,6 +2005,8 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
         "---\nid: TSK-001\ntitle: t\nstatus: complete\nwork_type: feat\n---\n",
     )
     .unwrap();
+    git(&root, &["config", "user.name", "Scaffold fixture"]);
+    git(&root, &["config", "user.email", "scaffold@example.test"]);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-q", "-m", "chore: add a record"]);
     let head = git(&root, &["rev-parse", "HEAD"]);

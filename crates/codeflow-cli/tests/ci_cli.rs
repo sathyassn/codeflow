@@ -85,9 +85,16 @@ fn git(dir: &Path, args: &[&str]) {
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .env("CODEFLOW_HOME", isolated_home())
         .output()
         .expect("git runs");
-    assert!(out.status.success(), "git {args:?}");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed with {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// A repo with a `main` base commit and a `feat/x` branch carrying one commit

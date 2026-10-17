@@ -6,7 +6,9 @@
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::Receiver;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
