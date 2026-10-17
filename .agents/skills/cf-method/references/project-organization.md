@@ -342,6 +342,58 @@ multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
 
+### Acceptance waivers and redactions
+
+A waiver is a criterion result in the fenced `yaml` acceptance block under
+`## Closeout`. Its format is `AC-N: waived | <full amendment commit SHA>`
+inside `acceptance.criteria`. The evidence after `|` is the commit alone,
+not a review URL or an explanation. The named commit must change that
+criterion and change planning records only. The completion must contain it.
+
+A task can name an amendment already on its integration target. Before its
+first landing, it can also name an amendment in its own task range. In that
+case the amendment changes only its record and is strictly after the range's
+merge-base and strictly before `reviewed` in commit ancestry. The amendment
+cannot be the reviewed commit or the completion commit. A reopened range
+cannot use that own-range allowance. An epic waiver names a planning
+amendment that its reviewed commit contains. A waiver changes a criterion's
+result; it does not authorize redacting an acceptance block.
+
+A record-only redaction keeps the status, criterion identifiers and tags,
+every criterion result, the journey result, the verdict, `reviewed`, and
+`review`. It may replace criteria wording and the descriptive text in active
+or superseded acceptance blocks. A waived criterion keeps its amendment SHA.
+The reviewer confirms that meaning and evidence remain unchanged.
+
+1. Start a `plan/` branch from the task's integration target. Keep the
+   original record unchanged and edit a copy outside the repository.
+2. Obtain a review of the replacement and run
+   `codeflow task redact TSK-NNN --replacement <file> --review <reference>`.
+   The reference identifies the redaction review; it never replaces the
+   original acceptance block's review provenance.
+3. Commit only that record. Name it in the pull request's `Task:` line and
+   run `codeflow ci` and pre-push. No other file belongs in this range.
+
+The command writes a `redaction` mapping in the record's frontmatter:
+
+| Field | Meaning |
+|---|---|
+| `source` | Full commit SHA on the target at the branch point, holding the original record |
+| `sha256` | Lowercase SHA-256 of the original record's exact UTF-8 bytes, including its trailing newline |
+| `review` | Non-empty reference to the review of this replacement |
+
+A hand edit with the same fields receives the same CI checks. The source
+record must match the target's record, and the digest must match its bytes.
+The range changes only that regular record file. Unrelated commits already
+on the target do not invalidate the original acceptance. The route also
+works when the record is already reopened and its old block is
+`acceptance_superseded`; redaction leaves its status unchanged.
+
+The digest retains an audit reference without copying the replaced text
+into the new record. Earlier Git objects still contain the original text;
+this command does not rewrite history. Changed meaning, results, reviewed
+commits or review provenance require the normal reopen and review route.
+
 ### Operator feedback
 
 Feedback from the operator is a request like any other and attaches to its
