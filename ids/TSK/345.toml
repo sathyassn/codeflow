@@ -1,0 +1,11 @@
+id = "TSK-345"
+uid = "63a0382e-825a-44ca-a212-9d806b6cfaea"
+kind = "TSK"
+title = "the startup-file guard reads Cygwin and MSYS2 home spellings"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:40:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
