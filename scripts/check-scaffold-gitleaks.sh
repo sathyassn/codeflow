@@ -15,7 +15,8 @@
 #      entry, an allowlist, a .gitleaks.json beside .gitleaks.toml, an
 #      inline gitleaks:allow comment or an edited extended file that a pull
 #      request adds fails it, and the same exemption on the trusted commit
-#      passes; an unreadable trusted commit fails it before it scans; links
+#      passes when policy permits it; an unreadable trusted commit fails it
+#      before it scans; links
 #      the pull request plants are never written through or followed, and
 #      no Python module or .gitattributes it commits steers the scan; a
 #      secret added in a merge resolution or in a file that replaces a link
