@@ -1,0 +1,11 @@
+id = "TSK-362"
+uid = "620ccff6-a4d3-43e0-a6c1-8fb62d20ca51"
+kind = "TSK"
+title = "Every capability promise resolves to a test, a native record or a declared gap"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:17Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
