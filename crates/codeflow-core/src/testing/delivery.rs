@@ -451,14 +451,22 @@ pub fn preflight(
     targets: &[TargetConfig],
     mode: &str,
 ) -> Result<BTreeMap<String, String>, TestingError> {
-    let probe = std::env::temp_dir().join(format!("codeflow-gate-probe-{}", uuid::Uuid::new_v4()));
-    std::fs::write(&probe, b"probe").map_err(|e| {
+    use std::io::Write;
+
+    // An unnamed, exclusively created file cannot follow a planted temp name.
+    let mut probe = tempfile::tempfile().map_err(|e| {
         invalid(
             root,
             format!("temporary directory is not writable in this sandbox: {e}"),
         )
     })?;
-    std::fs::remove_file(probe)?;
+    probe.write_all(b"probe").map_err(|e| {
+        invalid(
+            root,
+            format!("temporary directory is not writable in this sandbox: {e}"),
+        )
+    })?;
+    drop(probe);
     let mut tools = BTreeSet::new();
     let mut versions = BTreeMap::new();
     for t in targets {

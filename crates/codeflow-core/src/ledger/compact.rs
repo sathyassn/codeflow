@@ -110,17 +110,18 @@ pub fn compact_ledger_type(
     all_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
     // Write merged base atomically.
-    let tmp_path = subdir.join(format!("{type_name}.jsonl.tmp"));
-    {
-        let mut f = fs::File::create(&tmp_path)?;
-        for event in &all_events {
-            let mut line = serde_json::to_vec(event)?;
-            line.push(b'\n');
-            f.write_all(&line)?;
-        }
-        f.sync_all()?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".codeflow-ledger-").suffix(".tmp");
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    let mut temporary = builder.tempfile_in(&subdir)?;
+    for event in &all_events {
+        let mut line = serde_json::to_vec(event)?;
+        line.push(b'\n');
+        temporary.write_all(&line)?;
     }
-    fs::rename(&tmp_path, &base_path)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(&base_path).map_err(|error| error.error)?;
     sync_directory(&subdir)?;
 
     // Delete merged fragments. The sidecar `.jsonl.lock` files are left in
@@ -398,6 +399,33 @@ mod tests {
                 r#"{{"event":"session_end","timestamp":"2026-01-01T01:00:00Z","session_id":"{sid}"}}"#
             ),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_ignores_planted_temporary_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, b"unchanged").unwrap();
+        setup_sessions_with_end(root.path(), "ses-done");
+        let folder = root.path().join("work-graph");
+        fs::create_dir(&folder).unwrap();
+        write_line(
+            &folder.join("work-graph-ses-done.jsonl"),
+            r#"{"event":"task_created","timestamp":"2026-01-01T00:00:00Z","session_id":"ses-done"}"#,
+        );
+        let planted = folder.join("work-graph.jsonl.tmp");
+        std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+
+        let result = compact_ledger_type(root.path(), "work-graph", None).unwrap();
+
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+        assert!(fs::symlink_metadata(planted).unwrap().is_symlink());
+        assert_eq!(result.merged_count, 1);
+        assert!(fs::read_to_string(folder.join("work-graph.jsonl"))
+            .unwrap()
+            .contains("task_created"));
     }
 
     #[test]
