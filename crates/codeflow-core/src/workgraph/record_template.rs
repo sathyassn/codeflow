@@ -89,7 +89,6 @@ pub fn check(kind: RecordKind, text: &str) -> Result<(), String> {
 }
 
 fn check_trial(kind: RecordKind, text: &str, trial: &Trial) -> Result<(), String> {
-    static CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let (prefix, dir) = match kind {
         RecordKind::Epic => ("EPC", "epics"),
         RecordKind::Spec => ("SPC", "specs"),
@@ -120,15 +119,14 @@ fn check_trial(kind: RecordKind, text: &str, trial: &Trial) -> Result<(), String
     check_fields(kind, &rendered, &id, &uid, trial)?;
     // The validator reads a record from its canonical path, so the trial
     // record is written to a private scratch folder and removed after.
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let seq = CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let scratch = std::env::temp_dir().join(format!(
-        "codeflow-template-check-{}-{nanos}-{seq}",
-        std::process::id()
-    ));
-    let folder = scratch.join(dir);
+    let mut scratch_builder = tempfile::Builder::new();
+    scratch_builder.prefix("codeflow-template-check-");
+    #[cfg(unix)]
+    scratch_builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let scratch = scratch_builder
+        .tempdir()
+        .map_err(|e| format!("cannot check the template: {e}"))?;
+    let folder = scratch.path().join(dir);
     let path = folder.join(format!("{id}.md"));
     let written = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&path, rendered));
     let result = written
@@ -141,7 +139,6 @@ fn check_trial(kind: RecordKind, text: &str, trial: &Trial) -> Result<(), String
                 RecordKind::Task => validate_task(&path, &opts),
             }
         });
-    let _ = std::fs::remove_dir_all(&scratch);
     match result? {
         Ok((errors, _)) if errors.is_empty() => Ok(()),
         Ok((errors, _)) => Err(errors

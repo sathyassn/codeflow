@@ -1286,8 +1286,17 @@ def validate_published_sections(
 
 
 def check_pr(args: argparse.Namespace) -> None:
-    config, state = load_config(args.config), get_host_state(args)
-    target = git("rev-parse", f"{args.target_ref}^{{commit}}", cwd=args.root)
+    print(json.dumps(pr_verdict(args), sort_keys=True))
+
+
+def pr_verdict(
+    args: argparse.Namespace, *, state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """One verdict for hosted and local checks; preflight supplies local state."""
+    config = load_config(args.config)
+    if state is None:
+        state = get_host_state(args)
+    target = git("rev-parse", f"{args.target_ref or args.base}^{{commit}}", cwd=args.root)
     base = git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
     if base != target or git("merge-base", base, head, cwd=args.root) != base:
@@ -1415,7 +1424,7 @@ def check_pr(args: argparse.Namespace) -> None:
         result["repair"] = repair
     if base_configuration is not None:
         result["base_configuration"] = base_configuration
-    print(json.dumps(result, sort_keys=True))
+    return result
 
 
 def carried_config(
@@ -1871,22 +1880,15 @@ def tree_error(ref: str, config: dict[str, Any], state: dict[str, Any], *, cwd: 
     return None
 
 
-def draft_intent(args: argparse.Namespace, notes: list[str]) -> str | None:
-    """The declared Impact of the local PR draft, when one is given."""
-    path = args.body_file or (Path(os.environ["CODEFLOW_PR_DRAFT"]) if os.getenv("CODEFLOW_PR_DRAFT") else None)
-    if path is None:
-        return None
-    try:
-        return parse_release_impact(path.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
-    except (OSError, ReleaseError) as error:
-        notes.append(f"the PR draft {path} gives no readable Release impact: {error}")
-        return None
+def draft_path(args: argparse.Namespace) -> Path | None:
+    """The explicit PR body, else the draft named by the author."""
+    return args.body_file or (Path(os.environ["CODEFLOW_PR_DRAFT"]) if os.getenv("CODEFLOW_PR_DRAFT") else None)
 
 
 def preflight(args: argparse.Namespace) -> None:
     """R-93: the cheap local release checks pre-push runs. It blocks only a
-    push that breaks a release tree its base kept valid; a missing entry only
-    warns, and the PR job's full `check-pr` stays the gate."""
+    push that breaks a release tree its base kept valid. Declaration errors
+    and missing entries warn; the hosted `check-pr` stays the gate."""
     config = load_config(args.config)
     head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
     notes: list[str] = []
@@ -1895,12 +1897,13 @@ def preflight(args: argparse.Namespace) -> None:
         state = structural_state(config, cwd=args.root)
     except ReleaseError as error:
         print(json.dumps({"status": "warn", "notes": [
-            f"release preflight could not read the recorded baseline ({error}); CI checks it"
+            f"release preflight could not read the recorded baseline ({error}); "
+            "marker floor and entry equality not checked; CI checks it"
         ]}, sort_keys=True))
         return
     base, target = resolve_pr_base(args, head, config)
     if base is None:
-        notes.append(f"release range unresolved: no local or {args.remote} ref for {target}; CI checks it")
+        notes.append(f"release range unresolved: no local or {args.remote} ref for {target}; marker floor and entry equality not checked; CI checks it")
     head_error = tree_error(head, config, state, cwd=args.root)
     if head_error is None:
         notes.append(f"release tree valid at {head[:12]} against the recorded baseline ({HOST_UNCHECKED})")
@@ -1916,7 +1919,20 @@ def preflight(args: argparse.Namespace) -> None:
     if base is not None:
         sets = load_path_sets(head, cwd=args.root)
         behaviour = [path for path in changed_paths(base, head, cwd=args.root) if is_behaviour_path(path, sets)]
-        intent = draft_intent(args, notes)
+        intent = None
+        draft = draft_path(args)
+        if draft is None:
+            notes.append("marker floor and entry equality not checked: no PR body; set CODEFLOW_PR_DRAFT")
+        else:
+            try:
+                intent = parse_release_impact(draft.read_text(encoding="utf-8"), codeflow_bin(args))["impact"]
+                verdict_args = argparse.Namespace(**{
+                    **vars(args), "base": base, "target_ref": base, "body_file": draft,
+                })
+                pr_verdict(verdict_args, state=state)
+            except (OSError, UnicodeError, ReleaseError) as error:
+                status = "blocked" if status == "blocked" else "warn"
+                notes.append(f"PR release-impact warning ({HOST_UNCHECKED}): {error}; this warning never blocks")
         if behaviour and intent != "none" and not entry_changed(base, head, config, state, cwd=args.root):
             status = "blocked" if status == "blocked" else "warn"
             shown = ", ".join(behaviour[:3]) + (f" and {len(behaviour) - 3} more" if len(behaviour) > 3 else "")
@@ -2400,16 +2416,20 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     sub = value.add_subparsers(dest="command", required=True)
 
-    check = sub.add_parser("check-pr")
-    check.add_argument("--base", required=True)
-    check.add_argument("--head", required=True)
-    check.add_argument("--target-ref", required=True)
-    source = check.add_mutually_exclusive_group(required=True)
-    source.add_argument("--body-file", type=Path)
-    source.add_argument("--body-env")
-    check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
-    add_host_args(check)
-    check.set_defaults(func=check_pr)
+    for name in ["check-pr", "check-local"]:
+        check = sub.add_parser(
+            name, help="the hosted release-impact verdict" if name == "check-local" else None
+        )
+        check.add_argument("--base", required=True)
+        check.add_argument("--head", required=True)
+        check.add_argument("--target-ref", required=name == "check-pr",
+                           help="current target ref (check-local defaults to --base)")
+        source = check.add_mutually_exclusive_group(required=True)
+        source.add_argument("--body-file", type=Path)
+        source.add_argument("--body-env")
+        check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
+        add_host_args(check)
+        check.set_defaults(func=check_pr)
 
     prepare = sub.add_parser("sync")
     prepare.add_argument("--cargo", default="cargo")
