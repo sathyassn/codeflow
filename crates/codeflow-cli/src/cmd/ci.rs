@@ -68,6 +68,8 @@ pub struct CiArgs {
     /// protected branch or at the line's `origin/<line>` ref must bind the line to the branch's
     /// epic. Declared bases use only `origin/<name>`; local branches, including protected names,
     /// never supply them. Missing remote refs warn and keep the protected fallback.
+    /// Pre-push uses a second protected name only when its advertised tip equals the
+    /// destination default's tip.
     /// Host protection cannot be verified offline: protect integration/* and every name in
     /// `protected_branches` on the host. A bare run reads the local remote-tracking ref;
     /// git-guard refuses update-ref of refs/remotes/*.
