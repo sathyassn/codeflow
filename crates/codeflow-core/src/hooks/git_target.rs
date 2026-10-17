@@ -278,7 +278,12 @@ pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<Str
         if !is_name(&name) {
             return Err(format!("`{word}`"));
         }
-        match vars.get(&name) {
+        // HOME is inherited by the hook and shell. A tracked write or unknown
+        // value takes precedence; never substitute an inherited value for it.
+        let inherited = (name == "HOME" && !vars.contains_key(&name))
+            .then(|| std::env::var("HOME").ok().map(Val::Known))
+            .flatten();
+        match vars.get(&name).or(inherited.as_ref()) {
             Some(Val::Known(v))
                 if !v.contains(|ch: char| {
                     super::git_guard::shell_blank(ch) || matches!(ch, '*' | '?' | '[')

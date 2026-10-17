@@ -341,14 +341,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "from_utf8_lossy",
-        1,
-        "display",
-    ),
-    // a git or tool error message shown to a person, never compared
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
         "read_branch_name",
         "from_utf8_lossy",
         1,
@@ -1476,6 +1468,15 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Missing or non-Unicode HOME leaves the path unresolved and refused;
+    // no empty value or alternate path is substituted after a decode error.
+    (
+        "crates/codeflow-core/src/hooks/git_target.rs",
+        "expand_word",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
     // A blank check-name test: the name is kept untrimmed, and a wider whitespace set only refuses more names as blank.
     (
         "crates/codeflow-core/src/doctor/remote_perimeter.rs",
@@ -2428,22 +2429,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "grammar:posix-shell",
-    ),
-    // The invalid-byte branch returns AliasAnswer::Unreadable; expand_alias refuses execution of the unresolved alias.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "obtain-absent:from_utf8",
-        1,
-        "unproven",
-    ),
-    // Only subprocess stderr is trimmed for a refusal message; identity stdout is strict and separately framed.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "read_alias",
-        "trim",
-        1,
-        "display",
     ),
     // An unreadable branch becomes NON_UTF8_BRANCH, which GitPolicy::branch_is_protected treats as protected; BranchTracker refuses protected mutations.
     (
@@ -5981,6 +5966,8 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
+    ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
     ("crates/codeflow-core/src/workgraph/history.rs", "check_command", "ErrorKind::NotFound", 1, "Git treats an absent GIT_SHALLOW_FILE as no boundary, including a dangling path; other read errors refuse. The installed CLI test compares relative, missing and empty overrides with native Git."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_dir", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
     ("crates/codeflow-core/src/absence.rs", "is_kind", "is_file", 1, "Type check on metadata from metadata_optional; its errors become None, which every caller reads as the answer that refuses, and only proven absence is Some(false)."),
