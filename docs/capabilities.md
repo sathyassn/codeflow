@@ -133,7 +133,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -148,6 +148,12 @@ adrs: [ADR-0011, ADR-0019]
 
 Update also installs missing in-tier manifest entries. It never clobbers and
 never silently skips.
+
+| Version case | What update and a repeated init do |
+|---|---|
+| Binary older than the project's `scaffold_version` | Refuses before writing project files, preserving the pin, release digests and managed files; names both versions and the pinned version to install |
+| Unparsable pin | Refuses before writing project files and names the value, file and correction to make |
+| Binary released before this safeguard | Can still lower the pin |
 
 | Policy scalar | On update |
 |---|---|
@@ -242,7 +248,7 @@ Other checks on these planes:
 | Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form, a table line other than a plain entry, and any escaped table name or key or multi-line string in the state fail closed. With no table the install checks `sha256.sum` alone and warns |
 | Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
 | Managed CI secret scan range (TSK-225) | the gitleaks job of `codeflow-ci.yml` | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Exemptions come only from the trusted commit |
-| Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: a warning for a behaviour change with no pending entry, a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
+| Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: warnings for a behaviour change with no pending entry and, with a PR draft, release-impact mismatches; a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host; `release.py check-local` gives the hosted verdict for an explicit range and body, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
 
 | Refusal record and report | Behaviour |
 |---|---|
@@ -501,7 +507,7 @@ The work records a plan produces are judged by one core (SPC-013):
 | Work record rule | Behaviour |
 |---|---|
 | Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` at its tip, reviewed directly or followed only by changes to its own record's status and Closeout |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line, a [secret-scan exemption](policy-reference.md#secret-scan-exemption-pull-requests) adding or modifying only the regular file `.gitleaksignore` without a mode change, or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Claim scope | local branches, `origin`, the target's fetch remote and `git.claim_remotes` count as advisory claims; branches on other remotes remain information in `work next` and `work claim`, without making a task active or conflicting |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |
@@ -592,7 +598,7 @@ name: opt-in-documentation-portal
 area: scaffold
 status: shipped
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
-epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017]
+epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022]
 adrs: [ADR-0048, ADR-0058]
 ```
 

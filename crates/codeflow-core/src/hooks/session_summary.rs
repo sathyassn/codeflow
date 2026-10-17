@@ -385,7 +385,9 @@ mod tests {
 
     #[test]
     fn test_record_outside_repo_records_nothing() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(dir) = crate::fixture_tests::outside_repository() else {
+            return;
+        };
         assert_eq!(record(dir.path(), "{}"), Ok(None));
     }
 

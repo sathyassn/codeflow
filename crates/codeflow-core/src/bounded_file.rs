@@ -119,3 +119,90 @@ fn stable_metadata(left: &std::fs::Metadata, right: &std::fs::Metadata) -> std::
     #[cfg(not(unix))]
     Ok(true)
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{read_bounded_regular, read_regular};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use std::time::Duration;
+
+    /// The longest a read of a fifo may take. An open of a fifo with no
+    /// writer blocks until one appears, so a reader that opens it never
+    /// returns; a refusal before the open takes microseconds.
+    const PROMPT: Duration = Duration::from_secs(5);
+
+    fn make_fifo(path: &Path) {
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `name` is a NUL-terminated pathname that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    }
+
+    /// Runs `read` on its own thread and returns what it returned, or panics
+    /// after [`PROMPT`]. A blocked reader is released first by opening the
+    /// fifo for writing, so the test process does not keep a stuck thread.
+    fn within_the_bound(
+        fifo: &Path,
+        read: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
+    ) -> std::io::Result<Vec<u8>> {
+        let (done, result) = channel();
+        std::thread::spawn(move || {
+            let _ = done.send(read());
+        });
+        match result.recv_timeout(PROMPT) {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                let _release = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(fifo);
+                panic!("the read of a fifo did not return within {PROMPT:?}: it opened the fifo");
+            }
+        }
+    }
+
+    #[test]
+    fn read_bounded_regular_refuses_a_fifo_without_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        make_fifo(&fifo);
+        let started = std::time::Instant::now();
+        let path = fifo.clone();
+        let error = within_the_bound(&fifo, move || read_bounded_regular(&path, 1024))
+            .expect_err("a fifo is not a regular file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        assert!(started.elapsed() < PROMPT, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn read_bounded_regular_refuses_a_link_to_a_fifo_without_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        make_fifo(&fifo);
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&fifo, &link).unwrap();
+        let error = within_the_bound(&fifo, move || read_bounded_regular(&link, 1024))
+            .expect_err("a link is not a regular file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+    }
+
+    #[test]
+    fn read_regular_refuses_a_fifo_without_opening_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        make_fifo(&fifo);
+        let path = fifo.clone();
+        let error = within_the_bound(&fifo, move || read_regular(&path))
+            .expect_err("a fifo is not a regular file");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{error}");
+    }
+
+    #[test]
+    fn read_bounded_regular_still_reads_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"bytes").unwrap();
+        assert_eq!(read_bounded_regular(&file, 1024).unwrap(), b"bytes");
+    }
+}
