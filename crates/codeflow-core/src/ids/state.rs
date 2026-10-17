@@ -96,6 +96,25 @@ pub fn update(git: &Git, change: impl FnOnce(&mut State)) -> Result<(), IdsError
 #[cfg(all(test, unix))]
 mod r22_tests {
     #[test]
+    fn state_save_ignores_planted_temporary_link() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path()).unwrap();
+        let git = super::Git::new(root.path());
+        let dir = repo.path().join("codeflow");
+        std::fs::create_dir(&dir).unwrap();
+        let sentinel = root.path().join("sentinel");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        let planted = dir.join("registry-state.tmp");
+        std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+
+        super::save(&git, &super::State::default()).unwrap();
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
+        assert!(dir.join("registry-state.json").is_file());
+    }
+
+    #[test]
     fn r22_state_dangling_leaf_and_ancestor_refuse_missing_state_is_empty() {
         let root = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(root.path()).unwrap();

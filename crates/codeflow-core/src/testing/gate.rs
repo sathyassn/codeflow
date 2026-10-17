@@ -272,7 +272,7 @@ fn run_gate_resolved(
     std::fs::create_dir_all(&target_dir)?;
     let target_dir = target_dir.canonicalize()?;
     let run_dir = target_dir.join("codeflow-gate").join(&run_id);
-    std::fs::create_dir_all(&run_dir)?;
+    create_run_directory(&target_dir, &run_id)?;
     configure_run_targets(
         &mut targets,
         project_dir,
@@ -427,6 +427,12 @@ fn run_gate_resolved(
         passed,
         coverage,
     })
+}
+
+// The build-output root is caller-owned. Each run owns its leaf exclusively
+// before any producer writes there, even when a link was planted at that name.
+fn create_run_directory(target_dir: &Path, run_id: &str) -> std::io::Result<()> {
+    crate::contained::Tree::open(target_dir)?.mkdir(&format!("codeflow-gate/{run_id}"))
 }
 
 fn configure_run_targets(
@@ -1275,5 +1281,31 @@ mod r22_regressions {
         let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/odd\xff"));
         assert!(configure_run_targets(&mut [target.clone()], root, odd, root, false).is_err());
         assert!(configure_run_targets(&mut [target], root, root, root, false).is_ok());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod temporary_directory_tests {
+    #[test]
+    fn gate_output_refuses_planted_run_directory_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = root.path().join("codeflow-gate/run-id");
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &path).unwrap();
+        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
+    }
+
+    #[test]
+    fn gate_output_refuses_planted_container_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = root.path().join("codeflow-gate");
+        std::os::unix::fs::symlink(outside.path(), &path).unwrap();
+        assert!(super::create_run_directory(root.path(), "run-id").is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
     }
 }
