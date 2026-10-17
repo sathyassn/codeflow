@@ -1,0 +1,11 @@
+id = "TSK-361"
+uid = "a66e0d34-1310-4e3e-8480-0b6f5b0befc5"
+kind = "TSK"
+title = "A test reports skipped or incomplete when its scenario did not run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
