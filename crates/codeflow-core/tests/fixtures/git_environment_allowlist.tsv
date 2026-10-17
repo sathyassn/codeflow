@@ -7,6 +7,7 @@ crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"outer")	1	Presentation service
 crates/codeflow-cli/src/cmd/present.rs	env(name,value)	2	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env(secret,"sentinel")	1	Presentation service and canary environment controls; these children perform no Git operations.
 crates/codeflow-cli/src/cmd/present.rs	env_clear()	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/tests/ci_cli.rs	env_remove(name)	1	Removes only root_checkout::AGENT_MARKERS from fixture Git commands; preserves inherited Git configuration (TSK-351 review finding 2).
 crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env(key,value)	2	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
 crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env_remove(key)	1	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
 crates/codeflow-cli/tests/ci_pin.rs	envs(fake.iter().copied())	1	Adds the fake osv-scanner controls to the dependency audit step. The span carries no keys; its call sites (ci_pin.rs:1025, :1033, :1036, :1048, and the run closure at :966) pass only OSV_FAKE, OSV_FAKE_SOURCE or an empty slice; no Git configuration.
