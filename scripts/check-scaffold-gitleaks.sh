@@ -33,7 +33,8 @@
 # The step's download is served from a local archive of the gitleaks under
 # test, so no network is needed; its pinned checksum is the Linux release's
 # and is not checked here.
-# Usage: check-scaffold-gitleaks.sh [gitleaks] [codeflow]
+# Usage: check-scaffold-gitleaks.sh [gitleaks] [codeflow] [previous-codeflow]
+# With no previous build, the update route replays the current build's init.
 # CODEFLOW_CI_TEMPLATE and CODEFLOW_CI_OWN name another template and own
 # workflow to check, for example earlier revisions to show the cases they
 # fail; every case still runs and each failure is listed at the end.
@@ -43,9 +44,11 @@ set -eu
 
 GITLEAKS=${1:-gitleaks}
 CODEFLOW=${2:-}
+PREVIOUS_CODEFLOW=${3:-$CODEFLOW}
 absolute() { case $1 in /*) printf '%s' "$1" ;; */*) printf '%s/%s' "$(pwd)" "$1" ;; *) command -v "$1" ;; esac; }
 GITLEAKS=$(absolute "$GITLEAKS")
 [ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
+[ -z "$PREVIOUS_CODEFLOW" ] || PREVIOUS_CODEFLOW=$(absolute "$PREVIOUS_CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-ci.yml}
 OWN=${CODEFLOW_CI_OWN:-$ROOT/.github/workflows/codeflow-ci.yml}
@@ -558,6 +561,13 @@ MESSAGE=
 NO_SCAN=
 
 # Both a full-history scan and a range use commit ids, even with a HEAD path.
+REPO="$TMP/head-initial"
+init_repo
+printf 'a path named HEAD\n' >"$REPO/HEAD"
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "initial finding beside HEAD"
+expect head-path-initial 1 leak.txt:1
+
 new_repo head-path
 printf 'a path named HEAD\n' >"$REPO/HEAD"
 commit "track HEAD path"
@@ -572,30 +582,48 @@ unset SCAN_FROM
 # Exercise an installed build's init and update, then run its managed step
 # without a local workflow edit. A push scans commits held by its trusted head;
 # its reviewed ignore file still applies when inline allows are refused.
-new_repo installed-inline-policy
-FIRST=$(tip)
-printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
-printf '%s\n' "$PLANTED" >"$REPO/ignored.txt"
-commit "held findings"
-HELD=$(tip)
-mkdir -p "$REPO/.codeflow"
-printf '{"git":{"secret_scan_inline_allow":"never"}}\n' >"$REPO/.codeflow/policy.json"
-printf '%s:ignored.txt:generic-api-key:1\n' "$HELD" >"$REPO/.gitleaksignore"
-commit "refuse inline allows and retain reviewed ignore"
-if [ -n "$CODEFLOW" ]; then
-  (cd "$REPO" && "$CODEFLOW" init --minimal --yes && "$CODEFLOW" update) \
-    >"$TMP/installed-update.out" 2>&1
-  workflow="$REPO/.github/workflows/codeflow-ci.yml"
-  STEP_SCRIPT="$TMP/installed-step.sh"
-  python3 "$TMP/extract-step.py" "$workflow" "$workflow" "$STEP_SCRIPT" >>"$FAILURES"
-  cmp "$STEP_SCRIPT" "$TMP/step.sh" || failed installed-workflow "installed step differs from template"
-fi
-SCAN_FROM=$FIRST
-expect installed-never-inline-push 1 inline.txt:1
-SCAN_FROM=
-expect installed-never-inline-full 1 inline.txt:1
-unset SCAN_FROM
-unset STEP_SCRIPT
+for route in fresh updated; do
+  for policy in trusted never; do
+    new_repo "installed-$route-$policy"
+    FIRST=$(tip)
+    printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
+    printf '%s\n' "$PLANTED" >"$REPO/ignored.txt"
+    commit "held findings"
+    HELD=$(tip)
+    mkdir -p "$REPO/.codeflow"
+    if [ "$policy" = never ]; then
+      printf '{"git":{"secret_scan_inline_allow":"never"}}\n' >"$REPO/.codeflow/policy.json"
+    else
+      printf '{"git":{}}\n' >"$REPO/.codeflow/policy.json"
+    fi
+    printf '%s:ignored.txt:generic-api-key:1\n' "$HELD" >"$REPO/.gitleaksignore"
+    commit "trusted policy and reviewed ignore"
+    if [ -n "$CODEFLOW" ]; then
+      if [ "$route" = fresh ]; then
+        (cd "$REPO" && "$CODEFLOW" init --minimal --yes) >"$TMP/installed-$route-$policy.out" 2>&1
+      else
+        (cd "$REPO" && "$PREVIOUS_CODEFLOW" init --minimal --yes && "$CODEFLOW" update) \
+          >"$TMP/installed-$route-$policy.out" 2>&1
+      fi
+      workflow="$REPO/.github/workflows/codeflow-ci.yml"
+      STEP_SCRIPT="$TMP/installed-$route-$policy.sh"
+      python3 "$TMP/extract-step.py" "$workflow" "$workflow" "$STEP_SCRIPT" >>"$FAILURES"
+      cmp "$STEP_SCRIPT" "$TMP/step.sh" || failed installed-workflow "installed step differs from template"
+    fi
+    SCAN_FROM=$FIRST
+    if [ "$policy" = never ]; then
+      expect "installed-$route-$policy-push" 1 inline.txt:1
+      SCAN_FROM=
+      expect "installed-$route-$policy-full" 1 inline.txt:1
+    else
+      expect "installed-$route-$policy-push" 0
+      SCAN_FROM=
+      expect "installed-$route-$policy-full" 0
+    fi
+    unset SCAN_FROM
+    unset STEP_SCRIPT
+  done
+done
 
 # An [extend] path is read from the trusted commit, never the checkout: a
 # pull request that widens the extended file fails, and once merged it
@@ -876,6 +904,89 @@ as_canary merge -q side >/dev/null 2>&1 || true
 printf 'main\nside\n%s\n' "$PLANTED" >"$REPO/f.txt"
 commit "resolve with a secret"
 on_base "$BASE" pr-conflict-path 1 f.txt:3
+
+# A legacy conflicted-merge fingerprint is diagnosed, never applied to its
+# unprefixed path. Existing b/ paths and unreadable commits are distinct.
+new_repo legacy-fingerprint
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf 'base\n' >"$REPO/f.txt"
+printf 'plain\n' >"$REPO/real.txt"
+commit "merge inputs"
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/f.txt"
+commit side
+git -C "$REPO" checkout -q "$MAIN"
+printf 'main\n' >"$REPO/f.txt"
+commit main
+as_canary merge -q side >/dev/null 2>&1 || true
+printf '%s\n' "$PLANTED" >"$REPO/f.txt"
+mkdir "$REPO/b"
+printf '%s\n' "$PLANTED" >"$REPO/b/real.txt"
+commit "resolve with findings"
+MERGED=$(tip)
+OLD="$MERGED:b/f.txt:generic-api-key:1"
+NEW="$MERGED:f.txt:generic-api-key:1"
+REAL="$MERGED:b/real.txt:generic-api-key:1"
+MISSING=0123456789abcdef0123456789abcdef01234567
+ABSENT="$MERGED:b/absent.txt:generic-api-key:1"
+"$GITLEAKS" detect --source "$REPO" --log-opts "--remerge-diff $MERGED --" \
+  --gitleaks-ignore-path /dev/null --no-banner --redact --exit-code 0 \
+  --report-format json --report-path "$TMP/legacy-raw.json" >/dev/null 2>&1
+python3 - "$TMP/legacy-raw.json" "$OLD" <<'PY'
+import json
+import sys
+
+assert sys.argv[2] in {f["Fingerprint"] for f in json.load(open(sys.argv[1], encoding="utf-8"))}, "plain git did not reproduce the legacy merge fingerprint"
+PY
+printf '%s\n%s\n%s:b/ghost.txt:generic-api-key:1\n%s\n' "$OLD" "$REAL" "$MISSING" "$ABSENT" >"$REPO/.gitleaksignore"
+commit "legacy and real path exemptions"
+cp "$REPO/.gitleaksignore" "$TMP/legacy-ignore"
+MESSAGE="legacy remerge fingerprint $OLD; review and replace with $NEW"
+after_step() {
+  grep -qF "existing b/ path for $REAL; keep this fingerprint unchanged" "$TMP/legacy-fingerprint.out" &&
+  grep -qF "unreadable commit $MISSING" "$TMP/legacy-fingerprint.out" &&
+  grep -qF "neither path exists for $ABSENT; no replacement inferred" "$TMP/legacy-fingerprint.out" || return 1
+  for ignore in "$runner"/gitleaks-trusted.*/ignore; do
+    cmp "$ignore" "$TMP/legacy-ignore" || return 1
+  done
+}
+expect legacy-fingerprint 1 f.txt:1
+after_step() { :; }
+MESSAGE=
+# Reviewing and committing the exact replacement exempts only the old finding.
+printf '%s\n%s\n' "$NEW" "$REAL" >"$REPO/.gitleaksignore"
+printf '%s\n' "$PLANTED" >"$REPO/new.txt"
+commit "review the replacement and add a new finding"
+expect migrated-fingerprint 1 new.txt:1
+# A diagnostic's work and output are bounded, without changing the ignore file.
+python3 - "$REPO/.gitleaksignore" "$OLD" "$REAL" <<'PY'
+import sys
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write((sys.argv[2] + "\n") * 51 + sys.argv[3] + "\n")
+PY
+commit "many legacy fingerprints"
+MESSAGE="legacy fingerprint diagnostics stopped at the review limit; review remaining entries manually"
+expect bounded-fingerprints 1 f.txt:1 new.txt:1
+# A slow diagnostic probe exhausts its budget; the real scan still runs.
+mkdir "$TMP/slow-diagnostic-git"
+cat >"$TMP/slow-diagnostic-git/git" <<SH
+#!/bin/sh
+case " \$* " in *" cat-file -t "*) sleep 6 ;; esac
+exec "$(command -v git)" "\$@"
+SH
+chmod +x "$TMP/slow-diagnostic-git/git"
+STEP_ENV="PATH=$TMP/fake-bin:$TMP/slow-diagnostic-git:$PATH"
+expect timed-fingerprints 1 f.txt:1 new.txt:1
+STEP_ENV=
+# Exemptions beyond the diagnostic's byte budget still apply to gitleaks.
+python3 - "$REPO/.gitleaksignore" "$NEW" "$REAL" <<'PY'
+import sys
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write("# x\n" * 16385 + sys.argv[2] + "\n" + sys.argv[3] + "\n")
+PY
+commit "exemptions beyond the diagnostic byte budget"
+expect bounded-ignore-bytes 1 new.txt:1
+MESSAGE=
 
 # git configuration the runner sets does not change the patch gitleaks reads.
 # With diff.noprefix, gitleaks would drop dir/ and the trusted exemption for

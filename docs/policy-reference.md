@@ -128,6 +128,31 @@ branch, and that a linked review establishes the finding as a false positive.
 Refuse entries without a commit: they cover that location in every later
 commit.
 
+## Reviewing legacy remerge fingerprints
+
+The managed GitHub secret scan removes Git's `remerge` header notes so
+gitleaks reports a conflicted merge's actual path. Older scans could record
+`<commit>:b/<path>:<rule>:<line>` instead of
+`<commit>:<path>:<rule>:<line>` in `.gitleaksignore`.
+
+The scan checks the trusted ignore file and offers the exact replacement
+only when the commit is readable, `b/<path>` is absent from that commit,
+and `<path>` exists. It reports an existing `b/` path separately and keeps
+its fingerprint unchanged. An unreadable commit needs fetching or manual
+investigation before a replacement can be inferred. Neither case is
+classified as a legacy fingerprint.
+
+Review the finding, confirm that the exemption still applies, and submit
+the suggested replacement as a reviewed ignore-file change. A pull
+request's own ignore-file change cannot exempt its finding in that run;
+the trusted base must already hold it. The scan never rewrites or aliases
+fingerprints, so unrelated and newly introduced findings remain blocked.
+
+The advisory diagnostic examines at most the first 64 KiB of the ignore
+file and 50 candidate fingerprints, with a five-second time budget. A
+limit warning asks for manual review of the remainder. These limits apply
+only to diagnostics; gitleaks still reads the complete trusted ignore file.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It

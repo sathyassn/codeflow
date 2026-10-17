@@ -405,7 +405,18 @@ as extra steps when your stack warrants:
   commits, or rebase onto the base when the change is on the base's side.
   Names with spaces or non-ASCII letters pass. The scan pins git's patch
   format, so git configuration on the runner, such as `diff.noprefix`,
-  cannot move a finding to another path. It then drops one
+  cannot move a finding to another path. Older remerge scans could record
+  `<commit>:b/<path>:<rule>:<line>` for a conflicted merge's unprefixed file.
+  The step diagnoses that legacy fingerprint only when the commit is
+  readable, the prefixed path is absent and the unprefixed path exists.
+  It prints the exact replacement for review, leaving the ignore file and
+  its exemptions unchanged. An existing `b/` path and an unreadable commit
+  receive distinct messages; neither is called legacy. Review the finding
+  and land the replacement through the normal reviewed exemption path.
+  A head-only exemption cannot authorize itself on a pull request. The
+  diagnostic checks at most 64 KiB and 50 candidates within five seconds,
+  then warns to review the remainder manually; gitleaks still reads the
+  complete trusted ignore file. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.
