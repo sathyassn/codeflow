@@ -1,0 +1,11 @@
+id = "TSK-366"
+uid = "8ae0d1b3-d299-455d-8577-880cb03e8102"
+kind = "TSK"
+title = "Expectation regeneration never counts as verification"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:33Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
