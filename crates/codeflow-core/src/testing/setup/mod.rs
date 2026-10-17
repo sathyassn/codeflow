@@ -498,6 +498,28 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/testing/templates")
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn schema_write_ignores_planted_temporary_link() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, b"unchanged").unwrap();
+        let codeflow = root.path().join(".codeflow");
+        std::fs::create_dir(&codeflow).unwrap();
+        let planted = codeflow.join("test-config.schema.tmp");
+        std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+
+        write_schema_next_to(&codeflow.join("test-config.json")).unwrap();
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+        assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(codeflow.join("test-config.schema.json")).unwrap(),
+            TEST_CONFIG_SCHEMA
+        );
+    }
+
     #[test]
     fn config_path_is_correct() {
         let path = config_path(Path::new("/repo")).unwrap();

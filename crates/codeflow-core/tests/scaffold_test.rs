@@ -1602,6 +1602,30 @@ fn update_requires_initialized_project() {
     assert!(err.to_string().contains("codeflow init"));
 }
 
+#[cfg(unix)]
+#[test]
+fn update_diff_output_ignores_planted_temporary_link() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets_v2) = fixture_assets(true);
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("sentinel");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+    let planted = root.join("update.tmp");
+    std::os::unix::fs::symlink(&sentinel, &planted).unwrap();
+    let mut options = update_opts("2.1.0");
+    options.diff_out = Some(root.join("update.diff"));
+
+    scaffold::update(&assets_v2, &root, &options).unwrap();
+
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert!(std::fs::symlink_metadata(planted).unwrap().is_symlink());
+    assert!(std::fs::read_to_string(root.join("update.diff"))
+        .unwrap()
+        .contains("+step one (improved)"));
+}
+
 #[test]
 fn update_writes_diff_file() {
     isolate_git();
