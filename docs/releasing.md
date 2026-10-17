@@ -63,6 +63,28 @@ Release-state check (`scripts/release.py check-pr`):
     its label.
 - The main-push state check and `codeflow integrate` apply the same refusal.
 
+Run the same verdict locally before pushing, with the current target, head
+and saved PR body:
+
+```sh
+python3 scripts/release.py check-local \
+  --base origin/main --head HEAD \
+  --body-file target/pr-body.md --repository sathyassn/codeflow \
+  --codeflow-bin target/debug/codeflow
+```
+
+`check-local` uses the same verdict as hosted `check-pr`, including the
+conventional-marker floor and equality between the declared impact and the
+entries added or edited. It reads published state from the host, returns
+JSON on success, and exits 2 with the hosted error on a mismatch. Build the
+body reader first with `cargo build -p codeflow-cli`, or name an installed
+build with `--codeflow-bin`. Fetch the target first and pass its current tip
+as `--base`. A task branch uses its recorded integration target instead of
+`origin/main`. `--target-ref` defaults to that base and can name a separate
+current target ref to detect a stale base. The verdict holds for those
+inputs and host state, which can change before CI runs. `check-pr` remains
+the hosted entry point and requires `--target-ref` explicitly.
+
 Merge:
 
 - PR CI checks the actual proposed merge tree, which is more than the absence
@@ -388,6 +410,9 @@ The first two planes are the local planes:
 | What they judge against | The recorded bootstrap and the local stable tags. They say "not checked against the host" |
 | Published tags | Every local stable tag counts as published, so a pending version never reuses one |
 | Preflight range | The branch against its pull request target: a task branch's `integration_target`, else `main` |
+| PR draft | Set `CODEFLOW_PR_DRAFT` to the saved body path; the hook passes it as `--body-file`. Direct preflight runs also accept `--body-file` |
+| Declaration warnings | With a readable draft, preflight runs the shared PR verdict against its local baseline and range. Marker-floor and entry-equality errors name the rule and warn without blocking. Without a body it says these rules were not checked; an unreadable or invalid body warns |
+| Limits | Preflight does not read host state or prove the target is current. Use `check-local` with a fetched target for the hosted verdict |
 | Missing entry warning | The preflight warns when that range touches behavior paths with no pending entry added or edited, in a fragment or the section, and no `Impact: none` in the local PR draft named by `CODEFLOW_PR_DRAFT` |
 | Work in progress | A missing entry never blocks a work-in-progress push |
 | Base already invalid | The preflight only warns, so it does not catch every new break there. The pull request job does |

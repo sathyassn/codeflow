@@ -889,6 +889,56 @@ class ReleaseImpactFieldTests(unittest.TestCase):
             self.parse(self.body("minor", breaking="`yes | no`"))
 
 
+class LocalVerdictTests(unittest.TestCase):
+    """Issue 117's reported contradictions replayed through both commands."""
+
+    def test_reported_hosted_errors_match_the_local_command(self) -> None:
+        for carrier in ["written", "fragments"]:
+            for number, marker, entry, declared, message in [
+                (99, "fix", "minor", "patch", "must equal"),
+                (111, "feat", "minor", "patch", "below marker floor minor"),
+                (97, "fix", "patch", "none", "below marker floor patch"),
+            ]:
+                with self.subTest(carrier=carrier, pr=number):
+                    repo = Repository(carrier)
+                    self.addCleanup(repo.cleanup)
+                    repo.pending("2.1.0" if entry == "minor" else "2.0.1", [(entry, "Change the tool")])
+                    repo.write("src/tool.rs", "// changed behaviour\n")
+                    head = repo.commit(f"{marker}: change the tool")
+                    body = repo.root / ".git" / "body.md"
+                    body.write_text(repo.body(declared))
+                    for name in ["check-pr", "check-local"]:
+                        args = [sys.executable, str(SCRIPT), "--root", str(repo.root),
+                                "--config", str(repo.config), name, "--base", repo.target,
+                                "--head", head, "--body-file", str(body),
+                                "--host-state", str(repo.host), "--codeflow-bin", str(CODEFLOW)]
+                        if name == "check-pr":
+                            args += ["--target-ref", repo.target]
+                        result = subprocess.run(args, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn(message, result.stderr)
+
+    def test_a_matching_declaration_gives_the_same_verdict(self) -> None:
+        repo = Repository("fragments")
+        self.addCleanup(repo.cleanup)
+        repo.pending("2.1.0", [("minor", "Add a flag")])
+        head = repo.commit("feat: add a flag")
+        body = repo.root / ".git" / "body.md"
+        body.write_text(repo.body("minor"))
+        results = []
+        for name in ["check-pr", "check-local"]:
+            args = release.parser().parse_args([
+                "--root", str(repo.root), "--config", str(repo.config), name,
+                "--base", repo.target, "--head", head, "--target-ref", repo.target,
+                "--body-file", str(body), "--host-state", str(repo.host),
+            ])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                args.func(args)
+            results.append(json.loads(output.getvalue()))
+        self.assertEqual(results[0], results[1])
+
+
 class PullRequestTests(unittest.TestCase):
     carrier = "written"
 
@@ -2409,6 +2459,52 @@ class PreflightTests(unittest.TestCase):
         with contextlib.redirect_stdout(output), mock.patch.dict(os.environ, {"CODEFLOW_PR_DRAFT": ""}):
             release.preflight(args)
         return json.loads(output.getvalue()), getattr(args, "exit_code", 0)
+
+    def mismatch(self, marker: str, entry: str, declared: str, message: str) -> None:
+        self.repo.pending("2.1.0" if entry == "minor" else "2.0.1", [(entry, "Change the tool")])
+        self.repo.write("src/tool.rs", "// changed behaviour\n")
+        self.repo.commit(f"{marker}: change the tool")
+        result, code = self.preflight(body=self.repo.body(declared))
+        self.assertEqual((result["status"], code), ("warn", 0))
+        self.assertIn(message, " ".join(result["notes"]))
+
+    def test_pr99_entry_equality_warns_without_blocking(self) -> None:
+        self.mismatch("fix", "minor", "patch", "must equal")
+
+    def test_pr111_minor_marker_floor_warns_without_blocking(self) -> None:
+        self.mismatch("feat", "minor", "patch", "below marker floor minor")
+
+    def test_pr97_patch_marker_floor_warns_without_blocking(self) -> None:
+        self.mismatch("fix", "patch", "none", "below marker floor patch")
+
+    def test_an_unreadable_or_invalid_draft_warns_without_blocking(self) -> None:
+        for contents in [b"no impact section", b"\xff"]:
+            with self.subTest(contents=contents):
+                path = self.repo.root / ".git" / "invalid.md"
+                path.write_bytes(contents)
+                result, code = self.preflight(body_file=path)
+                self.assertEqual((result["status"], code), ("warn", 0))
+                self.assertIn("PR release-impact warning", " ".join(result["notes"]))
+        result, code = self.preflight(body_file=path.with_name("missing.md"))
+        self.assertEqual((result["status"], code), ("warn", 0))
+
+    def test_the_environment_draft_is_checked_when_no_argument_is_given(self) -> None:
+        self.repo.write("src/tool.rs", "// changed behaviour\n")
+        head = self.repo.commit("feat: change the tool")
+        path = self.repo.root / ".git" / "draft.md"
+        path.write_text(self.repo.body("patch"))
+        args = self.repo.args(head=head, branch="feat/work", remote="origin", target="", base="", body_file=None)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.dict(os.environ, {"CODEFLOW_PR_DRAFT": str(path)}):
+            release.preflight(args)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["status"], "warn")
+        self.assertIn("below marker floor minor", " ".join(result["notes"]))
+
+    def test_no_body_says_the_floor_and_equality_were_not_checked(self) -> None:
+        result, code = self.preflight()
+        self.assertEqual(code, 0)
+        self.assertIn("marker floor and entry equality not checked", " ".join(result["notes"]))
 
     def test_a_behaviour_change_without_an_entry_warns_and_never_blocks(self) -> None:
         self.repo.write("src/tool.rs", "fn main() {}\n")
