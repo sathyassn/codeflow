@@ -595,7 +595,7 @@ mod tests {
         // End-to-end: run_auto called with a nested path writes config at
         // the canonical root, NOT at the nested path — prevents stale
         // duplicate `.codeflow/` subtrees inside the project.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let root = dir.path();
         let nested = root.join("crates").join("codeflow-cli");
         std::fs::create_dir_all(&nested).unwrap();
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn run_auto_creates_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         std::fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n",
@@ -647,7 +647,7 @@ mod tests {
     /// a plain `Written` that would imply a stack was configured.
     #[test]
     fn run_auto_empty_repo_reports_no_targets() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_auto(dir.path()).unwrap();
         assert!(
             matches!(result, SetupResult::WrittenNoTargets),
@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn run_template_refuses_overwrite() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // Create a config
         write_minimal_config(dir.path()).unwrap();
         // Create template dir + file
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn run_template_not_found() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_template(
             dir.path(),
             &assets_template_dir(),
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn run_template_rejects_traversal() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_template(
             dir.path(),
             &assets_template_dir(),
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn run_template_rejects_absolute() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_template(dir.path(), &assets_template_dir(), "/etc/passwd", false);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn run_template_rejects_backslash_traversal() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_template(
             dir.path(),
             &assets_template_dir(),
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn add_target_no_config_errors() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let prompts = ScriptedPromptProvider::new(vec![]);
         let result = run_add_target(dir.path(), &prompts);
         assert!(result.is_err());
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn write_minimal_config_creates_file() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         write_minimal_config(dir.path()).unwrap();
         let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.schema_version, "1.0");
@@ -759,7 +759,7 @@ mod tests {
     fn write_minimal_config_is_idempotent_for_populated_config() {
         use crate::testing::config::{ModeCommand, RunnerType, TargetConfig, TestConfig};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
 
         let mut modes = std::collections::BTreeMap::new();
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn write_minimal_config_preserves_malformed_existing_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         let malformed = b"{ populated but malformed\n";
@@ -831,7 +831,7 @@ mod tests {
     fn run_auto_refuses_to_overwrite_populated_config() {
         use crate::testing::config::{ModeCommand, RunnerType, TargetConfig, TestConfig};
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
 
         let mut modes = std::collections::BTreeMap::new();
@@ -889,7 +889,7 @@ mod tests {
 
     #[test]
     fn run_auto_rejects_and_preserves_malformed_existing_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         let malformed = b"{ populated but malformed\n";
@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn run_auto_populates_an_existing_empty_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         write_minimal_config(dir.path()).unwrap();
         std::fs::write(
             dir.path().join("Cargo.toml"),
@@ -921,14 +921,14 @@ mod tests {
 
     #[test]
     fn list_templates_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let list = get_template_list(dir.path()).unwrap();
         assert!(list.is_empty());
     }
 
     #[test]
     fn interactive_abort_returns_aborted() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // Write existing config
         write_minimal_config(dir.path()).unwrap();
         let prompts = ScriptedPromptProvider::new(vec!["a"]);
@@ -954,7 +954,7 @@ mod tests {
         });
 
         // Write via config-writer to a tempfile
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let out_path = dir.path().join(template_name);
         config::write_test_config(&out_path, &loaded).unwrap();
 
@@ -1027,7 +1027,7 @@ mod tests {
 
     #[test]
     fn run_template_success_from_real_templates() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
 
         let result =
             run_template(dir.path(), &assets_template_dir(), "minimal.json", false).unwrap();
@@ -1037,7 +1037,7 @@ mod tests {
 
     #[test]
     fn run_template_content_uses_the_same_safe_writer() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let content = std::fs::read_to_string(assets_template_dir().join("minimal.json")).unwrap();
         let result = run_template_content(dir.path(), "minimal.json", &content, false).unwrap();
         assert!(matches!(result, SetupResult::Written));
@@ -1058,7 +1058,7 @@ mod tests {
 
     #[test]
     fn run_template_content_rejects_unsafe_name_before_writing() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         let result = run_template_content(
             dir.path(),
             "../minimal.json",
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn run_template_force_overwrites() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // Create existing config
         write_minimal_config(dir.path()).unwrap();
 
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn run_add_target_success() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         write_minimal_config(dir.path()).unwrap();
         // Provide: name, runner, cwd, essential cmd, full cmd
         let prompts = ScriptedPromptProvider::new(vec![
@@ -1109,7 +1109,7 @@ mod tests {
 
     #[test]
     fn run_add_target_rejects_duplicate_without_mutating_config() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         write_minimal_config(dir.path()).unwrap();
         let first = ScriptedPromptProvider::new(vec!["api", "custom", ".", "true", "true"]);
         run_add_target(dir.path(), &first).unwrap();
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn interactive_success_no_existing_no_stacks() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         // No existing config, no sentinel files -> wizard creates empty config
         let prompts = ScriptedPromptProvider::new(vec![]);
         let result = run_interactive(dir.path(), &prompts).unwrap();
@@ -1163,7 +1163,7 @@ mod tests {
 
     #[test]
     fn interactive_success_with_detected_stack() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         std::fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n",
@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn interactive_replace_existing() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         write_minimal_config(dir.path()).unwrap();
         // "r" to replace, no stacks detected -> empty config
         let prompts = ScriptedPromptProvider::new(vec!["r"]);

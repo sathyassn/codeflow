@@ -96,6 +96,37 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Secret-scan exemption pull requests
+
+The managed secret scan reads `.gitleaksignore` from the pull request's
+trusted base. When an integration line contains a reviewed false positive,
+land its fingerprint on the base in a separate pull request first, then
+rerun the line's scan.
+
+`codeflow ci` gives a range that adds or modifies only the root `.gitleaksignore`
+the **secret-scan exemption** class. Its body names one existing epic or
+task with `Task: EPC-NNN` or `Task: TSK-NNN`. A task branch still names its
+own task. Adding a record, a document or any other path keeps the range out
+of this class; `.gitleaksignore` remains outside planning amendments.
+The head entry must be a regular file. Deletions, type changes and mode
+changes do not qualify: such a range naming a task stays ordinary tracked
+work with its dependency check, and one naming an epic is refused.
+
+The class permits a task whose predecessor is incomplete at the planning
+anchor, including one complete only on an integration line. Task identity,
+record validation, PR-body requirements and commit standards still apply.
+The secret scan and security review jobs still run at their configured
+levels. The new fingerprint takes effect only after it lands on the trusted
+base; it cannot exempt a finding introduced by its own pull request.
+Repository approval rules, including code-owner review where configured,
+are unchanged. The class neither configures protection nor grants approval.
+
+Reviewers must verify that each added or changed entry uses `<commit>:<path>:<rule>:<line>`,
+that its commit is already on the named epic's integration line or task's
+branch, and that a linked review establishes the finding as a false positive.
+Refuse entries without a commit: they cover that location in every later
+commit.
+
 ## Where a new key goes
 
 A new policy key lives in the schema registry and the code default only. It
@@ -419,6 +450,71 @@ redirect into it and edit-guard a native edit; a write by any other program
 (`curl -o`, `cp`, `tar`) is the residual AC-6 names, held by the sandbox
 where that path is outside the writable root (review rounds 17 and 18).
 
+The alias and follow-tags checks use one bounded effective-configuration
+reader. Git resolves files, includes, conditional includes, command options
+and inherited configuration environment variables. The reader preserves
+configuration values as bytes until a decision needs text, retaining scope,
+origin and all values for multi-valued keys. Lookup folds section and variable
+names to lowercase while preserving subsection case, as Git does. Alias names
+are case-insensitive. Relative file origins resolve from Git's repository
+base, including invocations from subdirectories. A malformed configuration,
+include loop, unsupported include-path interpolation, or read beyond three
+seconds or 4 MiB is reported as "cannot verify". Missing
+includes contribute nothing, as in Git, and remain in the diagnostic inventory.
+The include inventory is limited to 128 entries.
+
+The guards refuse configuration-dependent actions when shell environment
+changes cannot be reproduced, including `GIT_CONFIG_COUNT`, its key/value pairs,
+`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
+`GIT_CONFIG_NOSYSTEM`. Refusals name the affected variable or unsupported
+option. The parser reads assignments, declaring and input-setting builtins
+(`declare`, `typeset`, `export`, `readonly`, `local`, `unset`, `read`,
+`getln`, `printf -v`, `print -v`, `getopts`, `mapfile`, `readarray`, `let`), loop
+variables (`for VAR in`) and assignment expansions, including `$[...]` and
+`$((...))` arithmetic in Git segments and unquoted heredocs. Array literals
+are read as one assignment and refusals name the array. A destination is
+verified only when it is a literal variable name after quote removal; brace,
+glob, subscript and substitution shapes are unresolved. Namerefs, variable
+redirections and indirect assignment expansions also leave
+configuration-dependent actions unverifiable. Literal configuration
+destinations refuse append writes too. A dynamic value for a known unrelated
+destination, such as `export PATH=$PATH:/x`, is allowed.
+
+On a line with a configuration-dependent Git decision, the guards refuse any
+non-Git segment that mentions a configuration variable except as a plain
+`$NAME` or `${NAME}` read. This backstop applies to aliases, pushes, other
+transports, discards and exec-guard's outward checks. It includes Git's
+configuration, repository-location and program variables, `HOME` and
+`XDG_CONFIG_HOME`. Consequently, data such as `printf HOME; git st` also
+refuses. Git operands and commit messages remain excluded. Lines without such
+a decision, such as `grep HOME f`, are unaffected by this backstop. Clearing
+the environment with `env -i` or `--ignore-environment` also leaves
+configuration-dependent decisions unverifiable.
+
+Configuration or refs supplied as data through variables or xargs, such as
+`V=$(cat f); git push origin "$V"`, are not judged.
+
+Command-local reader environment entries are limited to `GIT_CONFIG_*`,
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `HOME`, `XDG_CONFIG_HOME` and
+`GIT_CEILING_DIRECTORIES`; other names are unverifiable. `--config-env` alias
+invocations remain conservative refusals because a shell assignment can supply
+the named variable. Exec-guard alone does not discover configuration variables
+set inside sourced files; this remains a tracked follow-up.
+Exec-guard alone also does not follow same-line configuration writes before an
+alias; git-guard's ordered configuration-write facts remain a tracked follow-up.
+Repository discovery uses libgit2 before the bounded reader runs. A FIFO or
+device named by an include can block that discovery; bounding this earlier
+stage remains a follow-up for the EPC-022 closeout review, including whether
+each harness refuses or proceeds after a hook timeout. The reader's deadline
+does not bound the whole hook invocation.
+
+`codeflow doctor --check git-config-includes` names include files that may
+be writable, distinguishes missing files, and reports when discovery cannot be
+verified. Include-file writes are not guarded, and the check does not certify
+filesystem permissions. The operator inspects or repairs the configuration and
+secures its include paths. This is the diagnostic mitigation for issue 88; it
+avoids starting Git for every path a session guard examines.
+
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
 `--git-dir`, `GIT_DIR` on the line or in the environment the hook runs in,
@@ -493,8 +589,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   this page says the guard reads is still a blocker when it slips
   through. The sandbox holds such a write when the resolved path is
   outside the writable root or matches a deny. These stay open: a path
-  inside a writable root; an include file in the workspace that a user
-  configuration pulls in (issue 88); a code-running key set at repository
+  inside a writable root; writes to include files (doctor names potentially
+  writable includes, but cannot discover nested includes behind inactive
+  conditions or concurrent changes, issue 88); a code-running key set at repository
   scope, which an allowed `git status` then runs; a workspace symbolic
   link to a protected file, which no sandbox was tested against; a seat
   with no sandbox; Claude's unsandboxed retry, since the presets set

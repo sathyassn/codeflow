@@ -9,6 +9,20 @@ use codeflow_core::testing::doctor;
 use codeflow_core::testing::gate::{self, GateOutcome};
 use codeflow_core::testing::setup;
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+
+/// A fresh project folder. Setup treats the nearest enclosing folder with a
+/// repository as the project root, so when `TMPDIR` is inside a repository the
+/// fixture gets a repository of its own and the enclosing one is never written
+/// to (issue 104).
+fn project_dir() -> tempfile::TempDir {
+    git_isolation::isolate_git();
+    let dir = tempfile::tempdir().unwrap();
+    git_isolation::own_repository(dir.path());
+    dir
+}
+
 /// Template directory in this repo's scaffold assets. Release binaries embed
 /// these files for test setup; init does not scaffold the templates themselves.
 fn assets_template_dir() -> std::path::PathBuf {
@@ -78,7 +92,7 @@ fn prepend_fixture_bin(project_dir: &std::path::Path) {
 /// to the template after a round-trip through the config-writer.
 #[test]
 fn setup_template_then_doctor_pass() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
     let template_dir = assets_template_dir();
 
     // Apply template with force
@@ -116,7 +130,7 @@ fn setup_template_then_doctor_pass() {
 /// -> produces a config with both rust-core and web targets; doctor passes.
 #[test]
 fn setup_auto_detects_rust_and_node() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
 
     // Create stack marker files
     std::fs::write(
@@ -159,7 +173,7 @@ fn setup_auto_detects_rust_and_node() {
 /// `.codeflow/test-config.json` equivalent to the minimal.json template.
 #[test]
 fn init_non_interactive_produces_minimal_config() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
 
     // Write minimal config (simulates what init --non-interactive does)
     setup::write_minimal_config(dir.path()).unwrap();
@@ -196,7 +210,7 @@ fn init_non_interactive_produces_minimal_config() {
 
 #[test]
 fn setup_repairs_a_missing_schema_without_replacing_a_populated_config() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
     let config = r#"{
   "$schema": "test-config.schema.json",
   "schema_version": "1.0",
@@ -232,7 +246,7 @@ fn setup_repairs_a_missing_schema_without_replacing_a_populated_config() {
 fn setup_refuses_a_codeflow_directory_symlink() {
     use std::os::unix::fs::symlink;
 
-    let project = tempfile::tempdir().unwrap();
+    let project = project_dir();
     let outside = tempfile::tempdir().unwrap();
     symlink(outside.path(), project.path().join(".codeflow")).unwrap();
 
@@ -247,7 +261,7 @@ fn setup_refuses_a_codeflow_directory_symlink() {
 fn shipped_custom_template_executes_both_public_command_sets() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
     setup::run_template(
         dir.path(),
         &assets_template_dir(),
@@ -316,7 +330,7 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
     ];
 
     for (template, executable, script, expected_args) in fixtures {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = project_dir();
         setup::run_template(dir.path(), &assets_template_dir(), template, false).unwrap();
         let bin = dir.path().join("fixture-bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -347,7 +361,7 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
 
 #[test]
 fn minimal_template_executes_as_an_intentional_no_target_setup() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
     setup::run_template(dir.path(), &assets_template_dir(), "minimal.json", false).unwrap();
     let outcome = gate::run_gate(dir.path(), "full").unwrap();
     assert!(matches!(outcome, GateOutcome::NoTargets { .. }));
@@ -370,7 +384,7 @@ fn single_target_templates_execute_their_full_commands() {
             true,
         ),
     ] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = project_dir();
         setup::run_template(dir.path(), &assets_template_dir(), template, false).unwrap();
         let bin = dir.path().join("fixture-bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -397,7 +411,7 @@ fn single_target_templates_execute_their_full_commands() {
 #[cfg(unix)]
 #[test]
 fn monorepo_template_executes_each_target_in_its_declared_cwd() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = project_dir();
     setup::run_template(
         dir.path(),
         &assets_template_dir(),

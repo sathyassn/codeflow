@@ -25,6 +25,7 @@ use super::state::{
     ProjectState, SyncBatch, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
+use super::version::check_write_version;
 use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Answers to init's at-most-three questions (charter §4.1: product
@@ -55,7 +56,8 @@ pub struct InitOptions {
 /// # Errors
 ///
 /// Fails on unreadable/unwritable project state, an invalid scaffold
-/// manifest, or git plumbing failures. Missing individual assets are NOT
+/// manifest, an invalid or newer existing pin, or git plumbing failures.
+/// Missing individual assets are NOT
 /// errors — they are skipped and warned in the report.
 pub fn init(
     source: &dyn super::AssetSource,
@@ -75,6 +77,16 @@ fn init_writes(
     root: &Path,
     opts: &InitOptions,
 ) -> Result<Report, ScaffoldError> {
+    // Refuse before creating directories, Git metadata or scaffold files.
+    let previous = if ProjectState::exists(root) {
+        Some(ProjectState::load(root)?)
+    } else {
+        None
+    };
+    if let Some(state) = &previous {
+        check_write_version(&state.scaffold_version, &opts.binary_version, "init")?;
+    }
+
     std::fs::create_dir_all(root).map_err(|e| ScaffoldError::io(root, e))?;
     let manifest = ScaffoldManifest::load(source)?;
 
@@ -88,11 +100,6 @@ fn init_writes(
     let hook_manager = detect::detect_hook_manager(root)?;
 
     // Resolve tier / answers against any previous install.
-    let previous = if ProjectState::exists(root) {
-        Some(ProjectState::load(root)?)
-    } else {
-        None
-    };
     let recorded_tier = previous.as_ref().map(|s| s.tier);
     let tier = effective_tier(recorded_tier, opts.tier);
 
