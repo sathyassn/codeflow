@@ -530,9 +530,8 @@ mod tests {
         let conditional = dir.path().join("conditional");
         std::fs::write(&included, "[alias]\n ship = push origin v9.9.9\n").unwrap();
         std::fs::write(&conditional, "[push]\n followTags = true\n").unwrap();
-        let output = std::process::Command::new("git")
+        let output = crate::git::judging_command()
             .current_dir(dir.path())
-            .envs(&env)
             .args(["rev-parse", "--absolute-git-dir"])
             .output()
             .unwrap();
