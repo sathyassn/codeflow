@@ -127,7 +127,7 @@ jobs:
           # run here; the coverage report job reads the Rust journeys from
           # the shards' results (TSK-270).
           - part: checks
-            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,journey-python
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -612,7 +612,7 @@ jobs:
 
       - name: Windows Node target through cmd.exe
         shell: bash
-        run: CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_parity.py
+        run: python scripts/test_gate_parity.py && CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_portal_windows.py
 
   # The journey gate's Python journeys need no test results, so they run
   # here from the start (TSK-265); the journeys job runs the rest. Together

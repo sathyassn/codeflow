@@ -37,12 +37,16 @@ This sweep records the TSK-287 migration for issue 122.
   object-store selection refuses: retry; if it persists, remove the cache.
   This allows a retry after ordinary Git maintenance rewrites a cache.
   Missing commit objects report a graph disagreement with the remove-cache remedy.
-- Judging subprocesses use `history::command`, which supplies
+- Judging subprocesses generally use `history::command`, which supplies
   `-c core.commitGraph=false` and clears inherited `GIT_DIR`, `GIT_COMMON_DIR`,
   `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES` and `GIT_WORK_TREE`.
   Each caller supplies the checked repository's directory. This preserves
   configured on-disk alternates and prevents environment redirects from
   selecting an unchecked repository or object store.
+  Push-set subprocesses retain `git::judging_command` and explicitly add
+  `-c core.commitGraph=false`; this also clears inherited index and
+  command-config inputs. Their history queries use the same
+  `history::check_command` guard.
 - Shallow boundaries are the union of non-empty files in the common and
   private Git directories. Neither libgit2's `is_shallow()` result nor an
   empty private file masks the common boundary.
