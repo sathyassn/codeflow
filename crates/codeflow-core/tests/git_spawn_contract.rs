@@ -42,6 +42,12 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-core/src/doctor/mod.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "permission fixture tests re-running their own binary with an isolated TMPDIR",
+    ),
+    (
         "codeflow-core/src/ids/git.rs",
         "std::env::current_exe().unwrap()",
         2,

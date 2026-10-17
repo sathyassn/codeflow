@@ -636,6 +636,16 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
     false
 }
 
+/// Inventory includes outside the guard's fixed protected-path class.
+/// Doctor reports these potentially writable files and failed reads; ordinary
+/// path checks do not launch a configuration probe per operand.
+pub(crate) fn included_git_config_files(
+    root: &Path,
+) -> Result<Vec<crate::security::git_config::Include>, String> {
+    crate::security::git_config::read(root, &[], &crate::security::git_config::Environment::new())
+        .map(|config| config.includes)
+}
+
 /// Every checkout sharing this repository: its own working tree, the main
 /// working tree and each registered linked worktree.
 fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
