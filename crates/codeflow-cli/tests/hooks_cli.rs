@@ -1846,6 +1846,509 @@ fn exec_guard_blocks_dangerous_command_with_exit_2() {
 }
 
 #[test]
+fn configuration_operands_and_missing_includes_allow_ordinary_git_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let work = dir.path().join("work");
+    git(
+        dir.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/config",
+            work.to_str().unwrap(),
+        ],
+    );
+    let global = dir.path().join("fixture-global");
+    std::fs::write(
+        &global,
+        "[includeIf \"gitdir:/nowhere/work/\"]\n path = missing\n[alias]\n st = status\n",
+    )
+    .unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git commit -m 'docs: explain gitconfig includes'",
+            "git commit -m 'move to HOME page'",
+            "git checkout -- .git/config-notes.md",
+            "git log -1 -- docs/gitconfig.md && git push origin feat/x",
+            "git push origin task/x",
+            "git st",
+        ] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", hook])
+                    .env("GIT_CONFIG_GLOBAL", &global)
+                    .current_dir(&work),
+                &guard_payload(command, &work),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    let out = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        output.contains("missing; contributes no configuration"),
+        "{output}"
+    );
+    assert!(
+        output.contains(dir.path().join("missing").to_str().unwrap()),
+        "{output}"
+    );
+}
+
+#[test]
+fn relative_configuration_includes_work_from_subdirectories() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(dir.path().join("extra"), "[alias]\n st = status\n").unwrap();
+    git(dir.path(), &["config", "include.path", "../extra"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (cwd, command) in [
+            (&sub, "git st"),
+            (&dir.path().to_path_buf(), "git -C sub st"),
+            (&dir.path().to_path_buf(), "cd sub && git st"),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(cwd),
+                &guard_payload(command, cwd),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn exec_guard_alone_refuses_environment_release_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let global = dir.path().join("extra-config");
+    std::fs::write(&global, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    for command in [
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship".to_string(),
+        "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        format!("GIT_CONFIG_GLOBAL='{}' git ship", global.display()),
+        "{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship".to_string(),
+        "{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship".to_string(),
+        format!("{{GIT_CONFIG_GLOBAL,X}}='{}' git ship", global.display()),
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\"; git ship".to_string(),
+    ] {
+        let out = exec_guard_tool(dir.path(), "Bash", &command);
+        assert_eq!(out.status.code(), Some(2), "{command}: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"), "{command}");
+    }
+}
+
+#[test]
+fn assignment_prefixes_do_not_hide_git_paths_containing_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["tag", "v9.9.9"]);
+    for (hook, target) in [("git-guard", "HEAD:main"), ("exec-guard", "v9.9.9")] {
+        for prefix in ["/tmp/a=b/git", "env /tmp/a=b/git", "FOO=/usr/bin/git git"] {
+            let command = format!("{prefix} push origin {target}");
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(&command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn configuration_closing_rule_refuses_expansion_writes_but_allows_plain_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    write_agent_policy(dir.path(), TARGETING_POLICY);
+    git(dir.path(), &["config", "alias.zz", "status"]);
+    let home = dir.path().join("home");
+    let nested = home.join("src/x");
+    std::fs::create_dir_all(&nested).unwrap();
+    init_repo(&nested, "task/x");
+    let refusals = [
+        "git -c x.y=$[HOME=1] zz",
+        "git zz $[HOME=1]",
+        "git ship $[HOME=1]",
+        "git -c x.y=$[GIT_CONFIG_COUNT=1] zz",
+        "git zz $[GIT_CONFIG_COUNT=1]",
+        "git ship $[GIT_CONFIG_COUNT=1]",
+        "cat <<EOF\n$[HOME=1]\nEOF\ngit zz",
+        "declare -a arr=(1 2); git zz",
+        "arr=(1 2); git zz",
+        "export {GIT_CONFIG_PARAMETERS,X}=\"'remote.origin.push=HEAD:refs/heads/main'\"; git push origin",
+        "export {HOME,X}=/evil; git zz",
+        "export H{OME,X}=/evil; git zz",
+        "{HOME,X}=/evil git zz",
+        "env H{OME,X}=/evil git zz",
+        "command env HOM?=/evil git push origin task/x",
+        "printf -v {HOME,X} %s /evil; git zz",
+        "read {HOME,X} < f; git zz",
+        "for H{OME,X} in /evil; do git zz; done",
+        "getln HOM?; git zz",
+        ": ${H?ME=/evil}; git zz",
+        ": ${$V=/evil}; git zz",
+        "cat <<EOF\n${(P)V::=/evil}\nEOF\ngit zz",
+        "V=HOME; : ${(P)V::=/evil}; git zz",
+        ": ${(P)V::=/evil}; git zz",
+        "print -z /evil; getln HOME; git zz",
+        "exec {HOME}>/dev/null; git zz",
+        "exec {slot}</dev/null; git zz",
+        "export HOM?=/evil; git zz",
+        "read HOM? < f; git push origin task/x",
+        "HOM?=/evil; git push origin task/x",
+        "cat <<EOF\n${HOME:=/evil}\nEOF\ngit zz",
+        "getln GIT_DIR; git push origin task/x",
+        "getln GIT_COMMON_DIR; git push origin task/x",
+        "getln GIT_EXEC_PATH; git push origin task/x",
+        "getln XDG_CONFIG_HOME; git push origin task/x",
+        "printf HOME; git zz",
+        "git zz; getln HOME",
+    ];
+    let allowed = [
+        "export PATH=$PATH:/x; git status",
+        "V=1; echo $V",
+        "git status",
+        "git log -1",
+        "git log -1 \"$((1+1))\"",
+        "/tmp/a=b/git push origin task/x",
+        "export FOO=$(pwd); git push origin task/x",
+        "export FOO='(1 2)'; git push origin task/x",
+        "read -r answer < f; git push origin task/x",
+        "printf -v out %s x",
+        "cd \"$HOME/src/x\" && git push origin task/x",
+        "git commit -m \"set HOME\"",
+        "printf '%s' \"${HOME}\"; git push origin task/x",
+        "git log -- HOME GIT_CONFIG_PARAMETERS; git push origin task/x",
+        "getln HOME; git status",
+        "export PATH=$PATH:/x",
+        "read -p \"...\" answer",
+        "echo \"${HOME:-/x}\"",
+        "declare -a arr=(1 2)",
+        ": ${FOO:=bar}",
+        "grep HOME f",
+        "env | grep HOME",
+    ];
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for (commands, expected) in [(&refusals[..], 2), (&allowed[..], 0)] {
+            for command in commands {
+                let out = run_with_stdin(
+                    codeflow()
+                        .args(["hook", hook])
+                        .env("HOME", &home)
+                        .current_dir(dir.path()),
+                    &guard_payload(command, dir.path()),
+                );
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(expected)
+                    || (command.contains("arr=(1 2); git") && !diagnostic.contains("arr"))
+                    || (expected == 2
+                        && !diagnostic.contains("configuration")
+                        && !diagnostic.contains("configured remote"))
+                {
+                    failures.push(format!(
+                        "{hook}: {command}: expected {expected}, got {:?}: {}",
+                        out.status.code(),
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn mixed_case_aliases_cannot_hide_protected_pushes_or_releases() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(
+        dir.path(),
+        &["config", "alias.toMain", "push origin HEAD:main"],
+    );
+    git(dir.path(), &["tag", "v9.9.9"]);
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        // Each plane owns a different decision: protected branch vs release.
+        let commands: &[&str] = if hook == "git-guard" {
+            git(
+                dir.path(),
+                &["config", "alias.ship", "push origin HEAD:main"],
+            );
+            &[
+                "git -c alias.pm='push origin HEAD:main' Pm",
+                "git SHIP",
+                "git Ship",
+                "git toMain",
+            ]
+        } else {
+            git(dir.path(), &["config", "alias.ship", "push origin v9.9.9"]);
+            &[
+                "git SHIP",
+                "git Ship",
+                "git -c alias.rel='push origin v9.9.9' Rel",
+            ]
+        };
+        for command in commands {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            if out.status.code() != Some(2) {
+                failures.push(format!("{hook}: {command}: {:?}", out.status.code()));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn unresolved_configuration_writes_refuse_in_both_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["config", "alias.zz", "status"]);
+    let writes = [
+        "V=HOME; export $V=/evil",
+        "export \"$(echo HOME)=/evil\"",
+        "export `echo HOME`=/evil",
+        ": ${HOME::=/evil}",
+        "print -v HOME /evil",
+        "HOME[1,-1]=/evil",
+        "declare -n r=HOME; r=/evil",
+        "typeset -n r=HOME; r=/evil",
+        "declare -nx r=HOME",
+        "local -n r=HOME",
+        "V=HOME; declare $V=/evil",
+        "V=HOME; typeset $V=/evil",
+        "V=HOME; readonly $V=/evil",
+        "V=HOME; local $V=/evil",
+        "V=HOME; unset $V",
+        "V=HOME; read $V",
+        "V=HOME; printf -v $V %s /evil",
+        "V=HOME; print -v $V /evil",
+        "V=HOME; getopts x $V",
+        "V=HOME; mapfile $V",
+        "V=HOME; readarray $V",
+        "V=HOME; let $V=1",
+        "getopts x HOME",
+        "mapfile HOME",
+        "readarray HOME",
+        "let HOME=1",
+        "HOME+=/evil",
+        "export HOME[0]=/evil",
+        "V=GIT_CONFIG_PARAMETERS; export $V=\"'remote.origin.push=HEAD:refs/heads/main'\"",
+        "V=GIT_CONFIG_PARAMETERS; K=core.hooks; export $V=\"'${K}Path=/dev/null'\"",
+    ];
+    let mut failures = Vec::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for write in writes {
+            for operation in ["git zz", "git push origin", "git reset --hard"] {
+                // Exec-guard owns outward actions; discard belongs to git-guard.
+                if hook == "exec-guard" && operation == "git reset --hard" {
+                    continue;
+                }
+                let command = format!("{write}; {operation}");
+                let out = run_with_stdin(
+                    codeflow().args(["hook", hook]).current_dir(dir.path()),
+                    &guard_payload(&command, dir.path()),
+                );
+                let diagnostic = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2)
+                    || ![
+                        "environment variable",
+                        "unresolved variable destination",
+                        "nameref option",
+                    ]
+                    .iter()
+                    .any(|reason| diagnostic.contains(reason))
+                {
+                    failures.push(format!(
+                        "{hook}: {command}: {:?}: {diagnostic}",
+                        out.status.code()
+                    ));
+                }
+            }
+        }
+        for command in ["export PATH=$PATH:/x; git zz", "V=1; echo $V; git zz"] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn configuration_builtins_refuse_in_both_guards_while_alias_operands_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    git(dir.path(), &["config", "alias.st", "status"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for (command, expected) in [
+            (
+                "declare -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            (
+                "typeset -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/x",
+                2,
+            ),
+            ("export HOME=/tmp/config; git push origin task/x", 2),
+            ("readonly HOME=/tmp/config; git push origin task/x", 2),
+            ("read HOME < file; git ship", 2),
+            ("printf -v HOME %s /tmp/config; git ship", 2),
+            ("for HOME in /tmp/config; do git ship; done", 2),
+            (": ${HOME:=/tmp/config}; git ship", 2),
+            ("git st docs/gitconfig.md", 0),
+            ("git st -- HOME", 0),
+        ] {
+            let out = run_with_stdin(
+                codeflow().args(["hook", hook]).current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(expected),
+                "{hook}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn installed_exec_guard_and_include_diagnostic_journey() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let installed = codeflow()
+        .args(["init", "--minimal", "--yes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    // This shell-event fixture wires only exec-guard. No git-guard call can
+    // supply the missing refusal on its behalf.
+    let out = exec_guard_tool(dir.path(), "Bash", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin v9.9.9' git ship");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"));
+
+    let included = dir.path().join("included-config");
+    std::fs::write(&included, "[alias]\n ship = push origin v9.9.9\n").unwrap();
+    git(
+        dir.path(),
+        &["config", "include.path", included.to_str().unwrap()],
+    );
+    let payload = serde_json::json!({"tool_name":"Write", "tool_input":{
+        "file_path":included, "content":"[core]\n pager = planted\n"}, "cwd":dir.path()})
+    .to_string();
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "edit-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
+        &guard_payload(
+            &format!("printf planted > '{}'", included.display()),
+            dir.path(),
+        ),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doctor = codeflow()
+        .args(["doctor", "--check", "git-config-includes"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    assert!(output.contains("included-config"), "{output}");
+    assert!(output.contains("writable"), "{output}");
+}
+
+#[test]
+fn doctor_reports_writable_global_and_system_include_files() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/config");
+    let parent = dir.path().join("parent-config");
+    let included = dir.path().join("included-config");
+    std::fs::write(&parent, "[include]\n path = included-config\n").unwrap();
+    std::fs::write(&included, "[core]\n pager = planted\n").unwrap();
+    for variable in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        let out = codeflow()
+            .env(variable, &parent)
+            .env("GIT_CONFIG_NOSYSTEM", "false")
+            .args(["doctor", "--check", "git-config-includes"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            output.contains("included-config") && output.contains("writable"),
+            "{variable}: {output}"
+        );
+    }
+}
+
+#[test]
 fn exec_guard_blocks_powershell_catastrophe_with_exit_2() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");

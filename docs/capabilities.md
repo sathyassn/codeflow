@@ -133,7 +133,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -148,6 +148,12 @@ adrs: [ADR-0011, ADR-0019]
 
 Update also installs missing in-tier manifest entries. It never clobbers and
 never silently skips.
+
+| Version case | What update and a repeated init do |
+|---|---|
+| Binary older than the project's `scaffold_version` | Refuses before writing project files, preserving the pin, release digests and managed files; names both versions and the pinned version to install |
+| Unparsable pin | Refuses before writing project files and names the value, file and correction to make |
+| Binary released before this safeguard | Can still lower the pin |
 
 | Policy scalar | On update |
 |---|---|
@@ -273,11 +279,12 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   provider. On GitHub it requires a PR and the required checks on an
   up-to-date branch, blocks force-push and deletion, and reports anything
   the plan tier cannot apply.
-- `codeflow doctor` runs twenty-two health checks on the repository and the
+- `codeflow doctor` runs twenty-three health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
+| Git configuration includes | Included files that may be writable, and configuration the bounded reader cannot verify; include-file writes remain unguarded |
 | Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB |
 | Reading sizes (ADR-0083) | the kernel and the per-task reading chain in bytes, each shipped skill and agent body and the always-loaded instruction set in lines, against advisory guidelines with a stated basis (500 lines for a body, 200 for the always-loaded set, 160 KiB for the chain, the kernel derived from the Codex limit), or a project's own `[reading]` values in `.codeflow/project.toml`: information within them, a note above them that names the detail to move behind a trigger, never a warning or a failure; a skill or agent description over the API's 1,024 characters warns; when the installed skills' read edges differ from the map the binary ships, the chain is information naming both versions |
 | Permissions and the sandbox | a warning naming each directory a full gate writes outside the worktree (its locks and its evidence) that this process cannot write; when `SANDBOX_RUNTIME` is set it notes that, probes the network over HTTPS and checks the HTTP status, and reports a failed Codex sign-in probe as unconfirmed, quoting it, unless it says signed out |
@@ -591,7 +598,7 @@ name: opt-in-documentation-portal
 area: scaffold
 status: shipped
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
-epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017]
+epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022]
 adrs: [ADR-0048, ADR-0058]
 ```
 

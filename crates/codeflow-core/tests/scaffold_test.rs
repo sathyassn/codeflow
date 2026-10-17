@@ -883,6 +883,174 @@ fn init_v1(root: &Path) -> tempfile::TempDir {
     assets_dir
 }
 
+/// Include untracked files, baselines and the digest table, not just git's diff.
+fn tree_bytes(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.insert(
+                    path.strip_prefix(root).unwrap().into(),
+                    std::fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
+fn init_tier_upgrade_refuses_an_older_binary_without_writing_any_file() {
+    isolate_git();
+    for (force, has_repo) in [(false, true), (true, true), (false, false)] {
+        let (_p, root) = project_dir();
+        let (_a1, assets_v1) = fixture_assets(false);
+        scaffold::init(&assets_v1, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+        let state_path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml");
+        std::fs::write(&state_path, format!("{state}\n[scaffold_sha256]\nversion = \"2.0.0\"\nx86_64-unknown-linux-gnu = \"{}\"\n", "a".repeat(64))).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let mut options = opts(Some(Tier::Standard), "1.9.0");
+        options.force = force;
+        if !has_repo {
+            std::fs::remove_dir_all(root.join(".git")).unwrap();
+        }
+        let before = tree_bytes(&root);
+        let result = scaffold::init(&assets_v2, &root, &options);
+        assert_eq!(
+            tree_bytes(&root),
+            before,
+            "init refusal must leave every byte intact"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("1.9.0"), "{message}");
+        assert!(message.contains("2.0.0"), "{message}");
+        assert!(message.contains("install the pinned version"), "{message}");
+    }
+}
+
+#[test]
+fn init_tier_upgrade_refuses_an_unparsable_pin_without_writing_any_file() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let (_a, assets) = fixture_assets(false);
+    scaffold::init(&assets, &root, &opts(Some(Tier::Minimal), "2.0.0")).unwrap();
+    let path = root.join(".codeflow/project.toml");
+    let state = read(&root, ".codeflow/project.toml").replace(
+        "scaffold_version = \"2.0.0\"",
+        "scaffold_version = \"broken\"",
+    );
+    std::fs::write(path, state).unwrap();
+    let before = tree_bytes(&root);
+    let result = scaffold::init(&assets, &root, &opts(Some(Tier::Standard), "2.1.0"));
+    assert_eq!(tree_bytes(&root), before);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("\"broken\""), "{message}");
+    assert!(message.contains(".codeflow/project.toml"), "{message}");
+    assert!(message.contains("correct it and retry"), "{message}");
+    assert!(!message.contains("older"), "{message}");
+}
+
+#[test]
+fn update_refuses_an_older_binary_without_writing_any_file() {
+    isolate_git();
+    for force in [false, true] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let state_path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml");
+        std::fs::write(&state_path, format!("{state}\n[scaffold_sha256]\nversion = \"2.0.0\"\nx86_64-unknown-linux-gnu = \"{}\"\n", "a".repeat(64))).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let mut options = update_opts("1.9.0");
+        options.force = force;
+        options.diff_out = Some(root.join("update.diff"));
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &options);
+        assert_eq!(
+            tree_bytes(&root),
+            before,
+            "refusal must leave every byte intact"
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("1.9.0"), "{message}");
+        assert!(message.contains("2.0.0"), "{message}");
+        assert!(message.contains("install the pinned version"), "{message}");
+    }
+}
+
+#[test]
+fn update_refuses_an_unparsable_pin_without_writing_any_file() {
+    isolate_git();
+    for pin in [
+        "broken",
+        "",
+        "2.no.0",
+        "2..0",
+        "2.0.0-",
+        "2.0.0+",
+        "2.0.0-01",
+        "18446744073709551616.0.0",
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let path = root.join(".codeflow/project.toml");
+        let state = read(&root, ".codeflow/project.toml").replace(
+            "scaffold_version = \"2.0.0\"",
+            &format!("scaffold_version = \"{pin}\""),
+        );
+        std::fs::write(path, state).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &update_opts("2.1.0"));
+        assert_eq!(tree_bytes(&root), before, "invalid pin {pin:?}");
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains(&format!("{pin:?}")), "{message}");
+        assert!(message.contains("scaffold_version"), "{message}");
+        assert!(message.contains(".codeflow/project.toml"), "{message}");
+        assert!(message.contains("correct it and retry"), "{message}");
+        assert!(!message.contains("older"), "{message}");
+    }
+}
+
+#[test]
+fn update_with_an_equal_binary_still_refreshes_managed_files() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets_v2) = fixture_assets(true);
+    scaffold::update(&assets_v2, &root, &update_opts("2.0.0")).unwrap();
+    assert_eq!(read(&root, ".claude/workflows/develop.md"), DEVELOP_V2);
+    assert!(read(&root, ".codeflow/project.toml").contains("scaffold_version = \"2.0.0\""));
+}
+
+#[test]
+fn update_compares_prereleases_and_ignores_build_metadata() {
+    isolate_git();
+    for (pin, binary, allowed) in [
+        ("2.0.0", "2.0.0-rc.1", false),
+        ("2.0.0-rc.10", "2.0.0-rc.2", false),
+        ("2.0.0-rc.2", "2.0.0-rc.10", true),
+        ("2.0.0-rc.1", "2.0.0", true),
+        ("2.0.0+build.1", "2.0.0+build.2", true),
+        ("2.0.1+build.1", "2.0.0+build.2", false),
+    ] {
+        let (_p, root) = project_dir();
+        let (_a1, assets_v1) = fixture_assets(false);
+        scaffold::init(&assets_v1, &root, &opts(None, pin)).unwrap();
+        let (_a2, assets_v2) = fixture_assets(true);
+        let before = tree_bytes(&root);
+        let result = scaffold::update(&assets_v2, &root, &update_opts(binary));
+        assert_eq!(result.is_ok(), allowed, "{pin} -> {binary}: {result:?}");
+        if !allowed {
+            assert_eq!(tree_bytes(&root), before);
+        }
+    }
+}
+
 #[test]
 fn update_replaces_unmodified_managed_files() {
     isolate_git();
