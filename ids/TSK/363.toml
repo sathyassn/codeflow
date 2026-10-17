@@ -1,0 +1,11 @@
+id = "TSK-363"
+uid = "e0b237dd-ac95-4411-8ed2-18384f59be5a"
+kind = "TSK"
+title = "Policy keys with no reader are refused or warned, never documented as controls"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:21Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
