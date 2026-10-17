@@ -153,7 +153,9 @@ fn merge_refuses_candidate_moved_during_gate() {
     let dir = fixture(false);
     let root = dir.path();
     let line = git(root, &["rev-parse", "main"]);
-    gate(root, "git checkout --detach feat/reviewed");
+    // Change only HEAD, leaving the candidate files intact so the gate's
+    // file-generation guard does not reject the mutation first.
+    gate(root, "git update-ref HEAD HEAD^1");
     let error =
         integrate_with_mode(root, "feat/reviewed", "main", IntegrateMode::Merge).unwrap_err();
     assert!(error.to_string().contains("candidate HEAD moved"));
