@@ -48,6 +48,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "the directory-prefix differential test runs `<prefix>; pwd` under the installed bash and zsh in a disposable fixture, never git (TSK-302)",
     ),
     (
+        "codeflow-core/src/doctor/mod.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "permission fixture tests re-running their own binary with an isolated TMPDIR",
+    ),
+    (
         "codeflow-core/src/ids/git.rs",
         "std::env::current_exe().unwrap()",
         2,

@@ -457,7 +457,7 @@ fn odd_name_problem(shown: &str) -> String {
 }
 
 /// What an entry of `mode` is when it is not a regular file or folder.
-fn special(mode: i32) -> Option<&'static str> {
+pub(crate) fn special_entry_kind(mode: i32) -> Option<&'static str> {
     match mode {
         LINK_MODE => Some("symbolic link"),
         GITLINK_MODE => Some("submodule"),
@@ -511,7 +511,7 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
                 let message = odd_name_problem(&shown);
                 return Some((shown, message));
             }
-            if let Some(kind) = special(i32::from(file.mode())) {
+            if let Some(kind) = special_entry_kind(i32::from(file.mode())) {
                 let message = format!(
                     "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
                 );
@@ -536,7 +536,7 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
         return unreadable();
     };
     let mut found = None;
-    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special(
+    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special_entry_kind(
         entry.filemode(),
     ) {
         Some(kind) => {

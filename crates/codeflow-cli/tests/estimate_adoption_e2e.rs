@@ -9,6 +9,10 @@ use std::process::{Command, Output};
 
 const EXAMPLE: &str = ".agents/skills/cf-estimate/examples/forecast.json";
 
+#[path = "support/own_repository.rs"]
+mod own_repository;
+use own_repository::own_repository;
+
 struct Project {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -21,6 +25,7 @@ impl Project {
         let root = temp.path().join("project");
         std::fs::create_dir(&root).unwrap();
         let home = temp.path().join("private-home");
+        own_repository(&root);
         Self {
             _temp: temp,
             root,
