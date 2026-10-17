@@ -1,0 +1,11 @@
+id = "TSK-348"
+uid = "ecf73b15-0388-498f-9ecb-f5c77ca14359"
+kind = "TSK"
+title = "native platform journeys run in hosted CI"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:41:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
