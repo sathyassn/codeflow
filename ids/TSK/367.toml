@@ -1,0 +1,11 @@
+id = "TSK-367"
+uid = "0d8ea3b0-b95f-4065-a19f-29d129d34def"
+kind = "TSK"
+title = "A bounded mutation campaign proves the enforcement tests catch weakened checks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
