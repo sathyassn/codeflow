@@ -1,0 +1,11 @@
+id = "TSK-343"
+uid = "a5a12606-0fc1-4941-be06-01ab6b619884"
+kind = "TSK"
+title = "The guard fuzz tests and the local coverage gate fit their time limit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:40:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
