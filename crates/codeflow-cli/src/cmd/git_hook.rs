@@ -512,25 +512,19 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn pending_registry_note_redacts_a_url_used_as_the_remote_name() {
+        use std::ffi::OsStr;
         let dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(dir.path()).unwrap();
-        let tree = repo.treebuilder(None).unwrap().write().unwrap();
-        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
-        let head = repo
-            .commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                "fixture",
-                &repo.find_tree(tree).unwrap(),
-                &[],
-            )
-            .unwrap();
-        repo.reference(codeflow_core::ids::REGISTRY_REF, head, true, "fixture")
-            .unwrap();
-        repo.remote("origin", "/unused").unwrap();
+        let head = repo_with_commit(dir.path(), &[b"a"]);
+        for args in [
+            vec!["update-ref", codeflow_core::ids::REGISTRY_REF, &head],
+            vec!["remote", "add", "origin", "/unused"],
+        ] {
+            let args: Vec<_> = args.iter().map(OsStr::new).collect();
+            run_git(dir.path(), &args, b"");
+        }
         let refs = git_hook::parse_push_refs(&format!(
             "refs/heads/task/example {head} refs/heads/task/example {}\n",
             "0".repeat(40)
