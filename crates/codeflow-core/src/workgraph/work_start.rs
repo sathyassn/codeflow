@@ -426,6 +426,7 @@ fn local_or_upstream(
 #[must_use]
 pub fn is_stable_work_target(target: &str) -> bool {
     target_reference_names(target).is_some()
+        && !logical_target(target).starts_with('-')
         && !looks_like_full_object_id(target)
         && !logical_target(target).starts_with("task/")
 }
@@ -789,6 +790,20 @@ pub fn declared_work_target_at_revision(
     branch: &str,
     revision: &str,
 ) -> Result<Option<String>, WorkStartError> {
+    Ok(
+        declared_work_record_at_revision(repo_root, branch, revision)?
+            .and_then(|record| record.integration_target)
+            .filter(|target| !target.is_empty())
+            .map(|target| logical_target(&target).to_owned()),
+    )
+}
+
+/// The task record a work branch claims, read at `revision`.
+fn declared_work_record_at_revision(
+    repo_root: &Path,
+    branch: &str,
+    revision: &str,
+) -> Result<Option<Record>, WorkStartError> {
     let Some(suffix) = work_branch_suffix(repo_root, branch)? else {
         return Ok(None);
     };
@@ -807,12 +822,96 @@ pub fn declared_work_target_at_revision(
                 .is_some_and(|id| suffix.starts_with(&format!("{id}-")))
     })?;
     Ok(records
-        .values()
+        .into_values()
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
-        .max_by_key(|record| record.id.len())
-        .and_then(|record| record.integration_target.as_deref())
-        .filter(|target| !target.is_empty())
-        .map(|target| logical_target(target).to_owned()))
+        .max_by_key(|record| record.id.len()))
+}
+
+/// Whether the records at one revision bind a declared epic line.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EpicLineBinding {
+    /// The records bind the line to the branch's epic.
+    Bound,
+    /// A refusal no other revision can lift: the name is not an epic line,
+    /// its epic is not the branch's own, or the epic is cancelled or
+    /// archived.
+    Refused(String),
+    /// These records do not bind the line; another trusted revision may.
+    Unbound(String),
+}
+
+/// Whether the records at `anchor` (named `place` in messages) bind `line`
+/// as an epic line that `branch` may declare. The line's epic must be the
+/// branch's own (the epic a `plan/` branch names, or the epic of the task a
+/// work branch claims at `head`), must exist at `anchor` without being
+/// cancelled or archived, and a task of that epic there must target this
+/// exact line, as [`check_epic_line`] requires of a landing line. A name
+/// alone binds nothing. The caller chooses an anchor the change itself does
+/// not write: the protected branch, or the line's remote-tracking ref.
+///
+/// # Errors
+///
+/// Returns why the repository, a revision or a record could not be read.
+pub fn epic_line_binding(
+    repo_root: &Path,
+    branch: &str,
+    head: &str,
+    line: &str,
+    anchor: &str,
+    place: &str,
+) -> Result<EpicLineBinding, WorkStartError> {
+    let line = logical_target(line);
+    let epic_id = match super::line_adoption::epic_id(line) {
+        Ok(epic_id) => epic_id,
+        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+    };
+    let own = if let Some(plan) = branch.strip_prefix("plan/") {
+        super::line_adoption::epic_id(&format!("integration/{plan}"))
+            .ok()
+            .map(str::to_owned)
+    } else {
+        declared_work_record_at_revision(repo_root, branch, head)?.and_then(|record| record.epic_id)
+    };
+    if own.as_deref() != Some(epic_id) {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which is not the epic of branch '{branch}'"
+        )));
+    }
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let tree = repo
+        .revparse_single(anchor)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| WorkStartError::Repository(format!("{anchor}: {error}")))?;
+    let records = records_from_tree(&repo, &tree)?;
+    let Some(epic) = records
+        .get(epic_id)
+        .filter(|record| record.kind == RecordKind::Epic)
+    else {
+        return Ok(EpicLineBinding::Unbound(format!(
+            "names {epic_id}, which has no epic record on {place}"
+        )));
+    };
+    if matches!(epic.status.as_str(), "cancelled" | "archived") {
+        return Ok(EpicLineBinding::Refused(format!(
+            "names {epic_id}, which is {} on {place}",
+            epic.status
+        )));
+    }
+    let bound = records.values().any(|record| {
+        record.kind == RecordKind::Task
+            && record.epic_id.as_deref() == Some(epic_id)
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| logical_target(target) == line)
+    });
+    if !bound {
+        return Ok(EpicLineBinding::Unbound(format!(
+            "is not the target of any task of {epic_id} on {place}"
+        )));
+    }
+    Ok(EpicLineBinding::Bound)
 }
 
 /// The `integration_target` the task record at `path` declares.

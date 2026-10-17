@@ -157,6 +157,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
     ("CI_BASE_REFUSED", Runs),
+    ("CI_BASE_TARGET_DIFFER", Runs),
     ("CI_RANGE_UNREADABLE", Runs),
     ("CI_BRANCH_UNRESOLVED", Runs),
     ("CI_BODY_UNSUPPLIED", Runs),
@@ -1150,6 +1151,28 @@ fn clears_ci_base_unresolved() {
             ("--head <ref>", "--head HEAD"),
         ],
         &["--branch", "feat/x"],
+    );
+    assert!(!after.contains(finding), "{after}");
+}
+
+#[test]
+fn clears_ci_base_target_differ() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    let branch = "integration/EPC-001-outcome";
+    git(root, &["switch", "-qc", branch]);
+    git(root, &["branch", "alternate", "main"]);
+    commit(root, "x.txt", "feat: add x");
+    let finding = "differs from named --base";
+    let before = codeflow(root, &["ci", "--base", "alternate", "--branch", branch]);
+    let printed = block(&before, finding).to_string();
+    assert_prints_row(&printed, "CI_BASE_TARGET_DIFFER");
+    let step = printed_command(&printed, "CI_BASE_TARGET_DIFFER", None);
+    let after = run_printed(
+        root,
+        &step,
+        &[("<ref>", "alternate"), ("<target>", "main")],
+        &["--branch", branch],
     );
     assert!(!after.contains(finding), "{after}");
 }

@@ -181,13 +181,13 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<STAGE>` | Hook stage (receives git's standard hook arguments). One of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push`, `capabilities`. |
 | | `[ARGS]...` | Arguments passed through by git (e.g. the commit-msg file path, the pre-push remote name and URL). |
 | `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
-| | `--base <REF>` | Base ref of the range (exclusive). Auto-detected from CI env when omitted. |
+| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches. An unresolved or unsuitable declared target warns; pass --base to select the intended range. |
 | | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
-| | `--branch <NAME>` | Branch name to check against the naming policy (default: the CI-provided or current HEAD branch). |
+| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Only protected branches and bound epic lines may supply a declared target: records on a protected branch or at the line's `origin/<line>` ref must bind the line to the branch's epic. Declared bases use only `origin/<name>`; local branches, including protected names, never supply them. Missing remote refs warn and keep the protected fallback. Pre-push uses a second protected name only when its advertised tip equals the destination default's tip. Host protection cannot be verified offline: protect integration/* and every name in `protected_branches` on the host. A bare run reads the local remote-tracking ref; git-guard refuses update-ref of refs/remotes/*. Pass --branch when an explicit --head belongs to another line. |
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
-| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, else the branch an explicit `--base` names). A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
@@ -387,6 +387,23 @@ does not by itself mean enforcement succeeded.
 
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 
+`codeflow ci` pins revisions and prints branch context and source.
+`--branch` selects frozen or amendable acceptance binding; `--head` selects
+no branch. Detached candidates need `--branch`.
+
+Without `--base`: CI metadata, `CODEFLOW_DEFAULT_BRANCH`,
+`--into` or the declared target, then protected branches. Declared targets count
+only when protected or bound as the `--branch` row says; others and unresolved
+targets warn. Targets containing the head require `--base`.
+
+Acceptance uses `--into`, CI metadata, the declared target, a named `--base`,
+a protected or eligible epic line at the base commit, then the repository
+default. Planning branches infer only their epic's lines. Ambiguous commit
+bases need `--into` or `--branch`. Base disagreements are reported;
+bases and targets retain protection. Pre-push validates and passes
+`--into=<target>`; its base follows the `--branch` row.
+CI context errors block the push.
+
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request adding or modifying only the regular file `.gitleaksignore`
 without changing its mode may name one existing epic or
@@ -518,6 +535,6 @@ remotes live as well as reading fetched refs, so a narrow fetch cannot hide work
 | The check failed, or the command could not complete | non-zero, usually 1 |
 | `codeflow update` left conflicts | 2 |
 | `codeflow hook` wants the harness to block the tool call | 2 |
-| `codeflow ci` could not verify in full: no base ref resolved, the commit range could not be enumerated, or `--pr-body-file` was unreadable | 2 |
+| `codeflow ci` could not verify in full: the range or acceptance context could not be resolved, the commits could not be enumerated, or `--pr-body-file` was unreadable | 2 |
 | `codeflow portal setup` or `portal transfer` reported conflicts | 2 |
 | An unknown subcommand or an invalid flag | 2 |

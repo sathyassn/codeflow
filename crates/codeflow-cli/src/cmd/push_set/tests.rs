@@ -134,6 +134,16 @@ impl History {
         history.git(&["config", "user.name", "Test"]);
         history.git(&["config", "user.email", "test@example.invalid"]);
         history.commit("base.txt", "base", "chore: base");
+        history.commit(
+            "project-management/epics/EPC-001.md",
+            "---\nid: EPC-001\ntitle: Work\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-10-16\n---\n",
+            "docs: plan the epic",
+        );
+        history.commit(
+            "project-management/tasks/TSK-002.md",
+            "---\nid: TSK-002\nepic_id: EPC-001\nintegration_target: integration/EPC-001-line\n---\n",
+            "docs: bind the epic line",
+        );
         command(
             history.remote.path(),
             &["init", "--bare", "-q", "-b", "main"],
@@ -170,7 +180,7 @@ impl History {
     fn task(&self, target: &str) {
         self.commit(
             "project-management/tasks/TSK-001.md",
-            &format!("---\nid: TSK-001\nintegration_target: {target}\n---\n"),
+            &format!("---\nid: TSK-001\nepic_id: EPC-001\nintegration_target: {target}\n---\n"),
             "chore: record target",
         );
     }
@@ -233,8 +243,36 @@ fn command(root: &Path, args: &[&str]) -> String {
 const NEW: &str = "0000000000000000000000000000000000000000";
 
 #[test]
+fn push_set_declared_advertisements_require_eligibility_and_protected_tip_agreement() {
+    for (target, same_tip) in [
+        ("master", true),
+        ("master", false),
+        ("integration/EPC-999-decoy", false),
+    ] {
+        let h = History::new();
+        let base = h.git(&["rev-parse", "main"]);
+        h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
+        h.task(target);
+        let hidden = h.commit("earlier", "earlier", "fix: earlier work");
+        h.advertise(if same_tip { &base } else { &hidden }, target);
+        let head = h.commit("later", "later", "fix: later work");
+        let range = h.range("task/TSK-001-change", &head, NEW);
+        assert_eq!(range.base, base, "{target}, same_tip={same_tip}");
+        let selected = if same_tip { target } else { "main" };
+        assert!(
+            range
+                .notices
+                .iter()
+                .any(|text| text.contains(&format!("uses advertised target '{selected}'"))),
+            "{:?}",
+            range.notices
+        );
+    }
+}
+
+#[test]
 fn push_set_landing_extends_advertised_line_not_first_boundary() {
-    for branch in ["integration/line", "main"] {
+    for branch in ["integration/EPC-001-line", "main"] {
         let h = History::new();
         let old = h.git(&["rev-parse", "HEAD"]);
         h.advertise(&old, branch);
@@ -255,22 +293,22 @@ fn push_set_landing_extends_advertised_line_not_first_boundary() {
 #[test]
 fn push_set_task_that_merged_line_uses_target_not_previous_push() {
     let h = History::new();
-    h.git(&["checkout", "-q", "-b", "integration/line"]);
-    h.task("integration/line");
-    h.advertise("HEAD", "integration/line");
+    h.git(&["checkout", "-q", "-b", "integration/EPC-001-line"]);
+    h.task("integration/EPC-001-line");
+    h.advertise("HEAD", "integration/EPC-001-line");
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
     let old = h.commit("own", "own", "feat: own work");
     h.advertise(&old, "task/TSK-001-change");
-    h.git(&["checkout", "-q", "integration/line"]);
+    h.git(&["checkout", "-q", "integration/EPC-001-line"]);
     let target = h.commit("line", "line", "feat: line advances");
-    h.advertise(&target, "integration/line");
+    h.advertise(&target, "integration/EPC-001-line");
     h.git(&["checkout", "-q", "task/TSK-001-change"]);
     h.git(&[
         "merge",
         "--no-ff",
         "-m",
         "feat: incorporate line",
-        "integration/line",
+        "integration/EPC-001-line",
     ]);
     let head = h.git(&["rev-parse", "HEAD"]);
     // A different checkout and an uncommitted target must not change the push.
@@ -283,19 +321,19 @@ fn push_set_task_that_merged_line_uses_target_not_previous_push() {
     assert!(range
         .notices
         .iter()
-        .any(|text| text.contains("integration/line")));
+        .any(|text| text.contains("integration/EPC-001-line")));
 }
 
 #[test]
 fn push_set_new_task_with_multiple_boundaries_uses_declared_target() {
     let h = History::new();
     let target = h.git(&["rev-parse", "HEAD"]);
-    h.advertise(&target, "integration/line");
+    h.advertise(&target, "integration/EPC-001-line");
     h.git(&["checkout", "-q", "-b", "sibling"]);
     h.commit("sibling", "sibling", "feat: sibling");
     h.advertise("HEAD", "task/sibling");
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change", &target]);
-    h.task("integration/line");
+    h.task("integration/EPC-001-line");
     h.git(&["merge", "--no-ff", "-m", "feat: use sibling", "sibling"]);
     let head = h.git(&["rev-parse", "HEAD"]);
     let range = h.range("task/TSK-001-change", &head, NEW);
@@ -303,18 +341,18 @@ fn push_set_new_task_with_multiple_boundaries_uses_declared_target() {
     assert!(range
         .notices
         .iter()
-        .any(|text| text.contains("integration/line")));
+        .any(|text| text.contains("integration/EPC-001-line")));
 }
 
 #[test]
 fn push_set_target_base_keeps_every_destination_missing_commit() {
     let h = History::new();
     let common = h.git(&["rev-parse", "HEAD"]);
-    h.git(&["checkout", "-q", "-b", "integration/line"]);
+    h.git(&["checkout", "-q", "-b", "integration/EPC-001-line"]);
     let advertised = h.commit("line", "line", "feat: target diverges");
-    h.advertise(&advertised, "integration/line");
+    h.advertise(&advertised, "integration/EPC-001-line");
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change", &common]);
-    h.task("integration/line");
+    h.task("integration/EPC-001-line");
     let missing = h.commit("missing", "missing", "Invalid commit subject");
     let head = h.commit("later", "later", "feat: later work");
     let range = h.range("task/TSK-001-change", &head, NEW);
@@ -332,7 +370,7 @@ fn push_set_target_base_keeps_every_destination_missing_commit() {
     assert!(range
         .notices
         .iter()
-        .any(|text| text.contains("integration/line")));
+        .any(|text| text.contains("integration/EPC-001-line")));
 }
 
 #[test]
@@ -341,7 +379,7 @@ fn push_set_undeclared_branch_keeps_advertised_history_fallback() {
         for existing in [false, true] {
             let h = History::new();
             let line = h.commit("line", "line", "Legacy line subject.");
-            h.advertise(&line, "integration/line");
+            h.advertise(&line, "integration/EPC-001-line");
             h.git(&["checkout", "-q", "-b", branch]);
             let old = h.commit("old", "old", "feat: first push");
             if existing {
@@ -361,7 +399,7 @@ fn push_set_undeclared_branch_keeps_advertised_history_fallback() {
 
 #[test]
 fn push_set_line_rewrites_keep_advertised_history_fallback() {
-    for branch in ["main", "integration/line"] {
+    for branch in ["main", "integration/EPC-001-line"] {
         let h = History::new();
         let common = h.git(&["rev-parse", "HEAD"]);
         let old = h.commit("old", "old", "feat: old line");
@@ -377,7 +415,7 @@ fn push_set_line_rewrites_keep_advertised_history_fallback() {
 }
 
 #[test]
-fn push_set_unresolvable_task_targets_keep_advertised_history_fallback() {
+fn push_set_rejected_task_targets_keep_the_destination_default() {
     for target in ["integration/missing", "HEAD~1"] {
         let h = History::new();
         h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
@@ -386,7 +424,7 @@ fn push_set_unresolvable_task_targets_keep_advertised_history_fallback() {
         h.advertise(&old, "task/TSK-001-change");
         let head = h.commit("new", "new", "feat: next push");
         let range = h.range("task/TSK-001-change", &head, &old);
-        assert_eq!(range.base, old);
+        assert_eq!(range.base, h.git(&["rev-parse", "main"]));
         assert!(range.note.is_none());
     }
 }
@@ -394,13 +432,13 @@ fn push_set_unresolvable_task_targets_keep_advertised_history_fallback() {
 #[test]
 fn push_set_resolves_qualified_task_target_names() {
     for target in [
-        "refs/heads/integration/line",
-        "refs/remotes/dest/integration/line",
-        "origin/integration/line",
+        "refs/heads/integration/EPC-001-line",
+        "refs/remotes/dest/integration/EPC-001-line",
+        "origin/integration/EPC-001-line",
     ] {
         let h = History::new();
         let base = h.git(&["rev-parse", "HEAD"]);
-        h.advertise(&base, "integration/line");
+        h.advertise(&base, "integration/EPC-001-line");
         h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
         h.task(target);
         let head = h.git(&["rev-parse", "HEAD"]);
@@ -409,7 +447,7 @@ fn push_set_resolves_qualified_task_target_names() {
         assert!(range
             .notices
             .iter()
-            .any(|text| text.contains("advertised target 'integration/line'")));
+            .any(|text| text.contains("advertised target 'integration/EPC-001-line'")));
     }
 }
 
@@ -417,9 +455,9 @@ fn push_set_resolves_qualified_task_target_names() {
 fn push_set_task_target_ignores_unrelated_malformed_records() {
     let h = History::new();
     let base = h.commit("line", "line", "feat: line");
-    h.advertise(&base, "integration/line");
+    h.advertise(&base, "integration/EPC-001-line");
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
-    h.task("integration/line");
+    h.task("integration/EPC-001-line");
     let head = h.commit(
         "project-management/tasks/TSK-002.md",
         "malformed",
@@ -430,7 +468,7 @@ fn push_set_task_target_ignores_unrelated_malformed_records() {
     assert!(range
         .notices
         .iter()
-        .any(|text| text.contains("advertised target 'integration/line'")));
+        .any(|text| text.contains("advertised target 'integration/EPC-001-line'")));
 }
 
 #[test]
@@ -472,8 +510,8 @@ fn push_set_clean_target_note_has_no_remedy_and_rewrite_uses_its_own() {
 #[test]
 fn push_set_unfetched_declared_target_is_named_without_fetching() {
     let h = History::new();
-    h.task("integration/line");
-    h.advertise("HEAD", "integration/line");
+    h.task("integration/EPC-001-line");
+    h.advertise("HEAD", "integration/EPC-001-line");
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
     let old = h.commit("old", "old", "feat: first work");
     h.advertise(&old, "task/TSK-001-change");
@@ -487,7 +525,10 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         other.path(),
         &["config", "user.email", "test@example.invalid"],
     );
-    command(other.path(), &["checkout", "-q", "integration/line"]);
+    command(
+        other.path(),
+        &["checkout", "-q", "integration/EPC-001-line"],
+    );
     std::fs::write(other.path().join("advance"), "advance").unwrap();
     command(other.path(), &["add", "advance"]);
     command(
@@ -501,18 +542,16 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
             "fetch",
             "-q",
             other.path().to_str().unwrap(),
-            "HEAD:refs/heads/integration/line",
+            "HEAD:refs/heads/integration/EPC-001-line",
         ],
     );
     let head = h.commit("new", "new", "feat: next work");
     let range = h.range("task/TSK-001-change", &head, &old);
     assert_eq!(range.base, old);
-    assert!(range
-        .notices
-        .iter()
-        .any(|text| text.contains("declared target 'integration/line'")
-            && text.contains(&tip)
-            && text.contains("not fetched here")));
+    assert!(range.notices.iter().any(|text| text
+        .contains("declared target 'integration/EPC-001-line'")
+        && text.contains(&tip)
+        && text.contains("not fetched here")));
     assert!(!is_commit(h.local.path(), &tip).unwrap());
 
     // With no usable advertised tip, the range stays unresolved but its
@@ -526,7 +565,11 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
     // Keep the advertisement well formed while its only commit is unfetched.
     command(
         h.remote.path(),
-        &["symbolic-ref", "HEAD", "refs/heads/integration/line"],
+        &[
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/integration/EPC-001-line",
+        ],
     );
     let listing = OnceCell::new();
     let advertised = OnceCell::new();
@@ -713,4 +756,135 @@ fn r22_release_preflight_valid_empty_notes_stay_clear() {
     );
     assert!(report.notes.is_empty());
     assert!(report.violations.is_empty());
+}
+
+#[test]
+fn round_two_hook_and_local_plans_use_the_same_epic_target() {
+    let line = "integration/EPC-001-outcome";
+    let branch = "plan/EPC-001-next";
+    // Bound by records on the protected branch, then by none.
+    for (bound, expected) in [(true, line), (false, "main")] {
+        let h = History::new();
+        if bound {
+            h.commit(
+                "project-management/epics/EPC-001.md",
+                "---\nid: EPC-001\ntitle: Outcome\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-10-06\n---\n\n# Outcome\n",
+                "docs: plan the epic",
+            );
+            h.commit(
+                "project-management/tasks/TSK-001.md",
+                &format!("---\nid: TSK-001\nepic_id: EPC-001\ntitle: Work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {line}\ncreated: 2026-10-06\n---\n\n# Work\n"),
+                "docs: plan the task",
+            );
+        }
+        h.git(&["branch", line]);
+        let head = h.git(&["rev-parse", "HEAD"]);
+        let pushed = PushRef {
+            local_ref: format!("refs/heads/{branch}"),
+            local_sha: head.clone(),
+            remote_ref: format!("refs/heads/{branch}"),
+            remote_sha: NEW.into(),
+        };
+        let judged = Judged::Target {
+            target: "main".into(),
+            tip: head,
+            policy: Box::default(),
+        };
+        let mut report = StageReport::default();
+        let target = ci_target(
+            h.local.path(),
+            &pushed,
+            branch,
+            &judged,
+            &GitPolicy::default(),
+            &mut report,
+        )
+        .unwrap();
+        assert_eq!(target.as_deref(), Some(expected), "{:?}", report.status);
+        assert_eq!(
+            report
+                .status
+                .iter()
+                .any(|line| line.contains("destination's default")),
+            !bound,
+            "{:?}",
+            report.status
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn round_two_hook_supplied_ci_context_errors_keep_their_block() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("ci-fixture");
+    std::fs::write(&exe, "#!/bin/sh\nexit 2\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let policy = GitPolicy {
+        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Warn,
+        ..Default::default()
+    };
+    let mut report = StageReport::default();
+    run_check_with(
+        &exe,
+        dir.path(),
+        &["ci", "--run-level", "warn", "--into=main"],
+        None,
+        &policy,
+        &mut report,
+        &mut Vec::new(),
+    );
+    assert_eq!(report.violations.len(), 1);
+    assert_eq!(
+        report.violations[0].level,
+        codeflow_core::hooks::PolicyLevel::Block
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn round_two_unavailable_destination_refuses_before_ci() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = History::new();
+    let base = h.git(&["rev-parse", "HEAD"]);
+    h.task("main");
+    let branch = "task/TSK-001-work";
+    let pushed = PushRef {
+        local_ref: format!("refs/heads/{branch}"),
+        local_sha: h.git(&["rev-parse", "HEAD"]),
+        remote_ref: format!("refs/heads/{branch}"),
+        remote_sha: base,
+    };
+    let listing = OnceCell::from(Err("fixture: destination unavailable".into()));
+    let advertised = OnceCell::new();
+    let answer = OnceCell::new();
+    let anchor = OnceCell::new();
+    let fetch_failed = OnceCell::new();
+    let destination = Destination {
+        listing: &listing,
+        answer: &answer,
+        anchor: &anchor,
+        fetch_failed: &fetch_failed,
+        fork: None,
+        url: None,
+        advertised: &advertised,
+        namespace: None,
+        policy: &GitPolicy::default(),
+    };
+    let exe = h.local.path().join("ci-fixture");
+    std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > arguments.txt\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut report = StageReport::default();
+    let error = run_ci_ranges(
+        &exe,
+        h.local.path(),
+        &[&pushed],
+        &destination,
+        &mut report,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("destination unavailable"), "{error}");
+    assert!(!h.local.path().join("arguments.txt").exists());
 }

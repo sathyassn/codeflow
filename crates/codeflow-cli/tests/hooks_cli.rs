@@ -5747,16 +5747,26 @@ fn declared_line(bare: &Path, local: &Path) -> String {
     receive(bare, local, "main:stable");
     git(local, &["fetch", "-q", "dest"]);
     integration_line(bare, local);
+    std::fs::create_dir_all(local.join("project-management/epics")).unwrap();
+    commit_file(
+        local,
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ntitle: Work\nstatus: planning\nwork_type: feat\nspecs: []\ncreated: 2026-10-16\n---\n",
+        "docs: plan the epic",
+    );
     std::fs::create_dir_all(local.join("project-management/tasks")).unwrap();
     let tip = commit_file(
         local,
         "project-management/tasks/TSK-001.md",
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: integration/line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
+        "---\nid: TSK-001\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: integration/EPC-001-line\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
         "docs: declare the task target",
     );
-    receive(bare, local, "line:integration/line");
+    receive(bare, local, "line:integration/EPC-001-line");
     git(local, &["fetch", "-q", "dest"]);
-    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["branch", "-f", "integration/EPC-001-line", "line"]);
+    // The shared declaration check reads binding records from origin.
+    git(local, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(local, &["fetch", "-q", "origin"]);
     tip
 }
 
@@ -5773,9 +5783,9 @@ fn declared_task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) 
     receive(bare, local, "task/TSK-001-change:task/TSK-001-change");
     git(local, &["checkout", "-q", "line"]);
     commit_file(local, "line2.txt", "line2\n", "Legacy line subject two.");
-    receive(bare, local, "line:integration/line");
+    receive(bare, local, "line:integration/EPC-001-line");
     git(local, &["fetch", "-q", "dest"]);
-    git(local, &["branch", "-f", "integration/line", "line"]);
+    git(local, &["branch", "-f", "integration/EPC-001-line", "line"]);
     git(local, &["checkout", "-q", "task/TSK-001-change"]);
     old
 }
@@ -5794,11 +5804,14 @@ fn push_set_declared_target_rebase_checks_the_line_s_commits_from_the_default() 
     // judged too, and refuse the push.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = declared_task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
-    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    git(
+        local.path(),
+        &["rebase", "-q", "dest/integration/EPC-001-line"],
+    );
     let rebased = rev(local.path(), "HEAD");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &rebased, &old);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert!(
@@ -5839,7 +5852,7 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
             "rebase",
             "-q",
             "--onto",
-            "dest/integration/line",
+            "dest/integration/EPC-001-line",
             "line~1",
             "HEAD~1",
         ],
@@ -5847,7 +5860,7 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
     let bad = commit_file(local.path(), "c.txt", "c\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert_eq!(code, Some(1), "{err}");
@@ -5878,7 +5891,7 @@ fn push_set_declared_target_new_branch_checks_the_line_s_commits_from_the_defaul
     let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
     let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &good)]);
     assert!(
-        err.contains("uses advertised target 'integration/line'"),
+        err.contains("uses advertised target 'integration/EPC-001-line'"),
         "{err}"
     );
     assert_eq!(code, Some(1), "{err}");
@@ -8209,6 +8222,37 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
     );
 }
 
+#[test]
+fn first_push_without_declared_target_survives_default_branch_advancing() {
+    let (bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+        true,
+    );
+    let fork = rev(local.path(), "feat/x");
+    git(local.path(), &["switch", "-q", "main"]);
+    git(local.path(), &["branch", "-d", "feat/x"]);
+    commit_file(
+        local.path(),
+        "main.txt",
+        "advanced\n",
+        "docs: advance default",
+    );
+    receive(bare.path(), local.path(), "main:stable");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    for branch in [
+        "fix/unbound",
+        "docs/unbound",
+        "chore/unbound",
+        "plan/non-epic",
+    ] {
+        git(local.path(), &["switch", "-q", "-C", branch, &fork]);
+        let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
+        let (code, err) = push_hook(local.path(), "dest", &[(branch, &head)]);
+        assert_eq!(code, Some(0), "{branch}: {err}");
+        assert!(err.contains("push not stopped"), "{err}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn push_tree_review_advertised_tips_and_ancestors_pass_under_new_names() {
@@ -8773,4 +8817,33 @@ fn push_tree_committed_submodule_ignore_cannot_hide_tracked_edits() {
         assert_eq!(code, Some(1), "ignore={ignore}: {err}");
         assert!(err.contains("tracked files differ"), "{err}");
     }
+}
+
+#[test]
+fn protected_advertised_target_cannot_hide_a_criterion_from_pre_push() {
+    use line_adoption_fixture::{blocks, output, Line, ZERO};
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    let policy = std::fs::read_to_string(f.root().join(".codeflow/policy.json"))
+        .unwrap()
+        .replace("\"off\"", "\"warn\"");
+    f.write(".codeflow/policy.json", &policy);
+    f.commit("chore: enable the push check");
+    f.protected_target_shadow();
+    let destination = f.root().join(".git/destination.git");
+    receive(&destination, f.root(), "main:main");
+    // Neither a local-only protected name nor one advertised ahead of the
+    // destination default may shorten the criteria range.
+    blocks(
+        &f.push_branch("task/TSK-001-work", ZERO),
+        "work.criteria_frozen",
+    );
+    receive(&destination, f.root(), "master:master");
+    let out = f.push_branch("task/TSK-001-work", ZERO);
+    blocks(&out, "work.criteria_frozen");
+    assert!(
+        output(&out).contains("uses advertised target 'main'"),
+        "{}",
+        output(&out)
+    );
 }
