@@ -1,0 +1,11 @@
+id = "TSK-358"
+uid = "8cab84a5-5af0-4c6b-a2bc-cf6d460a8c5f"
+kind = "TSK"
+title = "Hosted Linux and Windows gates run on ready pull requests into integration lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T19:44:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
