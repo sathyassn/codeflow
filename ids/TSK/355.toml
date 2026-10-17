@@ -1,0 +1,11 @@
+id = "TSK-355"
+uid = "ffab40f2-aa62-45c1-a161-93523a27479e"
+kind = "TSK"
+title = "Unchanged deterministic gate results are reused while push protections stay live"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T19:44:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
