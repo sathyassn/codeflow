@@ -60,6 +60,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.automation_profiles` | profile list | `[]` | an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line} | Trusted bots whose pull requests skip branch naming, the commit message shape rules and the PR Summary shape (SPC-013 R-82). | Applies in `codeflow ci` only when the actor the workflow passes and the head branch both match, read from the target side of the range. Locally and on fork pull requests the actor is `unknown` and nothing applies. Tests, the secret scan, AI attribution, emoji, policy characters, PR sections and the release declaration still run at their configured level; `sections` only supplies content for headings the bot body omits. |
 | `git.pr_section_mapping` | object | `` | {state: diagnosed \| accepted \| refused \| custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none} | The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84). | Absent by default. `init` and `update` write `diagnosed` with a proposed mapping; `accepted` checks the mapped headings, `refused` and `custom` check pr_required_sections. While diagnosed the check runs at warn only when init created the policy file without a pr_sections key; a pr_sections key in the file always wins (R-115). |
 | `git.product_paths` | string list | `null` | an array of path globs (e.g. src/**) | The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70). | `codeflow init` writes the default for the detected stack and `codeflow update` adds it once; a value the project sets is kept. Absent, the binary assumes the stack default. The shared adopter-facing paths continue to require journey coverage. |
+| `git.document_indexes` | string list | `[]` | an array of exact repository-relative file paths (e.g. DOC-INDEX.md), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Read from the amendment's target policy; declare the files in a prior task pull request. Product and watched paths, hidden paths, harness instructions and non-regular files stay excluded. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.direct_changes` | enum | `allow` | allow \| forbid | Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
 | `git.release_branch_pattern` | string | `` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
@@ -95,6 +96,23 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `guidance.prompt_reminders` | enum | `warn` | off \| allow \| warn | The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation. | Advisory only: warn adds the line, off and allow add nothing; block is refused because a reminder never stops a prompt. |
 
 <!-- codeflow-derived policy-reference end -->
+
+## Planning amendment paths
+
+A planning amendment may change records under `project-management/` except
+its templates, plans under `docs/plan/`, and other files under `docs/` that
+are outside the adopter-facing set. It may also change exact document
+index files from `git.document_indexes` in the target policy, such as
+`["DOC-INDEX.md"]`, and the project-owned part of root `AGENTS.md` while
+keeping its managed block byte for byte.
+
+Declare index files in a prior task PR after upgrading the pinned binary.
+The list defaults to empty and admits exact repository-relative file names,
+without globs or dot components. A declaration never overrides product or
+watched globs, hidden-path exclusions or harness instruction exclusions.
+Files must be regular. When carrying documentation, indexes or `AGENTS.md`,
+both trees must have no symbolic links or submodules. A refusal names the
+excluded path and the admitted set; carry an excluded file in a task PR.
 
 ## Where a new key goes
 

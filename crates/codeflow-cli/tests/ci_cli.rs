@@ -15,6 +15,8 @@ mod acceptance_fix;
 mod base_policy;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
+#[path = "ci_cli/document_indexes.rs"]
+mod document_indexes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 

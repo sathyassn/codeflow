@@ -102,10 +102,12 @@ pub fn findings(
             groups.entry(key).or_default().extend(lines.iter().cloned());
         }
     }
+    // range_problem has already admitted these paths. Outside the record
+    // home they are plans, docs, declared indexes or root AGENTS.md.
     let files: Vec<&str> = changed_paths
         .iter()
         .map(String::as_str)
-        .filter(|path| *path == "AGENTS.md" || path.starts_with("docs/"))
+        .filter(|path| !path.starts_with("project-management/"))
         .collect();
     let mut found = refused;
     // Named epics first, in the order the line names them, then the rest.
@@ -410,7 +412,8 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         match amendment_path(path, &project) {
             None => {
                 return Some(format!(
-                    "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
+                    "a planning-only pull request touches a path outside the admitted set: {path}; admitted paths: project-management/** except templates, docs/plan/**, docs/** and git.document_indexes from the target policy ({}), all outside the adopter-facing set, hidden paths and harness instruction files; AGENTS.md only outside its managed block",
+                    if project.document_indexes.is_empty() { "none declared".to_string() } else { project.document_indexes.join(", ") }
                 ))
             }
             Some(AmendmentPath::Record) => {}
@@ -622,6 +625,8 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let paths = ProjectPaths {
         product,
         watched: list(git.get("breaking_watch_paths"), "breaking_watch_paths")?.unwrap_or_default(),
+        document_indexes: list(git.get("document_indexes"), "document_indexes")?
+            .unwrap_or_default(),
     };
     paths.validate()?;
     Ok(paths)

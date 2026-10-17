@@ -209,7 +209,7 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
     assert_blocks(
         &ci(root, "plan/sneaky", &body("Task: EPC-001")),
         "planning PR with product code",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
 
     branch_with(root, "fix/bad", &[("docs/guide.md", "# Guide\n")]);
@@ -559,7 +559,7 @@ fn the_whole_range_is_classified_whatever_its_shape() {
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: EPC-001")),
         "merge resolution",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: none: merge")),

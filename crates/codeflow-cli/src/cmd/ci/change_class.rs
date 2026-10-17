@@ -133,6 +133,7 @@ pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, Str
         let target = ProjectPaths {
             product: target_globs(&policy, "product_paths")?,
             watched: target_globs(&policy, "breaking_watch_paths")?,
+            document_indexes: Vec::new(),
         };
         target
             .validate()
@@ -360,6 +361,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec!["src/**".into(), "docs/runtime/**".into()],
             watched: vec!["docs/api/contract.md".into()],
+            document_indexes: Vec::new(),
         };
         for path in [
             "docs/guide.md",

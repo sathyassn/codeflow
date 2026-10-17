@@ -72,6 +72,8 @@ pub struct ProjectPaths {
     pub product: Vec<String>,
     /// `git.breaking_watch_paths`.
     pub watched: Vec<String>,
+    /// Exact files from `git.document_indexes`, admitted only as documentation.
+    pub document_indexes: Vec<String>,
 }
 
 impl ProjectPaths {
@@ -100,16 +102,22 @@ impl ProjectPaths {
         let paths = Self {
             product,
             watched: policy.git.breaking_watch_paths,
+            document_indexes: policy.git.document_indexes,
         };
         paths.validate()?;
         Ok(paths)
     }
 
-    /// Validate configured globs before they can classify a decision path.
+    /// Validate configured globs and index paths before classification.
     ///
     /// # Errors
     /// Returns the invalid policy key and pattern, with a repair instruction.
     pub fn validate(&self) -> Result<(), String> {
+        for path in &self.document_indexes {
+            if !valid_document_index(path) {
+                return Err(format!("invalid git.document_indexes path {path:?}; use an exact repository-relative file path without globs, backslashes or dot components"));
+            }
+        }
         for (key, patterns) in [
             ("product_paths", &self.product),
             ("breaking_watch_paths", &self.watched),
@@ -130,6 +138,13 @@ impl ProjectPaths {
             _ => &[],
         }
     }
+}
+
+/// An exact, normalized repository-relative file name, never a path pattern.
+pub(crate) fn valid_document_index(path: &str) -> bool {
+    !path.contains(['\\', '*', '?', '[', ']', ':'])
+        && !path.chars().any(char::is_control)
+        && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
 }
 
 /// The default `git.product_paths` for a stack, as `codeflow init` writes it
@@ -229,7 +244,7 @@ pub fn is_planning_path(path: &str) -> bool {
 pub enum AmendmentPath {
     /// A record or a plan ([`is_planning_path`]).
     Record,
-    /// A documentation file under `docs/` that is not adopter-facing.
+    /// A file under `docs/` or a declared index that is not adopter-facing.
     Doc,
     /// The root `AGENTS.md`, admitted only while its managed block is
     /// byte-identical to the target's ([`instructions_block_unchanged`]).
@@ -250,7 +265,8 @@ const INSTRUCTION_STEMS: &[&str] = &["agents.", "claude.", "gemini."];
 /// matches it in any letter case (so a shipped template such as
 /// `docs/decisions/template.md`, or a product glob such as `**/*.py`, keeps
 /// it out even under `docs/plan/`). What is left is admitted as a record or
-/// plan ([`is_planning_path`]) or a file under `docs/`. `CLAUDE.md`,
+/// plan ([`is_planning_path`]), a file under `docs/`, or an exact declared
+/// document index. `CLAUDE.md`,
 /// `.claude/`, `.agents/`, `.codeflow/`, record templates, policy, hooks and
 /// CI all stay out.
 #[must_use]
@@ -276,7 +292,8 @@ pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPat
     if is_planning_path(path) {
         Some(AmendmentPath::Record)
     } else {
-        path.starts_with("docs/").then_some(AmendmentPath::Doc)
+        (path.starts_with("docs/") || project.document_indexes.iter().any(|index| index == path))
+            .then_some(AmendmentPath::Doc)
     }
 }
 
@@ -360,6 +377,7 @@ mod tests {
         ProjectPaths {
             product: list("product_paths"),
             watched: list("breaking_watch_paths"),
+            document_indexes: Vec::new(),
         }
     }
 
@@ -376,6 +394,7 @@ mod tests {
         let adopter = ProjectPaths {
             product: vec!["src/**".to_string()],
             watched: vec!["api/schema.json".to_string()],
+            document_indexes: Vec::new(),
         };
         assert_eq!(
             sets.adopter_facing_member("api/schema.json", &adopter),
@@ -520,6 +539,7 @@ mod tests {
                     .map(ToString::to_string)
                     .collect(),
                 watched: Vec::new(),
+                document_indexes: Vec::new(),
             };
             assert_eq!(
                 sets.adopter_facing_member(path, &project),
@@ -560,6 +580,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec![],
             watched: vec![],
+            document_indexes: Vec::new(),
         };
         let record = crate::git::GitName::from_bytes(b"project-management/tasks/TSK-002\xff.md")
             .storage_key();
@@ -581,6 +602,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec!["src/**".to_string(), "**/*.py".to_string()],
             watched: vec!["docs/api/schema.json".to_string()],
+            document_indexes: Vec::new(),
         };
         for (path, expected) in [
             (
@@ -654,6 +676,65 @@ mod tests {
             Some(&raw)
         ));
         assert!(instructions_block_unchanged(Some(&raw), Some(&raw)));
+    }
+
+    #[test]
+    fn document_indexes_are_exact_files_and_never_override_exclusions() {
+        let mut project = ProjectPaths::default();
+        assert_eq!(amendment_path("DOC-INDEX.md", &project), None);
+        assert_eq!(
+            amendment_path("docs/research/brief.md", &project),
+            Some(AmendmentPath::Doc)
+        );
+        project.document_indexes = vec!["DOC-INDEX.md".into(), "handbook/INDEX.md".into()];
+        for path in ["DOC-INDEX.md", "handbook/INDEX.md"] {
+            assert_eq!(amendment_path(path, &project), Some(AmendmentPath::Doc));
+        }
+        for path in ["doc-index.md", "DOC-INDEX.md/child", "handbook/other.md"] {
+            assert_eq!(amendment_path(path, &project), None, "{path}");
+        }
+        project.product = vec!["docs/portal/**".into()];
+        project.watched = vec!["api/**".into()];
+        for path in [
+            "docs/portal/INDEX.md",
+            "DOCS/PORTAL/INDEX.md",
+            "api/INDEX.md",
+            ".private/INDEX.md",
+            "handbook/CLAUDE.md",
+            "project-management/templates/index.md",
+            ".github/workflows/index.md",
+        ] {
+            project.document_indexes.push(path.into());
+            assert_eq!(amendment_path(path, &project), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn document_index_policy_loads_exact_paths_and_refuses_patterns_and_non_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        for (path, valid) in [
+            ("DOC-INDEX.md", true),
+            ("handbook/INDEX.md", true),
+            ("", false),
+            ("/INDEX.md", false),
+            ("../INDEX.md", false),
+            ("./INDEX.md", false),
+            ("docs//INDEX.md", false),
+            ("docs/", false),
+            ("docs/**", false),
+            ("C:/INDEX.md", false),
+            ("docs\\INDEX.md", false),
+            ("INDEX\n.md", false),
+        ] {
+            let policy = serde_json::json!({"git": {"document_indexes": [path]}});
+            std::fs::write(dir.path().join(".codeflow/policy.json"), policy.to_string()).unwrap();
+            let loaded = ProjectPaths::load(dir.path());
+            assert_eq!(loaded.is_ok(), valid, "{path:?}: {loaded:?}");
+            if valid {
+                assert_eq!(loaded.unwrap().document_indexes, [path]);
+            }
+        }
     }
 
     #[test]

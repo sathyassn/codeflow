@@ -222,6 +222,19 @@ release branch or a body-of-work `integration/` branch, never a task branch,
 and it resolves to a real local or remote-tracking branch, never `HEAD`, a
 tag, an object ID, or a revision expression.
 
+A planning amendment may carry records under `project-management/` (except
+its templates), plans under `docs/plan/`, other documentation under `docs/`,
+and exact document index files declared in `git.document_indexes` in the
+target's `.codeflow/policy.json`. It may also edit the project-owned part
+of root `AGENTS.md` while keeping the target's managed block byte for byte.
+Declare an index such as `DOC-INDEX.md` in a prior task PR after upgrading
+the pinned binary; the new key is absent from the shipped policy file.
+Product and watched paths, hidden paths and harness instruction files
+remain excluded even when declared as indexes. Files must be regular;
+carrying documentation, indexes or `AGENTS.md` also requires both trees to
+have no symbolic links or submodules. A refusal names the excluded path
+and the admitted set. Carry an excluded file in a task PR.
+
 ### Dependencies
 
 An entry of `depends_on` is either a bare task id, a code dependency, or

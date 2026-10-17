@@ -311,6 +311,10 @@ catalog! {
 
     // Protected branches and the sanctioned landing path.
 
+    /// A pull request without a valid work class or planning path set.
+    WORK_CLASSIFICATION = Step::Edit(".codeflow/policy.json"),
+        "add exactly one Task: TSK-NNN, or Task: EPC-NNN for the epic's planning change or integration line; where durable tracking is inactive, name the tracked unit; for an excluded planning path, carry it in a task pull request, or first declare a document index in git.document_indexes in .codeflow/policy.json on the target through a task pull request; product and watched paths stay excluded";
+
     /// Work that would land on a protected branch outside a pull request.
     PROTECTED_BRANCH = Step::Codeflow("codeflow integrate"),
         "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";

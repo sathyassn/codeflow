@@ -137,7 +137,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 68] = [
+pub const SCHEMA: [KeySpec; 69] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -555,6 +555,17 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `codeflow update` adds it once; a value the project sets is \
                 kept. Absent, the binary assumes the stack default. The shared \
                 adopter-facing paths continue to require journey coverage.",
+    },
+    KeySpec {
+        path: "git.document_indexes",
+        kind: KeyKind::StringList,
+        valid: "an array of exact repository-relative file paths (e.g. DOC-INDEX.md), without globs or dot components",
+        purpose: "Document index files a planning amendment may update alongside records and plans.",
+        notes: "Empty by default. Read from the amendment's target policy; \
+                declare the files in a prior task pull request. Product and \
+                watched paths, hidden paths, harness instructions and \
+                non-regular files stay excluded. The shipped policy file \
+                does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.direct_changes",
@@ -1035,6 +1046,21 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
+        "git.document_indexes" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::workgraph::classify::valid_document_index(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative file path without globs, backslashes or dot components"),
+                    });
+                }
+            }
+        }
         "git.root_branch" => {
             if let Some(s) = value.as_str() {
                 if !s.is_empty() && !crate::root_checkout::is_valid_branch_name(s) {
