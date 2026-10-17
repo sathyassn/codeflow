@@ -1,0 +1,11 @@
+id = "TSK-341"
+uid = "f74e5a95-6948-4e6b-a2b0-0c0dd69c604b"
+kind = "TSK"
+title = "Reviewed predecessor chains have consistent claim and push decisions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:38:40Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
