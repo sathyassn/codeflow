@@ -682,9 +682,12 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git(&root, &["fetch", "-q", "origin"]);
-    git(&root, &["switch", "-q", main]);
-    let (pushed, said) = push(&root, &["origin", LINE_A, LINE_B]);
-    assert!(pushed, "the lines push:\n{said}");
+    // Each new tree must be checked from its own complete checkout.
+    for line in [LINE_A, LINE_B] {
+        git(&root, &["switch", "-q", line]);
+        let (pushed, said) = push(&root, &["origin", line]);
+        assert!(pushed, "the line {line} pushes:\n{said}");
+    }
     git(&root, &["fetch", "-q", "origin"]);
 
     // The release branch: both imports, one direct fix, and the
@@ -722,7 +725,6 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
         "the release-integration task completes at the head",
     );
     let completed = commit(&root, "chore: complete the release integration");
-    git(&root, &["switch", "-q", main]);
     let (pushed, said) = push(&root, &["origin", RELEASE]);
     assert!(pushed, "the release branch pushes:\n{said}");
     assert!(
@@ -754,7 +756,6 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     );
     std::fs::write(root.join("src/late.rs"), "pub fn late() {}\n").unwrap();
     let late = commit(&root, "fix: a late change");
-    git(&root, &["switch", "-q", main]);
     let (pushed, said) = push(&root, &["origin", "integration/release-2"]);
     assert!(!pushed, "code after the completion pushed:\n{said}");
     // The push is judged on everything the release branch adds to main, as
