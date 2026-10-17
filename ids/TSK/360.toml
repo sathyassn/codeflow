@@ -1,0 +1,11 @@
+id = "TSK-360"
+uid = "d7fc424b-23c3-49f6-85a3-179dc6c1e919"
+kind = "TSK"
+title = "The repository contract states builder evidence and the hosted green landing rule"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T19:44:55Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
