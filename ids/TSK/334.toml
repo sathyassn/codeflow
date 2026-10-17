@@ -1,0 +1,11 @@
+id = "TSK-334"
+uid = "acfc0b3a-f48d-40ff-b075-51873ccdc845"
+kind = "TSK"
+title = "Cloud and registry credentials remain outside agent sessions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:36:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
