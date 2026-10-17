@@ -17,6 +17,8 @@ mod base_policy;
 mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
+#[path = "ci_cli/secret_scan_exemption.rs"]
+mod secret_scan_exemption;
 
 use std::path::Path;
 use std::process::{Command, Output};
