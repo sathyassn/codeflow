@@ -168,7 +168,10 @@ waive the clarity, safety, review or protected-branch conditions.
    that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (serialized,
-   runs the full gate, keeps the tested tip); or **PR** into the integration
+   runs the full gate, keeps the tested tip). Add `--merge` to preserve a
+   reviewed head when the line has advanced: it gates a no-fast-forward merge
+   commit, then advances only the local line. Rebase remains the default;
+   neither mode pushes. Or **PR** into the integration
    branch, merged by the primary once the candidate's full gate is green and
    the PR's required checks pass. The PR cites the gate run by its id and
    revision from its durable home.

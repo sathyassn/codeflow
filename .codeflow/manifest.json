@@ -407,7 +407,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "a25c2bdc22dacb9d286a8afd706b57f50c07d9478060a2011657295226483b8e",
+      "sha256": "bebc2039f497fa435fbc05ffb3ba1b1803333915cca472c6d03d038fabbd3ed2",
       "exec": false
     },
     ".agents/skills/cf-method/references/autonomy.md": {
@@ -1247,7 +1247,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "a25c2bdc22dacb9d286a8afd706b57f50c07d9478060a2011657295226483b8e",
+      "sha256": "bebc2039f497fa435fbc05ffb3ba1b1803333915cca472c6d03d038fabbd3ed2",
       "exec": false
     },
     ".claude/skills/cf-method/references/autonomy.md": {

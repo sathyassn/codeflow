@@ -1157,3 +1157,98 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
         rows.join("\n")
     }
 }
+
+/// TSK-293 AC-4: a completed task remains bound to its reviewed commit when
+/// merge mode lands it on a line that advanced after the review.
+#[test]
+fn integrate_merge_preserves_a_completed_tasks_acceptance_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(&codeflow(&root, &["init", "--yes", "--full"]), "init");
+    git(&root, &["switch", "-qc", LINE]);
+    git(&root, &["switch", "-qc", "plan/merge"]);
+    ok(&codeflow(&root, &["epic", "new", "merge journey"]), "epic");
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "new",
+                "--epic",
+                "EPC-001",
+                "--into",
+                LINE,
+                "merge journey",
+            ],
+        ),
+        "task",
+    );
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
+    edit(
+        &root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n- AC-2 (journey) When landed, the binding shall remain valid.\n",
+    );
+    // The fixture has a real, small gate so integrate exercises its normal
+    // full-mode stage without running the consuming project's full suite.
+    std::fs::write(
+        root.join(".codeflow/test-config.json"),
+        r#"{"schema_version":"1.0","targets":[{"name":"merged-feature","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch src/first.rs line.txt"}}}]}"#,
+    ).unwrap();
+    commit(&root, "chore: plan the merge journey");
+    git(&root, &["switch", "-q", LINE]);
+    git(&root, &["merge", "--ff-only", "plan/merge"]);
+    let branch = "task/TSK-001-merge-journey";
+    git(&root, &["switch", "-qc", branch]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/first.rs"), "pub fn first() {}\n").unwrap();
+    let reviewed = commit(&root, "feat: build reviewed work");
+    let block = acceptance(dir.path(), &reviewed, "verified | fixture built");
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "complete",
+                "--acceptance",
+                &block,
+            ],
+        ),
+        "complete the task",
+    );
+    let completed = commit(&root, "chore: complete the task");
+    ok(&ci(&root, branch, "TSK-001"), "ci before landing");
+    git(&root, &["switch", "-q", LINE]);
+    std::fs::write(root.join("line.txt"), "line advanced\n").unwrap();
+    let line = commit(&root, "docs: advance the line");
+    ok(
+        &codeflow(&root, &["integrate", branch, "--into", LINE, "--merge"]),
+        "land with merge mode",
+    );
+    assert_eq!(git(&root, &["rev-parse", "HEAD^1"]), line);
+    assert_eq!(git(&root, &["rev-parse", "HEAD^2"]), completed);
+    assert_eq!(git(&root, &["rev-parse", branch]), completed);
+    let record = std::fs::read_to_string(root.join(TASK)).unwrap();
+    assert!(record.contains(&format!("reviewed: {reviewed}")));
+    let passed = ok(
+        &codeflow(
+            &root,
+            &["ci", "--base", &line, "--head", "HEAD", "--branch", LINE],
+        ),
+        "ci over the landing",
+    );
+    assert!(passed.contains(SCOPE), "{passed}");
+}
