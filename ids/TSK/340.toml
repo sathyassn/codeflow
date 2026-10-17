@@ -1,0 +1,11 @@
+id = "TSK-340"
+uid = "975ec02f-2a5b-4de6-aef0-f45d4be4f1d1"
+kind = "TSK"
+title = "Status changes and repeated closeout have one valid acceptance sequence"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:38:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
