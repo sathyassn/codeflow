@@ -1,0 +1,11 @@
+id = "TSK-364"
+uid = "6fc1d48f-b116-4c3a-9bad-b18bf75ece83"
+kind = "TSK"
+title = "A substituted hook binary cannot pass a hook silently"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:26Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
