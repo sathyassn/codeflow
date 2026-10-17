@@ -50,7 +50,8 @@
       "scripts/coverage-test-times.json",
       "scripts/coverage-merge.py",
       "scripts/test_coverage_merge.py",
-      "scripts/fixtures/coverage-merge/**"
+      "scripts/fixtures/coverage-merge/**",
+      "scripts/test_gate_portal_windows.py"
     ]
   },
   "defaults": {
@@ -275,6 +276,23 @@
       }
     },
     {
+      "name": "docs-portal-windows",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "essential": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        },
+        "full": {
+          "command": "python3 -B scripts/test_gate_portal_windows.py"
+        }
+      },
+      "requires": [
+        "docs-portal"
+      ],
+      "timeout_seconds": 300
+    },
+    {
       "name": "model-eval-kit",
       "enabled": true,
       "runner": "custom",
@@ -286,6 +304,9 @@
           "command": "python3 -B evals/model-artifacts/test_eval_kit.py && python3 -B evals/model-artifacts/test_retention_pack.py"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "narrow": [
         "evals/**",
         ".agents/skills/**",

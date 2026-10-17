@@ -34,6 +34,8 @@ pub const BINDING_RULE: &str = "work.acceptance_binding";
 /// Criteria changes outside the own-task or planning allowance, including
 /// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
+/// The selected criteria version, distinct from the run's policy authority.
+pub const AUTHORITY_NOTE: &str = "work.criteria_authority";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
 /// leaf serving the epic's journey says what ran (R-53). Level:
 /// `git.work_records`.
@@ -2266,6 +2268,7 @@ pub fn frozen_criteria(
             }
         }
         let judgement = judging.judge(record);
+        found.push(authority_note(record, &judgement.criteria_source));
         let unknown = judgement.landing_unknown();
         let authority = match &judgement.criteria {
             Authority::Held(kept) => Some(kept.as_ref()),
@@ -2341,6 +2344,15 @@ pub fn frozen_criteria(
         }
     }
     found
+}
+
+fn authority_note(record: &RecordView, source: &str) -> Finding {
+    Finding {
+        epic_record: None,
+        rule: AUTHORITY_NOTE,
+        message: format!("{} {source}", record.id),
+        note: true,
+    }
 }
 
 /// The frozen finding's message for a task whose criteria another task's
