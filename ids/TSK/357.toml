@@ -1,0 +1,11 @@
+id = "TSK-357"
+uid = "e9851163-39cb-4d92-9a82-0d1c4c489703"
+kind = "TSK"
+title = "A shared compiler cache is piloted and measured for new worktrees"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T19:44:39Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
