@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-two health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-three health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-two checks fall into six groups by the surface each one reads.
+The twenty-three checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -33,6 +33,10 @@ The twenty-two checks fall into six groups by the surface each one reads.
   `adopter-fit` read the `.codeflow/` directory, including `policy.json` and
   `project.toml`, whether it is writable, and which git ref the agent guards
   read policy from.
+  `git-config-includes` names included Git configuration files that may be
+  writable and reports a configuration it cannot verify. The operator
+  inspects `git config --show-origin --includes --list` and repairs or
+  secures its include paths.
 - **Delegates, model bindings and network.** `delegates`, `model-bindings`,
   `delegate-roundtrip` and `network` probe the peer CLIs, the approved model
   binding records, the binary's delegate lifecycle and a lookup of github.com.
@@ -58,9 +62,9 @@ failed check never hides the others. Each line starts with a status badge.
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
 check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
 `policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
-`id-registry` and `adopter-fit`. The other thirteen warn at most.
+`id-registry` and `adopter-fit`. The other fourteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-two names and exits 0.
+- `codeflow doctor --list` prints the twenty-three names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
