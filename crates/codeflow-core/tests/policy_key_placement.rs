@@ -36,6 +36,10 @@ use codeflow_core::scaffold::{
 };
 use serde_json::Value;
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
+
 #[test]
 fn inline_allow_policy_is_opt_in_and_accepts_only_trusted_or_never() {
     use codeflow_core::hooks::policy_schema::{
@@ -311,14 +315,6 @@ impl AssetSource for Overlay {
     }
 }
 
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
-
 #[test]
 fn update_leaves_a_last_release_policy_accepted_by_the_last_release_schema() {
     isolate_git();
@@ -334,6 +330,7 @@ fn update_leaves_a_last_release_policy_accepted_by_the_last_release_schema() {
     // A project at the last release: its scaffold, with the policy file that
     // release shipped.
     let project = tempfile::tempdir().expect("project tempdir");
+    git_isolation::own_repository(project.path());
     scaffold::init(
         &last_release,
         project.path(),
