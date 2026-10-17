@@ -11285,7 +11285,34 @@ fn flag_value<'a>(args: &'a [&'a str], names: &[&str]) -> Option<&'a str> {
 }
 
 #[cfg(test)]
+mod owned_fixture {
+    use super::*;
+
+    // Injected contexts judge commands in an owned, unborn repository before
+    // its first fetch. The configured origin lets fetch commands be judged too.
+    // Tests of actual refs and policy use evaluate_report_at with their own
+    // populated fixtures. Never consult this source checkout.
+    pub(super) fn evaluate_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init_opts(
+            dir.path(),
+            git2::RepositoryInitOptions::new().initial_head("main"),
+        )
+        .unwrap();
+        let origin = dir.path().join("origin.git");
+        git2::Repository::init_bare(&origin).unwrap();
+        repo.remote("origin", origin.to_str().unwrap()).unwrap();
+        evaluate_report_at(command, context, dir.path())
+    }
+
+    pub(super) fn evaluate(command: &str, context: &GuardContext<'_>) -> Vec<Violation> {
+        evaluate_report(command, context).violations
+    }
+}
+
+#[cfg(test)]
 mod registry_guard_tests {
+    use super::owned_fixture::evaluate;
     use super::*;
 
     fn verdict(command: &str) -> Vec<Violation> {
@@ -11356,6 +11383,7 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::owned_fixture::{evaluate, evaluate_report};
     // R22-GUARD-TESTS-BEGIN
     #[cfg(unix)]
     #[test]
@@ -12068,27 +12096,6 @@ mod tests {
         assert!(!find_name_matches(Some(&literal), &odd));
         let star = vec![("*".to_string(), false)];
         assert!(find_name_matches(Some(&star), &odd));
-    }
-
-    // Injected contexts judge commands in an owned, unborn repository before
-    // its first fetch. The configured origin lets fetch commands be judged too.
-    // Tests of actual refs and policy use evaluate_report_at with their own
-    // populated fixtures. Never consult this source checkout.
-    fn evaluate_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init_opts(
-            dir.path(),
-            git2::RepositoryInitOptions::new().initial_head("main"),
-        )
-        .unwrap();
-        let origin = dir.path().join("origin.git");
-        git2::Repository::init_bare(&origin).unwrap();
-        repo.remote("origin", origin.to_str().unwrap()).unwrap();
-        evaluate_report_at(command, context, dir.path())
-    }
-
-    fn evaluate(command: &str, context: &GuardContext<'_>) -> Vec<Violation> {
-        evaluate_report(command, context).violations
     }
 
     fn ctx<'a>(policy: &'a GitPolicy, branch: &'a str) -> GuardContext<'a> {
@@ -17817,6 +17824,7 @@ const DISCARD_MISC_OPTIONS: OptionSpec = OptionSpec {
 
 #[cfg(test)]
 mod discard_integration_tests {
+    use super::owned_fixture::evaluate;
     use super::*;
     use std::path::Path;
 

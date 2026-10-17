@@ -80,15 +80,17 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("CODEFLOW_HOME", isolated_home())
-        .output()
-        .expect("git runs");
+        .env("CODEFLOW_HOME", isolated_home());
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
+    let out = cmd.output().expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed with {}: {}",

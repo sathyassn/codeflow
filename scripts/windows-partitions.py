@@ -84,7 +84,7 @@ def serial(binary: str, test: str) -> bool:
 
 
 def load(path: Path = DATA) -> dict:
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     for binary in [*data["binaries"], *data["split"]]:
         if not BINARY_ID.match(binary):
             raise SystemExit(f"windows-partitions: binary id {binary!r} cannot be written in a filterset")
@@ -170,7 +170,7 @@ class Plan:
 
 def listed_tests(path: Path) -> set[tuple[str, str]]:
     """The non-ignored tests of a `cargo nextest list --message-format json`."""
-    listing = json.loads(path.read_text())
+    listing = json.loads(path.read_text(encoding="utf-8"))
     tests = set()
     for binary, suite in listing["rust-suites"].items():
         for name, case in suite["testcases"].items():
@@ -318,7 +318,7 @@ def main(data_path: Path = DATA, prefix: str = RESULTS, source: str = SOURCE, re
     args = parser.parse_args()
     if args.command == "measure":
         try:
-            current = json.loads(data_path.read_text())
+            current = json.loads(data_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             current = {}
         out = measure(args.directories, args.partitions or current.get("partitions", PARTITIONS),
