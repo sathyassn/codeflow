@@ -1,0 +1,11 @@
+id = "TSK-349"
+uid = "71c7d070-32ec-4efb-94c1-b0737ffa8d11"
+kind = "TSK"
+title = "Desktop work stays in its own session worktree"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T16:51:01Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
