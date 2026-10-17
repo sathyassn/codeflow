@@ -1,0 +1,11 @@
+id = "TSK-339"
+uid = "492c502c-8371-429a-a52f-d0d9db7513b2"
+kind = "TSK"
+title = "Completed work keeps its verified origin when lines merge"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:38:02Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
