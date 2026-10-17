@@ -218,7 +218,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
 | | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
@@ -442,8 +442,10 @@ rebases the branch onto the target by default, runs the full test gate, then
 fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
 commit whose first parent is the old target tip and whose second parent is
 the unchanged source head, and gates that merge result. This keeps a task's
-acceptance binding to its reviewed commit intact. A head already contained
-in the target needs no new merge commit.
+acceptance binding to its reviewed commit intact. Run `--merge` from a linked
+worktree; a root checkout is refused before candidate preparation. A head
+already contained in the target needs no new merge commit. The subject names
+both refs: `Merge branch '<branch>' into <target>`.
 
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse if the source or target moved

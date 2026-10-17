@@ -78,6 +78,20 @@ fn refused(found: &[Violation]) -> bool {
     found.iter().any(|v| v.rule == RULE && v.level_fixed)
 }
 
+/// Colon does not write files, but its shell expansions and redirects can.
+#[test]
+fn colon_reads_arguments_but_does_not_hide_shell_writes() {
+    let f = Fixture::new();
+    assert!(f.judge(": ${FOO:=bar}").is_empty());
+    for command in [
+        ": > H/.zshrc",
+        ": $(printf x > H/.zshrc)",
+        ": ${FOO:-$(printf x > H/.zshrc)}",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+}
+
 /// Every visible write form refuses, in every spelling the guard expands.
 #[test]
 fn visible_writes_to_startup_files_refuse() {

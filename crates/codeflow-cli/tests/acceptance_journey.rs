@@ -1165,46 +1165,7 @@ fn integrate_merge_preserves_a_completed_tasks_acceptance_binding() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     std::fs::create_dir(&root).unwrap();
-    ok(&codeflow(&root, &["init", "--yes", "--full"]), "init");
-    git(&root, &["switch", "-qc", LINE]);
-    git(&root, &["switch", "-qc", "plan/merge"]);
-    ok(&codeflow(&root, &["epic", "new", "merge journey"]), "epic");
-    ok(
-        &codeflow(
-            &root,
-            &[
-                "task",
-                "new",
-                "--epic",
-                "EPC-001",
-                "--into",
-                LINE,
-                "merge journey",
-            ],
-        ),
-        "task",
-    );
-    edit(
-        &root,
-        EPIC,
-        "- AC-1\n",
-        "- AC-1 When used, the system shall work.\n",
-    );
-    edit(
-        &root,
-        TASK,
-        "- AC-1\n",
-        "- AC-1 When used, the system shall work.\n- AC-2 (journey) When landed, the binding shall remain valid.\n",
-    );
-    // The fixture has a real, small gate so integrate exercises its normal
-    // full-mode stage without running the consuming project's full suite.
-    std::fs::write(
-        root.join(".codeflow/test-config.json"),
-        r#"{"schema_version":"1.0","targets":[{"name":"merged-feature","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch src/first.rs line.txt"}}}]}"#,
-    ).unwrap();
-    commit(&root, "chore: plan the merge journey");
-    git(&root, &["switch", "-q", LINE]);
-    git(&root, &["merge", "--ff-only", "plan/merge"]);
+    plan_merge_journey(&root);
     let branch = "task/TSK-001-merge-journey";
     git(&root, &["switch", "-qc", branch]);
     ok(
@@ -1234,10 +1195,25 @@ fn integrate_merge_preserves_a_completed_tasks_acceptance_binding() {
     git(&root, &["switch", "-q", LINE]);
     std::fs::write(root.join("line.txt"), "line advanced\n").unwrap();
     let line = commit(&root, "docs: advance the line");
-    ok(
-        &codeflow(&root, &["integrate", branch, "--into", LINE, "--merge"]),
-        "land with merge mode",
+    let policy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(".codeflow/policy.json")).unwrap())
+            .unwrap();
+    assert_eq!(policy["git"]["root_checkout_commits"], "block");
+    let linked = root.join(".worktrees/reviewed");
+    git(
+        &root,
+        &["worktree", "add", linked.to_str().unwrap(), branch],
     );
+    // Cargo blanks inherited harness markers. Set the actor explicitly so
+    // real installed hooks enforce the block policy on the merge candidate.
+    let landed = with_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["integrate", branch, "--into", LINE, "--merge"])
+        .env("CLAUDECODE", "1")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(&linked)
+        .output()
+        .unwrap();
+    ok(&landed, "land with merge mode under agent hooks");
     assert_eq!(git(&root, &["rev-parse", "HEAD^1"]), line);
     assert_eq!(git(&root, &["rev-parse", "HEAD^2"]), completed);
     assert_eq!(git(&root, &["rev-parse", branch]), completed);
@@ -1251,4 +1227,47 @@ fn integrate_merge_preserves_a_completed_tasks_acceptance_binding() {
         "ci over the landing",
     );
     assert!(passed.contains(SCOPE), "{passed}");
+}
+
+fn plan_merge_journey(root: &Path) {
+    ok(&codeflow(root, &["init", "--yes", "--full"]), "init");
+    git(root, &["switch", "-qc", LINE]);
+    git(root, &["switch", "-qc", "plan/merge"]);
+    ok(&codeflow(root, &["epic", "new", "merge journey"]), "epic");
+    ok(
+        &codeflow(
+            root,
+            &[
+                "task",
+                "new",
+                "--epic",
+                "EPC-001",
+                "--into",
+                LINE,
+                "merge journey",
+            ],
+        ),
+        "task",
+    );
+    edit(
+        root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n",
+    );
+    edit(
+        root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 When used, the system shall work.\n- AC-2 (journey) When landed, the binding shall remain valid.\n",
+    );
+    // The fixture has a real, small gate so integrate exercises its normal
+    // full-mode stage without running the consuming project's full suite.
+    std::fs::write(
+        root.join(".codeflow/test-config.json"),
+        r#"{"schema_version":"1.0","targets":[{"name":"merged-feature","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch src/first.rs line.txt"}}}]}"#,
+    ).unwrap();
+    commit(root, "chore: plan the merge journey");
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["merge", "--ff-only", "plan/merge"]);
 }

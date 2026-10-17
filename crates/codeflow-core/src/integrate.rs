@@ -208,6 +208,8 @@ pub fn integrate(
 
 /// Integrate using a rebase or a no-fast-forward merge candidate.
 /// The merge candidate is detached so neither branch moves before the gate.
+/// Merge mode requires a linked worktree so commit hooks retain their normal
+/// root-checkout enforcement.
 ///
 /// # Errors
 ///
@@ -231,6 +233,13 @@ pub fn integrate_with_mode(
         return Err(IntegrateError::Preflight(format!(
             "branch and target are both '{branch}'"
         )));
+    }
+    if mode == IntegrateMode::Merge && crate::root_checkout::is_root_checkout(&repo) {
+        return Err(IntegrateError::Preflight(
+            "--merge cannot run from a root checkout; run codeflow integrate --merge \
+             from a linked worktree instead"
+                .to_string(),
+        ));
     }
     let branch_oid = resolve_branch(&repo, branch)?;
     let target_oid = resolve_branch(&repo, target)?;
@@ -420,7 +429,7 @@ fn prepare_merge(
                 "--no-ff",
                 "--no-edit",
                 "-m",
-                "chore: integrate reviewed head",
+                &format!("Merge branch '{branch}' into {target}"),
                 &branch_oid.to_string(),
             ])
             .current_dir(repo_root)
@@ -431,11 +440,16 @@ fn prepare_merge(
                 message: format!("failed to run git merge: {error}"),
             })?;
         if !output.status.success() {
+            let remedy = if repo.index().is_ok_and(|index| index.has_conflicts()) {
+                "\nresolve on the source branch and re-run integrate"
+            } else {
+                ""
+            };
             return Err(IntegrateError::CandidateMergeFailed {
                 branch: branch.to_string(),
                 target: target.to_string(),
                 message: format!(
-                    "{}{}\nresolve on the source branch and re-run integrate",
+                    "{}{}{remedy}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr),
                 ),
@@ -1336,7 +1350,7 @@ mod r22_regressions {
 
     #[test]
     fn r22_unreadable_release_adoption_refuses_integration() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         assert!(run_release_structure(dir.path(), "main", "HEAD").is_ok());
         std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
         std::fs::write(dir.path().join(".codeflow/project.toml"), "invalid = [").unwrap();
