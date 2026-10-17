@@ -242,9 +242,82 @@ pub const SCHEMA: [KeySpec; 68] = [
                 `rm` or a `chmod` or `chown` of a directory holding enforcement \
                 files, and a recursive `rm`, `trash`, `find -delete` or `git \
                 clean -ff` of a registered worktree, a directory holding one, or \
-                a target it cannot resolve where worktrees live. A path built at \
-                run time is past the guard; the OS sandbox's write denies are \
-                the backstop.",
+                a target it cannot resolve where worktrees live. exec-guard \
+                refuses an interpreter (`python`, `python3`, `node`, `nodejs`, \
+                `perl`, `ruby`, a version suffix included) whose inline code or \
+                arguments name an enforcement path: a script's arguments, \
+                every word after inline code or stdin `-`, a `--name=value` \
+                option or an attached short value in a cluster (`-oFILE`, \
+                `-voFILE`), and string literals in its code. It judges every \
+                directory the line may run the interpreter in: the session \
+                directory and every one any directory change may reach, \
+                success or not. Within the modeled grammar (`cd`, `chdir`, \
+                `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, \
+                `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, \
+                `xargs`, `caffeinate`, `xcrun` and `ionice` with their \
+                options, GNU-prefixed names such as `genv` and `gtimeout` \
+                and every `env -C` spelling included; the zsh precommands \
+                `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; \
+                `find -execdir` from every directory in the set, a file \
+                start in its parent, `-path` against find's own spelling) \
+                the set is exact. Anything outside it (`source`, `.`, \
+                `sudo`, `env -S`, an option it does not list, or any other \
+                word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or \
+                `--chdir` after an env-like word) makes the directory \
+                unknown, and so does an unknown program that launches a \
+                modeled launcher or an interpreter later in its words \
+                (after a `--` too), and a script string an unknown program \
+                is given, a `-c` or `-e` value or any quoted word (`expect \
+                -c`, `osascript -e`, `ssh host '...'`), which is read as a \
+                command line; `echo` and `printf` operands stay data. When \
+                a shell or interpreter takes its code from anything other \
+                than a literal argument or a heredoc body the guard reads (a \
+                pipe, a here-string, a descriptor such as `/dev/stdin` or \
+                `/dev/fd/N`, a process substitution, or a `-c`/`-e` value \
+                holding a substitution), every word on the line is judged \
+                by its trailing components. On a line where a shell \
+                (`source` and `.` included) or an interpreter runs, every \
+                quoted string anywhere on the line is judged as possible \
+                code the same way, so a line that mixes an interpreter with \
+                an unrelated quoted protected path refuses; unquoted \
+                operands of other programs stay data. Quoted strings are \
+                read as the shell builds them: `$'...'` decoded, adjacent \
+                quoted pieces joined, and a `printf` of `%s` pieces read as \
+                the value it joins. A composed text (a `printf` escape or \
+                `%b`/`%q`, an `echo -e` or `print` decode, or a join of \
+                on-line assignments) is resolved exactly where the guard \
+                can and judged by the tail rule, and on a running line a \
+                composing construct it cannot resolve refuses as \
+                cannot-verify, naming it. That reading is closed-world: \
+                a value is resolved only when every input is a literal \
+                read exactly through a construct the guard models and the \
+                result equals what bash and zsh produce; any other \
+                construct feeding it is unresolved, named by its family. \
+                The output of a program other than the modelled builtins is \
+                outside text, judged by its trailing components as an \
+                unassigned variable is, and also as if empty, the spelled \
+                pieces around it joined. \
+                A word is also read \
+                without one surrounding `{}` pair; every known word is then judged by its trailing \
+                components at the same levels: it never fails open on grammar \
+                it does not understand. The model is conservative, so an odd shape like \
+                `cd .claude && cd .. && python3 tool.py settings.json`, and a \
+                repo-root `find . -execdir python3 lint.py notes.txt`, which \
+                can really run in a hook directory, are refused. An operand \
+                naming policy authority metadata refuses in every form \
+                whatever the level. It \
+                reads an enforcement file passed as an argument as a possible \
+                write, so read one with `cat`, `jq` or `grep`, or redirect it \
+                into the interpreter's stdin. An argument it cannot read (a \
+                variable, a substitution, a directory after a `cd` it cannot \
+                follow) refuses when its spelled part could name an enforcement \
+                path or the line names one, as git-guard judges a writer's \
+                operands. Code in a file the guard does not read, and a path \
+                a script builds at run time, stay past the guard; the OS \
+                sandbox's write denies are the backstop. The guard stops at \
+                shell grammar, so a path built by interpreter code, such as \
+                Python adjacent string literals or a node `+` concatenation, \
+                is part of that residual.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {

@@ -1557,6 +1557,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-config-int",
     ),
+    // A name that is not valid UTF-8 folds to None, and the interpreter argument prefilter sends that path to the full enforcement checks, never clears it (TSK-302).
+    (
+        "crates/codeflow-core/src/security/arguments.rs",
+        "folded",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
+    ),
+    // A find name/path pattern that does not compile means no entry is proven to match, so the execdir directory reads as every entry and the walk marks it unknown; it never clears a directory (TSK-302).
+    (
+        "crates/codeflow-core/src/security/arguments.rs",
+        "find_tests",
+        "obtain-absent:Pattern::new",
+        1,
+        "unproven",
+    ),
+    // An authority tail that does not compile as a pattern means the word is not proven to reach authority metadata by its tail; the literal and line checks still judge it (TSK-302).
+    (
+        "crates/codeflow-core/src/security/arguments.rs",
+        "tail_names_authority",
+        "obtain-absent:Pattern::new",
+        1,
+        "unproven",
+    ),
     // Space and tab, the blanks sed skips around an address and its command; another whitespace character stays and makes the command not a print command.
     (
         "crates/codeflow-core/src/security/startup.rs",
@@ -6000,6 +6024,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/bounded_file/confined/windows.rs", "check", "is_dir", 2, "Type checks on a held handle's metadata, obtained with its error propagated; any mismatch returns invalid()."),
     ("crates/codeflow-core/src/bounded_file/confined/windows.rs", "check", "is_file", 1, "Type check on a held handle's metadata, obtained with its error propagated; a non-file non-directory returns invalid()."),
     ("crates/codeflow-core/src/delegate.rs", "inspect_continuations", "ErrorKind::NotFound", 1, "The turn directory is validated as a real private directory before this call, so a leaf that is not found is proven absence."),
+    ("crates/codeflow-core/src/security/arguments.rs", "execdir_dirs", "is_dir", 1, "Type check on a directory entry's file_type obtained with its error read as not-a-directory; it only decides whether the walk descends, and a name it cannot read already keeps the directory as a run location, so a mis-read never clears one (TSK-302)."),
+    ("crates/codeflow-core/src/security/arguments.rs", "passes", "is_dir", 1, "Type check on an entry's file_type that only answers a find -type test; the type is None when it could not be read, and the test then passes, so the entry stays a candidate (TSK-302)."),
+    ("crates/codeflow-core/src/security/arguments.rs", "passes", "is_file", 1, "Type check on an entry's file_type that only answers a find -type test; the type is None when it could not be read, and the test then passes, so the entry stays a candidate (TSK-302)."),
     ("crates/codeflow-core/src/delegate.rs", "path_exists_safely", "ErrorKind::NotFound", 1, "Callers pass leaves of validated private directories (validate_state_dir, the turn directory), so a leaf not found is proven absence; other errors refuse."),
     ("crates/codeflow-core/src/delegate.rs", "private_file_metadata", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false refuses with unsafe_state."),
     ("crates/codeflow-core/src/delegate.rs", "validate_open_file", "is_file", 1, "Type check on the opened file's metadata, obtained with its error propagated; false refuses with unsafe_state."),

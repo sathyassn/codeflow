@@ -1552,7 +1552,7 @@ const WRITING_PROGRAMS: &[&str] = &[
 
 /// A word as the guard shows it in a message: a command substitution the
 /// tokenizer cut out reads as `$(...)`.
-fn shown_word(word: &str) -> String {
+pub(crate) fn shown_word(word: &str) -> String {
     word.replace([git_target::SUBSTITUTED, SUBSTITUTED_BARE], "$(...)")
 }
 
@@ -1775,7 +1775,11 @@ fn unknown_dir_name_violation(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
-fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+pub(crate) fn token_integrity_path(
+    token: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<&'static str> {
     if token.is_empty() {
         return None;
     }
@@ -2659,7 +2663,7 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
 /// (`hooks/pre-commit` under `.git/hooks`). An absolute word, or one from
 /// the home directory, does not depend on the directory and is judged as
 /// written; an option's value after `=` is read as a word.
-fn word_could_name(word: &str) -> Option<&'static str> {
+pub(crate) fn word_could_name(word: &str) -> Option<&'static str> {
     // A word is read whole, and by the value an option or an assignment
     // gives it: `--output=FILE`, `of=FILE` and, for a short option, its
     // attached operand (`-oFILE`, `-OFILE`), since a program writes there.
@@ -3659,54 +3663,89 @@ fn worktree_text(text: &str) -> Option<&'static str> {
 /// The enforcement path a command line names, as text or through a glob
 /// word that reaches one from `cwd` once expanded and resolved
 /// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
-fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    if let Some(p) = enforcement_text(line) {
-        return Some(p.to_string());
-    }
-    // Each word, as split at blanks and as the shell reads it (quotes and
-    // escapes removed, `policy"".json`), and the value of an assignment
-    // (`x=alias/policy.json`), after brace expansion: a glob is expanded,
-    // and a plain path is resolved through symbolic links (TSK-216 round
-    // 16).
+pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
+    line_names_where(line, cwd, payload_cwd, &|_| true, false)
+}
+
+/// Each word of `line` as [`line_names`] reads it: as split at blanks and
+/// as the shell reads it (quotes and escapes removed, `policy"".json`),
+/// and the value of an assignment (`x=alias/policy.json`), before brace
+/// expansion.
+pub(crate) fn line_path_words(line: &str) -> Vec<String> {
     let tokens: Vec<String> = expand_commands(line)
         .iter()
         .flat_map(|segment| shell_tokens(segment))
         .collect();
-    let found = line_words(line)
-        .chain(tokens.iter().map(String::as_str))
+    line_words(line)
+        .map(str::to_string)
+        .chain(tokens)
         .flat_map(|word| {
             let value = word
                 .split_once('=')
                 .filter(|(name, _)| assignment_name(name))
-                .map(|(_, value)| value);
-            std::iter::once(word).chain(value)
+                .map(|(_, value)| value.to_string());
+            std::iter::once(word.clone()).chain(value)
         })
-        .find_map(|word| {
-            let Some(words) = word_readings(word) else {
-                return Some(BRACE_UNREAD.to_string());
-            };
-            words.iter().find_map(|w| {
-                if has_glob(w) {
-                    glob_reach(w, cwd, payload_cwd)
-                } else {
-                    let path = integrity_shell_path(w, cwd);
-                    if w.is_empty() {
-                        return None;
-                    }
-                    match super::edit_guard::repository_enforcement_target(
-                        &path,
-                        payload_cwd,
-                        false,
-                    ) {
-                        Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
-                        Ok(false) => None,
-                        Err(error) => {
-                            Some(format!("cannot read repository enforcement paths: {error}"))
-                        }
+        .collect()
+}
+
+/// The paths a glob word reaches from `cwd`, or `None` when the guard
+/// cannot list them (an unreadable path, or more entries than it reads).
+pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
+    WordGlob::new(word, cwd).expand().ok()
+}
+
+/// [`line_names`] that resolves a plain word only when `worth` says its
+/// path may be an enforcement path, so a caller with a cheap test of its
+/// own skips the file system reads for the rest (TSK-302 review F4). The
+/// text check is unchanged. With `quoted_literal`, a word holding a blank
+/// or a shell operator, which the shell only passes when it was quoted and
+/// therefore never globs, is read as a plain path rather than a glob
+/// (TSK-302 review round 3); git-guard's own reading keeps it off.
+pub(crate) fn line_names_where(
+    line: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+    worth: &dyn Fn(&Path) -> bool,
+    quoted_literal: bool,
+) -> Option<String> {
+    if let Some(p) = enforcement_text(line) {
+        return Some(p.to_string());
+    }
+    // Each word, as split at blanks and as the shell reads it, and the
+    // value of an assignment, after brace expansion: a glob is expanded,
+    // and a plain path is resolved through symbolic links (TSK-216 round
+    // 16).
+    let words = line_path_words(line);
+    let found = words.iter().find_map(|word| {
+        let Some(words) = word_readings(word) else {
+            return Some(BRACE_UNREAD.to_string());
+        };
+        let quoted = quoted_literal
+            && word.contains(|c: char| {
+                matches!(
+                    c,
+                    ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
+                )
+            });
+        words.iter().find_map(|w| {
+            if has_glob(w) && !quoted {
+                glob_reach(w, cwd, payload_cwd)
+            } else {
+                let path = integrity_shell_path(w, cwd);
+                if w.is_empty() || !worth(&path) {
+                    return None;
+                }
+                match super::edit_guard::repository_enforcement_target(&path, payload_cwd, false) {
+                    Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
+                    Ok(false) => None,
+                    Err(error) => {
+                        Some(format!("cannot read repository enforcement paths: {error}"))
                     }
                 }
-            })
-        });
+            }
+        })
+    });
     found
 }
 
@@ -4223,7 +4262,7 @@ fn sed_text_violation(
 /// `None` when that part can select a path in a way the guard does not
 /// model (`-o`, `!`, `-not`, `(`, path or regex tests), so every path may
 /// reach it.
-fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
+pub(crate) fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     let mut names = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -4246,7 +4285,7 @@ fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     (!names.is_empty()).then_some(names)
 }
 
-fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
+pub(crate) fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     let Some(filter) = filter else {
         return true;
     };
@@ -10565,7 +10604,7 @@ fn take_digits(chars: &mut std::str::Chars<'_>, radix: u32, max: usize) -> Optio
 /// \E \f \n \r \t \v \\ \' \" \?`, octal `\NNN`, hex `\xHH`, `\uHHHH`,
 /// `\UHHHHHHHH` and `\cX`. A byte above 0x7f reads as the character of that
 /// number; a NUL is dropped. An unknown escape keeps its backslash.
-fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
+pub(crate) fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
     let mut out = String::new();
     while let Some(c) = chars.next() {
         if c == '\'' {
@@ -10747,6 +10786,18 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         });
     }
     words
+}
+
+/// The shell words of `line` that hold any quoted part, as the shell joins
+/// and decodes them: adjacent quoted pieces form one word
+/// (`'.cla''ude/settings.json'`) and `$'...'` is decoded (TSK-302 review
+/// round 9). A word written with no quote at all is left out.
+pub(crate) fn quoted_shell_words(line: &str) -> Vec<String> {
+    shell_words(line)
+        .into_iter()
+        .filter(|word| word.unquoted_prefix < word.text.len())
+        .map(|word| word.text)
+        .collect()
 }
 
 /// The argument vector the program receives: the segment's words without its
