@@ -381,13 +381,14 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     if output.status.success() {
         return Ok(Fetched::Ok);
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let raw_stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = crate::git::remote_query::display_urls(raw_stderr.trim());
     if stderr.is_empty() {
         return Err(IdsError::Git(format!(
             "fetching the registry from {remote} failed without a message"
         )));
     }
-    let lower = stderr.to_lowercase();
+    let lower = raw_stderr.to_lowercase();
     if lower.contains("couldn't find remote ref") || lower.contains("could not find remote ref") {
         let name = format!("refs/heads/{}", super::REGISTRY_BRANCH);
         match crate::git::remote_query::ls_remote(git.root(), &["--exit-code", remote, &name]) {
@@ -483,6 +484,7 @@ fn classify_push(text: &str) -> Pushed {
         .filter(|line| !line.is_empty() && *line != "Done")
         .collect::<Vec<_>>()
         .join("; ");
+    let reason = crate::git::remote_query::display_urls(&reason);
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     if has(&["codeflow pre-push"]) {
         return Pushed::Failed(IdsError::Refused(reason));
@@ -1022,6 +1024,19 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_push_redacts_urls_without_changing_classification() {
+        let text =
+            "To https://u:FAKE_REGISTRY_TOKEN@host.invalid/repo\nfatal: authentication failed";
+        let super::Pushed::Failed(crate::ids::IdsError::Permission(reason)) =
+            super::classify_push(text)
+        else {
+            panic!("authentication failure must stay a permission failure");
+        };
+        assert!(!reason.contains("FAKE_REGISTRY_TOKEN"));
+        assert!(reason.contains("https://***@host.invalid/repo"));
+    }
+
     #[test]
     fn r20_pending_registry_query_failure_refuses() {
         let root = tempfile::tempdir().unwrap();

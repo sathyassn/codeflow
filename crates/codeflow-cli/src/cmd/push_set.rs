@@ -773,14 +773,20 @@ fn run_check_with(
                 String::from_utf8_lossy(&out.stderr)
             );
             report.relayed.extend(
-                relayed_findings(&printed)
+                relayed_findings(&remote_query::display_urls(&printed))
                     .into_iter()
                     .map(|finding| format!("`{shown}`: {finding}")),
             );
         }
         Ok(out) => {
-            eprint!("{}", String::from_utf8_lossy(&out.stdout));
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            eprint!(
+                "{}",
+                remote_query::display_urls(&String::from_utf8_lossy(&out.stdout))
+            );
+            eprint!(
+                "{}",
+                remote_query::display_urls(&String::from_utf8_lossy(&out.stderr))
+            );
             if let Some(rules) = &rules_out {
                 report.refused_by.extend(rules.read());
             }

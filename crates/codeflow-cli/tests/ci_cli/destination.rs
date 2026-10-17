@@ -364,10 +364,11 @@ fn a_credential_in_the_destination_url_is_never_printed_in_a_refusal() {
 #[test]
 fn a_credential_in_the_destination_url_is_never_printed_in_a_judged_push() {
     let dir = fixture();
+    // Git must receive the original URL even though every display redacts it.
     // Answer every lookup with the real advertisement of the stub's remote.
     let stub = Stub::new(
         dir.path(),
-        "PATH=${PATH#*:} git ls-remote --symref \"$(dirname \"$0\")/remote.git\" HEAD 'refs/heads/*' 'refs/tags/*'; exit $?",
+        &format!("case \"$*\" in *'{TOKEN}'*) ;; *) exit 81 ;; esac; PATH=${{PATH#*:}} git ls-remote --symref \"$(dirname \"$0\")/remote.git\" HEAD 'refs/heads/*' 'refs/tags/*'; exit $?"),
     );
     let url = credential_urls(dir.path());
     let out = stub.pre_push_to(dir.path(), &url);

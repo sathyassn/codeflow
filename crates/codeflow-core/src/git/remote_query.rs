@@ -37,6 +37,31 @@ pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Redact URL userinfo in a diagnostic that may quote several remote URLs.
+/// Keep the original text for protocol parsing; use this only for display.
+#[must_use]
+pub fn display_urls(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices("://") {
+        let start = at + 3;
+        if start < copied {
+            continue;
+        }
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c.is_ascii_whitespace() || matches!(c, '/' | '?' | '#'))
+            .unwrap_or(rest.len());
+        if let Some(userinfo) = rest[..end].rfind('@') {
+            shown.push_str(&text[copied..start]);
+            shown.push_str("***");
+            copied = start + userinfo;
+        }
+    }
+    shown.push_str(&text[copied..]);
+    shown
+}
+
 /// `git ls-remote <args>`, never interactive and bounded by
 /// [`LS_REMOTE_DEADLINE`] per attempt and [`MAX_ANSWER_BYTES`]. A default
 /// advertisement (`--symref`) retries only timeouts, at most twice, with a
@@ -348,6 +373,13 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_redact_every_url_without_changing_other_text() {
+        let text = "fatal: 'https://u:FAKE@one.invalid/x'\nTo ssh://FAKE@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path";
+        assert_eq!(display_urls(text), "fatal: 'https://***@one.invalid/x'\nTo ssh://***@two.invalid\nhttps://three.invalid/u@path and git@four.invalid:path");
+        assert_eq!(display_urls("plain diagnostic"), "plain diagnostic");
+    }
 
     #[test]
     fn command_line_url_rewrite_cannot_redirect_judging_queries() {
