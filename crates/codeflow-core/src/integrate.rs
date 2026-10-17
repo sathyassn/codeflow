@@ -1168,7 +1168,7 @@ mod r22_regressions {
 
     #[test]
     fn r22_unreadable_release_adoption_refuses_integration() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         assert!(run_release_structure(dir.path(), "main", "HEAD").is_ok());
         std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
         std::fs::write(dir.path().join(".codeflow/project.toml"), "invalid = [").unwrap();

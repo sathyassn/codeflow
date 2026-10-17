@@ -1536,7 +1536,8 @@ pub fn check_work_start_on(
     }
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
-    let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;
+    let mut report =
+        check_task_anchor(root, task_id, target, &branch, Admission::Start, pins, None)?;
     report.branch = branch;
     Ok(report)
 }
@@ -1635,7 +1636,15 @@ pub fn check_work_start_anchored(
         .map(|head| head_branch_text(&head, task_id))
         .transpose()?
         .unwrap_or_default();
-    check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        &branch,
+        Admission::Start,
+        &[],
+        None,
+    )
 }
 
 /// CI admission shares structural readiness but does not try to start a closed task.
@@ -1653,7 +1662,15 @@ pub fn check_work_admission(
     branch: &str,
     head: &str,
 ) -> Result<WorkStartReport, WorkStartError> {
-    check_task_anchor(repo_root, task_id, target, branch, true, &[], Some(head))
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::Work,
+        &[],
+        Some(head),
+    )
 }
 
 /// [`check_work_admission`] for a push of a branch stacked on reviewed
@@ -1672,7 +1689,15 @@ pub fn check_work_admission_on(
     pins: &[ReviewedPin],
 ) -> Result<WorkStartReport, WorkStartError> {
     let _judgment = history::judgment();
-    check_task_anchor(repo_root, task_id, target, branch, true, pins, Some(head))
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::Work,
+        pins,
+        Some(head),
+    )
 }
 
 /// The reviewed predecessor heads a push of `task_id`'s branch stacks on
@@ -1765,12 +1790,46 @@ pub fn stacked_pins(
     Ok(pins)
 }
 
+/// CI admission for a validated secret-scan exemption class. It keeps the
+/// task's identity, planning anchor, graph, specs and start gate, but does not
+/// require its dependencies to be ready before the exemption reaches the base.
+/// The caller must first prove the range changes only `.gitleaksignore` and
+/// that the Task line identifies this task.
+///
+/// # Errors
+/// Returns the ordinary admission refusals except dependency readiness.
+pub fn check_secret_scan_exemption_admission(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+    branch: &str,
+    head: &str,
+) -> Result<WorkStartReport, WorkStartError> {
+    let _judgment = history::judgment();
+    check_task_anchor(
+        repo_root,
+        task_id,
+        target,
+        branch,
+        Admission::SecretScanExemption,
+        &[],
+        Some(head),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    Start,
+    Work,
+    SecretScanExemption,
+}
+
 fn check_task_anchor(
     repo_root: &Path,
     task_id: &str,
     target: &str,
     branch: &str,
-    admission: bool,
+    admission: Admission,
     pins: &[ReviewedPin],
     head: Option<&str>,
 ) -> Result<WorkStartReport, WorkStartError> {
@@ -1787,7 +1846,14 @@ fn check_task_anchor(
     let head_id = head_commit(&repo, head)?;
     let (merge_base, mut records) = anchored_records(&repo, target, head_id)?;
     let at_base = records.contains_key(task_id);
-    standalone_at_head(&repo, &mut records, task_id, branch, admission, head_id)?;
+    standalone_at_head(
+        &repo,
+        &mut records,
+        task_id,
+        branch,
+        admission != Admission::Start,
+        head_id,
+    )?;
     // A named fix may reopen a complete task in this range (TSK-140). Only
     // its status is projected onto the anchored readiness core; every
     // planning input and dependency still comes from the merge-base. The
@@ -1817,12 +1883,20 @@ fn check_task_anchor(
             }
         }
     }
-    let anchored = validate_task_structure(&repo, &records, task_id, target, pins, &mut None)?;
+    let anchored = validate_task_structure(
+        &repo,
+        &records,
+        task_id,
+        target,
+        pins,
+        &mut None,
+        admission != Admission::SecretScanExemption,
+    )?;
     // The start gate judges the record as the merge base has it, with a
     // reopen in this range projected above: a task complete or cancelled
     // there takes no further change. A standalone record arriving with its
     // code (admission) has no base record; `standalone_at_head` judged it.
-    if !admission || at_base {
+    if admission == Admission::Start || at_base {
         start_gate(&records[task_id], task_id)?;
     }
 
@@ -2244,7 +2318,7 @@ pub(crate) fn validate_anchored_task_in(
     pins: &[ReviewedPin],
     branches: &mut Option<PinBranches>,
 ) -> Result<AnchoredTask, WorkStartError> {
-    let result = validate_task_structure(repo, records, task_id, target, pins, branches)?;
+    let result = validate_task_structure(repo, records, task_id, target, pins, branches, true)?;
     start_gate(&records[task_id], task_id)?;
     Ok(result)
 }
@@ -2256,6 +2330,7 @@ fn validate_task_structure(
     target: &str,
     pins: &[ReviewedPin],
     branches: &mut Option<PinBranches>,
+    dependencies_required: bool,
 ) -> Result<AnchoredTask, WorkStartError> {
     let task = records
         .get(task_id)
@@ -2324,15 +2399,17 @@ fn validate_task_structure(
             "--on pin does not name a code dependency of this task".into(),
         ));
     }
-    validate_dependencies(
-        repo,
-        records,
-        task_id,
-        target,
-        &task.depends_on,
-        pins,
-        branches,
-    )?;
+    if dependencies_required {
+        validate_dependencies(
+            repo,
+            records,
+            task_id,
+            target,
+            &task.depends_on,
+            pins,
+            branches,
+        )?;
+    }
     Ok(AnchoredTask {
         epic_id: task.epic_id.clone(),
         specs,
