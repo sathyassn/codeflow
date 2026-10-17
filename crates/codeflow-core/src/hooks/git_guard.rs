@@ -9,7 +9,7 @@
 //! line (D19).
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -153,43 +153,30 @@ pub fn read_branch_name(
     }
 }
 
-/// Read `alias.<name>` for the guard by running `git config --get` where the
-/// command would run (`query.target`, relative to `cwd`), with the command's
-/// own `-c` settings. Exit 1 means the key is not set; any other failure is
-/// [`AliasAnswer::Unreadable`].
+/// Read `alias.<name>` through the shared effective-configuration reader.
+/// Missing keys are distinct from configuration the reader cannot verify.
 #[must_use]
 pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer {
-    let mut cmd = crate::git::command();
-    cmd.current_dir(cwd).stdin(std::process::Stdio::null());
+    let mut globals = Vec::new();
     match query.target {
         Some(t) if t.git_dir => {
-            cmd.arg(format!("--git-dir={}", t.path));
+            globals.push(format!("--git-dir={}", t.path));
         }
         Some(t) => {
-            cmd.arg("-C").arg(t.path);
+            globals.extend(["-C".into(), t.path.into()]);
         }
         None => {}
     }
     for setting in query.config {
-        cmd.arg("-c").arg(setting);
+        globals.extend(["-c".into(), setting.clone()]);
     }
-    cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
-    match cmd.output() {
-        // OS text rule (issue 79): the expansion is judged as command words,
-        // so one that is not valid UTF-8 is unreadable, which the guard
-        // treats as uncertainty and stops, never as a lossy spelling.
-        Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
-            Ok(text) => {
-                AliasAnswer::Expansion(text.strip_suffix('\n').unwrap_or(&text).to_string())
-            }
-            Err(_) => AliasAnswer::Unreadable("the alias is not valid UTF-8".to_string()),
+    match crate::security::git_config::read(cwd, &globals, &BTreeMap::new()) {
+        Ok(config) => match config.get(&format!("alias.{}", query.name.to_ascii_lowercase())) {
+            Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
+            Ok(None) => AliasAnswer::NotAlias,
+            Err(reason) => AliasAnswer::Unreadable(reason),
         },
-        Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
-        Ok(out) => AliasAnswer::Unreadable(format!(
-            "`git config` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        Err(e) => AliasAnswer::Unreadable(format!("git could not run: {e}")),
+        Err(reason) => AliasAnswer::Unreadable(reason),
     }
 }
 
@@ -619,7 +606,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // redirections are the shell's, not arguments.
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        let launched = strip_launchers(&words);
+        let launched = configuration_launch(&words);
         if top_level {
             // A redirection can fail, and the assignment with it.
             let redirected = words.len() != tokens.len();
@@ -917,12 +904,464 @@ fn git_config_env_sets_hooks_path(tokens: &[String]) -> bool {
 
 /// Inspect assignments before launchers are stripped, including prior exports.
 pub(super) fn transport_config_environment(command: &str) -> bool {
-    expand_commands(command).iter().any(|segment| {
-        let tokens = shell_tokens(segment);
-        leading_env_assignments(&tokens).iter().any(|(name, _)| {
-            name.starts_with("GIT_CONFIG") || matches!(*name, "HOME" | "XDG_CONFIG_HOME")
+    configuration_environment_change(command).is_some()
+}
+
+fn configuration_variable(name: &str) -> bool {
+    name.starts_with("GIT_CONFIG") || matches!(name, "HOME" | "XDG_CONFIG_HOME")
+}
+
+fn configuration_environment_change(command: &str) -> Option<String> {
+    expand_commands(command).iter().find_map(|segment| {
+        let mut tokens = command_argv(segment);
+        strip_reserved_words(&mut tokens);
+        configuration_environment_trigger(&tokens).or_else(|| configuration_shell_change(segment))
+    })
+}
+
+/// The closing rule covers Git's configuration, location and program inputs.
+fn configuration_input(name: &str) -> bool {
+    configuration_variable(name)
+        || GIT_LOCATION_VARS.contains(&name)
+        || matches!(
+            name,
+            "GIT_EXEC_PATH"
+                | "GIT_TEMPLATE_DIR"
+                | "GIT_INDEX_FILE"
+                | "GIT_CEILING_DIRECTORIES"
+                | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+                | "GIT_NAMESPACE"
+                | "GIT_OBJECT_DIRECTORY"
+                | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+                | "GIT_EDITOR"
+                | "GIT_SEQUENCE_EDITOR"
+                | "GIT_PAGER"
+                | "GIT_SSH"
+                | "GIT_SSH_COMMAND"
+                | "GIT_EXTERNAL_DIFF"
+                | "GIT_ASKPASS"
+                | "GIT_PROXY_COMMAND"
+        )
+}
+
+/// A line-wide backstop, consumed only by configuration-dependent decisions.
+/// Ordinary Git operands are excluded; shell writes and plain reads are read
+/// before quote removal so redirections and parameter syntax are not lost.
+pub(crate) fn configuration_line_backstop(command: &str) -> Option<String> {
+    expand_commands(command).iter().find_map(|segment| {
+        if let Some(reason) = configuration_shell_change(segment) {
+            return Some(reason);
+        }
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let git = strip_launchers(&words)
+            .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git));
+        configuration_text_backstop(segment, !git).or_else(|| {
+            if git {
+                return None;
+            }
+            words
+                .iter()
+                .take_while(|word| word.contains('='))
+                .find_map(|word| configuration_destination("assignment", word))
         })
     })
+}
+
+fn configuration_text_backstop(text: &str, inspect_names: bool) -> Option<String> {
+    let bytes = text.as_bytes();
+    let identifier = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let mut reads = BTreeSet::new();
+    let (mut single, mut double) = (false, false);
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' if !single => {
+                at += 2;
+                continue;
+            }
+            b'\'' if !double => single = !single,
+            b'"' if !single => double = !double,
+            b'$' if !single => {
+                let braced = bytes.get(at + 1) == Some(&b'{');
+                let start = at + if braced { 2 } else { 1 };
+                let end = start
+                    + bytes
+                        .get(start..)
+                        .unwrap_or_default()
+                        .iter()
+                        .take_while(|byte| identifier(**byte))
+                        .count();
+                if end > start && (!braced || bytes.get(end) == Some(&b'}')) {
+                    reads.insert((start, end));
+                }
+            }
+            b'{' if !single && !double => {
+                if let Some(close) = text[at + 1..].find('}').map(|end| at + 1 + end) {
+                    if matches!(bytes.get(close + 1), Some(b'>' | b'<')) {
+                        return Some(format!(
+                            "unresolved configuration write in variable redirection {{{}}}",
+                            &text[at + 1..close]
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    if !inspect_names {
+        return None;
+    }
+    at = 0;
+    while at < bytes.len() {
+        if !identifier(bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < bytes.len() && identifier(bytes[at]) {
+            at += 1;
+        }
+        let name = &text[start..at];
+        if configuration_input(name) && !reads.contains(&(start, at)) {
+            return Some(format!(
+                "configuration variable {name} outside a plain read in a non-Git segment"
+            ));
+        }
+    }
+    None
+}
+
+/// Resolve a literal path or a plain inherited HOME read without shell code.
+pub(crate) fn inherited_path(word: &str) -> Option<String> {
+    expand_word(word, &HashMap::new()).ok()
+}
+
+fn configuration_variable_reason(word: &str) -> Option<String> {
+    let name = word.split_once('=').map_or(word, |(name, _)| name);
+    let name = name.trim_end_matches('+');
+    let name = name.split_once('[').map_or(name, |(name, _)| name);
+    configuration_variable(name).then(|| format!("environment variable {name}"))
+}
+
+/// A literal non-configuration destination stays safe even with a dynamic value.
+/// An unresolved destination could name any configuration variable.
+fn configuration_destination(program: &str, word: &str) -> Option<String> {
+    let name = word
+        .split_once('=')
+        .map_or(word, |(name, _)| name.strip_suffix('+').unwrap_or(name));
+    if program == "assignment"
+        && name.contains('/')
+        && !unresolved_word(name)
+        && !name.contains(['{', '}', '?', '*', '[', ']', '(', ')'])
+    {
+        // A slash in the literal prefix makes this a path, not a variable.
+        return None;
+    }
+    if let Some(reason) = configuration_variable_reason(word) {
+        return Some(reason);
+    }
+    // Quote removal may leave a brace word with several possible names.
+    // Preserve a named trigger when one reading is a configuration input;
+    // otherwise every non-name shape (including an unreadable brace word)
+    // is unresolved, rather than another spelling to enumerate.
+    let readings = word_readings(name);
+    if let Some(reason) = readings.as_ref().and_then(|words| {
+        words
+            .iter()
+            .find_map(|word| configuration_variable_reason(word))
+    }) {
+        return Some(reason);
+    }
+    (!assignment_name(name) || readings.is_none())
+        .then(|| format!("unresolved variable destination in {program}: {name}"))
+}
+
+/// Look past assignment-shaped words to inspect a possible Git invocation.
+/// The shape check separately refuses an unresolved destination at that
+/// decision; an uncertain prefix must not hide the command being judged.
+pub(crate) fn configuration_assignment_tail(words: &[String]) -> &[String] {
+    let count = words
+        .iter()
+        .take_while(|word| configuration_assignment_prefix(word))
+        .count();
+    &words[count..]
+}
+
+fn configuration_program(word: &str) -> bool {
+    !matches!(program_kind(word), ProgramKind::Other)
+        || is_prefix_launcher(word)
+        || launcher_name(word) == "env"
+}
+
+fn configuration_assignment_prefix(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        // A literal assignment wins even when its value ends with `/git`.
+        // Otherwise retain a possible Git/launcher program for dispatch.
+        assignment_name(name.strip_suffix('+').unwrap_or(name)) || !configuration_program(word)
+    })
+}
+
+fn configuration_launch(mut words: &[String]) -> Option<(&str, &[String])> {
+    loop {
+        let (program, args) = strip_launchers(configuration_assignment_tail(words))?;
+        if !configuration_assignment_prefix(program) {
+            return Some((program, args));
+        }
+        // An env/launcher may expose another unresolved assignment prefix.
+        words = args;
+    }
+}
+
+/// Variable-writing builtins have destination operands, unlike ordinary data.
+fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
+    if matches!(program, "export" | "unset") || is_declare_builtin(program) {
+        if is_declare_builtin(program)
+            && args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| {
+                    arg.strip_prefix('-')
+                        .is_some_and(|flags| flags.contains('n'))
+                })
+        {
+            return Some(format!("unsupported nameref option {program} -n"));
+        }
+        return args
+            .iter()
+            .filter(|word| !word.starts_with('-'))
+            .find_map(|word| configuration_destination(program, word));
+    }
+    match program {
+        "read" | "getln" | "mapfile" | "readarray" => {
+            let mut at = 0;
+            while let Some(option) = args.get(at).filter(|word| word.starts_with('-')) {
+                at += 1;
+                if option == "--" {
+                    break;
+                }
+                // Skip option values, but inspect read -a's array destination.
+                let options_with_values = if program == "read" {
+                    "adinNptu"
+                } else {
+                    "dnuOsCc"
+                };
+                for (index, flag) in option.char_indices().skip(1) {
+                    if options_with_values.contains(flag) {
+                        let attached = &option[index + flag.len_utf8()..];
+                        let value = if attached.is_empty() {
+                            let value = args.get(at).map(String::as_str);
+                            at += 1;
+                            value
+                        } else {
+                            Some(attached)
+                        };
+                        if program == "read" && flag == 'a' {
+                            if let Some(reason) =
+                                value.and_then(|word| configuration_destination(program, word))
+                            {
+                                return Some(reason);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            args.get(at..)?
+                .iter()
+                .find_map(|word| configuration_destination(program, word))
+        }
+        "printf" | "print" => {
+            let options = args.iter().take_while(|arg| arg.starts_with('-'));
+            for (index, option) in options.enumerate() {
+                if option == "--" {
+                    break;
+                }
+                if let Some(flags) = option.strip_prefix('-') {
+                    if let Some(position) = flags.find('v') {
+                        let attached = &flags[position + 1..];
+                        let destination = if attached.is_empty() {
+                            args.get(index + 1).map(String::as_str)
+                        } else {
+                            Some(attached)
+                        };
+                        return destination
+                            .and_then(|word| configuration_destination(program, word));
+                    }
+                }
+            }
+            None
+        }
+        "getopts" => args
+            .get(1)
+            .and_then(|word| configuration_destination(program, word)),
+        "let" => args.iter().find_map(|word| {
+            if unresolved_word(word) {
+                Some("unresolved variable destination in let".into())
+            } else {
+                // Arithmetic expressions may contain several assignments.
+                configuration_destination(program, word).or_else(|| {
+                    word.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .find_map(configuration_variable_reason)
+                })
+            }
+        }),
+        "for" if args.get(1).is_some_and(|word| word == "in") => args
+            .first()
+            .and_then(|word| configuration_destination(program, word)),
+        _ => None,
+    }
+}
+
+/// A builtin or an assignment expansion can change later commands' environment.
+pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
+    for word in shell_words(segment) {
+        if let Some((name, value)) = word.text.split_once('=') {
+            if value.starts_with('(') && word.unquoted_prefix > name.len() + 1 {
+                return Some(format!("unsupported array assignment to {name}"));
+            }
+        }
+    }
+    let mut words = command_argv(segment);
+    strip_reserved_words(&mut words);
+    if let Some(reason) = words
+        .iter()
+        .take_while(|word| word.contains('='))
+        .find_map(|word| configuration_destination("assignment", word))
+    {
+        return Some(reason);
+    }
+    if let Some(reason) = strip_launchers(&words)
+        .and_then(|(program, args)| configuration_builtin_trigger(program, args))
+    {
+        return Some(reason);
+    }
+    // Read expansion syntax before quote removal. Single-quoted or escaped
+    // examples are data; ${NAME:=value} or ${NAME=value} writes NAME here.
+    let mut single = false;
+    let mut double = false;
+    let mut chars = segment.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if !single => {
+                chars.next();
+            }
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '$' if !single => {
+                if let Some(expression) = arithmetic_expansion(chars.as_str()) {
+                    if let Some(name) = expression
+                        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .find(|name| configuration_input(name))
+                    {
+                        return Some(format!(
+                            "environment variable {name} in arithmetic expansion"
+                        ));
+                    }
+                }
+                let Some(rest) = chars.as_str().strip_prefix('{') else {
+                    continue;
+                };
+                let body = rest.split('}').next().unwrap_or(rest);
+                if let Some((head, _)) = body.split_once('=') {
+                    let head = head.trim_end_matches(':');
+                    if !assignment_name(head) {
+                        return Some(format!(
+                            "unresolved variable destination in parameter expansion: {head}"
+                        ));
+                    }
+                }
+                let len = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                let (name, operator) = rest.split_at(len);
+                if operator.starts_with(":=")
+                    || operator.starts_with("::=")
+                    || operator.starts_with('=')
+                {
+                    if let Some(reason) = configuration_variable_reason(name) {
+                        return Some(reason);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Retain either shell arithmetic spelling, including nested array subscripts.
+/// An unterminated expression keeps its remaining text for fail-closed inspection.
+fn arithmetic_expansion(after_dollar: &str) -> Option<&str> {
+    let (open, close, mut depth) = if after_dollar.starts_with('[') {
+        ('[', ']', 1usize)
+    } else if after_dollar.starts_with("((") {
+        ('(', ')', 2usize)
+    } else {
+        return None;
+    };
+    let body = &after_dollar[depth..];
+    for (at, ch) in body.char_indices() {
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&body[..at]);
+            }
+        }
+    }
+    Some(body)
+}
+
+/// Inspect only assignments and launcher/builtin operands, never Git data.
+pub(crate) fn configuration_environment_trigger(tokens: &[String]) -> Option<String> {
+    let variable = configuration_variable_reason;
+    let mut at = 0;
+    loop {
+        while let Some(word) = tokens.get(at).filter(|word| word.contains('=')) {
+            if let Some(reason) = configuration_destination("assignment", word) {
+                return Some(reason);
+            }
+            at += 1;
+        }
+        let program = tokens.get(at)?;
+        let name = launcher_name(program);
+        if name == "env" {
+            let end = env_options(tokens, at + 1, &mut Vec::new()).ok()?;
+            let mut index = at + 1;
+            while index < end {
+                let word = &tokens[index];
+                if matches!(word.as_str(), "-i" | "-" | "--ignore-environment") {
+                    return Some(format!("unsupported environment option env {word}"));
+                }
+                if matches!(word.as_str(), "-u" | "--unset") {
+                    if let Some(reason) = tokens.get(index + 1).and_then(|word| variable(word)) {
+                        return Some(reason);
+                    }
+                    index += 2;
+                } else if matches!(word.as_str(), "-C" | "--chdir" | "-P" | "-a" | "--argv0") {
+                    index += 2;
+                } else {
+                    if let Some(reason) = word
+                        .strip_prefix("--unset=")
+                        .or_else(|| word.strip_prefix("-u"))
+                        .and_then(variable)
+                        .or_else(|| assignment(word).and_then(|_| variable(word)))
+                    {
+                        return Some(reason);
+                    }
+                    index += 1;
+                }
+            }
+            at = end;
+        } else if is_prefix_launcher(program) {
+            at = skip_launcher_options(program, tokens, at + 1)?;
+        } else {
+            return configuration_builtin_trigger(program, &tokens[at + 1..]);
+        }
+    }
 }
 
 /// Env vars whose in-session assignment disables the client hooks. `HUSKY`
@@ -6132,14 +6571,36 @@ fn heredoc_body(chars: &[char], start: usize, doc: &Heredoc) -> Option<(String, 
     None
 }
 
-/// Split the `$(…)` and backtick substitutions of an unquoted heredoc body,
-/// the only parts of it the shell runs. A backslash escapes `$` and `` ` ``.
+/// Retain parameter expansions and split command substitutions in an unquoted
+/// data heredoc. A backslash escapes `$` and `` ` ``.
 fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
     while i < chars.len() {
         match chars[i] {
             '\\' => i += 2,
+            '$' if chars.get(i + 1) == Some(&'[') => {
+                // Arithmetic in data heredocs changes variables too. Keep
+                // the shell syntax so both guards use the same write scan.
+                let rest: String = chars[i + 1..].iter().collect();
+                if let Some(expression) = arithmetic_expansion(&rest) {
+                    out.push(format!(": $[{expression}]"));
+                }
+                i += 2;
+            }
+            '$' if chars.get(i + 1) == Some(&'{') => {
+                // A data heredoc still evaluates parameter assignments. Keep
+                // the expansion without interpreting its surrounding prose.
+                if let Some(end) = chars[i + 2..].iter().position(|ch| *ch == '}') {
+                    let end = i + 3 + end;
+                    let parameter: String = chars[i..end].iter().collect();
+                    out.push(format!(": {parameter}"));
+                    // Nested command substitutions in the value also run.
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
             '$' if chars.get(i + 1) == Some(&'(') => {
                 let (inner, next) = capture_balanced(&chars, i + 2);
                 split_into_segments(&inner, out, depth, false);
@@ -6361,18 +6822,16 @@ struct LineFacts {
 struct Mentions {
     /// A git location variable (`GIT_DIR`, …).
     location_var: bool,
-    /// Where git reads its configuration from (`GIT_CONFIG_*`, `HOME`,
-    /// `XDG_CONFIG_HOME`) or a config file path, which the alias reader
-    /// cannot see.
-    config_env: bool,
+    /// A parsed builtin or expansion that writes a configuration variable.
+    shell_env: Option<String>,
     /// Transport cannot trust config supplied by the command being judged.
-    transport_env: bool,
+    transport_env: Option<String>,
     /// `GIT_CONFIG` itself, not one of the `GIT_CONFIG_*` variables.
     git_config_var: bool,
     /// A `git config` write whose order the guard does not model: anywhere
     /// on a line that is not flat, or nested in a substitution. Top-level
     /// writes on a flat line are followed in order.
-    config_write: bool,
+    config_write: Option<String>,
 }
 
 impl LineFacts {
@@ -6382,13 +6841,16 @@ impl LineFacts {
             nested_mover: false,
             mentions: Mentions {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
-                config_env: mentions_config_env(command),
-                transport_env: transport_config_environment(command),
+                shell_env: segments
+                    .iter()
+                    .find_map(|segment| configuration_shell_change(segment))
+                    .or_else(|| configuration_line_backstop(command)),
+                transport_env: configuration_environment_change(command),
                 git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
                     !command[at + word.len()..]
                         .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
                 }),
-                config_write: false,
+                config_write: None,
             },
         };
         for (idx, segment) in segments.iter().enumerate() {
@@ -6402,12 +6864,27 @@ impl LineFacts {
                 || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
             let nested = roles.is_some_and(|r| r[idx].is_none());
             let unordered = roles.is_none() || nested;
-            facts.mentions.config_write |= unordered
+            if unordered
                 && strip_launchers(&words).is_some_and(|(program, args)| {
                     matches!(program_kind(program), ProgramKind::Git)
                         && git_subcommand(args)
                             .is_some_and(|(sub, rest)| sub == "config" && !config_only_reads(rest))
-                });
+                })
+            {
+                facts.mentions.config_write =
+                    Some("a git config write whose order the guard cannot model".to_string());
+            }
+            if let Some(path) = redirect_writes(segment).targets.into_iter().find(|path| {
+                let path = Path::new(path);
+                path.ends_with("gitconfig")
+                    || path.ends_with(".gitconfig")
+                    || path.ends_with(".git/config")
+                    || path.ends_with(".git/config.worktree")
+                    || path.ends_with("git/config")
+            }) {
+                facts.mentions.config_write =
+                    Some(format!("a redirect into configuration path `{path}`"));
+            }
             facts.any_mover |= mover;
             let sets_var = program.is_none_or(|p| p == "export")
                 && tokens.iter().any(|t| assignment(t).is_some());
@@ -6442,8 +6919,26 @@ impl LineFacts {
             // A location variable the line sets outside the op's own launcher
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
-            config_unknown: self.mentions.config_env || self.mentions.config_write,
-            transport_env: self.mentions.transport_env,
+            config_write: self.mentions.config_write.clone(),
+            transport_env: configuration_environment_trigger(tokens)
+                .or_else(|| {
+                    tracked
+                        .then(|| {
+                            shell
+                                .vars
+                                .keys()
+                                .filter(|name| configuration_variable(name))
+                                .min()
+                                .map(|name| format!("environment variable {name}"))
+                        })
+                        .flatten()
+                })
+                .or_else(|| self.mentions.shell_env.clone())
+                .or_else(|| {
+                    (!tracked)
+                        .then(|| self.mentions.transport_env.clone())
+                        .flatten()
+                }),
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
@@ -6460,9 +6955,9 @@ struct Moves<'r> {
     vars: Option<&'r HashMap<String, Val>>,
     /// A git location variable may be set in a way the guard cannot scope.
     location_unknown: bool,
-    /// The line may change where git reads its configuration from.
-    config_unknown: bool,
-    transport_env: bool,
+    /// A parsed configuration write the alias reader cannot reproduce.
+    config_write: Option<String>,
+    transport_env: Option<String>,
     /// The line mentions `GIT_CONFIG`, the file `git config` writes when
     /// no scope option names one.
     git_config_var: bool,
@@ -6483,10 +6978,10 @@ fn check_authority(
         matches!(sub, "fetch" | "pull" | "push")
             || super::ref_authority::remote_transport_args(sub, rest).is_some()
     });
-    if moved.transport_env && transport {
+    if let Some(trigger) = moved.transport_env.as_ref().filter(|_| transport) {
         violations.push(Violation::always_blocking(
             "git.policy_authority",
-            "command-local configuration can redirect the configured remote".into(),
+            format!("cannot verify the configured remote after changing {trigger}"),
             "use the configured remote without configuration environment overrides",
         ));
         return;
@@ -6567,6 +7062,25 @@ fn check_git(
     };
     let head_moved_before = branches.head_may_move;
     branches.head_may_move |= !discard_readonly_git(sub, rest);
+    let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
+    let trigger = moved.transport_env.clone().or_else(|| {
+        config_env.then(|| {
+            let globals = &args[..args.len() - rest.len() - 1];
+            let option = globals
+                .iter()
+                .find(|arg| arg.starts_with("--config-env"))
+                .map_or("--config-env", String::as_str);
+            format!("unsupported option {option}")
+        })
+    });
+    if let Some(trigger) = trigger.filter(|_| JUDGED_SUBCOMMANDS.contains(&sub) && sub != "config")
+    {
+        out.push(Violation::always_blocking(
+            "git.policy_authority",
+            format!("cannot verify Git configuration after {trigger}"),
+            "run the Git operation with the configured environment; the operator changes configuration",
+        ));
+    }
 
     // A subcommand that is not a builtin may be an alias: judge what it
     // expands to, as if written literally. One the guard cannot read is
@@ -7208,26 +7722,6 @@ pub(crate) const GIT_BUILTINS: &[&str] = &[
 /// How deep an alias may expand into further aliases before the guard stops.
 const MAX_ALIAS_DEPTH: usize = 8;
 
-/// Does the line touch where git reads its configuration from, or name a git
-/// config file it could write? Any mention of a `GIT_CONFIG*` variable,
-/// `XDG_CONFIG_HOME`, a `git/config` or `gitconfig` path, or `HOME` as a word
-/// not read as `$HOME`, counts.
-fn mentions_config_env(command: &str) -> bool {
-    if ["GIT_CONFIG", "XDG_CONFIG_HOME", "git/config", "gitconfig"]
-        .iter()
-        .any(|marker| command.contains(marker))
-    {
-        return true;
-    }
-    let bytes = command.as_bytes();
-    command.match_indices("HOME").any(|(at, _)| {
-        let before = at.checked_sub(1).map(|i| bytes[i]);
-        let after = bytes.get(at + 4).copied();
-        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-        !before.is_some_and(|b| word(b) || b == b'$' || b == b'{') && !after.is_some_and(word)
-    })
-}
-
 /// Expand `sub`, a subcommand that is not a builtin, through the alias it
 /// names in every repository the op could target (TSK-112). Each result is
 /// the op's argument vector with the alias replaced by its expansion, the way
@@ -7249,8 +7743,11 @@ fn expand_alias(
     let lookup = ctx
         .alias_lookup
         .ok_or_else(|| "no alias reader".to_string())?;
-    if moved.config_unknown {
-        return Err("the line changes where git reads its configuration".to_string());
+    if let Some(trigger) = &moved.transport_env {
+        return Err(format!("the line changes {trigger}"));
+    }
+    if let Some(trigger) = &moved.config_write {
+        return Err(trigger.clone());
     }
     if config_changed {
         return Err(
@@ -10127,6 +10624,19 @@ fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
     out
 }
 
+fn capture_array_initializer(chars: &mut std::str::Chars<'_>) -> String {
+    let rest: Vec<char> = chars.clone().collect();
+    let (body, end) = capture_word_group(&rest, 0);
+    let mut array = format!("({body}");
+    if rest.get(end.saturating_sub(1)) == Some(&')') {
+        array.push(')');
+    }
+    for _ in 0..end {
+        chars.next();
+    }
+    array
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -10189,6 +10699,18 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         prefix_open = false;
                     }
                 }
+            }
+            '(' if !in_single && !in_double && cur.ends_with('=') => {
+                // An array initializer is one assignment, not one operand
+                // per element. Preserve it for the configuration diagnostic.
+                let array = capture_array_initializer(&mut chars);
+                cur.push_str(&array);
+                expands |= array.contains(['$', '`']);
+                if prefix_open {
+                    unquoted_prefix += 1;
+                }
+                prefix_open = false;
+                started = true;
             }
             // The shell splits words at its blanks (space, tab, newline); any
             // other whitespace, a no-break space included, is part of the word
@@ -11305,6 +11827,136 @@ mod tests {
             let result = report(command, "task/work");
             assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
             assert!(result.violations.iter().any(|v| v.message.contains("an alias the guard cannot resolve")), "{:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn configuration_destinations_require_a_literal_name() {
+        for name in ["{A,B}", "A?", "A*", "A[0]", "$A", "`name`", "(A)", ""] {
+            for program in ["export", "read", "getln", "printf", "for"] {
+                assert!(
+                    configuration_destination(program, name).is_some(),
+                    "{program}: {name}"
+                );
+            }
+        }
+        assert!(configuration_destination("export", "FOO=$BAR").is_none());
+        assert!(configuration_destination("export", "PATH+=:/x").is_none());
+        assert!(configuration_destination("export", "{A,B}{C,D}{E,F}{G,H}").is_some());
+        for command in [
+            "cat <<'EOF'\n${HOME:=/evil}\nEOF\ngit zz",
+            "cat <<EOF\n${HOME}\nEOF\ngit zz",
+            "cd \"$HOME/src/x\" && git push origin task/x",
+            "git commit -m 'set HOME'",
+        ] {
+            assert!(configuration_line_backstop(command).is_none(), "{command}");
+        }
+        // Parameter scanning must retain nested commands from data heredocs.
+        let segments = expand_commands("cat <<EOF\n${FOO:-$(git push origin main)}\nEOF");
+        assert!(
+            segments.iter().any(|s| s.contains("git push origin main")),
+            "{segments:?}"
+        );
+    }
+
+    #[test]
+    fn configuration_expansions_and_arrays_name_the_write() {
+        for command in [
+            "git -c x.y=$[HOME=1] zz",
+            "git zz $[HOME=1]",
+            "cat <<EOF\n$[HOME=1]\nEOF\ngit zz",
+        ] {
+            assert!(
+                configuration_line_backstop(command).is_some_and(|reason| reason.contains("HOME")),
+                "{command}"
+            );
+        }
+        for command in ["declare -a arr=(1 2)", "arr=(1 2)"] {
+            assert!(
+                configuration_shell_change(command)
+                    .is_some_and(|reason| reason.contains("arr") && !reason.contains("2)")),
+                "{command}"
+            );
+        }
+        for command in [
+            "git log -1 \"$((1+1))\"",
+            "git log -1 '$[HOME=1]'",
+            "git log -1 \\$[HOME=1]",
+        ] {
+            assert!(configuration_line_backstop(command).is_none(), "{command}");
+        }
+    }
+
+    #[test]
+    fn configuration_closing_rule_reaches_transports_and_discards() {
+        for command in [
+            "export H{OME,X}=/evil; git fetch origin",
+            "printf HOME; git pull origin task/x",
+            "exec {HOME}>/dev/null; git reset --hard",
+            "{HOME,X}=/evil git reset --hard",
+            "env HOM?=/evil git push origin task/x",
+            "command env H{OME,X}=/evil git push origin task/x",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
+        }
+    }
+
+    #[test]
+    fn configuration_words_in_operands_are_not_environment_changes() {
+        for command in [
+            "git commit -m 'docs: explain gitconfig includes'",
+            "git commit -m 'move to HOME page'",
+            "git checkout -- .git/config-notes.md",
+            "git log -1 -- docs/gitconfig.md && git push origin feat/x",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                !blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
+        }
+    }
+
+    #[test]
+    fn configuration_environment_changes_refuse_branch_and_discard_decisions() {
+        for command in [
+            "declare -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
+            "typeset -x GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
+            "readonly GIT_CONFIG_GLOBAL=/tmp/config; git push origin task/work",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true git commit -m fix",
+            "BARE=true git --config-env=core.bare=BARE commit -m fix",
+            "GIT_CONFIG_GLOBAL=/tmp/config git branch -D feature",
+            "env -u GIT_CONFIG_SYSTEM git reset --hard",
+            "GIT_CONFIG_NOSYSTEM=1 git push origin task/work",
+            "export HOME=/tmp/config; git push origin task/work",
+            "env --unset=XDG_CONFIG_HOME git push origin task/work",
+            "command env HOME=/tmp/config git commit -m fix",
+        ] {
+            let result = report(command, "task/work");
+            assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
+            assert!(result.violations.iter().any(|v| v.message.contains("GIT_CONFIG") || v.message.contains("HOME") || v.message.contains("--config-env")), "{command}: {:?}", result.violations);
+        }
+    }
+
+    #[test]
+    fn alias_operands_are_not_configuration_changes() {
+        for command in [
+            "git st docs/gitconfig.md",
+            "git st -- HOME",
+            "git st git/config",
+        ] {
+            let result = report(command, "task/work");
+            assert!(
+                !blocks(&result.violations),
+                "{command}: {:?}",
+                result.violations
+            );
         }
     }
 
@@ -13191,8 +13843,8 @@ mod tests {
                 cwd: Cwd::Paths(vec![String::new()]),
                 vars: None,
                 location_unknown: false,
-                config_unknown: mentions,
-                transport_env: false,
+                config_write: None,
+                transport_env: None,
                 git_config_var: mentions,
                 narrows: false,
                 tokens,
@@ -15934,11 +16586,11 @@ mod tests {
         );
         assert_eq!(split_alias("a 'b"), None);
         assert_eq!(split_alias("a\\"), None);
-        assert!(mentions_config_env("HOME=/x git y"));
-        assert!(mentions_config_env("unset HOME"));
-        assert!(!mentions_config_env("git -C \"$HOME/r\" y"));
-        assert!(!mentions_config_env("git -C ${HOME}/r y"));
-        assert!(!mentions_config_env("CODEFLOW_HOME=1 git y"));
+        assert!(configuration_environment_change("HOME=/x git y").is_some());
+        assert!(configuration_environment_change("unset HOME").is_some());
+        assert!(configuration_environment_change("git -C \"$HOME/r\" y").is_none());
+        assert!(configuration_environment_change("git -C ${HOME}/r y").is_none());
+        assert!(configuration_environment_change("CODEFLOW_HOME=1 git y").is_none());
     }
 
     // A rebase given a `<branch>` checks it out and rewrites it: that branch
@@ -16993,19 +17645,20 @@ fn check_discard(
             Err(why)
         } else if prior_mutation {
             Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
-        } else if moved.config_unknown
-            || args
-                .iter()
-                .take(args.len().saturating_sub(rest.len() + 1))
-                .any(|a| {
-                    a == "--work-tree"
-                        || a.starts_with("--work-tree=")
-                        || a == "--bare"
-                        || a.contains("core.worktree=")
-                        || a.contains("core.bare=")
-                        || a.contains("include.path=")
-                        || a.contains("includeIf.")
-                })
+        } else if let Some(trigger) = &moved.transport_env {
+            Err(format!("cannot verify Git configuration after {trigger}"))
+        } else if args
+            .iter()
+            .take(args.len().saturating_sub(rest.len() + 1))
+            .any(|a| {
+                a == "--work-tree"
+                    || a.starts_with("--work-tree=")
+                    || a == "--bare"
+                    || a.contains("core.worktree=")
+                    || a.contains("core.bare=")
+                    || a.contains("include.path=")
+                    || a.contains("includeIf.")
+            })
         {
             Err("explicit work-tree or bare repository overrides need an unambiguous git -C invocation".into())
         } else {

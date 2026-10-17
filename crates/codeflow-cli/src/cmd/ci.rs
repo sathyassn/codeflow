@@ -618,8 +618,8 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
-    let tracked_claim = scope_ready
-        && work_checks(
+    let work_class = if scope_ready {
+        work_checks(
             &root,
             git,
             pr_body.as_deref(),
@@ -632,7 +632,10 @@ pub fn run(args: &CiArgs) -> i32 {
             &stacked,
             &mut tagged,
             &mut ran,
-        );
+        )
+    } else {
+        None
+    };
 
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
@@ -641,12 +644,20 @@ pub fn run(args: &CiArgs) -> i32 {
         &head,
         &stacked,
         level,
+        work_class
+            .as_ref()
+            .is_some_and(classification::Class::is_secret_scan_exemption),
         &mut tagged,
         &mut ran,
     );
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
-    if own_task || tracked_claim {
+    if own_task
+        || work_class
+            .as_ref()
+            .and_then(classification::Class::task_id)
+            .is_some()
+    {
         visible_graph_check(&root, level, &mut tagged);
     }
 
@@ -806,8 +817,8 @@ fn release_of(
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
 /// range: a completion is bound to the head it lands with. A tracked body
 /// also names that reviewed commit in an approving Reviews row (issue 121).
-/// `light` is the range's change class. Returns whether the pull request is
-/// tracked work (TSK-133's visible-workgraph check).
+/// `light` is the range's change class. Returns the validated work class
+/// for the visible-workgraph and own-branch checks.
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn work_checks<'a>(
     root: &Path,
@@ -822,7 +833,7 @@ fn work_checks<'a>(
     stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
-) -> bool {
+) -> Option<classification::Class> {
     let base = match resolve_base(root, base_candidates) {
         Ok(value) => value,
         Err(error) => {
@@ -830,7 +841,7 @@ fn work_checks<'a>(
                 sha: None,
                 violation: tracking_state_violation(error),
             });
-            return false;
+            return None;
         }
     };
     let range_parts = base.as_deref().map(|base| classification::Range {
@@ -846,7 +857,7 @@ fn work_checks<'a>(
                 sha: None,
                 violation,
             });
-            return false;
+            return None;
         }
     };
     let release_head = release.is_some_and(|(head, _)| head);
@@ -864,7 +875,7 @@ fn work_checks<'a>(
                         sha: None,
                         violation: tracking_state_violation(error),
                     });
-                    return false;
+                    return None;
                 }
             };
             Some(classification::ReleaseHead { owner })
@@ -911,9 +922,10 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
-    if let (Some(body), Some(classification::Class::Tracked { task_id })) =
-        (pr_body, class.as_ref())
-    {
+    if let (Some(body), Some(task_id)) = (
+        pr_body,
+        class.as_ref().and_then(classification::Class::review_task),
+    ) {
         if let Some(violation) = review_row_check(root, git, body, head, task_id, light) {
             tagged.push(TaggedViolation {
                 sha: None,
@@ -921,13 +933,7 @@ fn work_checks<'a>(
             });
         }
     }
-    matches!(
-        class,
-        Some(
-            classification::Class::Tracked { .. }
-                | classification::Class::ReleaseIntegration { .. }
-        )
-    )
+    class
 }
 
 /// Release acceptance applies only where durable tracking is enabled. All
@@ -1357,12 +1363,14 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
 /// `codeflow work start`.
 /// Returns whether the branch's task was checked, so the caller runs the
 /// visible-workgraph check for it.
+#[allow(clippy::too_many_arguments)] // The run context and its validated exemption class.
 fn own_branch_preflight(
     root: &Path,
     branch: &str,
     head: &str,
     stacked: &[ReviewedPin],
     level: PolicyLevel,
+    exemption: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> bool {
@@ -1379,7 +1387,7 @@ fn own_branch_preflight(
     if branch.starts_with("task/") || claims {
         match durable_work_tracking_enabled(root) {
             Ok(true) => {
-                evaluate_work_start(root, branch, head, stacked, level, tagged);
+                evaluate_work_start(root, branch, head, stacked, level, exemption, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -1497,6 +1505,7 @@ fn evaluate_work_start(
     head: &str,
     stacked: &[ReviewedPin],
     level: PolicyLevel,
+    exemption: bool,
     tagged: &mut Vec<TaggedViolation>,
 ) {
     // The head's records first: from a base checkout (the hosted policy
@@ -1541,9 +1550,16 @@ fn evaluate_work_start(
                 return;
             }
         };
-        if let Err(error) = codeflow_core::workgraph::work_start::check_work_admission_on(
-            root, &task_id, &target, branch, head, stacked,
-        ) {
+        let admission = if exemption {
+            codeflow_core::workgraph::work_start::check_secret_scan_exemption_admission(
+                root, &task_id, &target, branch, head,
+            )
+        } else {
+            codeflow_core::workgraph::work_start::check_work_admission_on(
+                root, &task_id, &target, branch, head, stacked,
+            )
+        };
+        if let Err(error) = admission {
             tagged.push(TaggedViolation {
                 sha: None,
                 violation: if work_start_reader_error(&error) {
@@ -3173,6 +3189,7 @@ mod tests {
                 &head,
                 &[],
                 PolicyLevel::Off,
+                false,
                 &mut tagged,
             );
             if defect == "none" {

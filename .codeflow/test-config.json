@@ -247,7 +247,8 @@
         }
       },
       "requires": [
-        "codeflow-bin"
+        "codeflow-bin",
+        "rust-build"
       ],
       "narrow": [
         "scripts/release.py",

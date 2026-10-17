@@ -23,6 +23,7 @@ use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
+mod git_config;
 mod grok_hooks;
 mod remote_perimeter;
 mod startup_files;
@@ -289,6 +290,7 @@ const CHECK_NAMES: &[&str] = &[
     "codex",
     "grok",
     "startup-files",
+    "git-config-includes",
     "config",
     "permissions",
     "policy-source",
@@ -326,6 +328,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
     m.insert("startup-files", startup_files::check);
+    m.insert("git-config-includes", git_config::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -3964,7 +3967,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 22);
+        assert_eq!(check_names().len(), 23);
     }
 
     #[test]
@@ -6112,12 +6115,49 @@ mod tests {
 
     #[test]
     fn test_check_permissions_pass() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
         let mut opts = test_opts();
         opts.project_dir = dir.path().to_string_lossy().to_string();
         let result = check_permissions(&opts);
         assert_eq!(result.status, Status::Pass);
+    }
+
+    /// Permission probes create persistent lock files. Their fixtures must
+    /// keep those writes out of a repository enclosing TMPDIR (issue 104).
+    #[cfg(unix)]
+    #[test]
+    fn permission_fixtures_leave_the_enclosing_repository_unchanged() {
+        let parent = tempfile::tempdir().unwrap();
+        git2::Repository::init(parent.path()).unwrap();
+        let inside = parent.path().join("tmp");
+        std::fs::create_dir(&inside).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let alias = outside.path().join("link");
+        std::os::unix::fs::symlink(&inside, &alias).unwrap();
+        for temporary in [&inside, &alias] {
+            for test in [
+                "doctor::tests::test_check_permissions_pass",
+                "doctor::tests::r23_dangling_codeflow_dir_fails_permissions",
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", test, "--nocapture"])
+                    .env("TMPDIR", temporary)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{test}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(
+                    !parent.path().join(".git/codeflow").exists(),
+                    "{test} wrote a gate lock outside its fixture through {}",
+                    temporary.display()
+                );
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -6681,7 +6721,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn r23_dangling_codeflow_dir_fails_permissions() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::fixture_tests::project_dir();
         assert_eq!(check_permissions(&opts_at(dir.path())).status, Status::Pass);
         dangling(&dir.path().join(".codeflow"));
         let result = check_permissions(&opts_at(dir.path()));
