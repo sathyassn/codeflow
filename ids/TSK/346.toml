@@ -1,0 +1,11 @@
+id = "TSK-346"
+uid = "4c3fda8f-a09a-415d-b7ea-1357e32113f3"
+kind = "TSK"
+title = "the meaning-taken eval pack is qualified on native seats"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:41:06Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
