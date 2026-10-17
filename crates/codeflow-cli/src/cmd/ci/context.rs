@@ -156,7 +156,7 @@ pub(in crate::cmd) enum Declared {
 /// branch, or those at the line's own remote-tracking ref. A local branch
 /// never binds anything, because the change's author can create one at any
 /// commit; the remote is trusted only as far as the host protects
-/// `integration/*`.
+/// `integration/*` and every name in `protected_branches`.
 pub(in crate::cmd) fn judged_declared_target(
     root: &Path,
     branch: &str,
@@ -237,7 +237,7 @@ fn eligible_declared(
     Ok(None)
 }
 
-/// The tip of a target that bounds a bare run's range. A declared epic line
+/// The tip of a target that bounds a bare run's range. A declared target
 /// resolves only through its remote-tracking ref: a local branch of that
 /// name is never the base, and one that differs is named.
 fn local_base(
@@ -249,16 +249,15 @@ fn local_base(
     explicit: bool,
 ) -> Result<Option<String>, String> {
     let name = normalize(target);
-    let line = !explicit && codeflow_core::workgraph::line_adoption::epic_id(&name).is_ok();
-    let candidates = if line {
-        vec![format!("refs/remotes/origin/{name}")]
-    } else {
+    let candidates = if explicit {
         target_candidates(target)
-    };
-    let local = if line {
-        rev_parse(root, &format!("refs/heads/{name}"))?
     } else {
+        vec![format!("refs/remotes/origin/{name}")]
+    };
+    let local = if explicit {
         None
+    } else {
+        rev_parse(root, &format!("refs/heads/{name}"))?
     };
     if let Some(tip) = resolve_base(root, &candidates)? {
         if local.as_ref().is_some_and(|local| *local != tip) {
@@ -274,7 +273,7 @@ fn local_base(
         return Ok(Some(tip));
     }
     let reason = if local.is_some() {
-        "exists only as a local branch, and a local-only line never counts".to_string()
+        "exists only as a local branch, which cannot supply a declared base".to_string()
     } else {
         "does not resolve".to_string()
     };

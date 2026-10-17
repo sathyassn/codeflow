@@ -66,8 +66,11 @@ pub struct CiArgs {
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
     /// Only protected branches and bound epic lines may supply a declared target: records on a
     /// protected branch or at the line's `origin/<line>` ref must bind the line to the branch's
-    /// epic, and a local-only line never counts. Host protection cannot be verified offline, so
-    /// protect integration/* on the host.
+    /// epic. Declared bases use only `origin/<name>`; local branches, including protected names,
+    /// never supply them. Missing remote refs warn and keep the protected fallback.
+    /// Host protection cannot be verified offline: protect integration/* and every name in
+    /// `protected_branches` on the host. A bare run reads the local remote-tracking ref;
+    /// git-guard refuses update-ref of refs/remotes/*.
     /// Pass --branch when an explicit --head belongs to another line.
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,

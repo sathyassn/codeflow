@@ -1388,8 +1388,10 @@ struct RangeBase {
 /// Select a range without excluding any destination-missing commit:
 /// 1. An existing protected/integration fast-forward uses its advertised old
 ///    tip when the destination can be asked.
-/// 2. A branch with a task target at its pushed commit uses the merge base
-///    with that target's advertised tip when the tip is available locally.
+/// 2. A branch with an eligible declared target at its pushed commit uses
+///    that target's advertised tip when available locally. Protected names
+///    must share the destination default's tip. Rejected declarations and
+///    differing protected tips use the destination default instead.
 ///    An unfetched target is noted, even if the fallback finds no base.
 /// 3. An existing branch otherwise uses the historical boundary against all
 ///    locally available advertised tips and its own old sha. A rewrite is
@@ -1408,7 +1410,7 @@ fn range_base(
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
     if let Advertised::Tips(tips) = destination.advertised(root) {
-        if let Some(base) = target_base(root, r, destination.policy, tips, notices)? {
+        if let Some(base) = target_base(root, r, destination, tips, notices)? {
             return Ok(Some(base));
         }
     }
@@ -1465,17 +1467,18 @@ fn range_base(
 
 /// Match the pull request's base without excluding any destination-missing
 /// commit: the selected base is either an advertised tip or its ancestor.
-/// Line rewrites and unavailable targets retain the historical fallback.
+/// Line rewrites and unavailable eligible targets retain the historical fallback.
 fn target_base(
     root: &Path,
     r: &PushRef,
-    policy: &GitPolicy,
+    destination: &Destination<'_>,
     tips: &AdvertisedTips,
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
     let Some(branch) = r.remote_branch() else {
         return Ok(None);
     };
+    let policy = destination.policy;
     let line = policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
     let (base, target) = if line {
         let Some(old) = existing_tip(root, r)? else {
@@ -1486,18 +1489,41 @@ fn target_base(
         }
         (old.to_string(), branch.to_string())
     } else {
-        let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+        let declared = super::ci::judged_declared_target(
             root,
             branch,
             &r.local_sha,
-        )
-        .map_err(|error| error.to_string())?;
-        let Some(target) = target else {
+            &policy.protected_branches,
+        )?;
+        let Some(declared) = declared else {
             return Ok(None);
         };
-        if !codeflow_core::workgraph::is_stable_work_target(&target) {
-            return Ok(None);
-        }
+        let default = match destination.answer(root) {
+            Ok(Ok(answer)) => answer.default.as_ref(),
+            _ => None,
+        };
+        let target = match declared {
+            super::ci::Declared::Eligible(target)
+                if !policy.branch_is_protected(&target)
+                    || default.is_some_and(|(_, tip)| {
+                        tips.branches.get(&target) == Some(&tip.to_string())
+                    }) =>
+            {
+                target
+            }
+            super::ci::Declared::Eligible(target)
+            | super::ci::Declared::Rejected { target, .. } => {
+                let Some((name, _)) = default else {
+                    return Err(format!(
+                        "declared target '{target}' cannot bound the range and the destination has no default target"
+                    ));
+                };
+                notices.push(format!(
+                    "declared target '{target}' cannot bound the range; using the destination's default target '{name}'"
+                ));
+                name.clone()
+            }
+        };
         let target = target.as_str();
         let Some(tip) = tips.branches.get(target) else {
             return Ok(None);

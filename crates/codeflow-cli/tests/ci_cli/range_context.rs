@@ -152,6 +152,14 @@ fn help_explains_base_selection_and_acceptance_mode() {
         text.contains("frozen or amendable") && text.contains("declared target"),
         "{text}"
     );
+    for phrase in [
+        "including protected names",
+        "protected_branches",
+        "local remote-tracking ref",
+        "update-ref of refs/remotes/*",
+    ] {
+        assert!(text.contains(phrase), "{text}");
+    }
 }
 
 #[test]
@@ -895,4 +903,27 @@ fn round_two_docs_validation_rejects_option_shaped_targets() {
             "{target}: {text}"
         );
     }
+}
+
+#[test]
+fn protected_local_target_cannot_hide_a_criterion_without_a_remote_ref() {
+    let f = Line::new();
+    f.protected_target_shadow();
+    let out = ci(&f, &[], None);
+    let text = output(&out);
+    assert!(text.contains("work.criteria_frozen"), "{text}");
+    assert!(text.contains("exists only as a local branch"), "{text}");
+    assert!(
+        text.contains("base falls back to the policy protected branches"),
+        "{text}"
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    let base = f.git(&["rev-parse", "main"]);
+    f.git(&["update-ref", "refs/remotes/origin/master", &base]);
+    let text = output(&ci(&f, &[], None));
+    assert!(text.contains("work.criteria_frozen"), "{text}");
+    assert!(
+        text.contains("local branch 'master' differs from 'origin/master'"),
+        "{text}"
+    );
 }
