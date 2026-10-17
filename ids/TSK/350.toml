@@ -1,0 +1,11 @@
+id = "TSK-350"
+uid = "d87a91fd-1064-4486-bf44-71f1ce4a7193"
+kind = "TSK"
+title = "Own-task criteria use the judged head in every checkout"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T16:56:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
