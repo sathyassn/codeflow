@@ -1,0 +1,11 @@
+id = "TSK-356"
+uid = "6f43a5fe-5c6e-4c4d-846c-db2614571354"
+kind = "TSK"
+title = "Slow test fixtures run once and exhaustive matrices run in the full gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T19:44:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
