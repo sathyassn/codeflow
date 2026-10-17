@@ -1,0 +1,11 @@
+id = "TSK-368"
+uid = "b7514188-e647-4104-86c8-6784b9a38e90"
+kind = "TSK"
+title = "Native workflow capabilities are qualified with current evidence"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
