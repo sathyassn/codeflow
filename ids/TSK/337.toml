@@ -1,0 +1,11 @@
+id = "TSK-337"
+uid = "ceedaf93-f073-47f9-97fb-c58a9ac6e489"
+kind = "TSK"
+title = "The prescribed Codex lane starts with its intended permissions"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:37:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
