@@ -1,0 +1,11 @@
+id = "TSK-365"
+uid = "7f426bf5-48b0-4b2e-aafa-347c7a389db2"
+kind = "TSK"
+title = "The CI pin attack drives the installed candidate binary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:08:29Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
