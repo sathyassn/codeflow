@@ -405,7 +405,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/integrate.rs",
-        "checkout",
+        "run_checkout",
         "from_utf8_lossy",
         1,
         "display",
@@ -421,9 +421,17 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/integrate.rs",
-        "integrate",
+        "integrate_with_mode",
         "from_utf8_lossy",
         1,
+        "display",
+    ),
+    // Git merge stdout and stderr are shown only after its exit status refuses the merge.
+    (
+        "codeflow-core/src/integrate.rs",
+        "prepare_merge",
+        "from_utf8_lossy",
+        2,
         "display",
     ),
     // a git or tool error message shown to a person, never compared
@@ -3104,7 +3112,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
         "crates/codeflow-core/src/integrate.rs",
-        "checkout",
+        "run_checkout",
         "trim",
         1,
         "display",
@@ -3128,7 +3136,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
         "crates/codeflow-core/src/integrate.rs",
-        "integrate",
+        "integrate_with_mode",
         "trim",
         1,
         "display",

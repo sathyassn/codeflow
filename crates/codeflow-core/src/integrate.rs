@@ -274,16 +274,8 @@ pub fn integrate_with_mode(
             ),
         });
     }
-    if mode == IntegrateMode::Merge
-        && repo.head().ok().and_then(|head| head.target()) != Some(tested_oid)
-    {
-        let _ = restore_checkout(repo_root, &original);
-        return Err(IntegrateError::MergeFailed {
-            target: target.to_string(),
-            message:
-                "merge candidate HEAD moved during integrate; refusing to land untested content"
-                    .to_string(),
-        });
+    if mode == IntegrateMode::Merge {
+        verify_merge_head(repo_root, &repo, target, &original, tested_oid)?;
     }
     let is_fast_forward = tested_oid == target_oid
         || history::descendant_of(&repo, tested_oid, target_oid).map_err(|error| {
@@ -343,6 +335,32 @@ pub fn integrate_with_mode(
         original,
         test_gate,
     )
+}
+
+fn verify_merge_head(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    target: &str,
+    original: &str,
+    tested_oid: git2::Oid,
+) -> Result<(), IntegrateError> {
+    let head = repo.head().map_err(|error| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message: format!("cannot read merge candidate HEAD after the gate: {error}"),
+        }
+    })?;
+    if head.target() != Some(tested_oid) {
+        let _ = restore_checkout(repo_root, original);
+        return Err(IntegrateError::MergeFailed {
+            target: target.to_string(),
+            message:
+                "merge candidate HEAD moved during integrate; refusing to land untested content"
+                    .to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
