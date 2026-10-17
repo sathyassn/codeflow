@@ -676,32 +676,24 @@ fn ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String>>, S
 }
 
 /// A throwaway repository with an empty exclude file, removed on drop.
-struct ScratchRepo(PathBuf);
+struct ScratchRepo(tempfile::TempDir);
 
 impl ScratchRepo {
     fn new() -> Option<Self> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("codeflow-ignore-{}-{nanos}", std::process::id()));
-        let scratch = Self(dir);
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("codeflow-ignore-");
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let scratch = Self(builder.tempdir().ok()?);
         let made = crate::git::command()
             .args(["init", "--quiet"])
-            .arg(&scratch.0)
+            .arg(scratch.0.path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .ok()?
             .success();
         made.then_some(scratch)
-    }
-}
-
-impl Drop for ScratchRepo {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -716,7 +708,7 @@ fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String
     let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root)?);
     let scratch =
         ScratchRepo::new().ok_or("cannot create scratch repository to read shared ignore rules")?;
-    let git_dir = scratch.0.join(".git");
+    let git_dir = scratch.0.path().join(".git");
     let git_dir = git_dir
         .to_str()
         .ok_or("scratch Git directory cannot be represented as text")?;

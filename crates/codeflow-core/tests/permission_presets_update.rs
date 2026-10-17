@@ -15,6 +15,10 @@ use codeflow_core::scaffold::settings_merge::merge_settings_from_baseline;
 use codeflow_core::scaffold::{self, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions};
 use serde_json::Value;
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
+
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -421,14 +425,6 @@ fn without_a_deny_baseline_new_exceptions_cannot_cancel_adopter_denies() {
 
 // --- whole-update cases against the real assets ----------------------------
 
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
-
 fn assets() -> DirSource {
     DirSource::new(repo().join("assets"))
 }
@@ -446,6 +442,7 @@ fn init_minimal() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     std::fs::create_dir(&root).unwrap();
+    git_isolation::own_repository(&root);
     scaffold::init(
         &assets(),
         &root,

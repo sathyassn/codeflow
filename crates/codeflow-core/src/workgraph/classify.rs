@@ -239,6 +239,60 @@ pub fn is_planning_path(path: &str) -> bool {
             || path.starts_with("docs/plan/"))
 }
 
+/// Whether the complete range changes only the ignore file read by the
+/// managed secret scan. Callers also validate the status and tree entry.
+/// Exact bytes keep nested files, lookalikes, empty
+/// ranges and mixed ranges out. This does not admit a planning path.
+#[must_use]
+pub fn is_secret_scan_exemption(paths: &[crate::git::GitName]) -> bool {
+    matches!(paths, [path] if path.bytes() == b".gitleaksignore")
+}
+
+/// Validate the exemption file in the head tree, retaining its existing mode.
+/// The caller checks that the range adds or modifies only `.gitleaksignore`.
+///
+/// # Errors
+/// Refuses unreadable history, a missing or non-regular head entry, or a mode
+/// change from the merge base. Uses the planning class's entry-mode check.
+pub fn validate_secret_scan_exemption_entry(
+    root: &Path,
+    base: &str,
+    head: &str,
+) -> Result<(), String> {
+    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+    let commit = |revision| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| error.to_string())
+    };
+    let head = commit(head)?;
+    let tree = head.tree().map_err(|error| error.to_string())?;
+    let entry = tree
+        .get_name(".gitleaksignore")
+        .ok_or("the head has no .gitleaksignore file")?;
+    if let Some(kind) = super::amendment::special_entry_kind(entry.filemode()) {
+        return Err(format!(
+            ".gitleaksignore at the head is a {kind}; an exemption requires a regular file"
+        ));
+    }
+    if entry.kind() != Some(git2::ObjectType::Blob) {
+        return Err(".gitleaksignore at the head is not a regular file".into());
+    }
+    let base = commit(base)?;
+    let from = super::acceptance::common_base(&repo, base.id(), head.id())?.unwrap_or(base.id());
+    let before = repo
+        .find_commit(from)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    if before
+        .get_name(".gitleaksignore")
+        .is_some_and(|old| old.filemode() != entry.filemode())
+    {
+        return Err("an exemption cannot change the mode of .gitleaksignore".into());
+    }
+    Ok(())
+}
+
 /// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmendmentPath {
@@ -331,6 +385,31 @@ pub fn is_spike_path(path: &str, task_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_scan_exemption_is_exactly_the_root_ignore_file() {
+        use crate::git::GitName;
+        assert!(is_secret_scan_exemption(&[GitName::from(
+            ".gitleaksignore"
+        )]));
+        for paths in [
+            vec![],
+            vec![".gitleaksignore", "docs/guide.md"],
+            vec!["nested/.gitleaksignore"],
+            vec![".GITLEAKSIGNORE"],
+            vec![".gitleaks.toml"],
+        ] {
+            let paths: Vec<_> = paths.into_iter().map(GitName::from).collect();
+            assert!(!is_secret_scan_exemption(&paths));
+        }
+        assert!(!is_secret_scan_exemption(&[GitName::from_bytes(
+            b".gitleaksignore\xff"
+        )]));
+        assert_eq!(
+            amendment_path(".gitleaksignore", &ProjectPaths::default()),
+            None
+        );
+    }
 
     #[test]
     fn embedded_table_parses_and_every_fixed_member_has_an_example() {

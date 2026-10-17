@@ -257,6 +257,7 @@ dependencies = [
  "codeflow-core",
  "codeflow-fixture",
  "codeflow-present",
+ "git2",
  "libc",
  "portable-pty",
  "pulldown-cmark",

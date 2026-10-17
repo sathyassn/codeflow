@@ -75,7 +75,8 @@ impl Preflight {
 /// Run `release.py preflight` for the branch `branch` pushed at `head`, with
 /// `remote` naming where its target's tracking refs live. `codeflow` is the
 /// binary release.py reads a PR draft with: the caller passes itself, so
-/// the reader is the same binary as the enforcer (TSK-147 F4).
+/// the reader is the same binary as the enforcer (TSK-147 F4). The draft
+/// named by `CODEFLOW_PR_DRAFT` is passed as `--body-file` when set.
 ///
 /// # Errors
 /// The calculator could not run or printed no result; the caller reports
@@ -87,18 +88,41 @@ pub fn preflight(
     remote: &str,
     codeflow: &Path,
 ) -> Result<Preflight, String> {
-    let output = Command::new(PYTHON)
-        .args([
-            "-B",
-            SCRIPT,
-            "preflight",
-            "--head",
-            head,
-            "--branch",
-            branch,
-            "--remote",
-            remote,
-        ])
+    let draft = std::env::var_os("CODEFLOW_PR_DRAFT").filter(|value| !value.is_empty());
+    preflight_with_draft(
+        root,
+        head,
+        branch,
+        remote,
+        codeflow,
+        draft.as_deref().map(Path::new),
+    )
+}
+
+fn preflight_with_draft(
+    root: &Path,
+    head: &str,
+    branch: &str,
+    remote: &str,
+    codeflow: &Path,
+    draft: Option<&Path>,
+) -> Result<Preflight, String> {
+    let mut command = Command::new(PYTHON);
+    command.args([
+        "-B",
+        SCRIPT,
+        "preflight",
+        "--head",
+        head,
+        "--branch",
+        branch,
+        "--remote",
+        remote,
+    ]);
+    if let Some(path) = draft {
+        command.arg("--body-file").arg(path);
+    }
+    let output = command
         // An environment variable, not an argument: a project's older
         // release.py ignores it instead of refusing the call.
         .env("CODEFLOW_BIN", codeflow)
@@ -214,6 +238,29 @@ mod tests {
         assert_eq!(warn.notes, ["/opt/the-running-codeflow"]);
         let blocked = preflight(dir.path(), "HEAD", "break", "origin", reader).unwrap();
         assert!(blocked.blocked());
+    }
+
+    #[test]
+    fn preflight_passes_the_draft_path_as_one_argument() {
+        if !python_available() {
+            return;
+        }
+        let dir = project(
+            "codeflow",
+            Some("import json, sys\nfrom pathlib import Path\np = Path(sys.argv[sys.argv.index('--body-file') + 1])\nprint(json.dumps({'status': 'warn', 'notes': [p.read_text()]}))\n"),
+        );
+        let draft = dir.path().join("draft body.md");
+        std::fs::write(&draft, "Impact: patch").unwrap();
+        let result = preflight_with_draft(
+            dir.path(),
+            "HEAD",
+            "task/x",
+            "origin",
+            Path::new("codeflow"),
+            Some(&draft),
+        )
+        .unwrap();
+        assert_eq!(result.notes, ["Impact: patch"]);
     }
 
     #[test]

@@ -21,6 +21,10 @@ use codeflow_core::scaffold::{
     self, AssetSource, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions,
 };
 
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
+
 /// TSK-184 AC-1: the 26 moments of the map, in rendered order. The first
 /// [`DELIVERY_MOMENTS`] are the delivery stages in the order work moves; the
 /// rest are the situations that cut across stages.
@@ -112,14 +116,6 @@ const REFERENCES: &[&str] = &[
     ".codeflow/rules/writing.md",
 ];
 
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
-
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -155,6 +151,7 @@ fn init_opts(tier: Tier) -> InitOptions {
 fn scaffold(source: &dyn AssetSource, tier: Tier) -> tempfile::TempDir {
     isolate_git();
     let dir = tempfile::tempdir().expect("project tempdir");
+    git_isolation::own_repository(dir.path());
     scaffold::init(source, dir.path(), &init_opts(tier)).expect("init succeeds");
     dir
 }
