@@ -1,0 +1,11 @@
+id = "TSK-336"
+uid = "0da5d30d-2f9e-4762-8c74-636c6d483cc6"
+kind = "TSK"
+title = "Hosted policy verdicts have trusted authority and limited credential exposure"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T15:37:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
