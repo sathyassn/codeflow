@@ -12,20 +12,9 @@ use codeflow_core::scaffold::{
 
 // --- fixtures ---------------------------------------------------------------
 
-/// Point git at empty global/system config for the whole test process. The
-/// engine under test spawns its own `git` subprocesses which inherit the
-/// process environment, so per-`Command` `.env()` cannot reach them. The
-/// process-global mutation is made race-free by doing it exactly once behind
-/// a `Once` that every test synchronizes on before its first spawn — POSIX
-/// `setenv` concurrent with `getenv`/spawn is a data race, so repeated
-/// `set_var` from parallel tests (even with identical values) is not benign.
-fn isolate_git() {
-    static ISOLATE: std::sync::Once = std::sync::Once::new();
-    ISOLATE.call_once(|| {
-        std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
-        std::env::set_var("GIT_CONFIG_SYSTEM", "/dev/null");
-    });
-}
+#[path = "support/git_isolation.rs"]
+mod git_isolation;
+use git_isolation::isolate_git;
 
 const MANIFEST: &str = r#"
 schema_version = 1
@@ -246,8 +235,8 @@ fn update_opts(version: &str) -> UpdateOptions {
     }
 }
 
-fn git(root: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -255,8 +244,71 @@ fn git(root: &Path, args: &[&str]) -> String {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .output()
-        .expect("git runs");
+        .expect("git runs")
+}
+
+/// Runs git in `root` and returns its trimmed stdout. A command that fails
+/// fails the test, so one that ran against the wrong repository, or not at
+/// all, is not read as empty output (issue 104).
+fn git(root: &Path, args: &[&str]) -> String {
+    let out = git_output(root, args);
+    assert!(
+        out.status.success(),
+        "git {args:?} in {} failed: {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// The value of a git config `key`, or an empty string when it is unset
+/// (`git config` exits 1 for an unset key; any other failure fails the test).
+fn git_config(root: &Path, key: &str) -> String {
+    let out = git_output(root, &["config", key]);
+    if out.status.code() == Some(1) && out.stdout.is_empty() {
+        return String::new();
+    }
+    git(root, &["config", key])
+}
+
+/// The fixture `git` helper reports a failed command, so a command that ran
+/// against the wrong repository, or not at all, fails the test (issue 104).
+/// A fixture reached through a link into a repository's folder still gets a
+/// repository of its own (issue 104): its lexical parents hold no `.git`.
+#[cfg(unix)]
+#[test]
+fn own_repository_judges_a_fixture_by_its_physical_path() {
+    isolate_git();
+    let repository = tempfile::tempdir().unwrap();
+    git(repository.path(), &["init", "-q"]);
+    let inside = repository.path().join("tmp");
+    std::fs::create_dir(&inside).unwrap();
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(&inside, alias.path().join("link")).unwrap();
+    let fixture = alias.path().join("link/proj");
+    std::fs::create_dir(&fixture).unwrap();
+    git_isolation::own_repository(&fixture);
+    assert!(
+        fixture.join(".git").exists(),
+        "the fixture has its own repository"
+    );
+}
+
+#[test]
+fn the_git_helper_returns_stdout_when_git_succeeds() {
+    isolate_git();
+    let (_dir, root) = project_dir();
+    git(&root, &["init", "-q"]);
+    assert_eq!(git(&root, &["rev-parse", "--is-inside-work-tree"]), "true");
+}
+
+#[test]
+#[should_panic(expected = "git [\"rev-parse\", \"no-such-ref\"] in")]
+fn the_git_helper_fails_the_test_when_git_fails() {
+    isolate_git();
+    let (_dir, root) = project_dir();
+    git(&root, &["init", "-q"]);
+    git(&root, &["rev-parse", "no-such-ref"]);
 }
 
 fn read(root: &Path, rel: &str) -> String {
@@ -281,6 +333,7 @@ fn project_dir() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("project tempdir");
     let root = dir.path().join("proj");
     std::fs::create_dir(&root).unwrap();
+    git_isolation::own_repository(&root);
     (dir, root)
 }
 
@@ -701,7 +754,7 @@ fn init_into_existing_repo_is_nondestructive() {
     );
 
     // husky: hooks left alone, recorded unwired, instructions printed.
-    assert_eq!(git(&root, &["config", "core.hooksPath"]), "");
+    assert_eq!(git_config(&root, "core.hooksPath"), "");
     assert!(read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""));
     assert!(report.notes.iter().any(|n| n.contains("husky")));
     assert_eq!(read(&root, ".husky/pre-commit"), "npx lint-staged\n");

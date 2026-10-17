@@ -14,6 +14,8 @@ pub mod error;
 pub mod estimate;
 pub mod feedback;
 pub mod file_lock;
+#[cfg(test)]
+mod fixture_tests;
 pub mod git;
 pub mod hooks;
 pub mod ids;
