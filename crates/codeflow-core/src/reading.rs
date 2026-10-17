@@ -1014,6 +1014,8 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "PLAN.md",
     "TASK.md",
     "index.md",
+    // An adopter's document index, named by the planning amendment example.
+    "DOC-INDEX.md",
     "portal.config.json",
     "epics/EPC-NNN.md",
     "specs/SPC-NNN.md",
