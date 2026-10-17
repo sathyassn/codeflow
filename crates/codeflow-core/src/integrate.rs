@@ -248,30 +248,9 @@ pub fn integrate_with_mode(
     let old_target_short = short_id(&repo, target_oid);
 
     // Stage 2: prepare and pin the candidate before the gate runs.
-    let (source_oid, tested_oid) = match mode {
-        IntegrateMode::Rebase => {
-            checkout(repo_root, branch)?;
-            match attempt_rebase(repo_root, target)? {
-                RebaseResult::Success => {}
-                RebaseResult::ConflictAborted { conflicting_files } => {
-                    let _ = restore_checkout(repo_root, &original);
-                    return Err(IntegrateError::RebaseConflict {
-                        branch: branch.to_string(),
-                        target: target.to_string(),
-                        conflicting_files,
-                    });
-                }
-            }
-            let rebased = resolve_branch(&repo, branch)?;
-            (rebased, rebased)
-        }
-        IntegrateMode::Merge => (
-            branch_oid,
-            prepare_merge(
-                repo_root, &repo, branch, target, branch_oid, target_oid, &original,
-            )?,
-        ),
-    };
+    let (source_oid, tested_oid) = prepare_candidate(
+        repo_root, &repo, branch, target, branch_oid, target_oid, &original, mode,
+    )?;
 
     // Stage 3: test gate (full mode), then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
@@ -364,6 +343,43 @@ pub fn integrate_with_mode(
         original,
         test_gate,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_candidate(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    branch: &str,
+    target: &str,
+    branch_oid: git2::Oid,
+    target_oid: git2::Oid,
+    original: &str,
+    mode: IntegrateMode,
+) -> Result<(git2::Oid, git2::Oid), IntegrateError> {
+    match mode {
+        IntegrateMode::Rebase => {
+            checkout(repo_root, branch)?;
+            match attempt_rebase(repo_root, target)? {
+                RebaseResult::Success => {}
+                RebaseResult::ConflictAborted { conflicting_files } => {
+                    let _ = restore_checkout(repo_root, original);
+                    return Err(IntegrateError::RebaseConflict {
+                        branch: branch.to_string(),
+                        target: target.to_string(),
+                        conflicting_files,
+                    });
+                }
+            }
+            let rebased = resolve_branch(repo, branch)?;
+            Ok((rebased, rebased))
+        }
+        IntegrateMode::Merge => Ok((
+            branch_oid,
+            prepare_merge(
+                repo_root, repo, branch, target, branch_oid, target_oid, original,
+            )?,
+        )),
+    }
 }
 
 /// Build a merge on detached HEAD. The source and target refs stay untouched,

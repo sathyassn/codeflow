@@ -55,10 +55,17 @@ fn merge_gates_both_parents_without_moving_either_ref() {
     let root = dir.path();
     let line = git(root, &["rev-parse", "main"]);
     let source = git(root, &["rev-parse", "feat/reviewed"]);
-    gate(root, &format!(
-        "test $(git rev-parse HEAD^1) = {line} && test $(git rev-parse HEAD^2) = {source} && test $(git rev-parse main) = {line} && test $(git rev-parse feat/reviewed) = {source} && git ls-files --error-unmatch feature.txt base.txt"
-    ));
+    gate(
+        root,
+        "git rev-parse main feat/reviewed HEAD > gated-refs.txt && git ls-files --error-unmatch feature.txt base.txt",
+    );
     integrate_with_mode(root, "feat/reviewed", "main", IntegrateMode::Merge).unwrap();
+    let landed = git(root, &["rev-parse", "main"]);
+    let gated = std::fs::read_to_string(root.join("gated-refs.txt")).unwrap();
+    assert_eq!(
+        gated.lines().collect::<Vec<_>>(),
+        [line.as_str(), source.as_str(), landed.as_str()]
+    );
     assert_eq!(git(root, &["rev-parse", "main^1"]), line);
     assert_eq!(git(root, &["rev-parse", "main^2"]), source);
     assert_eq!(git(root, &["rev-parse", "feat/reviewed"]), source);
@@ -155,7 +162,7 @@ fn merge_refuses_candidate_moved_during_gate() {
     let line = git(root, &["rev-parse", "main"]);
     // Change only HEAD, leaving the candidate files intact so the gate's
     // file-generation guard does not reject the mutation first.
-    gate(root, "git update-ref HEAD HEAD^1");
+    gate(root, "git update-ref HEAD \"HEAD^1\"");
     let error =
         integrate_with_mode(root, "feat/reviewed", "main", IntegrateMode::Merge).unwrap_err();
     assert!(error.to_string().contains("candidate HEAD moved"));
