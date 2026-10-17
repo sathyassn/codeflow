@@ -338,9 +338,10 @@ commit.
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<target>..HEAD"`
-  on a change, so it reads only the change's own commits, and without
-  `--log-opts` on a schedule, which reads the full history.
+- **gitleaks** scans for secrets. The GitHub workflow passes resolved commit ids
+  and a final `--` in `--log-opts`, so a tracked path named `HEAD` cannot
+  change the scan. A change scans its own commits; a schedule scans the
+  full history reachable from its resolved head.
   The GitHub workflow reads every exemption from the trusted commit: the
   pull request's base, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its
@@ -353,7 +354,15 @@ as extra steps when your stack warrants:
   a `GITLEAKS_CONFIG` file in the repository, come from the trusted commit
   too; the step fails when that commit does not hold the file, and refuses
   an absolute path into the checkout. An inline `gitleaks:allow` comment
-  counts only on a commit the trusted commit already holds. The step fails
+  counts only on a commit the trusted commit already holds by default
+  (`git.secret_scan_inline_allow = "trusted"`). Setting that key to `"never"`
+  in the trusted commit's `.codeflow/policy.json` ignores every inline allow.
+  Other trusted exemptions, including `.gitleaksignore` and configuration
+  allowlists, still apply. A pull request's policy change cannot change its
+  own scan. A missing policy or key uses `"trusted"`; a malformed policy or
+  value fails closed. This key affects the managed GitHub scan only. It is
+  absent from the shipped policy to keep older binaries able to read it;
+  upgrade and land the binary and CI pin before adding it. The step fails
   before it scans when the trusted commit is not in the checkout, and it
   downloads gitleaks under the runner's temp directory. Nothing from the
   checkout runs or steers the scan: its Python helpers run isolated (they
@@ -396,7 +405,18 @@ as extra steps when your stack warrants:
   commits, or rebase onto the base when the change is on the base's side.
   Names with spaces or non-ASCII letters pass. The scan pins git's patch
   format, so git configuration on the runner, such as `diff.noprefix`,
-  cannot move a finding to another path. It then drops one
+  cannot move a finding to another path. Older remerge scans could record
+  `<commit>:b/<path>:<rule>:<line>` for a conflicted merge's unprefixed file.
+  The step diagnoses that legacy fingerprint only when the commit is
+  readable, the prefixed path is absent and the unprefixed path exists.
+  It prints the exact replacement for review, leaving the ignore file and
+  its exemptions unchanged. An existing `b/` path and an unreadable commit
+  receive distinct messages; neither is called legacy. Review the finding
+  and land the replacement through the normal reviewed exemption path.
+  A head-only exemption cannot authorize itself on a pull request. The
+  diagnostic checks at most 64 KiB and 50 candidates within five seconds,
+  then warns to review the remainder manually; gitleaks still reads the
+  complete trusted ignore file. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

@@ -65,6 +65,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
+| `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
 | `git.test_gate_on_push` | Level | `block` | off \| warn \| allow \| block | Run the test gate before a push (pre-push hook). | Tree checks use the strictest level from the working copy, HEAD and the destination authority. At active levels, a clean, complete checkout at a pushed commit always runs tree checks first. Other checkouts need no tree checks only when an advertised destination branch already holds that commit; tags and other refs never qualify. This preserves epic new --integration from a planning branch. Ancestry reads commit objects with commit-graph, replace refs and grafts disabled. At block, an unchecked commit outside that branch history refuses the push. Dirty tracked files, assume-unchanged or skip-worktree index flags, sparse checkouts and missing or mismatched submodules prevent checking that tree. Initialized submodules are included in quick-target snapshots. Warn notes unchecked trees and the checks to run; off and allow name the inactive gate, including when checkout inspection would fail. Untracked files can influence quick targets; a pass describes the working checkout. Tag and other non-branch pushes are outside the push set. Local-config tampering is outside the hook threat model; hosted CI checks the pushed commit. |
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
@@ -126,6 +127,31 @@ that its commit is already on the named epic's integration line or task's
 branch, and that a linked review establishes the finding as a false positive.
 Refuse entries without a commit: they cover that location in every later
 commit.
+
+## Reviewing legacy remerge fingerprints
+
+The managed GitHub secret scan removes Git's `remerge` header notes so
+gitleaks reports a conflicted merge's actual path. Older scans could record
+`<commit>:b/<path>:<rule>:<line>` instead of
+`<commit>:<path>:<rule>:<line>` in `.gitleaksignore`.
+
+The scan checks the trusted ignore file and offers the exact replacement
+only when the commit is readable, `b/<path>` is absent from that commit,
+and `<path>` exists. It reports an existing `b/` path separately and keeps
+its fingerprint unchanged. An unreadable commit needs fetching or manual
+investigation before a replacement can be inferred. Neither case is
+classified as a legacy fingerprint.
+
+Review the finding, confirm that the exemption still applies, and submit
+the suggested replacement as a reviewed ignore-file change. A pull
+request's own ignore-file change cannot exempt its finding in that run;
+the trusted base must already hold it. The scan never rewrites or aliases
+fingerprints, so unrelated and newly introduced findings remain blocked.
+
+The advisory diagnostic examines at most the first 64 KiB of the ignore
+file and 50 candidate fingerprints, with a five-second time budget. A
+limit warning asks for manual review of the remainder. These limits apply
+only to diagnostics; gitleaks still reads the complete trusted ignore file.
 
 ## Where a new key goes
 

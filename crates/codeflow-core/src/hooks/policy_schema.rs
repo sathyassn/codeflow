@@ -137,7 +137,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 68] = [
+pub const SCHEMA: [KeySpec; 69] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -599,6 +599,19 @@ pub const SCHEMA: [KeySpec; 68] = [
         purpose: "Pre-commit scan for staged secrets and .env files.",
         notes: "Never suspended by bootstrap grace, but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
+    },
+    KeySpec {
+        path: "git.secret_scan_inline_allow",
+        kind: KeyKind::Enum(&["trusted", "never"]),
+        valid: "trusted | never",
+        purpose: "Inline gitleaks:allow handling in the managed CI secret scan.",
+        notes: "Read from the trusted commit (the pull request base, or the pushed \
+                commit). Missing means trusted: only allows on commits it already \
+                holds count. With never, every inline allow is ignored; other \
+                trusted exemptions still apply. A pull request's head-only policy \
+                change cannot change its own scan. This key does not affect the pre-commit scan. \
+                The shipped policy file does not list it, so an older binary \
+                never meets the key.",
     },
     KeySpec {
         path: "git.conflict_markers",
