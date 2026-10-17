@@ -6038,7 +6038,19 @@ fn push_hook_over_http(
     dir: &Path,
     url: &str,
     askpass: &Path,
+    helper: &Path,
 ) -> (Option<i32>, String, std::time::Duration) {
+    git(dir, &["config", "--local", "credential.helper", ""]);
+    git(
+        dir,
+        &[
+            "config",
+            "--local",
+            "--add",
+            "credential.helper",
+            helper.to_str().unwrap(),
+        ],
+    );
     git(dir, &["remote", "add", "dest", url]);
     let head = rev(dir, "HEAD");
     let started = std::time::Instant::now();
@@ -6046,6 +6058,7 @@ fn push_hook_over_http(
         codeflow()
             .args(["git-hook", "pre-push", "dest", url])
             .env("GIT_ASKPASS", askpass)
+            .env("HOME", askpass.parent().unwrap())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .current_dir(dir),
         &format!("refs/heads/feat/h {head} refs/heads/feat/h {ZERO_SHA}\n"),
@@ -6061,8 +6074,8 @@ fn push_hook_over_http(
 #[test]
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
-    // one that never answers is abandoned at the deadline; either way the
-    // hook says why, and refuses the unjudged push (SPC-013 R-120).
+    // one that never answers is abandoned after bounded timeout retries.
+    // Both refuse the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let marker = scratch.path().join("askpass-called");
@@ -6076,24 +6089,42 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     )
     .unwrap();
     std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let helper = scratch.path().join("credential-helper");
+    let calls = scratch.path().join("helper-calls");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\nexit 0\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(true), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(true), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(!marker.exists(), "askpass was invoked: {err}");
+    assert!(std::fs::read_to_string(&calls)
+        .unwrap()
+        .lines()
+        .any(|line| line == "get"));
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
     );
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(false), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("no answer within 10s"), "{err}");
-    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(err.contains("3 attempts"), "{err}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}");
 }
 
 #[test]

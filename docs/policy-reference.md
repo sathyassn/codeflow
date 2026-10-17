@@ -96,6 +96,30 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Destination lookup failures
+
+`codeflow ci` and pre-push refuse under `ci.destination_unavailable` when
+the destination's default-branch lookup times out, fails authentication,
+returns a malformed advertisement or advertises branches without a usable
+default. The refusal names the cause once per run and directs the operator
+to check network access, remote credentials and the remote's default branch.
+It always blocks, with no configurable level. Record and acceptance rules
+do not report that destination failure as a lifecycle violation.
+
+The shared lookup uses a fixed 10-second deadline per attempt. It retries
+only timeouts, at most twice, with a 100 ms backoff between attempts. A
+first-attempt success makes one network call. Authentication failures and
+unusable advertisements are not retried. Pre-push caches the final answer
+or error for every pushed ref and passes a successful advertisement to its
+child checks. A final error refuses the set before those children run.
+Local tracking refs, including `origin/HEAD`, never replace that answer.
+A destination with no branches yet keeps the existing bootstrap behavior;
+a release push still needs a default target to judge against.
+
+Messages and printed commands name a destination without credentials: the
+userinfo of a URL such as `https://user:token@host/path` is shown as
+`https://***@host/path`. Only git receives the real URL.
+
 ## Secret-scan exemption pull requests
 
 The managed secret scan reads `.gitleaksignore` from the pull request's
