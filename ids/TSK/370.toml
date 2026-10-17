@@ -1,0 +1,11 @@
+id = "TSK-370"
+uid = "df9d2603-4f33-4694-8558-b08f83f66905"
+kind = "TSK"
+title = "The shipped pipeline verifies each change with targeted checks and quick"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-17T20:20:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
