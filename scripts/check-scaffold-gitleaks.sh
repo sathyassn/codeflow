@@ -87,7 +87,7 @@ fi
 # repository's own step. In both workflows the secret-scan job runs nothing
 # before it but the checkout: an earlier step that ran checkout code could
 # write GITHUB_ENV or GITHUB_PATH, and the scan would honour them.
-python3 - "$TEMPLATE" "$OWN" "$TMP/step.sh" <<'PY' >>"$FAILURES"
+cat >"$TMP/extract-step.py" <<'PY'
 import re
 import sys
 
@@ -152,6 +152,7 @@ for path in (template, own):
     if re.search(r"""(^|[\s"'])(\./|scripts/)""", text, re.M):
         print(f"step: {path}: the step runs a path from the checkout")
 PY
+python3 "$TMP/extract-step.py" "$TEMPLATE" "$OWN" "$TMP/step.sh" >>"$FAILURES"
 if [ -s "$FAILURES" ]; then
   cat "$FAILURES" >&2
 fi
@@ -225,7 +226,7 @@ expect() {
   set +e
   (cd "$REPO" && env PATH="$FAKE_PATH" RUNNER_TEMP="$runner" \
     TRUSTED_SHA="${TRUSTED-$(tip)}" SCAN_FROM="${SCAN_FROM-${TRUSTED-}}" \
-    ${STEP_ENV:-} bash -e "$TMP/step.sh") \
+    ${STEP_ENV:-} bash -e "${STEP_SCRIPT:-$TMP/step.sh}") \
     >"$TMP/$name.out" 2>&1
   rc=$?
   set -e
@@ -502,6 +503,98 @@ on_base "$BASE" trusted-inline 0
 SCAN_FROM=
 on_base "$BASE" trusted-inline-full 0
 unset SCAN_FROM
+
+# The trusted policy can refuse held inline allows. Head-only changes cannot
+# relax or tighten its decision. Full-history scans include the held finding.
+new_repo inline-policy
+printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
+mkdir -p "$REPO/.codeflow"
+printf '{"git":{"secret_scan_inline_allow":"never"}}\n' >"$REPO/.codeflow/policy.json"
+commit "refuse inline allows"
+BASE=$(tip)
+printf '{"git":{"secret_scan_inline_allow":"trusted"}}\n' >"$REPO/.codeflow/policy.json"
+commit "head tries to allow"
+SCAN_FROM=
+on_base "$BASE" trusted-never-inline 1 inline.txt:1
+BASE=$(tip)
+printf '{"git":{"secret_scan_inline_allow":"never"}}\n' >"$REPO/.codeflow/policy.json"
+commit "head tries to refuse"
+on_base "$BASE" head-only-never-inline 0
+unset SCAN_FROM
+
+# A bad trusted value or policy shape fails closed before gitleaks runs.
+for kind in typo null false array object; do
+  case $kind in
+    typo) value='"typo"' ;;
+    null) value=null ;;
+    false) value=false ;;
+    array) value='[]' ;;
+    object) value='{}' ;;
+  esac
+  new_repo "inline-invalid-$kind"
+  mkdir -p "$REPO/.codeflow"
+  printf '{"git":{"secret_scan_inline_allow":%s}}\n' "$value" >"$REPO/.codeflow/policy.json"
+  commit "invalid inline policy"
+  MESSAGE="git.secret_scan_inline_allow on the trusted commit must be trusted or never"
+  NO_SCAN=1
+  expect "inline-invalid-$kind" 1
+done
+MESSAGE="cannot read git.secret_scan_inline_allow from the trusted policy"
+for kind in null-git duplicate-key duplicate-git invalid-json; do
+  new_repo "inline-malformed-$kind"
+  mkdir -p "$REPO/.codeflow"
+  case $kind in
+    null-git) policy='{"git":null}' ;;
+    duplicate-key) policy='{"git":{"secret_scan_inline_allow":"never","secret_scan_inline_allow":"trusted"}}' ;;
+    duplicate-git) policy='{"git":{"secret_scan_inline_allow":"never"},"git":{}}' ;;
+    invalid-json) policy='{"git":' ;;
+  esac
+  printf '%s\n' "$policy" >"$REPO/.codeflow/policy.json"
+  commit "malformed policy"
+  expect "inline-malformed-$kind" 1
+done
+MESSAGE=
+NO_SCAN=
+
+# Both a full-history scan and a range use commit ids, even with a HEAD path.
+new_repo head-path
+printf 'a path named HEAD\n' >"$REPO/HEAD"
+commit "track HEAD path"
+BASE=$(tip)
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "a finding with HEAD path"
+on_base "$BASE" head-path-range 1 leak.txt:1
+SCAN_FROM=
+on_base "$BASE" head-path-full 1 leak.txt:1
+unset SCAN_FROM
+
+# Exercise an installed build's init and update, then run its managed step
+# without a local workflow edit. A push scans commits held by its trusted head;
+# its reviewed ignore file still applies when inline allows are refused.
+new_repo installed-inline-policy
+FIRST=$(tip)
+printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
+printf '%s\n' "$PLANTED" >"$REPO/ignored.txt"
+commit "held findings"
+HELD=$(tip)
+mkdir -p "$REPO/.codeflow"
+printf '{"git":{"secret_scan_inline_allow":"never"}}\n' >"$REPO/.codeflow/policy.json"
+printf '%s:ignored.txt:generic-api-key:1\n' "$HELD" >"$REPO/.gitleaksignore"
+commit "refuse inline allows and retain reviewed ignore"
+if [ -n "$CODEFLOW" ]; then
+  (cd "$REPO" && "$CODEFLOW" init --minimal --yes && "$CODEFLOW" update) \
+    >"$TMP/installed-update.out" 2>&1
+  workflow="$REPO/.github/workflows/codeflow-ci.yml"
+  STEP_SCRIPT="$TMP/installed-step.sh"
+  python3 "$TMP/extract-step.py" "$workflow" "$workflow" "$STEP_SCRIPT" >>"$FAILURES"
+  cmp "$STEP_SCRIPT" "$TMP/step.sh" || failed installed-workflow "installed step differs from template"
+fi
+SCAN_FROM=$FIRST
+expect installed-never-inline-push 1 inline.txt:1
+SCAN_FROM=
+expect installed-never-inline-full 1 inline.txt:1
+unset SCAN_FROM
+unset STEP_SCRIPT
 
 # An [extend] path is read from the trusted commit, never the checkout: a
 # pull request that widens the extended file fails, and once merged it

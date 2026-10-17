@@ -732,7 +732,8 @@ jobs:
       # the configuration as gitleaks does: GITLEAKS_CONFIG, then
       # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
       # .gitleaks.toml, else the default rules. An inline gitleaks:allow
-      # comment counts only on a commit the trusted commit already holds.
+      # comment counts only on a commit the trusted commit already holds, unless
+      # its git.secret_scan_inline_allow policy is never, which ignores all of them.
       #
       # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
       # against its working directory. It runs from a directory that holds
@@ -837,15 +838,17 @@ jobs:
           fi
           # The history the scan reads: the event's own commits when it
           # names a start the checkout holds, else all of HEAD's.
-          scan=HEAD
+          head=$(git rev-parse --verify 'HEAD^{commit}')
+          scan=$head
           case ${SCAN_FROM:-} in
             '') scope="the full history of HEAD (a scheduled or manual run)" ;;
             *[!0-9a-f]*)
               echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
             *[!0]*)
               if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
-                scan="${SCAN_FROM}..HEAD"
-                scope="the $(git rev-list --count HEAD --not "$SCAN_FROM") commit(s) HEAD holds and ${SCAN_FROM} does not"
+                start=$(git rev-parse --verify "${SCAN_FROM}^{commit}")
+                scan="${start}..${head}"
+                scope="the $(git rev-list --count "$head" --not "$start" --) commit(s) HEAD holds and ${start} does not"
               else
                 scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
               fi ;;
@@ -885,12 +888,12 @@ jobs:
           export PATH="$trusted/bin:$PATH"
           # Refuses what gitleaks cannot read reliably in the history the pull
           # request brings: what HEAD holds and the trusted commit does not.
-          python3 -I - "$TRUSTED_SHA" <<'PY'
+          python3 -I - "$TRUSTED_SHA" "$head" <<'PY'
           import re
           import subprocess
           import sys
 
-          sha = sys.argv[1]
+          sha, head = sys.argv[1:]
           unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
           rewrite = ("rewrite the pull request's commits so that none uses the name; "
                      "renaming it in a later commit leaves it in this one")
@@ -923,7 +926,7 @@ jobs:
               return ascii(name.decode("utf-8", "replace"))[1:-1]
 
 
-          commits = [line.split() for line in git("rev-list", "--parents", "HEAD", "--not", sha).stdout.decode().splitlines()]
+          commits = [line.split() for line in git("rev-list", "--parents", head, "--not", sha, "--").stdout.decode().splitlines()]
           for commit, *parents in commits:
               if len(parents) > 2:
                   refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
@@ -931,7 +934,7 @@ jobs:
           # Each path a commit adds, changes, renames or copies, and each path
           # a merge changes beyond its automatic result.
           listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
-                        "--no-ext-diff", "HEAD", "--not", sha).stdout.split(b"\0")
+                        "--no-ext-diff", head, "--not", sha, "--").stdout.split(b"\0")
           commit, names = None, 0
           for token in listing:
               if names:
@@ -1000,6 +1003,30 @@ jobs:
                   refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
               return subprocess.run(["git", "cat-file", "blob", oid],
                                     capture_output=True, check=True).stdout
+
+
+          # Missing policy/key keeps the older workflow's trusted behavior.
+          # A malformed trusted value fails closed, never defaults to an allow.
+          class PolicyObject(dict):
+              def __init__(self, pairs):
+                  super().__init__(pairs)
+                  self.has_duplicates = len(pairs) != len(self)
+
+
+          policy = blob(".codeflow/policy.json")
+          try:
+              data = json.loads(policy, object_pairs_hook=PolicyObject) if policy is not None else PolicyObject([])
+              git = data.get("git", PolicyObject([]))
+              # The typed loader rejects duplicate root and Git fields too.
+              if data.has_duplicates or git.has_duplicates:
+                  raise ValueError("duplicate policy key")
+              inline_allow = git.get("secret_scan_inline_allow", "trusted")
+          except (ValueError, AttributeError):
+              refuse("cannot read git.secret_scan_inline_allow from the trusted policy; commit a JSON object with trusted or never")
+          if inline_allow not in ("trusted", "never"):
+              refuse("git.secret_scan_inline_allow on the trusted commit must be trusted or never")
+          with open(os.path.join(trusted, "inline-allow"), "w", encoding="utf-8") as handle:
+              handle.write(inline_allow)
 
 
           def in_repository(path, owner):
@@ -1085,8 +1112,9 @@ jobs:
           PY
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
-          if [ "$scan" != HEAD ]; then
-            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan"); then
+          inline_allow=$(cat "$trusted/inline-allow")
+          if [ "$scan" != "$head" ]; then
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" --); then
               echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
             fi
             changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
@@ -1101,7 +1129,7 @@ jobs:
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan}" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?
@@ -1120,7 +1148,9 @@ jobs:
           fi
           # The report holds no line text, so an inline gitleaks:allow is read
           # from the commit that holds the finding, and only a commit the
-          # trusted commit already holds counts.
+          # trusted commit already holds counts, when its policy permits it.
+          held='[]'
+          if [ "$inline_allow" = trusted ]; then
           held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
           import json
           import re
@@ -1148,6 +1178,7 @@ jobs:
           print(json.dumps(held))
           PY
           )
+          fi
           if [ "$held" != "[]" ]; then
             echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
           fi

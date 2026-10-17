@@ -308,9 +308,10 @@ and waits for the fresh run first.
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<target>..HEAD"`
-  on a change, so it reads only the change's own commits, and without
-  `--log-opts` on a schedule, which reads the full history.
+- **gitleaks** scans for secrets. The GitHub workflow passes resolved commit ids
+  and a final `--` in `--log-opts`, so a tracked path named `HEAD` cannot
+  change the scan. A change scans its own commits; a schedule scans the
+  full history reachable from its resolved head.
   The GitHub workflow reads every exemption from the trusted commit: the
   pull request's base, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its
@@ -323,7 +324,15 @@ as extra steps when your stack warrants:
   a `GITLEAKS_CONFIG` file in the repository, come from the trusted commit
   too; the step fails when that commit does not hold the file, and refuses
   an absolute path into the checkout. An inline `gitleaks:allow` comment
-  counts only on a commit the trusted commit already holds. The step fails
+  counts only on a commit the trusted commit already holds by default
+  (`git.secret_scan_inline_allow = "trusted"`). Setting that key to `"never"`
+  in the trusted commit's `.codeflow/policy.json` ignores every inline allow.
+  Other trusted exemptions, including `.gitleaksignore` and configuration
+  allowlists, still apply. A pull request's policy change cannot change its
+  own scan. A missing policy or key uses `"trusted"`; a malformed policy or
+  value fails closed. This key affects the managed GitHub scan only. It is
+  absent from the shipped policy to keep older binaries able to read it;
+  upgrade and land the binary and CI pin before adding it. The step fails
   before it scans when the trusted commit is not in the checkout, and it
   downloads gitleaks under the runner's temp directory. Nothing from the
   checkout runs or steers the scan: its Python helpers run isolated (they
