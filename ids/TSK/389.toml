@@ -1,0 +1,11 @@
+id = "TSK-389"
+uid = "8e4f1000-71ef-4f4e-996f-cc7486d1163c"
+kind = "TSK"
+title = "A lookup helper that keeps stderr open costs one timeout, not three"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:48Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
