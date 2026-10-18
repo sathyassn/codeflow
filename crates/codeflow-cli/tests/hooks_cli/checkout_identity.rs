@@ -397,3 +397,27 @@ fn checkout_identity_valid_pointers_and_worktree_lifecycle_stay_usable() {
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+#[test]
+fn checkout_identity_administrative_case_follows_the_filesystem() {
+    let f = Fixture::new();
+    let probe = f.temp.path().join("case-probe");
+    std::fs::write(&probe, "case").unwrap();
+    let folds_case = f.temp.path().join("CASE-PROBE").exists();
+    let administrative_parent = f.root.join(".git/worktrees");
+    let intermediate = f.root.join(".git/renaming-worktrees");
+    std::fs::rename(&administrative_parent, &intermediate).unwrap();
+    std::fs::rename(&intermediate, f.root.join(".git/WORKTREES")).unwrap();
+    let mut wrong = Vec::new();
+    // On a folding filesystem the original pointer still resolves to the
+    // same administrative directory. Else it is broken and must fail closed.
+    for guard in ["git-guard", "exec-guard"] {
+        expect(
+            &f.command(&f.linked, guard, "python3 -m pytest ."),
+            if folds_case { 0 } else { 2 },
+            "administrative directory case",
+            &mut wrong,
+        );
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

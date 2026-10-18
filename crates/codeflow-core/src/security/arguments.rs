@@ -766,7 +766,9 @@ fn code_literal_words(code: &str) -> Vec<String> {
         // `C:` and directory names are not separate relative operands.
         let native = [&literal, &spelled]
             .into_iter()
-            .find(|reading| cfg!(windows) && Path::new(reading).is_absolute())
+            .find(|reading| {
+                cfg!(windows) && (Path::new(reading).is_absolute() || reading.starts_with("~\\"))
+            })
             .map(|reading| {
                 let path = crate::portable_path::without_verbatim(PathBuf::from(reading));
                 crate::portable_path::slashed(&path)
@@ -909,12 +911,31 @@ fn code_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<
         // A single ~/tail literal may be consumed literally or expanded by
         // the interpreter. Judge both without interpreting runtime joins.
         // Bare ~ stays literal, including print("~") and split-string code.
-        value.strip_prefix("~/").and_then(|tail| {
-            let home = facts.home?;
-            let expanded = crate::portable_path::without_verbatim(home.to_path_buf()).join(tail);
-            let expanded = crate::portable_path::slashed(&expanded);
-            value_reach_at(&expanded, false, dir, true, facts)
-        })
+        value
+            .strip_prefix("~/")
+            .or_else(|| cfg!(windows).then(|| value.strip_prefix("~\\")).flatten())
+            .and_then(|tail| {
+                let home = facts.home?;
+                let tail = tail.trim_start_matches(|c| c == '/' || (cfg!(windows) && c == '\\'));
+                let expanded =
+                    crate::portable_path::without_verbatim(home.to_path_buf()).join(tail);
+                let expanded = crate::portable_path::slashed(&expanded);
+                value_reach_at(&expanded, false, dir, true, facts).or_else(|| {
+                    // A complete home-expanded code literal is a possible write
+                    // or recursive delete, not an argv project location. Include
+                    // the current checkout in its directory reach.
+                    git_guard::resolved_path_integrity(
+                        Path::new(&expanded),
+                        dir.unwrap_or(facts.payload_cwd),
+                        facts.payload_cwd,
+                    )
+                    .map(|reached| {
+                        Reach::Enforcement(format!(
+                            "an interpreter argument `{value}` may reach `{reached}`"
+                        ))
+                    })
+                })
+            })
     })
 }
 

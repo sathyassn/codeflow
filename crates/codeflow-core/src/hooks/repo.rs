@@ -109,19 +109,36 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
                 // location claimed by the administrative registration. Read
                 // that registration with native semantics only to cross-check
                 // discovery (libgit2 can report `./` for Windows backslashes).
-                let registered = crate::git::gitdir_checkout(repo.path())?;
-                let registered = crate::portable_path::without_verbatim(repo.path().to_path_buf())
-                    .join(crate::portable_path::without_verbatim(registered))
-                    .canonicalize()
-                    .map_err(|error| format!("cannot resolve worktree registration: {error}"))?;
+                let registered = checked_registration(repo.path())?;
                 if registered != discovered {
                     return Err(
                         "worktree registration disagrees with the discovered checkout".into(),
                     );
                 }
+                check_common_directory(&repo)?;
+            } else if !repo.is_bare()
+                && discovered != canonical(repo.path(), "git directory")?
+                && claims_work_directory(&repo)?
+                && repo
+                    .workdir()
+                    .map(|path| canonical(path, "work directory"))
+                    .transpose()?
+                    .as_ref()
+                    != Some(&discovered)
+            {
+                return Err(
+                    "repository work directory disagrees with the discovered checkout".into(),
+                );
+            }
+            if !repo.is_bare() && discovered != canonical(repo.path(), "git directory")? {
                 // `false` changes this handle only, never either pointer file.
                 repo.set_workdir(&discovered, false)
                     .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
+            }
+            // Validate the whole inventory before policy selection, including
+            // invocations from main where the current repository is not linked.
+            for worktree in crate::git::linked_worktrees(&repo)? {
+                checked_registration(&worktree.admin)?;
             }
             Ok(Some(repo))
         }
@@ -178,6 +195,91 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
         }
         Err(error) => Err(format!("cannot discover repository: {error}")),
     }
+}
+
+// libgit2 guesses the parent of a separate git directory when Git has not
+// stored core.worktree. That guess is not a conflicting checkout claim.
+fn claims_work_directory(repo: &Repository) -> Result<bool, String> {
+    match repo
+        .config()
+        .and_then(|config| config.get_entry("core.worktree").map(|_| ()))
+    {
+        Ok(()) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => repo
+            .workdir()
+            .map(|root| {
+                crate::absence::proven_absent(&root.join(".git"))
+                    .map(|absent| !absent)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+            .map(|present| present.unwrap_or(false)),
+        Err(error) => Err(format!("cannot inspect repository work directory: {error}")),
+    }
+}
+
+fn canonical(path: &Path, what: &str) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|error| format!("cannot resolve {what}: {error}"))
+}
+
+/// Administrative directories belong to the common git directory that
+/// physically contains `worktrees/<name>`, regardless of commondir's text.
+fn check_common_directory(repo: &Repository) -> Result<(), String> {
+    let admin = canonical(repo.path(), "worktree administrative directory")?;
+    let registrations = admin
+        .parent()
+        .ok_or("worktree has no registration directory")?;
+    let expected = registrations
+        .parent()
+        .ok_or("worktree registration has no common directory")?;
+    if canonical(
+        &expected.join("worktrees"),
+        "worktree registration directory",
+    )? != registrations
+        || canonical(repo.commondir(), "worktree common directory")? != expected
+    {
+        return Err("worktree common directory disagrees with its registration directory".into());
+    }
+    Ok(())
+}
+
+/// Both pointers must agree: the registration names a checkout containing
+/// a .git marker that opens this administrative directory, with its original
+/// common directory. Resolving only the registration's parent would let a
+/// symlink to a marker in another directory hide the actual checkout.
+pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
+    let text = std::fs::read(admin.join("gitdir"))
+        .map_err(|error| format!("cannot read worktree registration: {error}"))?;
+    let registered = GitName::from_bytes(text.trim_ascii_end())
+        .os_path()
+        .map_err(|error| error.to_string())?;
+    let registered = crate::portable_path::without_verbatim(admin.to_path_buf())
+        .join(crate::portable_path::without_verbatim(registered));
+    let root = canonical(
+        registered
+            .parent()
+            .ok_or("worktree registration has no checkout parent")?,
+        "worktree registration",
+    )?;
+    let marker = root.join(".git");
+    if canonical(&registered, "registered checkout marker")?
+        != canonical(&marker, "checkout marker")?
+    {
+        return Err("worktree registration names a different checkout marker".into());
+    }
+    std::fs::metadata(&marker)
+        .map_err(|error| format!("cannot inspect registered checkout marker: {error}"))?;
+    let checkout = Repository::open(&root)
+        .map_err(|error| format!("cannot open registered checkout: {error}"))?;
+    if !checkout.is_worktree()
+        || canonical(checkout.path(), "registered checkout git directory")?
+            != canonical(admin, "worktree administrative directory")?
+    {
+        return Err("worktree registration disagrees with its checkout marker".into());
+    }
+    check_common_directory(&checkout)?;
+    Ok(root)
 }
 
 /// libgit2 may ignore a broken inner marker and successfully discover an outer

@@ -684,7 +684,8 @@ pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, St
     roots.extend(
         crate::git::linked_worktrees(repo)?
             .into_iter()
-            .map(|worktree| worktree.path),
+            .map(|worktree| super::repo::checked_registration(&worktree.admin))
+            .collect::<Result<Vec<_>, _>>()?,
     );
     Ok(roots)
 }
@@ -715,14 +716,16 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
     let names = repo.worktrees().map_err(|error| error.to_string())?;
     for name in crate::git::name::names_of(&names) {
         let folder = name.os_path().map_err(|error| error.to_string())?;
-        protected.push((
-            repo.commondir()
-                .join("worktrees")
-                .join(folder)
-                .join("gitdir"),
-            false,
-            repo.commondir().to_path_buf(),
-        ));
+        for pointer in ["gitdir", "commondir"] {
+            protected.push((
+                repo.commondir()
+                    .join("worktrees")
+                    .join(&folder)
+                    .join(pointer),
+                false,
+                repo.commondir().to_path_buf(),
+            ));
+        }
     }
     for root in checkout_roots(repo)? {
         // A linked checkout's pointer is an enforcement file in its own
@@ -1540,7 +1543,10 @@ mod tests {
         let common = f.temp.path().join("main/.git");
         // A gitfile must name real repository metadata; a dangling/empty
         // administration directory is deliberately refused by discovery.
-        git2::Repository::init(f.temp.path().join("main")).unwrap();
+        git2::Repository::init(f.temp.path().join("main"))
+            .unwrap()
+            .set_workdir(&f.root, true)
+            .unwrap();
         std::fs::write(
             f.root.join(".git"),
             format!("gitdir: {}\n", common.display()),

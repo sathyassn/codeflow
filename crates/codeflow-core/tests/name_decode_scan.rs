@@ -1575,6 +1575,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-config-int",
     ),
+    // Only explicit native path separators after a home prefix are removed:
+    // slash everywhere and backslash on Windows. Whitespace stays in the name.
+    (
+        "crates/codeflow-core/src/security/arguments.rs",
+        "code_reach",
+        "trim_start_matches",
+        1,
+        "grammar:native-home-path",
+    ),
     // A name that is not valid UTF-8 folds to None, and the interpreter argument prefilter sends that path to the full enforcement checks, never clears it (TSK-302).
     (
         "crates/codeflow-core/src/security/arguments.rs",
