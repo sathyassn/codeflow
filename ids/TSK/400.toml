@@ -1,0 +1,11 @@
+id = "TSK-400"
+uid = "26f5445c-064a-4d67-a9ec-bc19a76be2c7"
+kind = "TSK"
+title = "An opt-in infrastructure preset refuses commands that change live cloud state"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T18:04:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
