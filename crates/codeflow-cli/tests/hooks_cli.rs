@@ -9,6 +9,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[path = "hooks_cli/checkout_identity.rs"]
+mod checkout_identity;
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,
