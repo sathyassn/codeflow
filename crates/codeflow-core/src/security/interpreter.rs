@@ -446,6 +446,40 @@ mod tests {
         .is_empty());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_repository_spellings_keep_ordinary_arguments_and_enforcement_refusals() {
+        let repo = repo();
+        let plain = crate::portable_path::canonicalize(&repo.root).unwrap();
+        let verbatim = repo.root.canonicalize().unwrap();
+        let spellings = [
+            plain.display().to_string(),
+            verbatim.display().to_string(),
+            plain.display().to_string().replace('\\', "/"),
+            plain.display().to_string().to_uppercase(),
+        ];
+        for root in [&plain, &verbatim] {
+            for spelling in &spellings {
+                let ordinary = format!(r#"W={spelling}; python3 tool.py "$W/src/app.py""#);
+                let findings = judge_in(&repo, root, root, &ordinary, PolicyLevel::Block);
+                assert!(findings.is_empty(), "{ordinary}: {findings:?}");
+                for suffix in [
+                    ".claude/settings.json",
+                    ".worktrees/w/.claude/settings.json",
+                    ".worktrees/w/.claude/*",
+                    ".worktrees/w/.*",
+                ] {
+                    let command = format!(r#"python3 tool.py "{spelling}/{suffix}""#);
+                    let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
+                    assert!(
+                        integrity_refusal(&findings).is_some(),
+                        "{command}: {findings:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// TSK-302 AC-4: a value the guard cannot read takes git-guard's rule
     /// for writer operands, and the refusal names the sanctioned route.
     #[test]
