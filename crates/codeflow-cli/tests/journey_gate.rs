@@ -287,7 +287,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
             "{id} must run for ready integration PRs, main and master PRs, and line pushes"
         );
     }
-    let verdict_condition = condition;
+    let verdict_condition = "github.event_name == 'pull_request' || github.event_name == 'push'";
     for id in ["gates-verdict", "windows-verdict"] {
         assert!(
             job(&workflow, id).contains(verdict_condition),

@@ -472,7 +472,7 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = (f"    if: always() && ({gate_event_condition(WORKFLOW)})\n"
+    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
@@ -614,9 +614,9 @@ class GatePartControls(unittest.TestCase):
         self.assertEqual(self.problems(workflow), [])
 
 
-def verdict_script(workflow: str = WORKFLOW) -> str:
+def verdict_script(workflow: str = WORKFLOW, name: str = "gates-verdict") -> str:
     """The `codeflow gates` verdict's bash script, as the runner sees it."""
-    job = parity.workflow_jobs(workflow)["gates-verdict"]
+    job = parity.workflow_jobs(workflow)[name]
     lines = job.splitlines()
     start = lines.index("        run: |") + 1
     script = []
@@ -653,6 +653,17 @@ class VerdictOutcomeControls(unittest.TestCase):
                 with self.subTest(outcome=outcome, job=("parts", "shards", "report")[which]):
                     self.assertEqual(self.verdict(*results), 1)
 
+    def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
+        env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
+        env.update({key: "skipped" for key in (
+            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+        for name in ("gates-verdict", "windows-verdict"):
+            with self.subTest(verdict=name):
+                result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("gates did not run", result.stdout)
+
     def test_reuse_passes_only_when_every_job_was_skipped(self):
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123"), 0)
         for results in (("skipped", "success", "skipped"), ("skipped", "skipped", "failure"),
@@ -671,6 +682,13 @@ class HostedEventParityControls(unittest.TestCase):
              "startsWith(github.event.pull_request.base.ref, 'integration/') && "
              "!github.event.pull_request.draft) || github.event_name == 'push'")
 
+    def test_both_verdicts_run_for_every_pull_request_and_push(self):
+        for name in ("gates-verdict", "windows-verdict"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            self.assertEqual(condition,
+                             "always() && (github.event_name == 'pull_request' || github.event_name == 'push')")
+
     def ready_workflow(self):
         return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
 
@@ -683,7 +701,7 @@ class HostedEventParityControls(unittest.TestCase):
     def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
         workflow = self.ready_workflow()
         job = parity.workflow_jobs(workflow)["windows-verdict"]
-        narrowed = job.replace(self.READY, "github.event_name == 'push'")
+        narrowed = job.replace("github.event_name == 'pull_request' || github.event_name == 'push'", "github.event_name == 'push'")
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
@@ -783,7 +801,7 @@ class CoverageShardControls(unittest.TestCase):
 
     def test_without_the_coverage_jobs_their_targets_go_unrun(self):
         start = WORKFLOW.index("  gates-coverage:\n")
-        end = WORKFLOW.index("  # The required check.")
+        end = WORKFLOW.index("  gates-verdict:\n")
         problems = parity.gate_part_problems(CONFIG, WORKFLOW[:start] + WORKFLOW[end:])
         self.assertTrue(any("`gates-coverage` job must be exactly" in p for p in problems), problems)
 

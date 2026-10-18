@@ -204,11 +204,11 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
                             "needs.reuse.outputs.run == '' && (<event condition>) }}`, so it runs on "
                             "every protected-base pull request and push the reuse decision does not "
                             f"cover; found {line.group(1) if line else 'none'}")
-        expected = verdict_job(guarded.group(1) if guarded else "")
+        expected = verdict_job()
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always() && (<the gates job's event condition>)`, need the reuse, gates and "
+                "`if: always() && (<pull_request or push>)`, need the reuse, gates and "
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
@@ -427,11 +427,11 @@ REUSE_JOB = """\
 # TSK-265: the `windows` verdict, pinned exactly like `codeflow gates`: a
 # substring check would let an inserted second success path through. It
 # passes only when every Windows job succeeded, or when the reuse decision
-# named a run and every Windows job was skipped. `{condition}` is the gates
-# job's event condition.
+# named a run and every Windows job was skipped. Verdicts run on every
+# pull request and push, including when gate selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: always() && ({condition})
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -453,6 +453,10 @@ WINDOWS_VERDICT_JOB = """\
             echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
             exit 0
           fi
+          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
+            echo "::error::the Windows gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
+          fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
             echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
             exit 1
@@ -468,9 +472,7 @@ def windows_verdict_problems(workflow: str) -> list[str]:
                 if re.search(rf"^ {{4}}name:\s*{re.escape(WINDOWS_VERDICT)}\s*$", text, re.M)]
     if len(verdicts) != 1:
         return [f"exactly one job must be named `{WINDOWS_VERDICT}`; found {[n for n, _ in verdicts]}"]
-    line = re.search(r"^ {4}if:\s*(.+?)\s*$", jobs.get("gates", ""), re.M)
-    guarded = GATES_IF.match(line.group(1)) if line else None
-    expected = WINDOWS_VERDICT_JOB.format(condition=guarded.group(1) if guarded else "")
+    expected = WINDOWS_VERDICT_JOB.format()
     name, text = verdicts[0]
     if norm_job(text) != norm_job(expected):
         return [f"`{WINDOWS_VERDICT}` ({name}) must be exactly the Windows verdict job: it passes only when every "
@@ -489,9 +491,9 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # The one accepted form of the verdict job. A substring check let a false
 # condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
 # so the job must match this text exactly, apart from blank lines, comments
-# and trailing spaces; `{condition}` is the gates job's own `if:` condition.
+# and trailing spaces. Every pull request and push must receive a verdict.
 VERDICT_JOB = """\
-    if: always() && ({condition})
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     name: codeflow gates
     needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -510,6 +512,10 @@ VERDICT_JOB = """\
             echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
             exit 0
           fi
+          if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
+            echo "::error::the Linux gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
+          fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${{PARTS}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
             exit 1
@@ -518,8 +524,8 @@ VERDICT_JOB = """\
 """
 
 
-def verdict_job(condition: str) -> str:
-    return VERDICT_JOB.format(condition=condition)
+def verdict_job() -> str:
+    return VERDICT_JOB.format()
 
 
 def norm_job(text: str) -> list[str]:

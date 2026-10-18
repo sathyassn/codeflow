@@ -5,8 +5,8 @@
 #
 # Linux and Windows gates run on pull requests into main and master, on
 # ready pull requests into integration/**, and on pushes below. Integration
-# drafts keep the secret scan, gitleaks canary and security review. Marking
-# a pull request ready starts the gates without a push.
+# drafts keep the security jobs and fail both verdicts because the gates did
+# not run. Marking a pull request ready starts the gates without a push.
 #
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
@@ -416,12 +416,12 @@ jobs:
         shell: bash
         run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
 
-  # The required check. It runs even when a part fails or is cancelled, so
-  # the check is never skipped, and it passes only when every part, every
-  # coverage shard and the coverage report passed, or when the reuse
-  # decision named a run and all of them were skipped.
+  # The required check runs on every pull request and push, even when a part
+  # fails, is cancelled or did not run. Draft integration pull requests and
+  # unsupported bases fail. It passes only when every part, coverage shard
+  # and report passed, or reuse named a run and all were skipped.
   gates-verdict:
-    if: always() && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push')
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     name: codeflow gates
     needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -439,6 +439,10 @@ jobs:
           if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
+          fi
+          if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
+            echo "::error::the Linux gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
@@ -691,12 +695,12 @@ jobs:
         shell: bash
         run: python scripts/test_windows_partitions.py && python scripts/windows-partitions.py check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
-  # The required Windows check. Like `codeflow gates`, it runs even when a
-  # job fails or is cancelled, so it is never skipped, and it passes only
-  # when the build, the checks, every test partition and both journey jobs
-  # passed, or when the reuse decision named a run and all were skipped.
+  # The required Windows check runs on every pull request and push, even
+  # when a job fails, is cancelled or did not run. Draft integration pull
+  # requests and unsupported bases fail. It passes only when all Windows
+  # jobs passed, or reuse named a run and all were skipped.
   windows-verdict:
-    if: always() && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push')
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -717,6 +721,10 @@ jobs:
             && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "Windows passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
+          fi
+          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
+            echo "::error::the Windows gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
             echo "::error::Windows concluded checks=${CHECKS} build=${BUILD} tests=${TESTS} journeys=${JOURNEYS} release journey=${RELEASE}; see the windows jobs"
