@@ -704,6 +704,39 @@ fn checkout_identity_absent_registration_keeps_spelling_and_recovers() {
 }
 
 #[test]
+fn checkout_identity_absent_recovery_compares_native_path_identity() {
+    let f = Fixture::new();
+    let alias = f.root.join("checkout-alias");
+    link(&f.root.join(".worktrees"), &alias);
+    std::fs::remove_dir_all(&f.linked).unwrap();
+    let mut wrong = Vec::new();
+    for target in [f.linked.clone(), alias.join("w")] {
+        let command = format!("git worktree remove --force '{}'", shell_path(&target));
+        assert!(
+            codeflow_core::hooks::repo::worktree_recovery(&command, &f.root),
+            "an absent registered checkout keeps its identity through an existing ancestor: {command}"
+        );
+        for guard in ["git-guard", "exec-guard", "edit-guard"] {
+            expect(
+                &f.command(&f.root, guard, &command),
+                0,
+                &command,
+                &mut wrong,
+            );
+        }
+    }
+    let other_absent = format!(
+        "git worktree remove --force '{}'",
+        shell_path(&alias.join("unregistered"))
+    );
+    assert!(!codeflow_core::hooks::repo::worktree_recovery(
+        &other_absent,
+        &f.root
+    ));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn checkout_identity_recovery_does_not_expand_registered_spellings() {
     let f = Fixture::new();
     let absent = f.temp.path().join("$(printf evil)");

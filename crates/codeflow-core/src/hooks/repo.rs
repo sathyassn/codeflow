@@ -477,7 +477,7 @@ pub fn worktree_recovery(command: &str, cwd: &Path) -> bool {
             if !crate::absence::proven_absent(&target).is_ok_and(|absent| absent) {
                 return false;
             }
-            let Ok(target) = super::edit_guard::normalized(&target, false) else {
+            let Ok(target_spelling) = super::edit_guard::normalized(&target, false) else {
                 return false;
             };
             worktrees.iter().any(|admin| {
@@ -485,8 +485,20 @@ pub fn worktree_recovery(command: &str, cwd: &Path) -> bool {
                     return false;
                 };
                 marker.parent().is_some_and(|root| {
-                    super::edit_guard::normalized(root, false).is_ok_and(|root| root == target)
-                        && crate::absence::proven_absent(root).is_ok_and(|absent| absent)
+                    if !crate::absence::proven_absent(root).is_ok_and(|absent| absent) {
+                        return false;
+                    }
+                    // Missing leaves still have existing ancestors. Resolve
+                    // their native spelling too, including Windows short
+                    // names, without replacing either absence proof.
+                    super::edit_guard::normalized(root, false)
+                        .is_ok_and(|root| root == target_spelling)
+                        || super::edit_guard::normalized(root, true)
+                            .and_then(|root| {
+                                super::edit_guard::normalized(&target, true)
+                                    .map(|target| root == target)
+                            })
+                            .unwrap_or(false)
                 })
             })
         }
