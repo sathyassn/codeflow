@@ -1,0 +1,11 @@
+id = "TSK-403"
+uid = "97f1c928-3ace-4598-9e68-d7d81542e731"
+kind = "TSK"
+title = "Grok consult and review seats run read-only commands without prompts and refuse writes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T18:04:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
