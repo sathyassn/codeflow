@@ -1,0 +1,11 @@
+id = "TSK-405"
+uid = "305c2387-a04d-4595-879e-8061c686f730"
+kind = "TSK"
+title = "A resolved update conflict does not come back on the next update"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T18:27:05Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
