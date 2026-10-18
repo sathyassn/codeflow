@@ -15,11 +15,11 @@ mod acceptance_fix;
 mod base_policy;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
-#[path = "ci_cli/document_indexes.rs"]
-mod document_indexes;
 #[cfg(unix)]
 #[path = "ci_cli/destination.rs"]
 mod destination;
+#[path = "ci_cli/document_indexes.rs"]
+mod document_indexes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 #[path = "ci_cli/secret_scan_exemption.rs"]
