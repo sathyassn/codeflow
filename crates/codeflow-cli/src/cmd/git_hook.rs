@@ -210,7 +210,7 @@ fn sync_pending_ids(
         report.notes.push(codeflow_core::remedy::Finding::new(
             format!(
                 "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
-                remote.unwrap_or("an unnamed remote")
+                codeflow_core::git::remote_query::display_url(remote.unwrap_or("an unnamed remote"))
             ),
             codeflow_core::remedy::IDS_PENDING_LOCAL.remedy(),
         ));
@@ -511,6 +511,35 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_registry_note_redacts_a_url_used_as_the_remote_name() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let head = repo_with_commit(dir.path(), &[b"a"]);
+        for args in [
+            vec!["update-ref", codeflow_core::ids::REGISTRY_REF, &head],
+            vec!["remote", "add", "origin", "/unused"],
+        ] {
+            let args: Vec<_> = args.iter().map(OsStr::new).collect();
+            run_git(dir.path(), &args, b"");
+        }
+        let refs = git_hook::parse_push_refs(&format!(
+            "refs/heads/task/example {head} refs/heads/task/example {}\n",
+            "0".repeat(40)
+        ));
+        let mut report = git_hook::StageReport::default();
+        sync_pending_ids(
+            dir.path(),
+            Some("https://u:FAKE_PENDING_TOKEN@host.invalid/repo"),
+            &refs,
+            &mut report,
+        );
+        let text = format!("{:?}", report.notes);
+        assert_eq!(text.matches("FAKE_PENDING_TOKEN").count(), 0);
+        assert!(text.contains("https://***@host.invalid/repo"));
+    }
 
     #[test]
     fn r20_pending_registry_read_failure_blocks_push() {

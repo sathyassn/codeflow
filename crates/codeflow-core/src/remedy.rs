@@ -495,9 +495,9 @@ catalog! {
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
-    /// A destination that did not answer for its branches.
+    /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote <remote>` answer (network, credentials), then push again";
+        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";

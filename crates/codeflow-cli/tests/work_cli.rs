@@ -70,6 +70,43 @@ fn succeeds(out: &Output) {
 }
 
 #[cfg(unix)]
+#[test]
+fn claim_redacts_remote_userinfo_in_git_diagnostics() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = fixture();
+    git(dir.path(), &["remote", "add", "origin", "/unused"]);
+    let bin = tempfile::tempdir().unwrap();
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    let token = "FAKE_DIAGNOSTIC_TOKEN_305";
+    write(bin.path(), "git", &format!(
+        "#!/bin/sh\nfor arg do\n if [ \"$arg\" = fetch ]; then\n  echo 'fatal: https://u:{token}@one.invalid/x and https://{token}@two.invalid/y unavailable' >&2\n  exit 128\n fi\ndone\nexec '{}' \"$@\"\n", real.trim()
+    ));
+    std::fs::set_permissions(
+        bin.path().join("git"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let out = cli(dir.path(), &["work", "claim", "TSK-001"], Some(bin.path()));
+    let text = format!(
+        "{}{}",
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap()
+    );
+    assert!(!out.status.success());
+    assert_eq!(
+        text.matches(token).count(),
+        0,
+        "credential appeared in claim output"
+    );
+    assert!(text.contains("https://***@one.invalid/x"));
+    assert!(text.contains("https://***@two.invalid/y"));
+}
+
+#[cfg(unix)]
 fn review_tool(bin: &Path, branch: &str, sha: &str, reviewed: bool) {
     review_tool_with(bin, branch, sha, sha, reviewed, "owner", "project", false);
 }
