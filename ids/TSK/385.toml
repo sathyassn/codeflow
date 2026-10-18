@@ -1,0 +1,11 @@
+id = "TSK-385"
+uid = "429ef15c-9bfc-4dd9-979c-b60f1d49b0de"
+kind = "TSK"
+title = "The quick gate runs the cheap repository-wide contract checks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
