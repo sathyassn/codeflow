@@ -1923,7 +1923,7 @@ pub(crate) fn interpreter_path_integrity(
     path: &Path,
     cwd: &Path,
     payload_cwd: &Path,
-    code_literal: bool,
+    code_literal: Option<&str>,
 ) -> Option<String> {
     path_integrity(path, cwd, payload_cwd)
         .map(str::to_string)
@@ -6249,6 +6249,18 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         }
         if in_double {
             cur.push(c);
+            // Keep shell escapes intact until shell_words removes quotes.
+            // An escaped quote cannot end this region or expose code
+            // parentheses as separate shell commands.
+            if c == '\\'
+                && chars
+                    .get(i + 1)
+                    .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\' | '\n'))
+            {
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
             if c == '"' {
                 in_double = false;
             }
@@ -7481,15 +7493,7 @@ fn check_git(
             out.extend(strictest);
         }
     }
-    check_discard(
-        args,
-        sub,
-        rest,
-        moved,
-        branches.discard_state_changed,
-        ctx,
-        out,
-    );
+    check_discard(args, sub, rest, moved, branches, ctx, out);
     track_branch_move(
         sub,
         rest,
@@ -17940,6 +17944,9 @@ mod tests {
 pub struct DiscardQuery<'a> {
     pub target: Option<Retarget<'a>>,
     pub intent: &'a super::git_discard::Intent,
+    /// A literal reading outside ordinary argument expansion needs the
+    /// bounded absent-checkout proof, never a live-tree discard inspection.
+    pub requires_absence: bool,
 }
 /// An unreadable or absent state probe is uncertainty, never a clean result.
 pub type DiscardLookup<'a> =
@@ -18120,11 +18127,30 @@ fn check_discard(
     sub: &str,
     rest: &[String],
     moved: &Moves<'_>,
-    prior_mutation: bool,
+    branches: &BranchTracker,
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
 ) {
-    let intent = discard_intent(sub, rest, moved);
+    // The bounded literal spelling keeps quoted dollars and parentheses as
+    // path text. Other commands retain the ordinary expansion analysis.
+    let literal =
+        super::repo::literal_recovery_command(&branches.line).then(|| shell_tokens(&branches.line));
+    let parsed = discard_intent(sub, rest, moved);
+    let (intent, requires_absence) = match literal.as_deref() {
+        Some(words)
+            if words.len() == 5 && words[..4] == ["git", "worktree", "remove", "--force"] =>
+        {
+            let requires_absence = !matches!(&parsed,
+                Ok(Some(super::git_discard::Intent::ForceRemoveWorktree(path))) if path == &words[4]);
+            (
+                Ok(Some(super::git_discard::Intent::ForceRemoveWorktree(
+                    words[4].clone(),
+                ))),
+                requires_absence,
+            )
+        }
+        _ => (parsed, false),
+    };
     if matches!(intent, Ok(None)) {
         return;
     }
@@ -18160,7 +18186,7 @@ fn check_discard(
         }
         let result = if let Some(why) = unresolved {
             Err(why)
-        } else if prior_mutation {
+        } else if branches.discard_state_changed {
             Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
         } else if let Some(trigger) = &moved.transport_env {
             Err(format!("cannot verify Git configuration after {trigger}"))
@@ -18184,7 +18210,13 @@ fn check_discard(
                 Ok(Some(intent)) => ctx
                     .discard_lookup
                     .ok_or_else(|| "repository-state lookup is unavailable".to_string())
-                    .and_then(|probe| probe(&DiscardQuery { target, intent })),
+                    .and_then(|probe| {
+                        probe(&DiscardQuery {
+                            target,
+                            intent,
+                            requires_absence,
+                        })
+                    }),
                 Ok(None) => Ok(None),
             }
         };

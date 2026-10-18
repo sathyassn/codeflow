@@ -868,13 +868,14 @@ fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, 
 }
 
 /// An argv operand can name its current checkout as a project location.
+/// Exact dot and dot-slash code literals also name a project location.
 /// A code string can name the filesystem root as a fragment, such as
 /// "/." in a runtime concatenation. Other ancestors still reach registered
 /// checkouts. Neither exemption applies to enforcement files.
 pub(crate) fn is_own_checkout_location(
     target: &Path,
     root: &Path,
-    code_literal: bool,
+    code_literal: Option<&str>,
 ) -> Result<bool, String> {
     let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(false);
@@ -883,8 +884,10 @@ pub(crate) fn is_own_checkout_location(
         return Ok(false);
     };
     let target = normalized(target, true).map_err(|error| error.to_string())?;
-    Ok((!code_literal && target == own[1])
-        || (code_literal && target.has_root() && target.parent().is_none()))
+    Ok(
+        ((code_literal.is_none() || matches!(code_literal, Some("." | "./"))) && target == own[1])
+            || (code_literal.is_some() && target.has_root() && target.parent().is_none()),
+    )
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),

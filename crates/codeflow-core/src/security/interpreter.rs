@@ -485,7 +485,7 @@ mod tests {
         for root in [&standalone, &repo.root, &repo.linked] {
             let discovered = crate::hooks::repo::open(root).unwrap().unwrap();
             assert!(
-                crate::hooks::edit_guard::is_own_checkout_location(root, root, false).unwrap(),
+                crate::hooks::edit_guard::is_own_checkout_location(root, root, None).unwrap(),
                 "checkout {root:?}, discovered workdir {:?}",
                 discovered.workdir()
             );
@@ -788,7 +788,7 @@ mod tests {
                         crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),
                             cwd,
-                            true,
+                            Some(&path),
                         )
                         .unwrap(),
                         "code root {path:?} in {cwd:?}"
@@ -797,7 +797,7 @@ mod tests {
                         !crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),
                             cwd,
-                            false,
+                            None,
                         )
                         .unwrap(),
                         "argv root {path:?} in {cwd:?}"

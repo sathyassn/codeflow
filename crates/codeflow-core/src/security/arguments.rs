@@ -1031,29 +1031,34 @@ fn literal_reach(
     }) {
         // A string fragment such as "/." is not an argv operand reaching
         // other checkouts. Exact enforcement paths still take file checks.
-        let reached = git_guard::interpreter_path_integrity(path, dir, facts.payload_cwd, code)
-            .or_else(|| {
-                // The explicit home can differ from the guard process's home.
-                // Keep its native-edit protections for candidates beneath it.
-                let Some(text) = path.to_str() else {
-                    return Some("cannot inspect a non-UTF-8 enforcement path".to_string());
-                };
-                let Some(home) = facts.home else {
-                    return Some("cannot resolve the home for enforcement paths".to_string());
-                };
-                let in_home = path.starts_with(home)
-                    || resolved_existing(path)
-                        .zip(resolved_existing(home))
-                        .is_none_or(|(path, home)| path.starts_with(home));
-                if !in_home {
-                    return None;
-                }
-                match edit_guard::enforcement_path(text, dir, facts.root, Some(home)) {
-                    Ok(false) => None,
-                    Ok(true) => Some("home enforcement files".to_string()),
-                    Err(why) => Some(format!("cannot inspect home enforcement paths: {why}")),
-                }
-            });
+        let reached = git_guard::interpreter_path_integrity(
+            path,
+            dir,
+            facts.payload_cwd,
+            code.then_some(value),
+        )
+        .or_else(|| {
+            // The explicit home can differ from the guard process's home.
+            // Keep its native-edit protections for candidates beneath it.
+            let Some(text) = path.to_str() else {
+                return Some("cannot inspect a non-UTF-8 enforcement path".to_string());
+            };
+            let Some(home) = facts.home else {
+                return Some("cannot resolve the home for enforcement paths".to_string());
+            };
+            let in_home = path.starts_with(home)
+                || resolved_existing(path)
+                    .zip(resolved_existing(home))
+                    .is_none_or(|(path, home)| path.starts_with(home));
+            if !in_home {
+                return None;
+            }
+            match edit_guard::enforcement_path(text, dir, facts.root, Some(home)) {
+                Ok(false) => None,
+                Ok(true) => Some("home enforcement files".to_string()),
+                Err(why) => Some(format!("cannot inspect home enforcement paths: {why}")),
+            }
+        });
         let Some(reached) = reached else {
             continue;
         };

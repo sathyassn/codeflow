@@ -2145,6 +2145,20 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interpreter_bodies_remove_shell_quotes_once() {
+        for command in [
+            r#"node -e "require(\"fs\").rmSync(\"/abs/repo\",{recursive:true})""#,
+            r#"node -e 'require("fs").rmSync("/abs/repo",{recursive:true})'"#,
+        ] {
+            assert_eq!(
+                super::interpreter_bodies(command),
+                vec![r#"require("fs").rmSync("/abs/repo",{recursive:true})"#],
+                "{command}: {:?}",
+                crate::hooks::git_guard::expand_commands(command)
+            );
+        }
+    }
 
     #[test]
     fn unreadable_and_shell_aliases_fail_closed_through_all_config_sources() {

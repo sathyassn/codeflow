@@ -266,16 +266,35 @@ pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
-/// The registration marker as spelled, relative to its administrative directory.
+/// The normalized marker named by a regular registration file.
 pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
-    let text = std::fs::read(admin.join("gitdir"))
+    let file = admin.join("gitdir");
+    let metadata = std::fs::symlink_metadata(&file)
+        .map_err(|error| format!("cannot inspect worktree registration: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("worktree registration must be a regular file".into());
+    }
+    let text = std::fs::read(&file)
         .map_err(|error| format!("cannot read worktree registration: {error}"))?;
-    let registered = GitName::from_bytes(text.trim_ascii_end())
+    let text = text.trim_ascii_end();
+    let root = text
+        .strip_suffix(b"/.git")
+        .or_else(|| {
+            cfg!(windows)
+                .then(|| text.strip_suffix(b"\\.git"))
+                .flatten()
+        })
+        .filter(|root| !root.is_empty())
+        .ok_or("worktree registration must end with /.git")?;
+    let root = GitName::from_bytes(root)
         .os_path()
         .map_err(|error| error.to_string())?;
-    let registered = crate::portable_path::without_verbatim(admin.to_path_buf())
-        .join(crate::portable_path::without_verbatim(registered));
-    Ok(registered)
+    let root = crate::portable_path::without_verbatim(admin.to_path_buf())
+        .join(crate::portable_path::without_verbatim(root));
+    // All absence proofs use this same normalized reading. A missing
+    // component followed by .. must not certify an existing checkout absent.
+    let root = super::edit_guard::normalized(&root, true).map_err(|error| error.to_string())?;
+    Ok(root.join(".git"))
 }
 
 /// Both pointers must agree: the registration names a checkout containing
@@ -423,7 +442,7 @@ fn check_discovery_boundaries(
 // Recovery admits only literal words. Validate the small shell subset before
 // using the shared quote-removing tokenizer: operators and expansions outside
 // single quotes cannot acquire permission by decoding to a registered path.
-fn literal_recovery_command(command: &str) -> bool {
+pub(super) fn literal_recovery_command(command: &str) -> bool {
     let mut quote = None;
     let mut chars = command.chars();
     while let Some(c) = chars.next() {
@@ -467,43 +486,56 @@ pub fn worktree_recovery(command: &str, cwd: &Path) -> bool {
     match args.as_slice() {
         ["git", "worktree", "prune" | "list"] => true,
         ["git", "worktree", "remove", "--force", target] => {
-            let Ok(Some(repo)) = open(cwd) else {
-                return false;
-            };
-            let Ok(worktrees) = registrations(&repo) else {
-                return false;
-            };
-            let target = cwd.join(target);
-            if !crate::absence::proven_absent(&target).is_ok_and(|absent| absent) {
-                return false;
-            }
-            let Ok(target_spelling) = super::edit_guard::normalized(&target, false) else {
-                return false;
-            };
-            worktrees.iter().any(|admin| {
-                let Ok(marker) = registered_marker(admin) else {
-                    return false;
-                };
-                marker.parent().is_some_and(|root| {
-                    if !crate::absence::proven_absent(root).is_ok_and(|absent| absent) {
-                        return false;
-                    }
-                    // Missing leaves still have existing ancestors. Resolve
-                    // their native spelling too, including Windows short
-                    // names, without replacing either absence proof.
-                    super::edit_guard::normalized(root, false)
-                        .is_ok_and(|root| root == target_spelling)
-                        || super::edit_guard::normalized(root, true)
-                            .and_then(|root| {
-                                super::edit_guard::normalized(&target, true)
-                                    .map(|target| root == target)
-                            })
-                            .unwrap_or(false)
-                })
+            open(cwd).ok().flatten().is_some_and(|repo| {
+                absent_registered_checkout(&repo, Path::new(target)).unwrap_or(false)
             })
         }
         _ => false,
     }
+}
+
+/// The precise absent path Git records, never its relative suffix lookup.
+/// Used by recovery and by the normal discard check after policy loading.
+pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Result<bool, String> {
+    let target = crate::portable_path::without_verbatim(target.to_path_buf());
+    if !target.is_absolute() {
+        return Ok(false);
+    }
+    let prefix = match target.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => prefix.as_os_str().as_encoded_bytes().len(),
+        _ => 0,
+    };
+    let bytes = &target.as_os_str().as_encoded_bytes()[prefix..];
+    let separator = |byte: &u8| *byte == b'/' || (cfg!(windows) && *byte == b'\\');
+    // A Windows UNC prefix can itself be an absolute filesystem root.
+    let Some(tail) = bytes.get(1..) else {
+        return Ok(false);
+    };
+    if tail
+        .split(separator)
+        .any(|part| part == b"." || part == b"..")
+        || bytes
+            .windows(2)
+            .any(|pair| separator(&pair[0]) && separator(&pair[1]))
+    {
+        return Ok(false);
+    }
+    let target = super::edit_guard::normalized(&target, true).map_err(|error| error.to_string())?;
+    if !crate::absence::proven_absent(&target).map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    for admin in registrations(repo)? {
+        let marker = registered_marker(&admin)?;
+        let root = marker
+            .parent()
+            .ok_or("registration has no checkout parent")?;
+        if root == target
+            && crate::absence::proven_absent(root).map_err(|error| error.to_string())?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

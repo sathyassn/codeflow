@@ -232,7 +232,7 @@ fn checkout_identity_main_checks_each_registration() {
             _ => f.other.join(".git").display().to_string(),
         };
         std::fs::write(registration, format!("{text}\n")).unwrap();
-        if matches!(mode, "missing" | "missing-leaf") {
+        if mode == "missing" {
             f.corrupt_refuses(&f.linked, mode, &mut wrong);
             for guard in ["git-guard", "exec-guard"] {
                 expect(
@@ -568,7 +568,6 @@ fn checkout_identity_complete_code_roots_refuse_but_project_arguments_allow() {
         let relative = if cwd == &f.root { "../repo" } else { "../.." };
         for path in [
             shell_path(cwd),
-            ".".into(),
             relative.into(),
             shell_path(&f.root),
             shell_path(&f.linked),
@@ -581,6 +580,13 @@ fn checkout_identity_complete_code_roots_refuse_but_project_arguments_allow() {
                 &mut wrong,
             );
         }
+        let absolute_read = format!(r#"python3 -c 'import os; os.chdir("{}")'"#, shell_path(cwd));
+        expect(
+            &f.command(cwd, "exec-guard", &absolute_read),
+            2,
+            "absolute own-root read cost",
+            &mut wrong,
+        );
         for command in [
             "python3 tool.py .",
             "python3 -m pytest .",
@@ -787,17 +793,11 @@ fn checkout_identity_force_recovery_proves_the_command_target() {
     );
     std::fs::remove_dir_all(&f.linked).unwrap();
     std::fs::create_dir_all(f.other.join(".worktrees/w")).unwrap();
-    // Follow the native filesystem's handling of a parent after a symlink.
-    // Both spellings must be absent; lexical equality alone is insufficient.
-    let registered_absent = match std::fs::metadata(absent_marker.parent().unwrap()) {
-        Ok(_) => false,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(error) => panic!("cannot inspect the registration fixture: {error}"),
-    };
-    assert_eq!(
-        codeflow_core::hooks::repo::worktree_recovery(&command, &f.root),
-        registered_absent
-    );
+    // The registration is normalized before the absence proof. Its
+    // existing folder cannot acquire recovery from a missing/.. spelling.
+    assert!(!codeflow_core::hooks::repo::worktree_recovery(
+        &command, &f.root
+    ));
 }
 
 #[test]
@@ -831,6 +831,328 @@ fn checkout_identity_recovery_preserves_the_shell_grammar() {
         &output,
         2,
         "PowerShell splatting is not a literal target",
+        &mut wrong,
+    );
+    let live = Fixture::new();
+    let ordinary = format!("git worktree remove --force '{}'", shell_path(&live.linked));
+    expect(
+        &live.command(&live.root, "git-guard", &ordinary),
+        0,
+        "ordinary live-tree discard inspection",
+        &mut wrong,
+    );
+    let named = live.temp.path().join("$(printf evil)");
+    git(
+        &live.root,
+        &[
+            "worktree",
+            "move",
+            &shell_path(&live.linked),
+            &shell_path(&named),
+        ],
+    );
+    for (tool, command) in [
+        (
+            "Bash",
+            format!("git worktree remove --force '{}'", shell_path(&named)),
+        ),
+        (
+            "PowerShell",
+            format!(
+                "git worktree remove --force \"{}\"",
+                shell_path(&named).replace('$', "\\$")
+            ),
+        ),
+    ] {
+        let output = run_with_stdin(codeflow().args(["hook", "git-guard"]).current_dir(&live.root),
+            &serde_json::json!({"tool_name":tool, "cwd":live.root, "tool_input":{"command":command}}).to_string());
+        expect(
+            &output,
+            2,
+            "literal recovery must not widen normal live-tree inspection",
+            &mut wrong,
+        );
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_bare_code_directory_literals_are_fragments() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for cwd in [&f.root, &f.linked] {
+        for command in [
+            r#"python3 -c 'import os; print(os.listdir("."))'"#,
+            r#"python3 -c 'import glob; print(glob.glob("./*.py"))'"#,
+            r#"python3 -c 'from pathlib import Path; Path(".").glob("*.py")'"#,
+            r#"python3 -c 'import os; os.walk("."); os.path.abspath("./"); print("./")'"#,
+            r#"python3 -c '"a.b".split("."); ".".join(["a", "b"]); "a" + "." + "b"'"#,
+            r#"python3 -c 'import sys; sys.version.rsplit(".", 1)'"#,
+            r#"node -e 'console.log(require("fs").readdirSync(".")); "a.b".split(".")'"#,
+            r#"node -e "console.log(require(\"fs\").readdirSync(\".\"))""#,
+            r#"python3 -c "import os; os.listdir(\".\")""#,
+            r#"perl -e "print(\".\")""#,
+            r#"ruby -e "puts(\".\")""#,
+            "python3 <<'PY'\nimport os\nprint(os.listdir(\".\"))\nPY",
+            r#"python3 -c 'import shutil; shutil.rmtree(".")'"#,
+            r#"node -e 'require("fs").rmSync(".",{recursive:true})'"#,
+            r#"perl -e 'use File::Path qw(remove_tree); remove_tree("./")'"#,
+            r#"ruby -e 'require "fileutils"; FileUtils.rm_rf(".")'"#,
+        ] {
+            expect(
+                &f.command(cwd, "exec-guard", command),
+                0,
+                command,
+                &mut wrong,
+            );
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_code_bodies_use_shell_quote_removal() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for cwd in [&f.root, &f.linked] {
+        let relative = if cwd == &f.root { "../repo" } else { "../.." };
+        let linked = if cwd == &f.root {
+            ".worktrees/w"
+        } else {
+            "../../.worktrees/w"
+        };
+        for path in [
+            shell_path(&f.root),
+            shell_path(&f.linked),
+            relative.into(),
+            linked.into(),
+        ] {
+            for (family, code) in [
+                (
+                    "node -e",
+                    format!(r#"require("fs").rmSync("{path}",{{recursive:true}})"#),
+                ),
+                (
+                    "node -e",
+                    format!(r#"require("fs").rmSync('{path}',{{recursive:true}})"#),
+                ),
+                (
+                    "python3 -c",
+                    format!(r#"import shutil; shutil.rmtree("{path}")"#),
+                ),
+                (
+                    "python3 -c",
+                    format!(r#"__import__("shutil").rmtree('{path}')"#),
+                ),
+                (
+                    "perl -e",
+                    format!(r#"use File::Path qw(remove_tree); remove_tree("{path}")"#),
+                ),
+                (
+                    "perl -e",
+                    format!(r#"use File::Path qw(remove_tree); print(""); remove_tree('{path}')"#),
+                ),
+                (
+                    "ruby -e",
+                    format!(r#"require "fileutils"; FileUtils.rm_rf("{path}")"#),
+                ),
+                (
+                    "ruby -e",
+                    format!(r#"require "fileutils"; FileUtils.rm_rf('{path}')"#),
+                ),
+            ] {
+                let escaped = code.replace('\\', "\\\\").replace('"', "\\\"");
+                let command = format!("{family} \"{escaped}\"");
+                expect(
+                    &f.command(cwd, "exec-guard", &command),
+                    2,
+                    &command,
+                    &mut wrong,
+                );
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_malformed_registrations_fail_closed() {
+    let mut wrong = Vec::new();
+    for mode in [
+        "no-suffix",
+        "missing-parent",
+        "symlink-marker",
+        "symlink-text",
+    ] {
+        let f = Fixture::new();
+        let registration = f.admin.join("gitdir");
+        match mode {
+            "no-suffix" => std::fs::write(
+                &registration,
+                format!("{}\n", f.root.join("gone/w/foo").display()),
+            )
+            .unwrap(),
+            "missing-parent" => std::fs::write(
+                &registration,
+                format!("{}\n", f.other.join("nope/../.git").display()),
+            )
+            .unwrap(),
+            "symlink-marker" => {
+                std::fs::remove_file(&registration).unwrap();
+                link(&f.linked.join(".git"), &registration);
+            }
+            _ => {
+                let bytes = std::fs::read(&registration).unwrap();
+                let text = f.temp.path().join("registration-text");
+                std::fs::write(&text, bytes).unwrap();
+                std::fs::remove_file(&registration).unwrap();
+                link(&text, &registration);
+            }
+        }
+        for cwd in [&f.root, &f.linked] {
+            f.corrupt_refuses(cwd, mode, &mut wrong);
+            for guard in ["git-guard", "exec-guard", "edit-guard"] {
+                for command in ["git worktree list", "git worktree prune"] {
+                    expect(&f.command(cwd, guard, command), 0, mode, &mut wrong);
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_recovery_rejects_ambiguous_targets_and_registrations() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    let gone = f.root.join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let plant = f.root.join(".git/worktrees/planted");
+    std::fs::create_dir(&plant).unwrap();
+    std::fs::write(plant.join("HEAD"), "ref: refs/heads/task/w\n").unwrap();
+    std::fs::write(plant.join("commondir"), "../..\n").unwrap();
+    // Exact suffix-lookup plant: a relative force-remove must never inherit
+    // recovery for a forged path whose last component is not .git.
+    std::fs::write(
+        plant.join("gitdir"),
+        format!("{}\n", gone.join("w/foo").display()),
+    )
+    .unwrap();
+    for guard in ["git-guard", "exec-guard"] {
+        expect(
+            &f.command(&gone, guard, "git worktree remove --force w"),
+            2,
+            "suffix lookup plant",
+            &mut wrong,
+        );
+    }
+    let conflict = f.root.join(".git/worktrees/conflict");
+    std::fs::create_dir(&conflict).unwrap();
+    std::fs::write(conflict.join("HEAD"), "ref: refs/heads/task/w\n").unwrap();
+    std::fs::write(conflict.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        conflict.join("gitdir"),
+        format!("{}\n", f.other.join(".git").display()),
+    )
+    .unwrap();
+    let live = f.temp.path().join("dummy-live");
+    std::fs::create_dir(&live).unwrap();
+    let alias = f.temp.path().join("dummy-link");
+    link(&live, &alias);
+    for root in [&live, &alias, &f.linked] {
+        let target = root.join("nope/..");
+        std::fs::write(
+            plant.join("gitdir"),
+            format!("{}\n", target.join(".git").display()),
+        )
+        .unwrap();
+        for cwd in [&f.root, &f.linked] {
+            let command = format!("git worktree remove --force '{}'", shell_path(&target));
+            assert!(
+                !codeflow_core::hooks::repo::worktree_recovery(&command, cwd),
+                "{command}"
+            );
+            for guard in ["git-guard", "exec-guard"] {
+                expect(&f.command(cwd, guard, &command), 2, &command, &mut wrong);
+            }
+        }
+    }
+    std::fs::remove_dir_all(&conflict).unwrap();
+    for root in [&live, &alias, &f.linked] {
+        let target = root.join("nope/..");
+        std::fs::write(
+            plant.join("gitdir"),
+            format!("{}\n", target.join(".git").display()),
+        )
+        .unwrap();
+        for cwd in [&f.root, &f.linked] {
+            let command = format!("git worktree remove --force '{}'", shell_path(&target));
+            expect(
+                &f.command(cwd, "git-guard", &command),
+                2,
+                "healthy discovery cannot certify forged absence",
+                &mut wrong,
+            );
+        }
+    }
+    let absent = f.root.join("absent");
+    std::fs::write(
+        plant.join("gitdir"),
+        format!("{}\n", absent.join(".git").display()),
+    )
+    .unwrap();
+    for target in [
+        format!("{}/./absent", shell_path(&f.root)),
+        format!("{}//absent", shell_path(&f.root)),
+        "absent".into(),
+        "//server/share".into(),
+    ] {
+        let command = format!("git worktree remove --force '{target}'");
+        assert!(
+            !codeflow_core::hooks::repo::worktree_recovery(&command, &f.root),
+            "{command}"
+        );
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_healthy_recovery_commands_still_load_policy() {
+    let f = Fixture::new();
+    std::fs::write(f.root.join(".codeflow/policy.json"), "not json\n").unwrap();
+    git(&f.root, &["add", ".codeflow/policy.json"]);
+    git(&f.root, &["commit", "-m", "test: unreadable policy"]);
+    let mut wrong = Vec::new();
+    for command in ["git worktree list", "git worktree prune"] {
+        for guard in ["git-guard", "exec-guard"] {
+            expect(&f.command(&f.root, guard, command), 2, command, &mut wrong);
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_prunable_folder_stays_protected_until_prune() {
+    let f = Fixture::new();
+    std::fs::remove_file(f.linked.join(".git")).unwrap();
+    let mut wrong = Vec::new();
+    f.writes_refuse(
+        &f.root,
+        &f.linked.join("notes.txt"),
+        "marker absent",
+        &mut wrong,
+    );
+    expect(
+        &f.command(&f.root, "git-guard", "printf hello"),
+        0,
+        "ordinary main work",
+        &mut wrong,
+    );
+    git(&f.root, &["worktree", "prune"]);
+    expect(
+        &f.edit(&f.root, &f.linked.join("notes.txt")),
+        0,
+        "pruned folder",
         &mut wrong,
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
