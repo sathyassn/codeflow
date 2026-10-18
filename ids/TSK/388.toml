@@ -1,0 +1,11 @@
+id = "TSK-388"
+uid = "c740c8ec-e7dd-43cd-a111-256189f984f0"
+kind = "TSK"
+title = "Remote branch names are shown without control characters"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
