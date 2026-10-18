@@ -1,0 +1,11 @@
+id = "TSK-387"
+uid = "77164413-8496-4ce6-96f4-5e771fccfa64"
+kind = "TSK"
+title = "The managed map and autonomy guidance cover multi-session coordination"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:33Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
