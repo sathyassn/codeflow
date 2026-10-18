@@ -1,0 +1,11 @@
+id = "TSK-391"
+uid = "8c7afbce-7477-45ec-8eb5-d46ad6401cc7"
+kind = "TSK"
+title = "Every Windows path spelling the guards meet is mapped or refused"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:57Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
