@@ -218,9 +218,10 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--docs` | Also run the doc-graph referential-integrity lint. |
 | | `--portal <DIR>` | Verify a portal evidence manifest without executing project code. |
 | | `--since <REF>` | Also judge every record changed since REF (a commit or branch) against the lifecycle transition rules, as CI judges a pull request. |
-| `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
+| `codeflow integrate <BRANCH>` | | Land a branch locally after gating a rebase or merge candidate |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
+| | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
 | `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
@@ -468,9 +469,20 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
   checkout.
 
 `codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target, runs the test gate, then advances the
-target with `git merge --ff-only`. The target moves only when every stage
-passes.
+rebases the branch onto the target by default, runs the full test gate, then
+fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
+commit whose first parent is the old target tip and whose second parent is
+the unchanged source head, and gates that merge result. This keeps a task's
+acceptance binding to its reviewed commit intact. Run `--merge` from a linked
+worktree; a root checkout is refused before candidate preparation. A head
+already contained in the target needs no new merge commit. The subject names
+both refs: `Merge branch '<branch>' into <target>`.
+
+Both modes advance the local target only after the gate and the adopted
+release structure check pass. They refuse if the source or target moved
+while testing. A conflict or failed gate leaves the target unchanged and
+restores the original checkout. The command does not push; the operator or
+primary handles the remote landing through the project's PR flow.
 
 - It runs under a gate-context token that the git hooks and git-guard verify,
   so a raw `git merge` or a manual ref move onto a protected branch stays

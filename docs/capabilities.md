@@ -375,17 +375,19 @@ id: CAP-005
 name: integrate
 area: engine
 status: shipped
-verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
+verified_by: ["cargo test integrate::", "codeflow-core tests/integrate_merge.rs", "codeflow-cli tests/integrate_merge_cli.rs", "codeflow-cli tests/acceptance_journey.rs"]
 epics: [EPC-001, EPC-022]
 adrs: []
 ```
 
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local landing
-path for protected branches. Under a file lock it rebases the branch onto the
-target, runs the test gate, then advances the target with
-`git merge --ff-only`. No merge commit is added, and the target moves only
-when every stage succeeds. A gate-context token lets the protected ref advance
-only through integrate or a human-merged PR. Detail: [commands](cli.md) and
+path for protected branches. Under a file lock it rebases and fast-forwards
+by default. With `--merge`, it gates a no-fast-forward merge commit that
+preserves the reviewed source head and its acceptance binding. Both modes
+advance only the local target ref after every stage succeeds; neither pushes.
+Merge mode runs from a linked worktree. A gate-context token lets the
+protected ref advance only through integrate or a human-merged PR. Detail:
+[commands](cli.md) and
 [enforcement planes](architecture/enforcement-planes.md).
 
 ### Remember
