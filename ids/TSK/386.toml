@@ -1,0 +1,11 @@
+id = "TSK-386"
+uid = "e5036923-0160-4a45-8b3d-df29816716e9"
+kind = "TSK"
+title = "Shipped CI scripts and the test harness remove their temporary directories"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
