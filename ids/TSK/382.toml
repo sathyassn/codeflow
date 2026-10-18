@@ -1,0 +1,11 @@
+id = "TSK-382"
+uid = "ddf03e79-b035-4633-a75e-c3869150e2fc"
+kind = "TSK"
+title = "An amendment note under a criterion keeps its closing journey tag"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
