@@ -5155,7 +5155,8 @@ fn direct_write_violation(
 ) -> Option<Violation> {
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
-        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "mkdir"
+        | "touch" => Some(args),
         _ => None,
     };
     // Every writer the table lists goes through the one judge exec-guard

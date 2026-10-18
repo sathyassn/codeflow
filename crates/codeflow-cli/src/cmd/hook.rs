@@ -232,6 +232,31 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
     }
 }
 
+// Quoted or escaped words use the established POSIX grammar only when the
+// tool proves that grammar. Portable literal words also permit recovery in
+// other shells; repository validation still proves a force-removal target.
+fn worktree_recovery(
+    payload: &git_guard::HookPayload,
+    command: &str,
+    cwd: &std::path::Path,
+) -> bool {
+    let portable_literal = command
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " \t/._-:".contains(c));
+    if !portable_literal && payload.tool_name != "Bash" {
+        let Ok(shell) = std::env::var_os("SHELL")
+            .map(std::ffi::OsString::into_string)
+            .transpose()
+        else {
+            return false;
+        };
+        if !exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)) {
+            return false;
+        }
+    }
+    codeflow_core::hooks::repo::worktree_recovery(command, cwd)
+}
+
 fn git_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
@@ -250,6 +275,9 @@ fn git_guard(stdin: &str) -> i32 {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
+    if worktree_recovery(&payload, command, &cwd) {
+        return 0;
+    }
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
@@ -468,6 +496,9 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
+    if worktree_recovery(&payload, command, &cwd) {
+        return 0;
+    }
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {

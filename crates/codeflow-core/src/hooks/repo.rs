@@ -40,8 +40,8 @@ impl RepoInfo {
         // Hook context must validate every protected checkout before policy
         // selection. `open` checks the current checkout's identity separately,
         // so read-only inventory tools can still diagnose missing siblings.
-        for worktree in crate::git::linked_worktrees(&repo)? {
-            checked_registration(&worktree.admin)?;
+        for admin in registrations(&repo)? {
+            checked_registration(&admin)?;
         }
         let root = repo
             .workdir()
@@ -121,13 +121,13 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
                 // location claimed by the administrative registration. Read
                 // that registration with native semantics only to cross-check
                 // discovery (libgit2 can report `./` for Windows backslashes).
-                let registered = checked_registration(repo.path())?;
+                let registered = checked_registration(repo.path())?
+                    .ok_or("discovered checkout has an absent registration target")?;
                 if registered != discovered {
                     return Err(
                         "worktree registration disagrees with the discovered checkout".into(),
                     );
                 }
-                check_common_directory(&repo)?;
             } else if !repo.is_bare()
                 && discovered != canonical(repo.path(), "git directory")?
                 && claims_work_directory(&repo)?
@@ -251,11 +251,23 @@ fn check_common_directory(repo: &Repository) -> Result<(), String> {
     Ok(())
 }
 
-/// Both pointers must agree: the registration names a checkout containing
-/// a .git marker that opens this administrative directory, with its original
-/// common directory. Resolving only the registration's parent would let a
-/// symlink to a marker in another directory hide the actual checkout.
-pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
+// Inventory the administrative names before interpreting their pointers. A
+// relative missing leaf is prunable too; the generic worktree reader requires
+// a checkout parent in the raw text before it can represent that checkout.
+pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
+    let names = repo.worktrees().map_err(|error| error.to_string())?;
+    crate::git::name::names_of(&names)
+        .into_iter()
+        .map(|name| {
+            name.os_path()
+                .map(|folder| repo.commondir().join("worktrees").join(folder))
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+/// The registration marker as spelled, relative to its administrative directory.
+pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
     let text = std::fs::read(admin.join("gitdir"))
         .map_err(|error| format!("cannot read worktree registration: {error}"))?;
     let registered = GitName::from_bytes(text.trim_ascii_end())
@@ -263,6 +275,23 @@ pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())?;
     let registered = crate::portable_path::without_verbatim(admin.to_path_buf())
         .join(crate::portable_path::without_verbatim(registered));
+    Ok(registered)
+}
+
+/// Both pointers must agree: the registration names a checkout containing
+/// a .git marker that opens this administrative directory, with its original
+/// common directory. Resolving only the registration's parent would let a
+/// symlink to a marker in another directory hide the actual checkout.
+///
+/// Absent targets are Git's prunable state, not live checkout roots. An
+/// unreadable target or an existing target with conflicting identity refuses.
+pub(super) fn checked_registration(admin: &Path) -> Result<Option<PathBuf>, String> {
+    let registered = registered_marker(admin)?;
+    if crate::absence::proven_absent(&registered)
+        .map_err(|error| format!("cannot inspect registered target: {error}"))?
+    {
+        return Ok(None);
+    }
     let root = canonical(
         registered
             .parent()
@@ -291,7 +320,7 @@ pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
         return Err("worktree registration disagrees with its checkout marker".into());
     }
     check_common_directory(&checkout)?;
-    Ok(root)
+    Ok(Some(root))
 }
 
 // A directory marker can be a symlink to either ordinary or linked
@@ -389,6 +418,80 @@ fn check_discovery_boundaries(
         }
     }
     Err("discovered repository is outside the searched ancestry".to_string())
+}
+
+// Recovery admits only literal words. Validate the small shell subset before
+// using the shared quote-removing tokenizer: operators and expansions outside
+// single quotes cannot acquire permission by decoding to a registered path.
+fn literal_recovery_command(command: &str) -> bool {
+    let mut quote = None;
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '\0')
+            | (
+                None,
+                ';' | '&' | '|' | '<' | '>' | '(' | ')' | '{' | '}' | '*' | '?' | '[' | ']' | '~'
+                | '#' | '^' | '!' | '\n' | '\r',
+            ) => return false,
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (_, '\\') => {
+                let Some(next) = chars.next() else {
+                    return false;
+                };
+                if next == '\0' || next == '\n' {
+                    return false;
+                }
+                // Quote removal belongs to shell_tokens. An escaped character
+                // cannot introduce an operator, expansion or closing quote.
+            }
+            (_, '$' | '`') => return false,
+            _ => {}
+        }
+    }
+    quote.is_none()
+}
+
+/// The bounded recovery available even when checkout identity cannot be read.
+/// Only one literal Git command qualifies; shell operators, substitutions,
+/// environment changes and Git global options never inherit this exception.
+#[must_use]
+pub fn worktree_recovery(command: &str, cwd: &Path) -> bool {
+    if !literal_recovery_command(command) {
+        return false;
+    }
+    let words = super::git_guard::shell_tokens(command);
+    let args: Vec<_> = words.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        ["git", "worktree", "prune" | "list"] => true,
+        ["git", "worktree", "remove", "--force", target] => {
+            let Ok(Some(repo)) = open(cwd) else {
+                return false;
+            };
+            let Ok(worktrees) = registrations(&repo) else {
+                return false;
+            };
+            let target = cwd.join(target);
+            if !crate::absence::proven_absent(&target).is_ok_and(|absent| absent) {
+                return false;
+            }
+            let Ok(target) = super::edit_guard::normalized(&target, false) else {
+                return false;
+            };
+            worktrees.iter().any(|admin| {
+                let Ok(marker) = registered_marker(admin) else {
+                    return false;
+                };
+                marker.parent().is_some_and(|root| {
+                    super::edit_guard::normalized(root, false).is_ok_and(|root| root == target)
+                        && crate::absence::proven_absent(root).is_ok_and(|absent| absent)
+                })
+            })
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -537,7 +640,7 @@ mod tests {
         assert!(repository.is_worktree());
         assert_eq!(
             super::checked_registration(repository.path()).unwrap(),
-            root
+            Some(root)
         );
     }
 

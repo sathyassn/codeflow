@@ -682,10 +682,12 @@ pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, St
         roots.push(workdir.to_path_buf());
     }
     roots.extend(
-        crate::git::linked_worktrees(repo)?
+        super::repo::registrations(repo)?
             .into_iter()
-            .map(|worktree| super::repo::checked_registration(&worktree.admin))
-            .collect::<Result<Vec<_>, _>>()?,
+            .map(|admin| super::repo::checked_registration(&admin))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten(),
     );
     Ok(roots)
 }
@@ -713,18 +715,22 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         })
         .collect();
     let mut protected = Vec::new();
-    let names = repo.worktrees().map_err(|error| error.to_string())?;
-    for name in crate::git::name::names_of(&names) {
-        let folder = name.os_path().map_err(|error| error.to_string())?;
-        for pointer in ["gitdir", "commondir"] {
-            protected.push((
-                repo.commondir()
-                    .join("worktrees")
-                    .join(&folder)
-                    .join(pointer),
-                false,
-                repo.commondir().to_path_buf(),
-            ));
+    // Protect the whole administrative namespace, including names Git does
+    // not list yet. Otherwise three individually allowed creates can plant
+    // a registration that locks every checkout on the next invocation.
+    protected.push((
+        repo.commondir().join("worktrees"),
+        true,
+        repo.commondir().to_path_buf(),
+    ));
+    for admin in super::repo::registrations(repo)? {
+        if super::repo::checked_registration(&admin)?.is_none() {
+            let marker = super::repo::registered_marker(&admin)?;
+            let root = marker
+                .parent()
+                .ok_or("registration has no checkout parent")?
+                .to_path_buf();
+            protected.push((root.clone(), true, root));
         }
     }
     for root in checkout_roots(repo)? {
@@ -758,6 +764,7 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         }
     }
     for (name, directory) in [
+        ("HEAD", false),
         ("hooks", true),
         ("refs/remotes", true),
         ("packed-refs", false),
@@ -861,7 +868,7 @@ fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, 
 }
 
 /// An argv operand can name its current checkout as a project location.
-/// A code string can also name the filesystem root as a fragment, such as
+/// A code string can name the filesystem root as a fragment, such as
 /// "/." in a runtime concatenation. Other ancestors still reach registered
 /// checkouts. Neither exemption applies to enforcement files.
 pub(crate) fn is_own_checkout_location(
@@ -876,7 +883,8 @@ pub(crate) fn is_own_checkout_location(
         return Ok(false);
     };
     let target = normalized(target, true).map_err(|error| error.to_string())?;
-    Ok(target == own[1] || (code_literal && target.has_root() && target.parent().is_none()))
+    Ok((!code_literal && target == own[1])
+        || (code_literal && target.has_root() && target.parent().is_none()))
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
