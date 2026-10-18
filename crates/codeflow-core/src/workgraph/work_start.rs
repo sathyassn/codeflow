@@ -840,15 +840,17 @@ pub enum EpicLineBinding {
     Unbound(String),
 }
 
-/// Whether the records at `anchor` (named `place` in messages) bind `line`
-/// as an epic line that `branch` may declare. A planning branch must name
-/// that epic. A task at `head` must belong to that epic or be standalone
-/// with a reason and this exact declared target. The epic must exist at
-/// `anchor` without being cancelled or archived, and a task of that epic
-/// there must target this exact line, as [`check_epic_line`] requires of a
-/// landing line. A name
-/// alone binds nothing. The caller chooses an anchor the change itself does
-/// not write: the protected branch, or the line's remote-tracking ref.
+/// Whether trusted records at `anchor` (named `place` in messages) bind
+/// `line` as an epic line that `branch` may declare. The task record at
+/// `head` is author-controlled routing input, not authorization: it must
+/// name the line's epic or be standalone with a reason and this target.
+/// A planning branch must name that epic.
+///
+/// Only the trusted anchor records bind the line: the epic must exist there
+/// without being cancelled or archived, and a task of that epic there must
+/// name this exact line, as [`check_epic_line`] requires of a landing line.
+/// The caller selects the protected tip or the remote line's tip as the
+/// anchor. Head-record membership never replaces this anchor check.
 ///
 /// # Errors
 ///
@@ -868,22 +870,29 @@ pub fn epic_line_binding(
     };
     let may_target = if let Some(plan) = branch.strip_prefix("plan/") {
         super::line_adoption::epic_id(&format!("integration/{plan}")) == Ok(epic_id)
+    } else if let Some(record) = declared_work_record_at_revision(repo_root, branch, head)? {
+        if let Some(own) = record.epic_id.as_deref() {
+            own == epic_id
+        } else {
+            if record
+                .standalone_reason
+                .as_deref()
+                .is_none_or(|reason| reason.trim().is_empty())
+            {
+                return Ok(EpicLineBinding::Refused(format!(
+                    "standalone task on branch '{branch}' has no nonblank standalone_reason"
+                )));
+            }
+            let target = record.integration_target.as_deref().unwrap_or_default();
+            if logical_target(target) != line {
+                return Ok(EpicLineBinding::Refused(format!(
+                    "standalone task on branch '{branch}' declares target '{target}', not this line '{line}'"
+                )));
+            }
+            true
+        }
     } else {
-        declared_work_record_at_revision(repo_root, branch, head)?.is_some_and(
-            |record| match record.epic_id.as_deref() {
-                Some(own) => own == epic_id,
-                None => {
-                    record
-                        .standalone_reason
-                        .as_deref()
-                        .is_some_and(|reason| !reason.trim().is_empty())
-                        && record
-                            .integration_target
-                            .as_deref()
-                            .is_some_and(|target| logical_target(target) == line)
-                }
-            },
-        )
+        false
     };
     if !may_target {
         return Ok(EpicLineBinding::Refused(format!(
@@ -3434,21 +3443,28 @@ mod tests {
         git(root, &["commit", "-am", "bind epic line"]);
         git(root, &["switch", "task/TSK-002-work"]);
         let path = root.join("project-management/tasks/TSK-002.md");
-        for (epic, reason, target, bound) in [
-            ("null", "bounded repair", line, true),
+        let missing_reason =
+            "standalone task on branch 'task/TSK-002-work' has no nonblank standalone_reason";
+        let wrong_target = "standalone task on branch 'task/TSK-002-work' declares target 'main', not this line 'integration/EPC-001-outcome'";
+        let other_epic = "names EPC-001, which is not the epic of branch 'task/TSK-002-work'";
+        for (epic, reason, target, refusal) in [
+            ("null", Some("bounded repair"), line, None),
             (
                 "null",
-                "bounded repair",
+                Some("bounded repair"),
                 "refs/heads/integration/EPC-001-outcome",
-                true,
+                None,
             ),
-            ("EPC-001", "null", line, true),
-            ("EPC-002", "null", line, false),
-            ("null", "null", line, false),
-            ("null", "' '", line, false),
-            ("null", "bounded repair", "main", false),
+            ("EPC-001", Some("null"), line, None),
+            ("EPC-002", Some("null"), line, Some(other_epic)),
+            ("null", None, line, Some(missing_reason)),
+            ("null", Some("null"), line, Some(missing_reason)),
+            ("null", Some("' '"), line, Some(missing_reason)),
+            ("null", Some("bounded repair"), "main", Some(wrong_target)),
         ] {
-            fs::write(&path, format!("---\nid: TSK-002\nepic_id: {epic}\nstandalone_reason: {reason}\nintegration_target: {target}\nstatus: todo\n---\n")).unwrap();
+            let reason_field =
+                reason.map_or_else(String::new, |value| format!("standalone_reason: {value}\n"));
+            fs::write(&path, format!("---\nid: TSK-002\nepic_id: {epic}\n{reason_field}integration_target: {target}\nstatus: todo\n---\n")).unwrap();
             git(root, &["commit", "-am", "declare target"]);
             let binding = epic_line_binding(
                 root,
@@ -3460,9 +3476,11 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                binding == EpicLineBinding::Bound,
-                bound,
-                "{epic}, {reason}, {target}: {binding:?}"
+                binding,
+                refusal.map_or(EpicLineBinding::Bound, |reason| EpicLineBinding::Refused(
+                    reason.to_string()
+                )),
+                "{epic}, {reason:?}, {target}"
             );
         }
         for branch in [

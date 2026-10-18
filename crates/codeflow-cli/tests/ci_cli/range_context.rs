@@ -154,7 +154,7 @@ fn help_explains_base_selection_and_acceptance_mode() {
     );
     for phrase in [
         "including protected names",
-        "standalone task's declared target",
+        "standalone task that declares the line",
         "protected_branches",
         "local remote-tracking ref",
         "update-ref of refs/remotes/*",
@@ -957,6 +957,8 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
     for case in [
         "local_only",
         "wrong_line",
+        "missing_reason",
+        "blank_reason",
         "missing_epic",
         "forged_epic",
         "other_epic",
@@ -980,6 +982,19 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
                 f.write(path, &record.replace(LINE, target));
                 f.commit("docs: declare decoy target");
                 "is not the target of any task of EPC-001"
+            }
+            "missing_reason" | "blank_reason" => {
+                let replacement = if case == "missing_reason" {
+                    ""
+                } else {
+                    "standalone_reason: ' '\n"
+                };
+                f.write(
+                    path,
+                    &record.replace("standalone_reason: Bounded repair\n", replacement),
+                );
+                f.commit("docs: remove standalone reason");
+                "standalone task on branch 'task/TSK-002-repair' has no nonblank standalone_reason"
             }
             "other_epic" => {
                 f.write(
@@ -1037,9 +1052,7 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
             "{case}: {text}"
         );
         let main = f.git(&["rev-parse", "origin/main"]);
-        assert!(
-            text.contains(&format!("range {}..", &main[..8])),
-            "{case}: {text}"
-        );
+        let fallback_range = format!("range {}..", &main[..8]);
+        assert!(text.contains(&fallback_range), "{case}: {text}");
     }
 }
