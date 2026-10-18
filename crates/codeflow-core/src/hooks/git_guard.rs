@@ -1938,7 +1938,26 @@ fn token_integrity_path_literal(
 /// `*`, `?` and `[`, and the forms the guard reads conservatively
 /// ([`conservative_glob`]).
 pub(crate) fn has_glob(word: &str) -> bool {
+    #[cfg(windows)]
+    let word = windows_pattern_body(word);
     word.contains(['*', '?', '[']) || conservative_glob(word)
+}
+
+/// A verbatim drive's `?` belongs to the Windows namespace marker, not a
+/// shell pattern. Only a complete absolute drive spelling earns this
+/// reading; all syntax after the marker still takes the usual glob rules.
+/// Kept lexical so the same reader is exercised on non-Windows test hosts.
+#[cfg(any(windows, test))]
+fn windows_pattern_body(word: &str) -> &str {
+    word.strip_prefix(r"\\?\")
+        .filter(|rest| {
+            let bytes = rest.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+        })
+        .unwrap_or(word)
 }
 
 /// Whether a word holds pattern syntax the guard reads conservatively,
@@ -2411,7 +2430,11 @@ impl WordGlob {
         self.pattern
             .components()
             .enumerate()
-            .take_while(|(at, c)| *at < self.literal || !has_glob(&c.as_os_str().to_string_lossy()))
+            .take_while(|(at, c)| {
+                *at < self.literal
+                    || !matches!(c, std::path::Component::Normal(_))
+                    || !has_glob(&c.as_os_str().to_string_lossy())
+            })
             .map(|(_, c)| c)
             .collect()
     }
@@ -11455,6 +11478,49 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn verbatim_drive_prefix_is_not_a_wildcard() {
+        // Exercise the Windows lexical reader on every host, before any
+        // platform-specific filesystem operation or path comparison.
+        for word in [r"\\?\C:\repo", r"\\?\c:\repo\src\app.py"] {
+            let body = super::windows_pattern_body(word);
+            assert!(!super::has_glob(body), "{word}");
+        }
+        for word in [
+            r"\\?\C:\repo\?",
+            r"\\?\C:\repo\.*",
+            r"\\?\C:\repo\[ab]",
+            r"\\?\C:\repo\**",
+            r"\\?\C:\repo\*(D)",
+            r"\\?\C:relative",
+            r"prefix\\?\C:\repo",
+        ] {
+            assert!(super::has_glob(super::windows_pattern_body(word)), "{word}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_glob_starts_at_its_literal_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let src = root.join("src");
+        std::fs::create_dir(&src).unwrap();
+        let file = src.join("app.py");
+        std::fs::write(&file, "").unwrap();
+        for suffix in [r"src\*.py", r"src\**"] {
+            let word = root.join(suffix).display().to_string();
+            let glob = super::WordGlob::new(&word, &root);
+            assert_eq!(glob.prefix(), src, "{word}");
+            let paths = glob.expand().unwrap();
+            assert!(paths.contains(&file), "{word}: {paths:?}");
+            assert!(
+                paths.iter().all(|p| p.starts_with(&src)),
+                "{word}: {paths:?}"
+            );
+        }
+    }
+
     #[test]
     fn disk_case_inspects_names_without_opening_structural_roots() {
         use std::path::{Component, Path};
