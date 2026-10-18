@@ -115,7 +115,7 @@ impl ProjectPaths {
     pub fn validate(&self) -> Result<(), String> {
         for path in &self.document_indexes {
             if !valid_document_index(path) {
-                return Err(format!("invalid git.document_indexes path {path:?}; use an exact repository-relative file path without globs, backslashes or dot components"));
+                return Err(format!("invalid git.document_indexes path {path:?}; use an exact repository-relative documentation file (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"));
             }
         }
         for (key, patterns) in [
@@ -140,9 +140,23 @@ impl ProjectPaths {
     }
 }
 
-/// An exact, normalized repository-relative file name, never a path pattern.
+/// An exact repository-relative documentation file, excluding instruction names.
 pub(crate) fn valid_document_index(path: &str) -> bool {
-    !path.contains(['\\', '*', '?', '[', ']', ':'])
+    let name = path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let documentation = name
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| matches!(extension, "md" | "mdx" | "rst" | "adoc" | "txt"));
+    let instructions = INSTRUCTION_STEMS
+        .iter()
+        .chain(["agent.", "warp.", "qwen.", "crush."].iter())
+        .any(|stem| name.starts_with(stem));
+    documentation
+        && !instructions
+        && !path.contains(['\\', '*', '?', '[', ']', ':'])
         && !path.chars().any(char::is_control)
         && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
 }
@@ -346,8 +360,12 @@ pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPat
     if is_planning_path(path) {
         Some(AmendmentPath::Record)
     } else {
-        (path.starts_with("docs/") || project.document_indexes.iter().any(|index| index == path))
-            .then_some(AmendmentPath::Doc)
+        (path.starts_with("docs/")
+            || project
+                .document_indexes
+                .iter()
+                .any(|index| index == path && valid_document_index(index)))
+        .then_some(AmendmentPath::Doc)
     }
 }
 
@@ -755,6 +773,43 @@ mod tests {
             Some(&raw)
         ));
         assert!(instructions_block_unchanged(Some(&raw), Some(&raw)));
+    }
+
+    #[test]
+    fn document_index_declarations_admit_only_documentation_files() {
+        for path in [
+            "Cargo.toml",
+            "Makefile",
+            "package.json",
+            "Dockerfile",
+            "scripts/build.sh",
+            "AGENT.md",
+            "WARP.md",
+            "QWEN.md",
+            "CRUSH.md",
+            "CLAUDE.md",
+        ] {
+            let project = ProjectPaths {
+                document_indexes: vec![path.into()],
+                ..ProjectPaths::default()
+            };
+            assert!(project.validate().is_err(), "{path} must be invalid");
+            assert_eq!(amendment_path(path, &project), None, "{path}");
+        }
+        for path in [
+            "index.MD",
+            "index.mdx",
+            "index.rst",
+            "index.adoc",
+            "index.txt",
+        ] {
+            let project = ProjectPaths {
+                document_indexes: vec![path.into()],
+                ..ProjectPaths::default()
+            };
+            project.validate().unwrap();
+            assert_eq!(amendment_path(path, &project), Some(AmendmentPath::Doc));
+        }
     }
 
     #[test]

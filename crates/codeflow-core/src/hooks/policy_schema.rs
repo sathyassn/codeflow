@@ -632,13 +632,16 @@ pub const SCHEMA: [KeySpec; 69] = [
     KeySpec {
         path: "git.document_indexes",
         kind: KeyKind::StringList,
-        valid: "an array of exact repository-relative file paths (e.g. DOC-INDEX.md), without globs or dot components",
+        valid: "an array of exact repository-relative documentation files (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), without globs or dot components",
         purpose: "Document index files a planning amendment may update alongside records and plans.",
-        notes: "Empty by default. Read from the amendment's target policy; \
-                declare the files in a prior task pull request. Product and \
-                watched paths, hidden paths, harness instructions and \
-                non-regular files stay excluded. The shipped policy file \
-                does not list it, so an older binary never meets the key.",
+        notes: "Empty by default. Declare the files in a prior task pull request. The hosted check reads \
+                the target policy; pre-push reads the range base, an existing \
+                branch's earlier pushed tip. The hosted check enforces target \
+                authority. Product and watched paths, hidden paths and \
+                non-regular files stay excluded. Index file names beginning \
+                AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH. are \
+                excluded without case. Root AGENTS.md keeps its separate \
+                project-section exception. The shipped policy file omits this key.",
     },
     KeySpec {
         path: "git.direct_changes",
@@ -1129,7 +1132,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 if !crate::workgraph::classify::valid_document_index(entry) {
                     errors.push(PolicyError {
                         key: path.to_string(),
-                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative file path without globs, backslashes or dot components"),
+                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative documentation file (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"),
                     });
                 }
             }
@@ -1605,6 +1608,21 @@ mod tests {
             "{}",
             errs[0]
         );
+    }
+
+    #[test]
+    fn document_index_policy_refuses_patterns_and_non_documentation_entries() {
+        for path in ["Cargo.toml", "Makefile", "docs/**", "WARP.md"] {
+            let policy = serde_json::json!({"git": {"document_indexes": [path]}});
+            let errors = validate_policy_str(&policy.to_string()).unwrap_err();
+            assert!(
+                errors.iter().any(|error| {
+                    error.key == "git.document_indexes" && error.message.contains("invalid path")
+                }),
+                "{path}: {errors:?}"
+            );
+        }
+        validate_policy_str(r#"{"git":{"document_indexes":["index.MD"]}}"#).unwrap();
     }
 
     #[test]

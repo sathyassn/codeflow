@@ -229,11 +229,21 @@ target's `.codeflow/policy.json`. It may also edit the project-owned part
 of root `AGENTS.md` while keeping the target's managed block byte for byte.
 Declare an index such as `DOC-INDEX.md` in a prior task PR after upgrading
 the pinned binary; the new key is absent from the shipped policy file.
-Product and watched paths, hidden paths and harness instruction files
-remain excluded even when declared as indexes. Files must be regular;
-carrying documentation, indexes or `AGENTS.md` also requires both trees to
-have no symbolic links or submodules. A refusal names the excluded path
-and the admitted set. Carry an excluded file in a task PR.
+Only documentation files with extensions `.md`, `.mdx`, `.rst`, `.adoc`
+or `.txt` can be declared, with case-insensitive extension matching.
+The hosted check reads the target policy and enforces the declaration.
+Pre-push reads the range base, an already-pushed branch's earlier tip,
+so it does not enforce that target-policy boundary.
+
+Product and watched paths and hidden paths remain excluded even when
+declared as indexes. Index file names beginning `AGENT.`, `AGENTS.`,
+`CLAUDE.`, `GEMINI.`, `WARP.`, `QWEN.` or `CRUSH.` are excluded without case.
+Independently of declarations, planning paths exclude file names beginning
+`AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its project-section
+exception. Files must be regular; carrying documentation, indexes or
+`AGENTS.md` also requires both trees to have no symbolic links or submodules.
+A refusal names the excluded path and the admitted set. Carry an excluded
+file in a task PR.
 
 ### Dependencies
 

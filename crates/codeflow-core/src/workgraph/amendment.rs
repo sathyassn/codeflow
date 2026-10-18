@@ -411,10 +411,11 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     for path in paths {
         match amendment_path(path, &project) {
             None => {
+                let path = crate::git::display_key(path);
                 return Some(format!(
                     "a planning-only pull request touches a path outside the admitted set: {path}; admitted paths: project-management/** except templates, docs/plan/**, docs/** and git.document_indexes from the target policy ({}), all outside the adopter-facing set, hidden paths and harness instruction files; AGENTS.md only outside its managed block",
                     if project.document_indexes.is_empty() { "none declared".to_string() } else { project.document_indexes.join(", ") }
-                ))
+                ));
             }
             Some(AmendmentPath::Record) => {}
             Some(kind) => {
@@ -574,7 +575,7 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
-/// records, and its `git.breaking_watch_paths`.
+/// records, its `git.breaking_watch_paths` and its `git.document_indexes`.
 fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let list =
         |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
@@ -684,6 +685,24 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planning_refusal_escapes_control_characters_in_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        for (path, escaped) in [
+            ("index\x1b.md", r"index\x1b.md"),
+            ("index\n.md", r"index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains(escaped), "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
 
     /// Round 23: a changed path that is not valid UTF-8 is refused by name
     /// before any rule reads the paths as text, with or without a readable

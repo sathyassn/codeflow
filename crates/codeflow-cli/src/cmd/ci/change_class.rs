@@ -120,7 +120,8 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
 /// `git.product_paths` and `git.breaking_watch_paths` at `base`, so neither
 /// side can narrow the surfaces the other names. The target side is read
 /// strictly: a present key that is not an array of strings, or a glob that
-/// does not parse, refuses; an absent key adds nothing.
+/// does not parse, refuses; an absent key adds nothing. `is_light_path` does
+/// not read `git.document_indexes`.
 pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, String> {
     let mut project = ProjectPaths::load(root)?;
     let target = codeflow_core::hooks::landed_policy::policy_text_at(root, base)?
