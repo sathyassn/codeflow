@@ -823,7 +823,7 @@ fn selection_check(
 }
 
 const RULE: &str = "work.classification";
-const HINT: &str = "add exactly one Task: TSK-NNN, or Task: EPC-NNN for the epic's planning change or integration line; where durable tracking is inactive, name the tracked unit";
+const HINT: &str = codeflow_core::remedy::WORK_CLASSIFICATION.text;
 
 fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, hint: &str) {
     tagged.push(super::TaggedViolation {
@@ -1363,6 +1363,7 @@ mod tests {
         let project = ProjectPaths {
             product: vec!["src/**".to_string()],
             watched: Vec::new(),
+            document_indexes: Vec::new(),
         };
         files
             .iter()
@@ -1373,7 +1374,11 @@ mod tests {
                 )
                 .is_none()
             })
-            .map(|path| format!("a planning-only pull request touches a product path: {path}"))
+            .map(|path| {
+                format!(
+                    "a planning-only pull request touches a path outside the admitted set: {path}"
+                )
+            })
     }
 
     fn input<'a>(body: &'a str, branch: &'a str, files: &'a [GitName]) -> Input<'a> {
@@ -1530,7 +1535,7 @@ mod tests {
                 refused
                     .as_ref()
                     .unwrap_err()
-                    .contains(&format!("touches a product path: {path}")),
+                    .contains(&format!("touches a path outside the admitted set: {path}")),
                 "{path}: {refused:?}"
             );
         }

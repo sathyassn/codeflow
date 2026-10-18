@@ -222,6 +222,36 @@ release branch or a body-of-work `integration/` branch, never a task branch,
 and it resolves to a real local or remote-tracking branch, never `HEAD`, a
 tag, an object ID, or a revision expression.
 
+A planning amendment may carry records under `project-management/` (except
+its templates), plans under `docs/plan/`, other documentation under `docs/`,
+and exact document index files declared in `git.document_indexes` in the
+target's `.codeflow/policy.json`. It may also edit the project-owned part
+of root `AGENTS.md` while keeping the target's managed block byte for byte.
+Declare an index such as `DOC-INDEX.md` in a prior task PR after upgrading
+the pinned binary; the new key is absent from the shipped policy file.
+A declaration is a reviewed policy change on the target and must not name a
+file a harness or build tool loads. Only documentation files with extensions
+`.md`, `.mdx`, `.rst` or `.adoc` can be declared, with case-insensitive
+extension matching. Text files are excluded because tools can load them.
+The hosted check reads the target policy and enforces the declaration.
+On a re-push of a `plan/` branch, pre-push can fall back to the earlier
+pushed tip; with an advertised work target it judges from the merge base
+with that target. The hosted check enforces the target-policy boundary.
+
+Product and watched paths and hidden paths remain excluded even when
+declared as indexes. Index file names beginning `AGENT.`, `AGENTS.`,
+`CLAUDE.`, `GEMINI.`, `WARP.`, `QWEN.` or `CRUSH.` are excluded without case.
+`SKILL.md`, `CONVENTIONS.md` and `llms*.md` are also refused without case.
+A file name whose stem contains a tilde followed by a digit is refused as a
+possible Windows short-name alias. These exclusions do not identify every
+file a tool loads; the policy review must check that boundary.
+Independently of declarations, planning paths exclude file names beginning
+`AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its project-section
+exception. Files must be regular; carrying documentation, indexes or
+`AGENTS.md` also requires both trees to have no symbolic links or submodules.
+A refusal names the excluded path and the admitted set. Carry an excluded
+file in a task PR.
+
 ### Dependencies
 
 An entry of `depends_on` is either a bare task id, a code dependency, or

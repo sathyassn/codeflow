@@ -318,7 +318,7 @@ fn a_planning_amendment_still_refuses_product_and_enforcement_paths() {
             path,
             &[
                 "work.classification",
-                &format!("touches a product path: {path}"),
+                &format!("touches a path outside the admitted set: {path}"),
             ],
         );
     }
@@ -590,7 +590,7 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
     assert_blocks(
         &ci(root, PLAN, BOTH),
         "an instruction file under docs/plan",
-        &["touches a product path: docs/plan/AGENTS.md"],
+        &["touches a path outside the admitted set: docs/plan/AGENTS.md"],
     );
 
     // The target marks docs/tool.md as product after the branch was cut;
@@ -609,7 +609,7 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
     assert_blocks(
         &ci(root, "plan/old-policy", "Task: EPC-001"),
         "a path the target's policy names as product",
-        &["touches a product path: docs/tool.md"],
+        &["touches a path outside the admitted set: docs/tool.md"],
     );
 
     // A document a symbolic link carries into the instructions.

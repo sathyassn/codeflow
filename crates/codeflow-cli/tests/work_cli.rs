@@ -1813,6 +1813,7 @@ fn the_journey_rule_matches_the_name_git_records() {
     let project = ProjectPaths {
         product: vec![pattern.into()],
         watched: vec![],
+        document_indexes: Vec::new(),
     };
     assert!(path_sets()
         .adopter_facing_member(actual, &project)

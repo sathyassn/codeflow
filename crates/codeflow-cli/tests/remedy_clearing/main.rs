@@ -97,6 +97,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
+    ("WORK_CLASSIFICATION", Runs),
     ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
     ("ID_REGISTRY", Runs),

@@ -102,10 +102,12 @@ pub fn findings(
             groups.entry(key).or_default().extend(lines.iter().cloned());
         }
     }
+    // range_problem has already admitted these paths. Outside the record
+    // home they are plans, docs, declared indexes or root AGENTS.md.
     let files: Vec<&str> = changed_paths
         .iter()
         .map(String::as_str)
-        .filter(|path| *path == "AGENTS.md" || path.starts_with("docs/"))
+        .filter(|path| !path.starts_with("project-management/"))
         .collect();
     let mut found = refused;
     // Named epics first, in the order the line names them, then the rest.
@@ -409,9 +411,11 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     for path in paths {
         match amendment_path(path, &project) {
             None => {
+                let path = crate::git::display_key(path);
                 return Some(format!(
-                    "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
-                ))
+                    "a planning-only pull request touches a path outside the admitted set: {path}; admitted paths: project-management/** except templates, docs/plan/**, docs/** and git.document_indexes from the target policy ({}), all outside the adopter-facing set, hidden paths and harness instruction files; AGENTS.md only outside its managed block",
+                    if project.document_indexes.is_empty() { "none declared".to_string() } else { project.document_indexes.join(", ") }
+                ));
             }
             Some(AmendmentPath::Record) => {}
             Some(kind) => {
@@ -421,6 +425,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     if let Some(path) = text {
+        let path = crate::git::display_key(path);
         for (side, at) in [("target", base), ("head", head)] {
             if let Some((kind, entry)) = first_special(repo, at) {
                 return Some(format!(
@@ -571,7 +576,7 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
-/// records, and its `git.breaking_watch_paths`.
+/// records, its `git.breaking_watch_paths` and its `git.document_indexes`.
 fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let list =
         |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
@@ -622,6 +627,8 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let paths = ProjectPaths {
         product,
         watched: list(git.get("breaking_watch_paths"), "breaking_watch_paths")?.unwrap_or_default(),
+        document_indexes: list(git.get("document_indexes"), "document_indexes")?
+            .unwrap_or_default(),
     };
     paths.validate()?;
     Ok(paths)
@@ -679,6 +686,44 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planning_refusal_escapes_control_characters_in_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, base) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        for (path, escaped) in [
+            ("index\x1b.md", r"index\x1b.md"),
+            ("index\n.md", r"index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains(escaped), "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn special_tree_refusal_escapes_the_document_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let base = crate::git::add_commit_modes(&repo, &[(b"link", b"target", 0o120_000)]);
+        for (path, escaped) in [
+            ("docs/index\x1b.md", r"docs/index\x1b.md"),
+            ("docs/index\n.md", r"docs/index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains("symbolic link"), "{problem:?}");
+            assert_eq!(problem.matches(escaped).count(), 2, "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
 
     /// Round 23: a changed path that is not valid UTF-8 is refused by name
     /// before any rule reads the paths as text, with or without a readable
