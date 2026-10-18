@@ -287,6 +287,30 @@ class GateBinaryControls(unittest.TestCase):
             consumer["requires"] = ["codeflow-bin"]
             self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
 
+    def test_windows_script_operands_keep_the_drive_and_separators(self):
+        for script in (r'C:\repo\scripts\consumer.py', 'C:/repo/scripts/consumer.py',
+                       r'\\server\share\consumer.py', r'\\?\C:\repo\consumer.py',
+                       r'scripts\consumer.py'):
+            for command in (f'python3 -B "{script}"', f"python3 -B '{script}'",
+                            f'python3 -B {script}'):
+                with self.subTest(command=command):
+                    self.assertIn(script, parity.literal_script_paths(command))
+
+    def test_quoted_script_with_spaces_reads_the_real_binary_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / "new consumer.py"
+            cfg = copy.deepcopy(CONFIG)
+            consumer = target(cfg, "model-eval-kit")
+            consumer["requires"] = []
+            for quote in ('"', "'"):
+                with self.subTest(quote=quote):
+                    consumer["modes"] = {"full": {"command": f'python3 -B {quote}{script}{quote}'}}
+                    # CRLF and UTF-8 are real bytes read by the discovery.
+                    script.write_bytes('# \u201d\r\nprint(CODEFLOW_BIN)\r\n'.encode("utf-8"))
+                    self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+                    script.write_bytes(b'print("ordinary script")\r\n')
+                    self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
     def test_utf8_script_discovery_with_windows_default_decoding(self):
         # Exercise a real byte read with the cp1252 default from hosted Windows.
         # Explicit encodings still reach Path.read_text unchanged.

@@ -857,15 +857,25 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
 REAL_BROWSER = "npm run check:real-browser --prefix crates/codeflow-present/web"
 
 
+def literal_script_paths(command: str) -> list[str]:
+    """Candidate script operands, including those inside launcher strings."""
+    extension = r'\.(?:py|mjs|cjs|js|sh|bash|ps1)'
+    # Keep quoted paths with spaces whole. Scan unquoted operands separately
+    # too: a quoted launcher string may contain several script invocations.
+    quoted = re.findall(r'"([^"\r\n]+' + extension + r')"', command)
+    quoted += re.findall(r"'([^'\r\n]+" + extension + r")'", command)
+    unquoted = re.findall(
+        r'''(?<![\w./\\?:-])((?:\\\\\?\\)?(?:[A-Za-z]:)?[/\\\w.-]+'''
+        + extension + r''')(?=$|[\s"';&|()<>])''', command)
+    return quoted + unquoted
+
+
 def script_uses_codeflow_bin(command: str, cwd: Path) -> bool:
     """Inspect literal script operands, including those inside launcher strings."""
     # These two files inspect references and construct synthetic controls.
     # The runtime Windows portal test has its own binary-dependent target.
     structural = {ROOT / "scripts/gate-parity.py", ROOT / "scripts/test_gate_parity.py"}
-    scripts = re.findall(
-        r'''(?<![\w./-])([/\w.-]+\.(?:py|mjs|cjs|js|sh|bash|ps1))(?=$|[\s"';&|()<>])''',
-        command)
-    for name in scripts:
+    for name in literal_script_paths(command):
         path = (cwd / name).resolve()
         if path not in structural and path.is_file() and re.search(r"\bCODEFLOW_BIN\b", repository_text(path)):
             return True
