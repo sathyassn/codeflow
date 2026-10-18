@@ -16,9 +16,10 @@
 //! Every line prints its marker in at least one shell, which shows the
 //! construct composes it there.
 //!
-//! The shells: `bash` on `PATH`, `/bin/bash` when it is another version,
-//! `zsh` (skipped when it is not installed), and `/bin/sh` and `dash` read
-//! as POSIX `sh`. Each runs in an empty directory with a fixed `HOME`,
+//! The required shells: `bash` and `zsh` on `PATH`, `/bin/sh` (`sh` on
+//! Windows) and `dash` read as POSIX `sh`. Unix also checks `/bin/bash`
+//! when it is another version. A missing shell fails the prerequisite check.
+//! Each runs in an empty directory with a fixed `HOME`,
 //! `LC_ALL=C`, no startup files, and `CF_PART=1733` as the one variable the
 //! lines read from outside.
 
@@ -761,7 +762,12 @@ fn shells() -> (Vec<Shell>, Vec<String>) {
     let mut found = Vec::new();
     let mut skipped = Vec::new();
     let mut bash_versions = Vec::new();
-    for program in ["bash", "/bin/bash"] {
+    let bash_programs: &[&str] = if cfg!(windows) {
+        &["bash"]
+    } else {
+        &["bash", "/bin/bash"]
+    };
+    for &program in bash_programs {
         match version(program) {
             Some(v) if !bash_versions.contains(&v) => {
                 bash_versions.push(v.clone());
@@ -785,7 +791,8 @@ fn shells() -> (Vec<Shell>, Vec<String>) {
         }),
         None => skipped.push("zsh".to_string()),
     }
-    for program in ["/bin/sh", "dash"] {
+    let sh = if cfg!(windows) { "sh" } else { "/bin/sh" };
+    for program in [sh, "dash"] {
         if version(program).is_some() {
             found.push(Shell {
                 label: program.to_string(),
@@ -830,6 +837,10 @@ struct Tally {
 fn layer_one_values_match_the_shells_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
     let (shells, skipped) = shells();
+    assert!(
+        skipped.is_empty(),
+        "required differential shells unavailable: {skipped:?}; install bash, zsh and dash and put their executables on PATH"
+    );
     assert!(
         shells.iter().any(|s| s.dialect == Dialect::Bash),
         "no bash to compare against"

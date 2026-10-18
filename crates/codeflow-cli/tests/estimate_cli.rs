@@ -8,6 +8,7 @@ use std::process::{Command, Output};
 mod drain_pipe;
 #[path = "support/own_repository.rs"]
 mod own_repository;
+#[cfg(unix)]
 use drain_pipe::drain_pipe;
 
 const DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";

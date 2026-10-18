@@ -3136,14 +3136,35 @@ fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
 }
 
 fn integrity_disk_case(path: &Path) -> Result<PathBuf, String> {
+    integrity_disk_case_with(path, |real| {
+        if let Some(metadata) =
+            crate::absence::existing_metadata(real).map_err(|error| error.to_string())?
+        {
+            super::edit_guard::normalize_case(real, &metadata)?;
+        }
+        Ok(())
+    })
+}
+
+fn integrity_disk_case_with(
+    path: &Path,
+    mut inspect: impl FnMut(&mut PathBuf) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     let mut real = PathBuf::new();
     for component in path.components() {
         real.push(component);
-        if let Some(metadata) =
-            crate::absence::existing_metadata(&real).map_err(|error| error.to_string())?
-        {
-            super::edit_guard::normalize_case(&mut real, &metadata)?;
+        // A prefix is not an entry: `\\?\C:` is incomplete until its root
+        // separator arrives. Canonicalizing a plain `C:` can also read the
+        // drive's working directory instead of the path we are walking.
+        // Inspect names only, as edit_guard::normalized does. Errors on
+        // actual entries still propagate, including unreadable ancestors.
+        if matches!(
+            component,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir
+        ) {
+            continue;
         }
+        inspect(&mut real)?;
     }
     Ok(real)
 }
@@ -11434,6 +11455,84 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disk_case_inspects_names_without_opening_structural_roots() {
+        use std::path::{Component, Path};
+        // Model a platform that cannot open a structural prefix as a file.
+        // Windows canonical temp paths start with a verbatim drive prefix;
+        // it is not a complete directory until the root separator is added.
+        let path = Path::new("/repo/src/notes.txt");
+        let mut inspected = Vec::new();
+        let result = super::integrity_disk_case_with(path, |part| {
+            if !matches!(part.components().next_back(), Some(Component::Normal(_))) {
+                return Err("structural path is not a directory entry".to_string());
+            }
+            inspected.push(part.clone());
+            Ok(())
+        });
+        assert_eq!(result.unwrap(), path);
+        assert_eq!(inspected.len(), 3);
+    }
+
+    #[test]
+    fn disk_case_keeps_unreadable_enforcement_names_as_errors() {
+        let error = super::integrity_disk_case_with(
+            std::path::Path::new("/repo/.codeflow/policy.json"),
+            |part| {
+                if part.ends_with(".codeflow") {
+                    Err("cannot read enforcement directory".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "cannot read enforcement directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disk_case_resolves_verbatim_temp_paths_and_keeps_patterns() {
+        let temp = tempfile::tempdir().unwrap();
+        let verbatim = temp.path().canonicalize().unwrap();
+        let plain = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir(verbatim.join("src")).unwrap();
+        for suffix in ["", "src", "src/*.py", "${arr[*]}", "missing/notes.txt"] {
+            assert_eq!(
+                super::integrity_disk_case(&verbatim.join(suffix)).unwrap(),
+                plain.join(suffix),
+                "{suffix}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disk_case_preserves_windows_short_name_resolution() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("Long directory name for path case");
+        std::fs::create_dir(&directory).unwrap();
+        let long: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: the input is terminated; a null output queries the size.
+        let size = unsafe { GetShortPathNameW(long.as_ptr(), std::ptr::null_mut(), 0) };
+        assert!(size > 0, "{}", std::io::Error::last_os_error());
+        let mut short = vec![0; size as usize];
+        // SAFETY: the output has the exact size returned by the first call.
+        let written = unsafe { GetShortPathNameW(long.as_ptr(), short.as_mut_ptr(), size) };
+        assert!(written > 0 && written < size);
+        short.truncate(written as usize);
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&short));
+        // Volumes with short names disabled return the long spelling. Both
+        // spellings must resolve; an enabled 8.3 alias exercises that path.
+        assert_eq!(
+            super::integrity_disk_case(&short).unwrap(),
+            crate::portable_path::canonicalize(&directory).unwrap()
+        );
+    }
+
     use super::owned_fixture::{evaluate, evaluate_report};
     // R22-GUARD-TESTS-BEGIN
     #[cfg(unix)]
@@ -18133,12 +18232,7 @@ mod sed_grammar_tests {
     /// A repository with enforcement files and ordinary notes.
     fn project() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        // The disk case of a verbatim `\\?\` path cannot be read on Windows.
-        let root = if cfg!(windows) {
-            dir.path().to_path_buf()
-        } else {
-            dir.path().canonicalize().unwrap()
-        };
+        let root = dir.path().canonicalize().unwrap();
         git2::Repository::init(&root).unwrap();
         std::fs::create_dir_all(root.join(".codeflow")).unwrap();
         std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
