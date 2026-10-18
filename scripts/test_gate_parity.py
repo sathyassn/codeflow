@@ -55,6 +55,12 @@ def doctest_name() -> str:
                 if full_command(CONFIG, t["name"]) == parity.DOCTESTS)
 
 
+def gate_event_condition(workflow: str) -> str:
+    gate = parity.workflow_jobs(workflow)["gates"]
+    condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M).group(1)
+    return parity.GATES_IF.match(condition).group(1)
+
+
 class GateParityControls(unittest.TestCase):
     def assert_parity(self, cfg: dict) -> None:
         self.assertEqual(parity.local_rust_commands(cfg), CI)
@@ -466,8 +472,8 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), "
-                  "github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n")
+    VERDICT_IF = (f"    if: always() && ({gate_event_condition(WORKFLOW)})\n"
+                  "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
     def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
@@ -655,6 +661,31 @@ class VerdictOutcomeControls(unittest.TestCase):
                 self.assertEqual(self.verdict(*results, "success", "123"), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", ""), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "failure", "123"), 1)
+
+
+class HostedEventParityControls(unittest.TestCase):
+    """Ready integration pull requests must keep both verdict contracts intact."""
+
+    READY = ("github.event_name == 'pull_request' && "
+             "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/') && "
+             "!github.event.pull_request.draft) || github.event_name == 'push'")
+
+    def ready_workflow(self):
+        return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
+
+    def test_ready_integration_conditions_keep_both_verdict_contracts(self):
+        workflow = self.ready_workflow()
+        self.assertEqual(parity.gate_part_problems(CONFIG, workflow), [])
+        self.assertEqual(parity.windows_verdict_problems(workflow), [])
+
+    def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
+        workflow = self.ready_workflow()
+        job = parity.workflow_jobs(workflow)["windows-verdict"]
+        narrowed = job.replace(self.READY, "github.event_name == 'push'")
+        self.assertNotEqual(job, narrowed)
+        problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
+        self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
 
 
 class CoverageShardControls(unittest.TestCase):
