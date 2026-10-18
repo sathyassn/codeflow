@@ -958,6 +958,36 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
 }
 
 #[test]
+fn installed_hooks_distinguish_code_fragments_from_named_paths() {
+    let (project, _home) = startup_project();
+    let mut wrong = Vec::new();
+    for harness in ["claude", "codex", "grok"] {
+        for command in [
+            r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+            r#"python3 -c 'print("/.")'"#,
+        ] {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if outputs.iter().any(|out| !out.status.success()) {
+                wrong.push(format!(
+                    "{harness}: refused runtime control {command}: {outputs:?}"
+                ));
+            }
+        }
+        for (command, rule) in [
+            ("python3 -c \"open('.zshrc', 'a').write('x')\"", RULE),
+            ("echo x >> rc", RULE),
+            ("python3 tool.py .claude/*(D)", "git.hook_integrity"),
+        ] {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, rule) {
+                wrong.push(format!("{harness}: should refuse {command}: {outputs:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn installed_edit_hooks_refuse_shell_startup_files() {
     let (project, home) = startup_project();
     let zshrc = home.join(".zshrc");

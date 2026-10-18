@@ -578,26 +578,71 @@ mod tests {
         );
     }
 
-    /// An incomplete ordinary glob refuses with the actual entry budget.
+    /// Large ordinary globs allow only with a safe enclosing directory;
+    /// an escape or a held checkout still reports the entry budget.
     #[test]
-    fn interpreter_incomplete_glob_reports_limit() {
+    fn interpreter_large_glob_requires_a_safe_prefix() {
         let repo = repo();
         let many = repo.root.join("many");
         std::fs::create_dir(&many).unwrap();
         for n in 0..5000 {
             std::fs::write(many.join(format!("f{n}")), "").unwrap();
         }
-        let findings = judge_in(
+        let mut wrong = Vec::new();
+        let mut check = |command: &str, refuse: bool| {
+            let findings = judge_in(&repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            let correct = if refuse {
+                integrity_refusal(&findings)
+                    .is_some_and(|v| v.message.contains("more than 4096 entries"))
+            } else {
+                findings.is_empty()
+            };
+            if !correct {
+                wrong.push(format!("{command}: refuse={refuse}: {findings:?}"));
+            }
+        };
+        check("python3 tool.py many/*", false);
+        check("python3 tool.py many/*/../../.claude/settings.json", true);
+        check("python3 tool.py many/*/../.claude/x", true);
+        let moved = many.join("linked");
+        std::fs::rename(&repo.linked, &moved).unwrap();
+        std::fs::write(
+            repo.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", moved.join(".git").display()),
+        )
+        .unwrap();
+        check("python3 tool.py many/*", true);
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Code string fragments do not acquire recursive checkout-operand
+    /// semantics. Shell arguments after the code still take those checks.
+    #[test]
+    fn interpreter_code_fragments_are_not_checkout_operands() {
+        let repo = repo();
+        assert_allowed(
+            &repo,
+            &[
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+                r#"python3 -c 'print("/.")'"#,
+            ],
+        );
+        assert_refused(
+            &repo,
+            &repo.linked,
+            &repo.linked,
+            &[
+                "python3 -c 'pass' ../..",
+                "python3 tool.py ../..",
+                "python3 tool.py .git",
+                "python3 tool.py .claude/*(D)",
+            ],
+        );
+        assert_refused(
             &repo,
             &repo.root,
             &repo.root,
-            "python3 tool.py many/*",
-            PolicyLevel::Block,
-        );
-        assert!(
-            integrity_refusal(&findings)
-                .is_some_and(|refusal| refusal.message.contains("more than 4096 entries")),
-            "{findings:?}"
+            &["python3 -c 'open(\"@LINKED@\", \"w\")'"],
         );
     }
 
@@ -664,7 +709,7 @@ mod tests {
     fn interpreter_hidden_worktree_glob_refuses() {
         let repo = repo();
         let word = format!("{}/.*", repo.linked.display());
-        let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root).unwrap();
+        let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root, &repo.root).unwrap();
         assert!(paths.contains(&repo.linked.join(".git")), "{paths:?}");
         assert!(paths.contains(&repo.linked.join(".claude")), "{paths:?}");
         assert_refused(

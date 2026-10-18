@@ -246,7 +246,7 @@ impl Facts<'_> {
             .find(|(word, pattern)| {
                 // A glob the guard cannot list is left to the enforcement
                 // reading of the line, which refuses it near protected paths.
-                literal_paths(word, *pattern, from, self.home)
+                literal_paths(word, *pattern, from, self.payload_cwd, self.home)
                     .is_ok_and(|paths| paths.iter().any(|path| self.authority(path)))
             })
             .map(|(word, _)| git_guard::shown_word(&word));
@@ -267,6 +267,7 @@ fn literal_paths(
     word: &str,
     pattern: bool,
     dir: &Path,
+    payload_cwd: &Path,
     home: Option<&Path>,
 ) -> Result<Vec<PathBuf>, &'static str> {
     // Quote removal happens in the argv parser. Characters left in the
@@ -280,7 +281,7 @@ fn literal_paths(
             continue;
         }
         if git_guard::has_glob(&reading) {
-            paths.extend(git_guard::glob_paths(&reading, dir)?);
+            paths.extend(git_guard::glob_paths(&reading, dir, payload_cwd)?);
         } else {
             paths.push(literal_target(&reading, dir, home));
         }
@@ -898,7 +899,7 @@ fn value_reach_at(
         || (value.starts_with('~') && !value.starts_with("~/") && value != "~");
     let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
     match (unresolved, dir.or(absolute.then_some(facts.payload_cwd))) {
-        (false, Some(dir)) => literal_reach(value, pattern, dir, facts),
+        (false, Some(dir)) => literal_reach(value, pattern, dir, code, facts),
         // A code literal whose directory is unknown is judged by its
         // trailing components, as an argument is; an unresolved expression
         // inside code stays exempt (TSK-302 review round 3, R3-2).
@@ -911,8 +912,14 @@ fn value_reach_at(
 /// A literal argument, its braces and globs expanded: authority metadata
 /// first, then an enforcement path. Only candidate paths take the writer's
 /// full checks, once each, without reinterpreting the original word.
-fn literal_reach(value: &str, pattern: bool, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach> {
-    let paths = match literal_paths(value, pattern, dir, facts.home) {
+fn literal_reach(
+    value: &str,
+    pattern: bool,
+    dir: &Path,
+    code: bool,
+    facts: &mut Facts<'_>,
+) -> Option<Reach> {
+    let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, facts.home) {
         Ok(paths) => paths,
         Err(why) => {
             let message = format!("cannot inspect interpreter argument `{value}`: {why}");
@@ -957,8 +964,10 @@ fn literal_reach(value: &str, pattern: bool, dir: &Path, facts: &mut Facts<'_>) 
                 .as_ref()
                 .is_some_and(|names| names.may_reach(path))
     }) {
-        let reached =
-            git_guard::interpreter_path_integrity(path, dir, facts.payload_cwd).or_else(|| {
+        // A string fragment such as "/." is not an argv operand reaching
+        // other checkouts. Exact enforcement paths still take file checks.
+        let reached = git_guard::interpreter_path_integrity(path, dir, facts.payload_cwd, code)
+            .or_else(|| {
                 // The explicit home can differ from the guard process's home.
                 // Keep its native-edit protections for candidates beneath it.
                 let Some(text) = path.to_str() else {

@@ -8605,10 +8605,76 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     }
     let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
     let err = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+    if out.status.code() != Some(0) {
+        wrong.push(format!("should allow the contained ordinary glob: {err}"));
+    }
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": "python3 tool.py many/*"}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("GIT_CONFIG_GLOBAL", many.join("f0"))
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
         wrong.push(format!(
-            "should refuse the incomplete glob with its entry limit: {err}"
+            "should refuse a glob holding configured authority: {out:?}"
         ));
+    }
+    for command in [
+        "python3 tool.py many/*/../../.claude/settings.json",
+        "python3 tool.py many/*/../.claude/x",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+            wrong.push(format!("should refuse an escaping glob: {command}: {err}"));
+        }
+    }
+    for (command, refuse) in [
+        ("tee many/*/../../.cla[u]de/settings.json < x", true),
+        ("tee many/*/../.claude/x < x", true),
+        ("rm many/*.o", false),
+        ("printf '%s\\n' many/* | xargs rm", false),
+    ] {
+        let out = guard_run(command, &root);
+        let err = String::from_utf8_lossy(&out.stderr);
+        let correct = if refuse {
+            out.status.code() == Some(2) && err.contains("git.hook_integrity")
+        } else {
+            out.status.code() == Some(0)
+        };
+        if !correct {
+            wrong.push(format!("{command}: refuse={refuse}: {err}"));
+        }
+    }
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/many", "many/linked"],
+    );
+    for protected in ["linked", ".claude"] {
+        if protected == ".claude" {
+            git(&root, &["worktree", "remove", "many/linked"]);
+            std::fs::create_dir(many.join(protected)).unwrap();
+        }
+        for (hook, command) in [
+            ("exec-guard", "python3 tool.py many/*"),
+            ("git-guard", "tee many/* < x"),
+        ] {
+            let out = if hook == "exec-guard" {
+                exec_guard_contract_3(&root, command)
+            } else {
+                guard_run(command, &root)
+            };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+                wrong.push(format!(
+                    "should refuse glob holding {protected}: {command}: {err}"
+                ));
+            }
+        }
     }
     let other = tmp.path().join("other");
     std::fs::create_dir(&other).unwrap();

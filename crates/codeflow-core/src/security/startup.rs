@@ -443,7 +443,7 @@ impl Class {
 
     /// Whether `name` is the last component of a class entry: a class file
     /// name anywhere, or a class directory such as `fish`.
-    fn knows_name(&self, name: &str) -> bool {
+    pub(crate) fn knows_name(&self, name: &str) -> bool {
         let name = name.to_lowercase();
         self.entries.iter().any(|entry| match entry {
             Entry::At { readings, .. } => readings
@@ -1034,7 +1034,9 @@ impl Line<'_> {
                 }
             }
         }
-        let Some(paths) = startup_glob_paths(&pattern.base, Path::new(&pattern.rest), dots) else {
+        let Some(paths) =
+            startup_glob_paths(&pattern.base, Path::new(&pattern.rest), dots, self.class)
+        else {
             return Judged::Unresolved(pattern.shown());
         };
         let mut placement = None;
@@ -1083,7 +1085,8 @@ impl Line<'_> {
             .iter()
             .filter_map(|dir| self.expand(word, dir).and_then(|_| self.pattern(word, dir)))
             .any(|pattern| {
-                startup_glob_paths(&pattern.base, Path::new(&pattern.rest), false).is_none()
+                startup_glob_paths(&pattern.base, Path::new(&pattern.rest), false, self.class)
+                    .is_none()
                     && !self.glob_ends_plain(&pattern.rest)
             })
         {

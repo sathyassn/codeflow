@@ -535,9 +535,7 @@ pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
 /// shell sentence named remote-tracking metadata for it).
 pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuration file";
 
-// File edits cannot establish which config keys are safe. The Git command
-// checker still permits ordinary `git config --global user.name ...` updates.
-pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
+fn global_git_config_paths(root: &Path) -> Vec<PathBuf> {
     // Every home a shell of this user may read, as the startup class
     // reads them: `HOME`, and `USERPROFILE` where it names another
     // directory (TSK-242 review round 14).
@@ -558,6 +556,26 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
             paths.push(root.join(path));
         }
     }
+    paths
+}
+
+/// A glob fallback must not hide a configured authority file beneath its
+/// enclosing directory, even when that file has an ordinary name.
+pub(crate) fn holds_global_git_config(target: &Path, root: &Path) -> bool {
+    let paths = global_git_config_paths(root);
+    [false, true].into_iter().any(|resolve| {
+        normalized(target, resolve).map_or(true, |target| {
+            paths.iter().any(|path| {
+                normalized(path, resolve).map_or(true, |path| path.starts_with(&target))
+            })
+        })
+    })
+}
+
+// File edits cannot establish which config keys are safe. The Git command
+// checker still permits ordinary `git config --global user.name ...` updates.
+pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
+    let paths = global_git_config_paths(root);
     // git reads its system file under the prefix it was built with
     // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
     // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
@@ -826,10 +844,14 @@ fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, 
     })
 }
 
-/// An interpreter commonly receives its own checkout as a
-/// project location. This exemption is only for checkout-root reach; exact
-/// enforcement files and directories still take their normal checks.
-pub(crate) fn is_own_checkout_root(target: &Path, root: &Path) -> Result<bool, String> {
+/// An argv operand can name its current checkout as a project location.
+/// A code string can also name an ancestor as a fragment, such as "/." in
+/// a runtime concatenation. Neither exemption applies to enforcement files.
+pub(crate) fn is_own_checkout_location(
+    target: &Path,
+    root: &Path,
+    code_literal: bool,
+) -> Result<bool, String> {
     let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(false);
     };
@@ -837,7 +859,7 @@ pub(crate) fn is_own_checkout_root(target: &Path, root: &Path) -> Result<bool, S
         return Ok(false);
     };
     let target = normalized(target, true).map_err(|error| error.to_string())?;
-    Ok(target == own[1])
+    Ok(target == own[1] || (code_literal && own[1].starts_with(target)))
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
