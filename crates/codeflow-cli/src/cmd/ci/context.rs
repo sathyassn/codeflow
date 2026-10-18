@@ -152,8 +152,9 @@ pub(in crate::cmd) enum Declared {
 
 /// Judge a branch's declared target the same way for `codeflow ci` and the
 /// pre-push hook. A protected branch counts. An epic line counts only when
-/// trusted records bind it to the branch's epic: those on the protected
-/// branch, or those at the line's own remote-tracking ref. A local branch
+/// trusted records bind it to the branch's epic or a standalone task's
+/// declared target: those on the protected branch, or those at the line's
+/// own remote-tracking ref. A local branch
 /// never binds anything, because the change's author can create one at any
 /// commit; the remote is trusted only as far as the host protects
 /// `integration/*` and every name in `protected_branches`.

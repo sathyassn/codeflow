@@ -9088,3 +9088,89 @@ fn protected_advertised_target_cannot_hide_a_criterion_from_pre_push() {
         output(&out)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn standalone_task_push_uses_remote_bound_line_through_installed_hook() {
+    use line_adoption_fixture::{output, passes, Line, LINE};
+    let (f, tip) = Line::standalone_on_remote_line();
+    let out = installed_standalone_push(&f);
+    let text = output(&out);
+    assert!(
+        text.contains(&format!("uses advertised target '{LINE}'")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("codeflow ci --base {tip} --head")),
+        "{text}"
+    );
+    passes(&out);
+    assert_eq!(
+        f.git(&["rev-parse", "HEAD"]),
+        f.git(&["rev-parse", "refs/remotes/origin/task/TSK-002-repair"])
+    );
+}
+
+#[cfg(unix)]
+fn installed_standalone_push(f: &line_adoption_fixture::Line) -> Output {
+    use std::os::unix::fs::PermissionsExt;
+    // Install the shipped shim verbatim and run Git, including its ref payload.
+    let hook = f.root().join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        include_str!("../../../assets/base/git-hooks/pre-push"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.command("git")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .args(["push", "origin", "task/TSK-002-repair"])
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hook() {
+    use line_adoption_fixture::{output, Line, LINE};
+    for case in ["local_only", "wrong_line", "other_epic"] {
+        let (f, _) = Line::standalone_on_remote_line();
+        let path = "project-management/tasks/TSK-002.md";
+        let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+        match case {
+            "local_only" => {
+                f.git(&["push", "origin", &format!(":{LINE}")]);
+            }
+            "wrong_line" => {
+                let decoy = "integration/EPC-001-decoy";
+                f.git(&["push", "origin", &format!("{LINE}:{decoy}")]);
+                f.write(path, &record.replace(LINE, decoy));
+                f.commit("docs: declare decoy line");
+            }
+            _ => {
+                f.write(
+                    path,
+                    &record.replace("epic_id: null", "epic_id: EPC-002").replace(
+                        "standalone_reason: Bounded repair",
+                        "standalone_reason: null",
+                    ),
+                );
+                f.commit("docs: assign another epic");
+            }
+        }
+        let out = installed_standalone_push(&f);
+        let text = output(&out);
+        assert!(!out.status.success(), "{case}: {text}");
+        assert!(text.contains("is not a bound epic line"), "{case}: {text}");
+        assert!(
+            text.contains("uses advertised target 'main'"),
+            "{case}: {text}"
+        );
+        assert!(text.contains("work.criteria_frozen"), "{case}: {text}");
+        assert!(
+            f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
+                .is_empty(),
+            "refused push transferred the branch"
+        );
+    }
+}
