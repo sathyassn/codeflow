@@ -295,9 +295,17 @@ mod tests {
         command: &str,
         integrity: PolicyLevel,
     ) -> Vec<Violation> {
+        // These placeholders occur unquoted, inside shell quotes and inside
+        // code literals. Use slash paths so shell escape removal cannot
+        // change their target. The Windows matrix below quotes native forms.
+        let shell_path = |path: &Path| {
+            crate::portable_path::slashed(&crate::portable_path::without_verbatim(
+                path.to_path_buf(),
+            ))
+        };
         let command = command
-            .replace("@ROOT@", &repo.root.display().to_string())
-            .replace("@LINKED@", &repo.linked.display().to_string());
+            .replace("@ROOT@", &shell_path(&repo.root))
+            .replace("@LINKED@", &shell_path(&repo.linked));
         evaluate(
             &command,
             &SecuritySection::default(),
@@ -440,7 +448,7 @@ mod tests {
             &repo.root,
             &repo.root,
             &[&format!(
-                "env -C \"{}\" python3 tool.py away/w",
+                "env -C '{}' python3 tool.py away/w",
                 other.root.display()
             )],
         );
@@ -502,6 +510,29 @@ mod tests {
         repo.home = repo.root.parent().unwrap().to_path_buf();
         assert_allowed(&repo, &[r#"python3 -c 'print("~")'"#]);
         assert_refused(&repo, &repo.root, &repo.root, &["python3 tool.py ~"]);
+    }
+
+    #[test]
+    fn escaped_native_code_paths_keep_checkout_identity() {
+        let repo = repo();
+        for (path, refuse) in [
+            (repo.linked.clone(), true),
+            (repo.root.join("src/app.py"), false),
+        ] {
+            for literal in [
+                serde_json::to_string(path.to_str().unwrap()).unwrap(),
+                format!("\"{}\"", path.display()),
+            ] {
+                let command = format!("python3 -c 'open({literal}, \"w\")'");
+                let findings =
+                    judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
+                assert_eq!(
+                    integrity_refusal(&findings).is_some(),
+                    refuse,
+                    "{command}: {findings:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -847,7 +878,11 @@ mod tests {
         let mut mismatches = Vec::new();
         for root in [&plain, &verbatim] {
             for spelling in &spellings {
-                let ordinary = format!(r#"W={spelling}; python3 tool.py "$W/src/app.py""#);
+                // Preserve the native spelling through POSIX double quotes.
+                // In particular, `\\` must reach the path reader as two
+                // separators in a verbatim namespace prefix.
+                let quoted = spelling.replace('\\', "\\\\");
+                let ordinary = format!(r#"W="{quoted}"; python3 tool.py "$W/src/app.py""#);
                 let findings = judge_in(&repo, root, root, &ordinary, PolicyLevel::Block);
                 let result = format!("cwd={root:?}; {ordinary}: {findings:?}");
                 results.push(result.clone());
@@ -860,7 +895,7 @@ mod tests {
                     ".worktrees/w/.claude/*",
                     ".worktrees/w/.*",
                 ] {
-                    let command = format!(r#"python3 tool.py "{spelling}/"{suffix}"#);
+                    let command = format!(r#"python3 tool.py "{quoted}/"{suffix}"#);
                     let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
                     let result = format!("cwd={root:?}; {command}: {findings:?}");
                     results.push(result.clone());

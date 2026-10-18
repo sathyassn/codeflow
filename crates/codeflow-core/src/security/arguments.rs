@@ -744,30 +744,16 @@ fn code_literal_words(code: &str) -> Vec<String> {
             continue;
         }
         let mut literal = String::new();
-        let mut spelled = String::new();
         let mut closed = false;
         while let Some(next) = chars.next() {
             if next == '\\' {
-                spelled.push(next);
-                if let Some(escaped) = chars.next() {
-                    spelled.push(escaped);
-                    literal.push(escaped);
-                }
+                literal.extend(chars.next());
             } else if next == ch {
                 closed = true;
                 break;
             } else {
-                spelled.push(next);
                 literal.push(next);
             }
-        }
-        // Native Windows path literals also use backslashes as separators.
-        // Keep that reading before escape removal can erase their identity.
-        if cfg!(windows) && Path::new(&spelled).is_absolute() {
-            let path = crate::portable_path::without_verbatim(PathBuf::from(&spelled));
-            words.extend(outward::literal_words(&crate::portable_path::slashed(
-                &path,
-            )));
         }
         words.extend(outward::literal_words(&literal));
         if !closed {
