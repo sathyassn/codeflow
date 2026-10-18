@@ -1,0 +1,11 @@
+id = "TSK-383"
+uid = "f9ef6a76-5b0f-4555-a395-fb145e0bff7f"
+kind = "TSK"
+title = "Remote protect changes only the rules it owns, and doctor reads the live rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:14Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
