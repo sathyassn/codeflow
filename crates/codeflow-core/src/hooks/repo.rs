@@ -115,7 +115,7 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
             let directory = canonical(repo.path(), "discovered git directory")?;
             let repo = Repository::open(crate::portable_path::without_verbatim(directory))
                 .map_err(|error| format!("cannot open discovered git directory: {error}"))?;
-            let discovered = check_discovery_boundaries(start, &repo)?;
+            let (discovered, repo) = check_discovery_boundaries(start, repo)?;
             if repo.is_worktree() {
                 // Git discovers the checkout at its .git pointer, not at the
                 // location claimed by the administrative registration. Read
@@ -270,13 +270,18 @@ pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
         "worktree registration",
     )?;
     let marker = root.join(".git");
-    if canonical(&registered, "registered checkout marker")?
-        != canonical(&marker, "checkout marker")?
-    {
+    let registered_marker = canonical(&registered, "registered checkout marker")?;
+    if registered_marker != canonical(&marker, "checkout marker")? {
         return Err("worktree registration names a different checkout marker".into());
     }
-    std::fs::metadata(&marker)
+    let metadata = std::fs::metadata(&marker)
         .map_err(|error| format!("cannot inspect registered checkout marker: {error}"))?;
+    // An alias named .git must not move the directory containing a gitfile.
+    // Directory markers may legitimately link straight to the admin directory;
+    // their identity is checked by opening that directory below.
+    if metadata.is_file() && registered_marker.parent() != Some(root.as_path()) {
+        return Err("worktree registration disagrees with its marker's directory".into());
+    }
     let checkout = open_checkout(&root)
         .map_err(|error| format!("cannot open registered checkout: {error}"))?;
     if !checkout.is_worktree()
@@ -307,9 +312,13 @@ fn open_checkout(root: &Path) -> Result<Repository, String> {
 }
 
 /// libgit2 may ignore a broken inner marker and successfully discover an outer
-/// repository. Each marker below the reported boundary must either resolve to
-/// that repository (a gitfile can redirect outside this ancestry) or be empty.
-fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<PathBuf, String> {
+/// repository. Each marker below the reported boundary must resolve to that
+/// repository, identify a nearer linked checkout, or be empty. `open` then
+/// validates the selected checkout's registration and common directory.
+fn check_discovery_boundaries(
+    start: &Path,
+    repo: Repository,
+) -> Result<(PathBuf, Repository), String> {
     let start = start
         .canonicalize()
         .map_err(|error| format!("cannot resolve repository search directory: {error}"))?;
@@ -329,7 +338,7 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<PathBuf
         if boundary.as_deref() == Some(ancestor)
             || (!repo.is_worktree() && ancestor == git_boundary)
         {
-            return Ok(ancestor.to_path_buf());
+            return Ok((ancestor.to_path_buf(), repo));
         }
         let marker = ancestor.join(".git");
         if crate::absence::proven_absent(&marker)
@@ -346,7 +355,13 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<PathBuf
                     )
                 })?;
                 if local_directory == git_boundary {
-                    return Ok(ancestor.to_path_buf());
+                    return Ok((ancestor.to_path_buf(), repo));
+                }
+                // Windows discovery can skip a directory symlink to linked
+                // metadata. Select that nearer checkout and let `open` check
+                // both pointers, rather than treating the outer result as final.
+                if local.is_worktree() {
+                    return Ok((ancestor.to_path_buf(), local));
                 }
                 return Err(format!(
                     "repository discovery skipped another repository at {}",
@@ -502,6 +517,28 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "a").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-m", "chore: init"]);
+    }
+
+    #[test]
+    fn discovery_keeps_the_nearest_registered_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let linked = dir.path().join("linked");
+        git(
+            dir.path(),
+            &["worktree", "add", "-b", "task/linked", "linked"],
+        );
+        // libgit2 can discover the outer repository when a Windows directory
+        // symlink names linked metadata. The boundary walk must retain the
+        // nearer checkout; registration validation still belongs to `open`.
+        let outer = Repository::open(dir.path()).unwrap();
+        let (root, repository) = super::check_discovery_boundaries(&linked, outer).unwrap();
+        assert_eq!(root, linked.canonicalize().unwrap());
+        assert!(repository.is_worktree());
+        assert_eq!(
+            super::checked_registration(repository.path()).unwrap(),
+            root
+        );
     }
 
     #[test]

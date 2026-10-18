@@ -188,6 +188,7 @@ fn checkout_identity_main_checks_each_registration() {
         "relative",
         "missing",
         "symlink-real",
+        "symlink-marker-real",
         "symlink-other",
         "symlink-local-other",
     ] {
@@ -196,13 +197,17 @@ fn checkout_identity_main_checks_each_registration() {
         let text = match mode {
             "relative" => "../../../../other/.git".to_string(),
             "missing" => "../../../../missing/.git".to_string(),
-            "symlink-real" | "symlink-other" | "symlink-local-other" => {
-                let alias = if mode == "symlink-local-other" {
+            "symlink-real" | "symlink-marker-real" | "symlink-other" | "symlink-local-other" => {
+                let alias = if mode == "symlink-marker-real" {
+                    let decoy = f.temp.path().join("decoy");
+                    std::fs::create_dir(&decoy).unwrap();
+                    decoy.join(".git")
+                } else if mode == "symlink-local-other" {
                     f.linked.join("alias")
                 } else {
                     f.temp.path().join("alias")
                 };
-                let target = if mode == "symlink-real" {
+                let target = if matches!(mode, "symlink-real" | "symlink-marker-real") {
                     &f.linked
                 } else {
                     &f.other
