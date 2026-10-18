@@ -154,6 +154,7 @@ fn help_explains_base_selection_and_acceptance_mode() {
     );
     for phrase in [
         "including protected names",
+        "standalone task's declared target",
         "protected_branches",
         "local remote-tracking ref",
         "update-ref of refs/remotes/*",
@@ -926,4 +927,119 @@ fn protected_local_target_cannot_hide_a_criterion_without_a_remote_ref() {
         text.contains("local branch 'master' differs from 'origin/master'"),
         "{text}"
     );
+}
+
+#[test]
+fn standalone_task_uses_remote_bound_line_in_ci_and_work_start() {
+    let (f, tip) = Line::standalone_on_remote_line();
+    let start = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["work", "start", "TSK-002"])
+        .output()
+        .unwrap();
+    passes(&start);
+    assert!(output(&start).contains(LINE), "{}", output(&start));
+    let out = ci(&f, &[], None);
+    let text = output(&out);
+    assert!(text.contains(&format!("range {}..", &tip[..8])), "{text}");
+    assert!(
+        text.contains(&format!(
+            "acceptance target '{LINE}' (branch declared target)"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("warning: branch declared target"), "{text}");
+    passes(&out);
+}
+
+#[test]
+fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
+    for case in [
+        "local_only",
+        "wrong_line",
+        "missing_epic",
+        "forged_epic",
+        "other_epic",
+        "cancelled_epic",
+    ] {
+        let (f, tip) = Line::standalone_on_remote_line();
+        let path = "project-management/tasks/TSK-002.md";
+        let record = std::fs::read_to_string(f.root().join(path)).unwrap();
+        let target = if case == "wrong_line" {
+            "integration/EPC-001-decoy"
+        } else {
+            LINE
+        };
+        let expected = match case {
+            "local_only" => {
+                f.git(&["update-ref", "-d", &format!("refs/remotes/origin/{LINE}")]);
+                "local-only line never counts"
+            }
+            "wrong_line" => {
+                f.git(&["update-ref", &format!("refs/remotes/origin/{target}"), &tip]);
+                f.write(path, &record.replace(LINE, target));
+                f.commit("docs: declare decoy target");
+                "is not the target of any task of EPC-001"
+            }
+            "other_epic" => {
+                f.write(
+                    path,
+                    &record.replace("epic_id: null", "epic_id: EPC-002").replace(
+                        "standalone_reason: Bounded repair",
+                        "standalone_reason: null",
+                    ),
+                );
+                f.commit("docs: assign another epic");
+                "which is not the epic of branch"
+            }
+            _ => {
+                f.git(&["switch", "-qc", "fixture/anchor", &tip]);
+                if case == "cancelled_epic" {
+                    let epic = std::fs::read_to_string(
+                        f.root().join(super::line_adoption::fixture::EPIC_PATH),
+                    )
+                    .unwrap();
+                    f.write(
+                        super::line_adoption::fixture::EPIC_PATH,
+                        &epic.replace("status: planning", "status: cancelled"),
+                    );
+                } else {
+                    f.git(&["rm", super::line_adoption::fixture::EPIC_PATH]);
+                }
+                let anchor = f.commit("docs: change remote records");
+                f.git(&[
+                    "update-ref",
+                    &format!("refs/remotes/origin/{LINE}"),
+                    &anchor,
+                ]);
+                f.git(&["switch", "-q", "task/TSK-002-repair"]);
+                if case == "missing_epic" {
+                    f.git(&["rm", super::line_adoption::fixture::EPIC_PATH]);
+                    f.commit("docs: remove local epic");
+                }
+                // In forged_epic the head still carries an epic and binding task:
+                // the author's own records cannot substitute for a trusted anchor.
+                if case == "cancelled_epic" {
+                    "which is cancelled"
+                } else {
+                    "has no epic record"
+                }
+            }
+        };
+        let text = output(&ci(&f, &[], None));
+        assert!(text.contains(expected), "{case}: {text}");
+        assert!(
+            text.contains("base falls back to the policy protected branches"),
+            "{case}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("acceptance target '{target}'")),
+            "{case}: {text}"
+        );
+        let main = f.git(&["rev-parse", "origin/main"]);
+        assert!(
+            text.contains(&format!("range {}..", &main[..8])),
+            "{case}: {text}"
+        );
+    }
 }

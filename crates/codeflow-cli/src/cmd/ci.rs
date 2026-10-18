@@ -66,7 +66,8 @@ pub struct CiArgs {
     /// a plan/EPC-NNN branch's epic line, or the default branch for integration/*.
     /// Only protected branches and bound epic lines may supply a declared target: records on a
     /// protected branch or at the line's `origin/<line>` ref must bind the line to the branch's
-    /// epic. Declared bases use only `origin/<name>`; local branches, including protected names,
+    /// epic or a standalone task's declared target. Declared bases use only `origin/<name>`;
+    /// local branches, including protected names,
     /// never supply them. Missing remote refs warn and keep the protected fallback.
     /// Pre-push uses a second protected name only when its advertised tip equals the
     /// destination default's tip.
