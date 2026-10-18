@@ -1,0 +1,11 @@
+id = "TSK-381"
+uid = "32e05ac2-10fa-4515-a962-03f7888a8514"
+kind = "TSK"
+title = "A pinned research input stays satisfied after its producer's line is deleted"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:05Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
