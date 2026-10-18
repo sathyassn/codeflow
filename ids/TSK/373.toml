@@ -1,0 +1,11 @@
+id = "TSK-373"
+uid = "59b2f9e9-5bf5-4efb-b143-4592f1892da6"
+kind = "TSK"
+title = "Refuse protected Windows glob arguments"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T04:54:39Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
