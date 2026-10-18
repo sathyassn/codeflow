@@ -418,8 +418,6 @@ impl DirSet {
 /// `dir` joined with `target`, `.` and `..` removed by spelling, as the
 /// shell's logical `cd` reads them. An absolute target replaces `dir`.
 pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
-    let dir = crate::portable_path::without_verbatim(dir.to_path_buf());
-    let target = crate::portable_path::without_verbatim(target.to_path_buf());
     let mut out = PathBuf::new();
     for component in dir.join(target).components() {
         match component {

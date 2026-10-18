@@ -3218,9 +3218,6 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
 
 /// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
 fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
-    let cwd = crate::portable_path::without_verbatim(cwd.to_path_buf());
-    let home = home.map(|path| crate::portable_path::without_verbatim(path.to_path_buf()));
-    let home = home.as_deref();
     if token == "~" {
         if let Some(home) = home {
             return home.to_path_buf();
@@ -3228,7 +3225,7 @@ fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf
     }
     // `~+` is the directory the command runs in.
     if token == "~+" {
-        return cwd.clone();
+        return cwd.to_path_buf();
     }
     if let Some(relative) = token.strip_prefix("~+/") {
         return cwd.join(relative);
@@ -3253,7 +3250,7 @@ fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf
             }
         }
     }
-    cwd.join(crate::portable_path::without_verbatim(PathBuf::from(token)))
+    cwd.join(token)
 }
 
 // Only explicit dot-patterns at a repository root can reach these hidden

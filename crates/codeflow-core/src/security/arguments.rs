@@ -695,15 +695,12 @@ fn call_reaches(
 
 /// The file a literal argument names from `dir`.
 fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
-    let dir = crate::portable_path::without_verbatim(dir.to_path_buf());
     match (
         value.strip_prefix("~/").or((value == "~").then_some("")),
         home,
     ) {
-        (Some(rest), Some(home)) => {
-            crate::portable_path::without_verbatim(home.to_path_buf()).join(rest)
-        }
-        _ => dir.join(crate::portable_path::without_verbatim(PathBuf::from(value))),
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => dir.join(value),
     }
 }
 
@@ -744,18 +741,36 @@ fn code_literal_words(code: &str) -> Vec<String> {
             continue;
         }
         let mut literal = String::new();
+        let mut spelled = String::new();
         let mut closed = false;
         while let Some(next) = chars.next() {
             if next == '\\' {
-                literal.extend(chars.next());
+                spelled.push(next);
+                if let Some(escaped) = chars.next() {
+                    spelled.push(escaped);
+                    literal.push(escaped);
+                }
             } else if next == ch {
                 closed = true;
                 break;
             } else {
+                spelled.push(next);
                 literal.push(next);
             }
         }
-        words.extend(outward::literal_words(&literal));
+        // Prefer a decoded native path, then its spelling if escape removal
+        // erased the separators. Keep its identity before splitting words:
+        // `C:` and directory names are not separate relative operands.
+        let native = [&literal, &spelled]
+            .into_iter()
+            .find(|reading| cfg!(windows) && Path::new(reading).is_absolute())
+            .map(|reading| {
+                let path = crate::portable_path::without_verbatim(PathBuf::from(reading));
+                crate::portable_path::slashed(&path)
+            });
+        words.extend(outward::literal_words(
+            native.as_deref().unwrap_or(&literal),
+        ));
         if !closed {
             break;
         }
@@ -1287,7 +1302,7 @@ fn resolved_existing(path: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-    let mut resolved = crate::portable_path::canonicalize(&existing).ok()?;
+    let mut resolved = std::fs::canonicalize(&existing).ok()?;
     resolved.extend(rest.iter().rev());
     Some(resolved)
 }
