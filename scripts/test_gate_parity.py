@@ -472,7 +472,7 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')\n"
+    VERDICT_IF = ("    if: always()\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
@@ -494,7 +494,7 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                "    if: always() && (github.event_name", "    if: always() && false && (github.event_name"),
+                self.VERDICT_IF, self.VERDICT_IF.replace("if: always()", "if: always() && false")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
@@ -680,14 +680,32 @@ class HostedEventParityControls(unittest.TestCase):
     READY = ("github.event_name == 'pull_request' && "
              "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
              "startsWith(github.event.pull_request.base.ref, 'integration/') && "
-             "!github.event.pull_request.draft) || github.event_name == 'push'")
+             "!github.event.pull_request.draft) || github.event_name == 'push' || "
+             "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
 
-    def test_both_verdicts_run_for_every_pull_request_and_push(self):
+    def test_both_verdicts_run_for_every_event(self):
         for name in ("gates-verdict", "windows-verdict"):
             job = parity.workflow_jobs(WORKFLOW)[name]
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
             self.assertEqual(condition,
-                             "always() && (github.event_name == 'pull_request' || github.event_name == 'push')")
+                             "always()")
+
+    def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
+        trigger = WORKFLOW.split("permissions:", 1)[0]
+        self.assertIn("  schedule:\n", trigger)
+        self.assertIn("  workflow_dispatch:", trigger)
+        for name in ("secret-scan", "gitleaks-canary", "security-review"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            self.assertIsNone(re.search(r"^ {4}if:", job, re.M), name)
+            self.assertNotIn("    needs:", job, name)
+
+    def test_schedule_and_dispatch_select_every_expensive_job(self):
+        for name in ("gates", "gates-coverage", "gates-coverage-report", "windows-build",
+                     "windows-tests", "windows", "windows-release-journey", "windows-journeys"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            for event in ("schedule", "workflow_dispatch"):
+                self.assertIn(f"github.event_name == '{event}'", condition, name)
 
     def ready_workflow(self):
         return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
@@ -701,7 +719,7 @@ class HostedEventParityControls(unittest.TestCase):
     def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
         workflow = self.ready_workflow()
         job = parity.workflow_jobs(workflow)["windows-verdict"]
-        narrowed = job.replace("github.event_name == 'pull_request' || github.event_name == 'push'", "github.event_name == 'push'")
+        narrowed = job.replace("    if: always()", "    if: always() && github.event_name == 'push'")
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)

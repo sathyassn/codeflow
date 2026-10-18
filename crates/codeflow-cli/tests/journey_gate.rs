@@ -271,7 +271,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
         "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:"
     ));
     assert!(trigger.contains("integration/**"));
-    let condition = "github.event_name == 'pull_request' && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push'";
+    let condition = "github.event_name == 'pull_request' && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
     for id in [
         "gates",
         "gates-coverage",
@@ -287,10 +287,11 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
             "{id} must run for ready integration PRs, main and master PRs, and line pushes"
         );
     }
-    let verdict_condition = "github.event_name == 'pull_request' || github.event_name == 'push'";
     for id in ["gates-verdict", "windows-verdict"] {
         assert!(
-            job(&workflow, id).contains(verdict_condition),
+            job(&workflow, id)
+                .lines()
+                .any(|line| line == "    if: always()"),
             "{id} must report the selected gate results"
         );
     }

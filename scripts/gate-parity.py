@@ -208,7 +208,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
         if norm_job(text) != norm_job(expected):
             problems.append(
                 f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
-                "`if: always() && (<pull_request or push>)`, need the reuse, gates and "
+                "`if: always()`, need the reuse, gates and "
                 "coverage jobs, and fail unless each of them succeeded or the reuse decision named a "
                 "run and all of them were skipped; any other form could let a skipped, failed or "
                 "cancelled part read as passed. Expected:\n" + expected)
@@ -428,10 +428,10 @@ REUSE_JOB = """\
 # substring check would let an inserted second success path through. It
 # passes only when every Windows job succeeded, or when the reuse decision
 # named a run and every Windows job was skipped. Verdicts run on every
-# pull request and push, including when gate selection skips the work.
+# event, including when gate selection skips the work.
 WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
+    if: always()
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -491,9 +491,9 @@ def reuse_job_problems(jobs: dict[str, str]) -> list[str]:
 # The one accepted form of the verdict job. A substring check let a false
 # condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
 # so the job must match this text exactly, apart from blank lines, comments
-# and trailing spaces. Every pull request and push must receive a verdict.
+# and trailing spaces. Every event must receive a verdict.
 VERDICT_JOB = """\
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
+    if: always()
     name: codeflow gates
     needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
