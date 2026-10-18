@@ -58,7 +58,7 @@ pub fn inspect(
         );
     }
     let at = target.map_or_else(|| cwd.to_path_buf(), |t| cwd.join(t.path));
-    let repo = Repository::discover(&at).map_err(|e| e.to_string())?;
+    let repo = super::repo::open(&at)?.ok_or("directory has no repository")?;
     let root = repo.workdir().ok_or("repository has no working tree")?;
     let prefix = at
         .canonicalize()

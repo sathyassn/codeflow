@@ -7330,6 +7330,18 @@ fn check_git(
         return;
     };
     let head_moved_before = branches.head_may_move;
+    if sub == "worktree"
+        && rest.first().is_some_and(|arg| arg == "repair")
+        && !rest
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+        && policy.hook_integrity.is_active()
+    {
+        out.push(hook_integrity_violation(
+            policy.hook_integrity,
+            "`git worktree repair` rewrites checkout integrity pointers".to_string(),
+        ));
+    }
     branches.head_may_move |= !discard_readonly_git(sub, rest);
     let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
     let trigger = moved.transport_env.clone().or_else(|| {

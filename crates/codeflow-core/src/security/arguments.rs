@@ -905,7 +905,17 @@ fn empty_spans(value: &str) -> Option<String> {
 /// source, not a shell operand, so an unresolved one is not read by the
 /// line's writer rule (TSK-302 review round 2, Grok F1).
 fn code_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
-    value_reach_at(value, false, dir, true, facts)
+    value_reach_at(value, false, dir, true, facts).or_else(|| {
+        // A single ~/tail literal may be consumed literally or expanded by
+        // the interpreter. Judge both without interpreting runtime joins.
+        // Bare ~ stays literal, including print("~") and split-string code.
+        value.strip_prefix("~/").and_then(|tail| {
+            let home = facts.home?;
+            let expanded = crate::portable_path::without_verbatim(home.to_path_buf()).join(tail);
+            let expanded = crate::portable_path::slashed(&expanded);
+            value_reach_at(&expanded, false, dir, true, facts)
+        })
+    })
 }
 
 fn value_reach_at(
@@ -940,8 +950,8 @@ fn literal_reach(
     code: bool,
     facts: &mut Facts<'_>,
 ) -> Option<Reach> {
-    // Code strings do not undergo shell tilde expansion. A runtime call
-    // such as expanduser("~") is beyond this literal-path reading.
+    // The literal reading of code does not undergo shell expansion;
+    // code_reach separately judges the home reading of a single ~/tail.
     let home = if code { None } else { facts.home };
     let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, home) {
         Ok(paths) => paths,

@@ -712,6 +712,18 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         })
         .collect();
     let mut protected = Vec::new();
+    let names = repo.worktrees().map_err(|error| error.to_string())?;
+    for name in crate::git::name::names_of(&names) {
+        let folder = name.os_path().map_err(|error| error.to_string())?;
+        protected.push((
+            repo.commondir()
+                .join("worktrees")
+                .join(folder)
+                .join("gitdir"),
+            false,
+            repo.commondir().to_path_buf(),
+        ));
+    }
     for root in checkout_roots(repo)? {
         // A linked checkout's pointer is an enforcement file in its own
         // right. Resolve this path like every other protected path, so an

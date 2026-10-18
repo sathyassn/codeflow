@@ -320,17 +320,20 @@ mod tests {
         findings.iter().find(|v| v.rule == "git.hook_integrity")
     }
 
+    fn argument_refusal(findings: &[Violation]) -> bool {
+        integrity_refusal(findings).is_some_and(|v| {
+            v.message.contains("interpreter") && !v.message.contains("interpreter code")
+        })
+    }
+
     /// Every command refuses under `git.hook_integrity` from `dir`, each
     /// with a finding about an interpreter argument, not its code.
     fn assert_refused(repo: &Repo, dir: &Path, root: &Path, commands: &[&str]) {
         let mut wrong = Vec::new();
         for command in commands {
             let findings = judge_in(repo, dir, root, command, PolicyLevel::Block);
-            match integrity_refusal(&findings) {
-                Some(v)
-                    if v.message.contains("interpreter")
-                        && !v.message.contains("interpreter code") => {}
-                _ => wrong.push(format!("should refuse: {command}: {findings:?}")),
+            if !argument_refusal(&findings) {
+                wrong.push(format!("should refuse: {command}: {findings:?}"));
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -427,11 +430,7 @@ mod tests {
             "python3 tool.py .WORKTREES/W/.GIT",
             PolicyLevel::Block,
         );
-        assert_eq!(
-            integrity_refusal(&findings).is_some(),
-            folds_case,
-            "{findings:?}"
-        );
+        assert_eq!(argument_refusal(&findings), folds_case, "{findings:?}");
         // A launcher can run in a different repository. Its registered
         // checkout roots must qualify for the same candidate checks.
         let other = self::repo();
@@ -516,6 +515,45 @@ mod tests {
         repo.home = repo.root.parent().unwrap().to_path_buf();
         assert_allowed(&repo, &[r#"python3 -c 'print("~")'"#]);
         assert_refused(&repo, &repo.root, &repo.root, &["python3 tool.py ~"]);
+        assert_allowed(
+            &repo,
+            &[
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+                r#"node -e 'require("fs").rmSync(require("os").homedir()+"/repo/.worktrees/w", {recursive:true})'"#,
+            ],
+        );
+    }
+
+    #[test]
+    fn code_tilde_paths_judge_literal_and_home_readings() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.worktrees/w"))'"#,
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.worktrees"))'"#,
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.claude"))'"#,
+            ],
+        );
+        // The literal reading still protects a repository beneath a directory
+        // actually named `~`, even when its home-expanded counterpart is absent.
+        let nested = repo.root.join("~/literal");
+        std::fs::create_dir(nested.parent().unwrap()).unwrap();
+        std::fs::rename(&repo.linked, &nested).unwrap();
+        std::fs::write(
+            repo.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", nested.join(".git").display()),
+        )
+        .unwrap();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[r#"python3 -c 'open("~/literal/.claude/settings.json", "w")'"#],
+        );
     }
 
     #[test]
