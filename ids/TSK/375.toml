@@ -1,0 +1,11 @@
+id = "TSK-375"
+uid = "8245694f-09e9-4811-ac42-7b265fc8b27d"
+kind = "TSK"
+title = "Bind standalone tasks to trusted epic lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T09:34:54Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
