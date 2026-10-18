@@ -1,0 +1,11 @@
+id = "TSK-396"
+uid = "e1e8cf86-6918-4432-b1ed-190965b8216e"
+kind = "TSK"
+title = "The guards' reach over other repositories by absolute path is decided and enforced"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:23:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
