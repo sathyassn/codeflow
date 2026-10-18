@@ -117,13 +117,23 @@ fn body(task_line: &str) -> String {
 }
 
 fn ci(root: &Path, branch: &str, pr_body: &str) -> (i32, String) {
-    ci_into(root, "main", branch, pr_body)
+    ci_into(root, "main", branch, pr_body, None)
 }
 
-fn ci_into(root: &Path, base: &str, branch: &str, pr_body: &str) -> (i32, String) {
-    let out = codeflow()
+fn ci_into(
+    root: &Path,
+    base: &str,
+    branch: &str,
+    pr_body: &str,
+    into: Option<&str>,
+) -> (i32, String) {
+    let mut command = codeflow();
+    command.arg("ci");
+    if let Some(into) = into {
+        command.args(["--into", into]);
+    }
+    let out = command
         .args([
-            "ci",
             "--base",
             base,
             "--head",
@@ -209,7 +219,7 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
     assert_blocks(
         &ci(root, "plan/sneaky", &body("Task: EPC-001")),
         "planning PR with product code",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
 
     branch_with(root, "fix/bad", &[("docs/guide.md", "# Guide\n")]);
@@ -529,7 +539,13 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["branch", "release/next", "main"]);
     git(root, &["switch", "-q", line]);
     assert_blocks(
-        &ci_into(root, "release/next", line, &body("Task: EPC-001")),
+        &ci_into(
+            root,
+            "release/next",
+            line,
+            &body("Task: EPC-001"),
+            Some("release/next"),
+        ),
         "wrong target",
         "lands on 'main', not 'release/next'",
     );
@@ -559,7 +575,7 @@ fn the_whole_range_is_classified_whatever_its_shape() {
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: EPC-001")),
         "merge resolution",
-        "planning-only pull request touches a product path: src/lib.rs",
+        "planning-only pull request touches a path outside the admitted set: src/lib.rs",
     );
     assert_blocks(
         &ci(root, "plan/merged", &body("Task: none: merge")),

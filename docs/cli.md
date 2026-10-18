@@ -185,13 +185,13 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<STAGE>` | Hook stage (receives git's standard hook arguments). One of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push`, `capabilities`. |
 | | `[ARGS]...` | Arguments passed through by git (e.g. the commit-msg file path, the pre-push remote name and URL). |
 | `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
-| | `--base <REF>` | Base ref of the range (exclusive). Auto-detected from CI env when omitted. |
+| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches. An unresolved or unsuitable declared target warns; pass --base to select the intended range. |
 | | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
-| | `--branch <NAME>` | Branch name to check against the naming policy (default: the CI-provided or current HEAD branch). |
+| | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Only protected branches and bound epic lines may supply a declared target: records on a protected branch or at the line's `origin/<line>` ref must bind the line to the branch's epic. Declared bases use only `origin/<name>`; local branches, including protected names, never supply them. Missing remote refs warn and keep the protected fallback. Pre-push uses a second protected name only when its advertised tip equals the destination default's tip. Host protection cannot be verified offline: protect integration/* and every name in `protected_branches` on the host. A bare run reads the local remote-tracking ref; git-guard refuses update-ref of refs/remotes/*. Pass --branch when an explicit --head belongs to another line. |
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
 | | `--pr-body-file <FILE>` | Read the PR/MR body from a file (scanned like `--pr-body`). |
 | | `--actor <ACTOR>` | The actor or app id that opened or updated the pull request, as the CI workflow passes it for trusted automation profiles (SPC-013 R-82). It is trusted only in a GitHub Actions pull request event from the same repository whose actor it names; a local run, another CI or a fork is `unknown` whatever is given. Default `unknown`. |
-| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, else the branch an explicit `--base` names). A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
+| | `--into <BRANCH>` | The branch a pull request merges into (default: the CI-provided target branch, the branch's declared target, a named --base, a unique protected or eligible epic line at the base commit, then the repository default). An ambiguous commit-ID base requires --into or --branch. A range whose head or target matches the release pattern is judged as a release range (SPC-013 R-120). |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | | Apply protected-branch policy to the remote provider |
@@ -218,9 +218,10 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--docs` | Also run the doc-graph referential-integrity lint. |
 | | `--portal <DIR>` | Verify a portal evidence manifest without executing project code. |
 | | `--since <REF>` | Also judge every record changed since REF (a commit or branch) against the lifecycle transition rules, as CI judges a pull request. |
-| `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
+| `codeflow integrate <BRANCH>` | | Land a branch locally after gating a rebase or merge candidate |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
+| | `--merge` | Preserve the source head with a no-fast-forward merge commit. |
 | `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, git-config-includes, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, remote-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
@@ -339,37 +340,37 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 
 ### Scaffold notes
 
-Before writing files, `codeflow update` and `codeflow init` on an initialized
-project refuse when the binary is older than `scaffold_version` in
-`.codeflow/project.toml`. The refusal names both versions and asks you to install
-the pinned version. An unparsable pin also refuses with its value, file and
-correction to make. Neither refusal changes project files, even with
-`--force` or `--diff`. Binaries released before this safeguard can still
-lower the pin.
+`codeflow update` and `codeflow init` on an initialized project check the
+pin before writing files.
 
-`codeflow update` exits 2 when the scaffold report or the adopted portal
-report contains conflicts, so a caller can tell a clean refresh from one that
-left `.new` sidecars behind.
+| Pin or report | Result |
+|---|---|
+| Binary older than `scaffold_version` in `.codeflow/project.toml` | Refuses, names both versions and asks for the pinned version to be installed |
+| Unparsable pin | Refuses, naming its value, file and correction |
+| Either refusal, including with `--force` or `--diff` | No project files change |
+| Binary released before this safeguard | Can still lower the pin |
+| `update` scaffold or adopted portal report contains conflicts | Exits 2, distinguishing a clean refresh from one that left `.new` sidecars |
 
 `codeflow estimate check` serves the optional cf-estimate method defined by
 specification SPC-007. The checker is read-only: it checks allocations and
 pinned evidence, and it makes no calibrated delivery prediction. Profiles,
 forecasts and outcomes stay project-owned.
 
-`codeflow estimate outcomes` derives each complete task's planned, started,
-blocked, completed and landed points from git author times and joins them by
-task id to the planning scenario of the adopted home's frozen forecasts, or
-of one `--forecast`. It exits 1 when `.codeflow/estimate.json` is adopted and
-its home is missing or unusable, the record is unreadable, or a given
-forecast cannot be read or is not a valid forecast; it exits 2 for an
-unusable threshold or minimum; otherwise 0, including when no forecast is
-joined. Landed is the first target commit that holds the reviewed commit,
-and elapsed active ends there when a later records change wrote the
-completion.
-Started is the task branch's first commit by ancestry and is unknown after a
-squash, rebase or fast-forward landing, or when author times run backwards.
-The minimum and thresholds are printed defaults, not policy. It writes
-nothing (ADR-0079).
+`codeflow estimate outcomes` compares complete tasks with planning scenarios
+without writing files (ADR-0079).
+
+| Outcome field | Source or rule |
+|---|---|
+| Planned, started, blocked, completed and landed points | Git author times, joined by task id to the planning scenario in the adopted home's frozen forecasts or one `--forecast` |
+| Landed | First target commit holding the reviewed commit; elapsed active ends there when a later records change wrote completion |
+| Started | Task branch's first commit by ancestry; unknown after squash, rebase or fast-forward landing, or when author times run backwards |
+| Minimum and thresholds | Printed defaults, not policy |
+
+| Condition | Exit |
+|---|---|
+| Adopted `.codeflow/estimate.json` with a missing or unusable home; unreadable record; given forecast unreadable or invalid | 1 |
+| Unusable threshold or minimum | 2 |
+| Otherwise, including no joined forecast | 0 |
 
 ### Enforce notes
 
@@ -390,6 +391,23 @@ does not by itself mean enforcement succeeded.
   lifecycle-directory payload cannot be read.
 
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
+
+`codeflow ci` pins revisions and prints branch context and source.
+`--branch` selects frozen or amendable acceptance binding; `--head` selects
+no branch. Detached candidates need `--branch`.
+
+Without `--base`: CI metadata, `CODEFLOW_DEFAULT_BRANCH`,
+`--into` or the declared target, then protected branches. Declared targets count
+only when protected or bound as the `--branch` row says; others and unresolved
+targets warn. Targets containing the head require `--base`.
+
+Acceptance uses `--into`, CI metadata, the declared target, a named `--base`,
+a protected or eligible epic line at the base commit, then the repository
+default. Planning branches infer only their epic's lines. Ambiguous commit
+bases need `--into` or `--branch`. Base disagreements are reported;
+bases and targets retain protection. Pre-push validates and passes
+`--into=<target>`; its base follows the `--branch` row.
+CI context errors block the push.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
 A pull request adding or modifying only the regular file `.gitleaksignore`
@@ -422,15 +440,12 @@ fails or does not parse writes nothing for that branch. `codeflow doctor
 `codeflow test` runs the configured targets, or the tests of a detected stack,
 and CI runs it again.
 
-- With no stack detected the run is a loud no-op that exits 0. `--strict`
-  makes it exit non-zero for scripted callers.
-- File and aggregate coverage thresholds all count toward the verdict.
-  `changed_files` rules are rejected until an explicit comparison base exists
-  (ADR-0021).
-- Captured output is bounded and reports truncation.
-- `test setup` detects only at the repository root. Monorepos declare package
-  `cwd` targets themselves, and a populated or malformed config is never
-  replaced automatically.
+| Test case | Behavior |
+|---|---|
+| No stack detected | Loud no-op, exit 0; `--strict` makes it non-zero for scripted callers |
+| Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
+| Captured output | Bounded, with truncation reported |
+| `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
 
 One full gate runs at a time on a machine.
 
@@ -454,9 +469,20 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
   checkout.
 
 `codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target, runs the test gate, then advances the
-target with `git merge --ff-only`. The target moves only when every stage
-passes.
+rebases the branch onto the target by default, runs the full test gate, then
+fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
+commit whose first parent is the old target tip and whose second parent is
+the unchanged source head, and gates that merge result. This keeps a task's
+acceptance binding to its reviewed commit intact. Run `--merge` from a linked
+worktree; a root checkout is refused before candidate preparation. A head
+already contained in the target needs no new merge commit. The subject names
+both refs: `Merge branch '<branch>' into <target>`.
+
+Both modes advance the local target only after the gate and the adopted
+release structure check pass. They refuse if the source or target moved
+while testing. A conflict or failed gate leaves the target unchanged and
+restores the original checkout. The command does not push; the operator or
+primary handles the remote landing through the project's PR flow.
 
 - It runs under a gate-context token that the git hooks and git-guard verify,
   so a raw `git merge` or a manual ref move onto a protected branch stays
@@ -506,13 +532,11 @@ remotes live as well as reading fetched refs, so a narrow fetch cannot hide work
 
 ### Present notes
 
-- `codeflow present export` accepts the older theme names `editorial`,
-  `instrument`, `technical` and `ink`. The default, `editorial`, resolves to
-  Slate.
-- `present feedback --wait` exits 6 on timeout and 7 when the session closes
-  with nothing pending.
-- `present update --expected-revision` exits 8 when another revision is
-  current.
+| Presentation option | Compatibility or exit |
+|---|---|
+| `present export` theme | Older names `editorial`, `instrument`, `technical` and `ink` remain accepted; the default `editorial` resolves to Slate |
+| `present feedback --wait` | Exits 6 on timeout; 7 when the session closes with nothing pending |
+| `present update --expected-revision` | Exits 8 when another revision is current |
 
 ### General exit behavior
 
@@ -522,6 +546,6 @@ remotes live as well as reading fetched refs, so a narrow fetch cannot hide work
 | The check failed, or the command could not complete | non-zero, usually 1 |
 | `codeflow update` left conflicts | 2 |
 | `codeflow hook` wants the harness to block the tool call | 2 |
-| `codeflow ci` could not verify in full: no base ref resolved, the commit range could not be enumerated, or `--pr-body-file` was unreadable | 2 |
+| `codeflow ci` could not verify in full: the range or acceptance context could not be resolved, the commits could not be enumerated, or `--pr-body-file` was unreadable | 2 |
 | `codeflow portal setup` or `portal transfer` reported conflicts | 2 |
 | An unknown subcommand or an invalid flag | 2 |

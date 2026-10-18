@@ -90,6 +90,30 @@ impl Line {
         self.git(&["commit", "-qm", message]);
         self.git(&["rev-parse", "HEAD"])
     }
+    /// A protected local name placed on a criterion change, followed by code.
+    pub fn protected_target_shadow(&self) -> String {
+        self.git(&["switch", "-q", "main"]);
+        let path = "project-management/tasks/TSK-001.md";
+        let record = std::fs::read_to_string(self.root().join(path)).unwrap();
+        self.write(
+            "project-management/tasks/TSK-002.md",
+            &record.replace("TSK-001", "TSK-002"),
+        );
+        self.commit("docs: plan another task");
+        self.git(&["switch", "-qc", "task/TSK-001-work"]);
+        self.write(path, &record.replace(LINE, "master"));
+        self.write(
+            "project-management/tasks/TSK-002.md",
+            &record
+                .replace("TSK-001", "TSK-002")
+                .replace("AC-1 Work runs.", "AC-1 Changed the criterion."),
+        );
+        let hidden = self.commit("docs: change the criterion");
+        self.git(&["branch", "master", &hidden]);
+        self.write("src/lib.rs", "pub fn changed() {}\n");
+        self.commit("fix: change work");
+        hidden
+    }
     pub fn land_task(&self) {
         self.git(&["switch", "-qc", "task/TSK-001-work"]);
         self.write("src/lib.rs", "pub fn work() {}\n");
@@ -131,6 +155,9 @@ impl Line {
         self.command(env!("CARGO_BIN_EXE_codeflow")).args(["ci", "--base", base, "--head", "HEAD", "--branch", branch, "--pr-body", "## Summary\nRepair the line.\n\n- adopt reviewed work\n\nTask: EPC-001\n\n## Changes\n- repair\n\n## Testing\n- fixture\n"]).output().unwrap()
     }
     pub fn push(&self, old: &str) -> Output {
+        self.push_branch(LINE, old)
+    }
+    pub fn push_branch(&self, branch: &str, old: &str) -> Output {
         let head = self.git(&["rev-parse", "HEAD"]);
         let mut child = self
             .command(env!("CARGO_BIN_EXE_codeflow"))
@@ -147,7 +174,7 @@ impl Line {
             .unwrap();
         writeln!(
             child.stdin.take().unwrap(),
-            "refs/heads/{LINE} {head} refs/heads/{LINE} {old}"
+            "refs/heads/{branch} {head} refs/heads/{branch} {old}"
         )
         .unwrap();
         child.wait_with_output().unwrap()

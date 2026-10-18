@@ -394,6 +394,9 @@ pub struct GitPolicy {
     /// project set. Absent (`null`), the binary assumes the stack default
     /// recorded in `.codeflow/project.toml`.
     pub product_paths: Option<Vec<String>>,
+    /// Exact repository-relative document index files a planning amendment
+    /// may carry, as declared on its target. Product and watched paths win.
+    pub document_indexes: Vec<String>,
     /// Retired compatibility key, accepted and ignored (R-70).
     pub direct_changes: String,
     /// Trusted automation profiles (SPC-013 R-82). A profile applies in
@@ -499,6 +502,7 @@ impl Default for GitPolicy {
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
             product_paths: None,
+            document_indexes: Vec::new(),
             direct_changes: "allow".to_string(),
             automation_profiles: Vec::new(),
             pr_section_mapping: None,

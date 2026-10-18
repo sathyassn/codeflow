@@ -1,5 +1,5 @@
 #[path = "../support/line_adoption.rs"]
-mod fixture;
+pub(super) mod fixture;
 use fixture::{blocks, output, passes, Line, LINE};
 
 /// TSK-248 AC-1 (issue 85): a landed adoption makes the line an epic line

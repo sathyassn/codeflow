@@ -137,7 +137,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 69] = [
+pub const SCHEMA: [KeySpec; 70] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -628,6 +628,27 @@ pub const SCHEMA: [KeySpec; 69] = [
                 `codeflow update` adds it once; a value the project sets is \
                 kept. Absent, the binary assumes the stack default. The shared \
                 adopter-facing paths continue to require journey coverage.",
+    },
+    KeySpec {
+        path: "git.document_indexes",
+        kind: KeyKind::StringList,
+        valid: "an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components",
+        purpose: "Document index files a planning amendment may update alongside records and plans.",
+        notes: "Empty by default. Declare the files in a prior task pull request. \
+                The hosted check reads the target policy. On a re-push of a \
+                plan/ branch, pre-push can fall back to the earlier pushed tip; \
+                with an advertised work target it judges from the merge base \
+                with that target. The hosted check enforces the target-policy \
+                boundary. A declaration is a reviewed policy change on the \
+                target and must not name a file a harness or build tool loads. \
+                Product and watched paths, hidden paths and non-regular files \
+                stay excluded. Index file names beginning AGENT., AGENTS., \
+                CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, \
+                CONVENTIONS.md and llms*.md, are excluded without case. A file \
+                name stem containing a tilde followed by a digit is refused \
+                as a possible short-name alias. Root AGENTS.md keeps its \
+                separate project-section exception. The shipped policy file \
+                omits this key.",
     },
     KeySpec {
         path: "git.direct_changes",
@@ -1121,6 +1142,21 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
 /// `git.worktree_locations` entry must be a folder `doctor` can expand.
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
+        "git.document_indexes" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::workgraph::classify::valid_document_index(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative documentation file (.md, .mdx, .rst or .adoc; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"),
+                    });
+                }
+            }
+        }
         "git.root_branch" => {
             if let Some(s) = value.as_str() {
                 if !s.is_empty() && !crate::root_checkout::is_valid_branch_name(s) {
@@ -1592,6 +1628,34 @@ mod tests {
             "{}",
             errs[0]
         );
+    }
+
+    #[test]
+    fn document_index_policy_refuses_patterns_and_non_documentation_entries() {
+        for path in [
+            "Cargo.toml",
+            "Makefile",
+            "docs/**",
+            "WARP.md",
+            "CMakeLists.txt",
+            "requirements-dev.txt",
+            "constraints.txt",
+            "llms.txt",
+            "CONVENTIONS.md",
+            "skills/example/SKILL.md",
+            "LLMS-full.MD",
+            "AGENTS~1.MD",
+        ] {
+            let policy = serde_json::json!({"git": {"document_indexes": [path]}});
+            let errors = validate_policy_str(&policy.to_string()).unwrap_err();
+            assert!(
+                errors.iter().any(|error| {
+                    error.key == "git.document_indexes" && error.message.contains("invalid path")
+                }),
+                "{path}: {errors:?}"
+            );
+        }
+        validate_policy_str(r#"{"git":{"document_indexes":["index.MD"]}}"#).unwrap();
     }
 
     #[test]

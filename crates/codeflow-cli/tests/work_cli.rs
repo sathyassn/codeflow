@@ -1445,6 +1445,16 @@ fn a_claim_on_a_reviewed_head_passes_its_own_push_check() {
         .unwrap();
     assert!(pushed.status.success(), "{}", text(&pushed));
 
+    // An explicit target without the hook hand-off remains a landing check,
+    // even when no body was supplied.
+    let named = cli(
+        root,
+        &["ci", "--base", "main", "--into", "main", "--branch", child],
+        Some(bin.path()),
+    );
+    assert!(!named.status.success(), "{}", text(&named));
+    assert!(text(&named).contains("not complete"), "{}", text(&named));
+
     // The pull request into the target still waits for the predecessor.
     let landing = cli(root, &["ci", "--base", "main", "--branch", child, "--pr-body", "Task: TSK-002\n## Summary\nWork.\n\n- work\n## Changes\n- Work.\n## Testing\nNot tested: nothing."], Some(bin.path()));
     assert!(!landing.status.success(), "{}", text(&landing));
@@ -1803,6 +1813,7 @@ fn the_journey_rule_matches_the_name_git_records() {
     let project = ProjectPaths {
         product: vec![pattern.into()],
         watched: vec![],
+        document_indexes: Vec::new(),
     };
     assert!(path_sets()
         .adopter_facing_member(actual, &project)

@@ -81,7 +81,7 @@ enum Command {
     Ci(cmd::ci::CiArgs),
     /// Generated status view: branch, worktrees, in-flight work, capabilities.
     Status(cmd::status::StatusArgs),
-    /// Land a branch into a target: flock(rebase -> test -> ff-merge).
+    /// Land a branch locally after gating a rebase or merge candidate.
     Integrate(cmd::integrate::IntegrateArgs),
     #[command(about = doctor_help())]
     Doctor(cmd::doctor::DoctorArgs),
