@@ -1,0 +1,11 @@
+id = "TSK-379"
+uid = "10c27818-9362-44bc-8e24-2413c271c615"
+kind = "TSK"
+title = "Repository and worktree discovery cannot unprotect enforcement files"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:21:55Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
