@@ -48,6 +48,48 @@ impl Line {
         f.git(&["switch", "-qc", LINE]);
         f
     }
+    /// A standalone repair after reviewed work on a remotely published line.
+    /// The protected branch has no epic records; only the remote line binds it.
+    pub fn standalone_on_remote_line() -> (Self, String) {
+        let f = Self::new();
+        let task =
+            std::fs::read_to_string(f.root().join("project-management/tasks/TSK-001.md")).unwrap();
+        let policy = "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/**\"],\"test_gate_on_push\":\"warn\"}}\n";
+        f.git(&["switch", "-q", "main"]);
+        f.git(&["rm", "-q", "-r", "project-management"]);
+        f.write(
+            "project-management/README.md",
+            "Records live on the line.\n",
+        );
+        f.write(".codeflow/policy.json", policy);
+        f.commit("docs: keep records on the line");
+        f.git(&["push", "-q", "origin", "main"]);
+        f.git(&["switch", "-q", LINE]);
+        f.write(".codeflow/policy.json", policy);
+        f.commit("chore: enable push checks");
+        f.land_task();
+        let tip = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["push", "-q", "origin", LINE]);
+        f.git(&["switch", "-qc", "task/TSK-002-repair"]);
+        f.write(
+            "project-management/tasks/TSK-002.md",
+            &task.replace("TSK-001", "TSK-002").replace(
+                "epic_id: EPC-001",
+                "epic_id: null\nstandalone_reason: Bounded repair",
+            ),
+        );
+        f.commit("docs: plan standalone repair");
+        f.write("src/lib.rs", "pub fn repaired() {}\n");
+        f.commit("fix: repair work");
+        passes(
+            &f.command(env!("CARGO_BIN_EXE_codeflow"))
+                .args(["ids", "seed"])
+                .output()
+                .unwrap(),
+        );
+        (f, tip)
+    }
+
     pub fn root(&self) -> &Path {
         self.dir.path()
     }

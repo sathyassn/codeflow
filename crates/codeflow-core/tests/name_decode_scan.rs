@@ -4785,6 +4785,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Rejects a standalone task with a whitespace-only human reason; task identities, refs and targets remain unchanged.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "epic_line_binding",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
     // The folded lookup becomes InvalidGraph (reviewed revision does not resolve), a refusal of the admission.
     (
         "crates/codeflow-core/src/workgraph/work_start.rs",
