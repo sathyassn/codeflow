@@ -249,6 +249,13 @@ fn checkout_identity_replaced_marker_cannot_move_the_checkout() {
             }
         }
         f.corrupt_refuses(&f.linked, mode, &mut wrong);
+        if mode == "symlink" {
+            f.corrupt_refuses(
+                &f.linked.canonicalize().unwrap(),
+                "canonical symlink cwd",
+                &mut wrong,
+            );
+        }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -389,12 +396,22 @@ fn checkout_identity_valid_pointers_and_worktree_lifecycle_stay_usable() {
         "valid symlink marker",
         &mut wrong,
     );
-    expect(
-        &f.command(&f.linked, "exec-guard", "python3 -m pytest ."),
-        0,
-        "valid symlink marker",
-        &mut wrong,
-    );
+    for cwd in [&f.linked, &f.linked.canonicalize().unwrap()] {
+        for guard in ["git-guard", "exec-guard"] {
+            expect(
+                &f.command(cwd, guard, "python3 -m pytest ."),
+                0,
+                "valid symlink marker",
+                &mut wrong,
+            );
+        }
+        expect(
+            &f.edit(cwd, &cwd.join("notes.txt")),
+            0,
+            "valid symlink marker edit",
+            &mut wrong,
+        );
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -419,5 +436,38 @@ fn checkout_identity_administrative_case_follows_the_filesystem() {
             &mut wrong,
         );
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn checkout_identity_missing_sibling_allows_status_but_refuses_guards() {
+    let f = Fixture::new();
+    std::fs::remove_dir_all(&f.linked).unwrap();
+    let mut wrong = Vec::new();
+    let output = codeflow()
+        .arg("status")
+        .current_dir(&f.root)
+        .output()
+        .unwrap();
+    expect(
+        &output,
+        0,
+        "status can diagnose a missing sibling",
+        &mut wrong,
+    );
+    for guard in ["git-guard", "exec-guard"] {
+        expect(
+            &f.command(&f.root, guard, "printf hello"),
+            2,
+            "guard cannot trust a missing sibling",
+            &mut wrong,
+        );
+    }
+    expect(
+        &f.edit(&f.root, &f.root.join("notes.txt")),
+        2,
+        "edit guard cannot trust a missing sibling",
+        &mut wrong,
+    );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

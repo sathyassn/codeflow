@@ -1614,6 +1614,12 @@ mod tests {
         .unwrap();
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
         std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        // A registered checkout needs the inverse pointer too. Keep the
+        // administrative name's exact bytes rather than its display form.
+        let mut marker = b"gitdir: ".to_vec();
+        marker.extend_from_slice(admin.as_os_str().as_bytes());
+        marker.push(b'\n');
+        std::fs::write(checkout.join(".git"), marker).unwrap();
         Some((dir, admin))
     }
 

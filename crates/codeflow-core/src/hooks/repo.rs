@@ -37,6 +37,12 @@ impl RepoInfo {
         let Some(repo) = open(start)? else {
             return Ok(None);
         };
+        // Hook context must validate every protected checkout before policy
+        // selection. `open` checks the current checkout's identity separately,
+        // so read-only inventory tools can still diagnose missing siblings.
+        for worktree in crate::git::linked_worktrees(&repo)? {
+            checked_registration(&worktree.admin)?;
+        }
         let root = repo
             .workdir()
             .ok_or("repository has no worktree")?
@@ -101,8 +107,14 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
 /// # Errors
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
-    match Repository::discover(start) {
+    match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
         Ok(repo) => {
+            // Derive repository claims from the physical metadata. On Windows,
+            // opening a directory symlink can otherwise report its alias as
+            // the workdir and hide a conflicting checkout at the destination.
+            let directory = canonical(repo.path(), "discovered git directory")?;
+            let repo = Repository::open(crate::portable_path::without_verbatim(directory))
+                .map_err(|error| format!("cannot open discovered git directory: {error}"))?;
             let discovered = check_discovery_boundaries(start, &repo)?;
             if repo.is_worktree() {
                 // Git discovers the checkout at its .git pointer, not at the
@@ -134,11 +146,6 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
                 // `false` changes this handle only, never either pointer file.
                 repo.set_workdir(&discovered, false)
                     .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
-            }
-            // Validate the whole inventory before policy selection, including
-            // invocations from main where the current repository is not linked.
-            for worktree in crate::git::linked_worktrees(&repo)? {
-                checked_registration(&worktree.admin)?;
             }
             Ok(Some(repo))
         }
@@ -270,7 +277,7 @@ pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
     }
     std::fs::metadata(&marker)
         .map_err(|error| format!("cannot inspect registered checkout marker: {error}"))?;
-    let checkout = Repository::open(&root)
+    let checkout = open_checkout(&root)
         .map_err(|error| format!("cannot open registered checkout: {error}"))?;
     if !checkout.is_worktree()
         || canonical(checkout.path(), "registered checkout git directory")?
@@ -280,6 +287,23 @@ pub(super) fn checked_registration(admin: &Path) -> Result<PathBuf, String> {
     }
     check_common_directory(&checkout)?;
     Ok(root)
+}
+
+// A directory marker can be a symlink to either ordinary or linked
+// metadata. Resolve it before asking libgit2 to open it, and use plain native
+// paths at that boundary: verbatim Windows spellings do not reliably follow
+// directory markers in libgit2. Gitfiles still resolve from their checkout.
+fn open_checkout(root: &Path) -> Result<Repository, String> {
+    let marker = root.join(".git");
+    let metadata = std::fs::metadata(&marker)
+        .map_err(|error| format!("cannot inspect checkout marker: {error}"))?;
+    let directory = if metadata.is_dir() {
+        canonical(&marker, "checkout metadata directory")?
+    } else {
+        root.to_path_buf()
+    };
+    Repository::open(crate::portable_path::without_verbatim(directory))
+        .map_err(|error| error.to_string())
 }
 
 /// libgit2 may ignore a broken inner marker and successfully discover an outer
@@ -313,7 +337,7 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<PathBuf
         {
             continue;
         }
-        let open_error = match Repository::open(ancestor) {
+        let open_error = match open_checkout(ancestor) {
             Ok(local) => {
                 let local_directory = local.path().canonicalize().map_err(|error| {
                     format!(

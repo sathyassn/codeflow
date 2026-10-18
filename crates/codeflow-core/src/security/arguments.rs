@@ -776,6 +776,16 @@ fn code_literal_words(code: &str) -> Vec<String> {
         words.extend(outward::literal_words(
             native.as_deref().unwrap_or(&literal),
         ));
+        // A raw home path can mix doubled and single backslashes. Decoding
+        // keeps its prefix but erases later separators, so also judge the
+        // spelling. Collapse repeated separators, never parent components.
+        if cfg!(windows) && spelled.starts_with("~\\") {
+            let path: PathBuf = Path::new(&spelled).components().collect();
+            let spelling = crate::portable_path::slashed(&path);
+            if native.as_deref() != Some(&spelling) {
+                words.extend(outward::literal_words(&spelling));
+            }
+        }
         if !closed {
             break;
         }
