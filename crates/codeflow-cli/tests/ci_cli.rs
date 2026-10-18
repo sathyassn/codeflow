@@ -18,8 +18,12 @@ mod change_class_probes;
 #[cfg(unix)]
 #[path = "ci_cli/destination.rs"]
 mod destination;
+#[path = "ci_cli/document_indexes.rs"]
+mod document_indexes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
+#[path = "ci_cli/range_context.rs"]
+mod range_context;
 #[path = "ci_cli/secret_scan_exemption.rs"]
 mod secret_scan_exemption;
 

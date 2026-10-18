@@ -138,16 +138,16 @@ epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0011, ADR-0019]
 ```
 
-`codeflow update` refreshes managed scaffold files by ownership class:
+`codeflow update` refreshes managed scaffold files:
 
-- Unmodified files are replaced.
-- User-modified files get a three-way merge from `.codeflow/.baseline/`. A
-  conflict produces a `.new` file and a report.
-- Managed regions are updated in place.
-- User-owned schema-versioned files gain new keys with defaults.
-
-Update also installs missing in-tier manifest entries. It never clobbers and
-never silently skips.
+| Case | Update action |
+|---|---|
+| Unmodified file | Replaces it |
+| User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and a report |
+| Managed region | Updates it in place |
+| User-owned schema-versioned file | Adds new keys with defaults |
+| Missing in-tier manifest entry | Installs it |
+| All classes | Never clobbers or silently skips |
 
 | Version case | What update and a repeated init do |
 |---|---|
@@ -375,17 +375,19 @@ id: CAP-005
 name: integrate
 area: engine
 status: shipped
-verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
+verified_by: ["cargo test integrate::", "codeflow-core tests/integrate_merge.rs", "codeflow-cli tests/integrate_merge_cli.rs", "codeflow-cli tests/acceptance_journey.rs"]
 epics: [EPC-001, EPC-022]
 adrs: []
 ```
 
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local landing
-path for protected branches. Under a file lock it rebases the branch onto the
-target, runs the test gate, then advances the target with
-`git merge --ff-only`. No merge commit is added, and the target moves only
-when every stage succeeds. A gate-context token lets the protected ref advance
-only through integrate or a human-merged PR. Detail: [commands](cli.md) and
+path for protected branches. Under a file lock it rebases and fast-forwards
+by default. With `--merge`, it gates a no-fast-forward merge commit that
+preserves the reviewed source head and its acceptance binding. Both modes
+advance only the local target ref after every stage succeeds; neither pushes.
+Merge mode runs from a linked worktree. A gate-context token lets the
+protected ref advance only through integrate or a human-merged PR. Detail:
+[commands](cli.md) and
 [enforcement planes](architecture/enforcement-planes.md).
 
 ### Remember
@@ -508,7 +510,7 @@ The work records a plan produces are judged by one core (SPC-013):
 |---|---|
 | Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` at its tip, reviewed directly or followed only by changes to its own record's status and Closeout |
 | Record redaction (ADR-0084) | `codeflow task redact` preserves acceptance results and review provenance while replacing criteria or acceptance wording; CI and pre-push require a record-only range with the original digest and a separate redaction review. Superseded blocks remain usable for later completion. See [delivery](delivery.md#acceptance-waivers-and-redactions) |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line, a [secret-scan exemption](policy-reference.md#secret-scan-exemption-pull-requests) adding or modifying only the regular file `.gitleaksignore` without a mode change, or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs, exact document index files declared by `git.document_indexes` on the target, and the `AGENTS.md` project section, ADR-0078; product and watched paths stay excluded), an epic's integration line, a [secret-scan exemption](policy-reference.md#secret-scan-exemption-pull-requests) adding or modifying only the regular file `.gitleaksignore` without a mode change, or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Claim scope | local branches, `origin`, the target's fetch remote and `git.claim_remotes` count as advisory claims; branches on other remotes remain information in `work next` and `work claim`, without making a task active or conflicting |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |

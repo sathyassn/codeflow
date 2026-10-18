@@ -1,5 +1,5 @@
 # file	normalized call span	count	reason
-crates/codeflow-cli/src/cmd/ci.rs	env(key)	2	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
 crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
 crates/codeflow-cli/src/cmd/mod.rs	env(CHILD,&gone)	1	A test re-runs its own binary from a removed directory; this call sets only the child marker CODEFLOW_R22_REMOVED_CWD (the directory to remove) and leaves Git configuration untouched.
 crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"inner")	1	Presentation service and canary environment controls; these children perform no Git operations.
@@ -75,6 +75,7 @@ crates/codeflow-core/src/git/remote_query.rs	env("GIT_CONFIG_PARAMETERS",paramet
 crates/codeflow-core/src/git/remote_query.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_SSH_QUERY_CHILD, and leaves Git configuration untouched.
 crates/codeflow-core/src/git/remote_query.rs	env(CHILD,dir.path())	2	Tests re-run their own binary; these calls set only the repository-path markers CODEFLOW_R20_EMPTY_REMOTE and CODEFLOW_REMOTE_REWRITE_CHILD, leaving Git configuration untouched at these spans.
 crates/codeflow-core/src/hooks/conflict_markers.rs	env(CHILD,"1")	1	A test re-runs its own binary; this call sets only the child marker CODEFLOW_R20_ATTRIBUTE_CHILD, and leaves Git configuration untouched.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG"	0	Former guard vocabulary span removed by TSK-283; retained at zero to preserve both parents' inventory and require review if it returns.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG=\"$X\" git config set alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.

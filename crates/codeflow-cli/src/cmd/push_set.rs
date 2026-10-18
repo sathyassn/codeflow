@@ -435,17 +435,12 @@ fn run_ci_ranges(
         if let Some(base) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
-            let mut args = vec![
-                "ci",
-                "--base",
-                &base,
-                "--head",
-                &r.local_sha,
-                "--branch",
-                branch,
-                "--run-level",
-                &running,
-            ];
+            let mut args = vec!["ci", "--base", &base, "--head", &r.local_sha];
+            args.extend(["--branch", branch, "--run-level", &running]);
+            // Range boundaries can be unnamed merge bases. Pass destination
+            // intent separately so CI does not infer it from coincident refs.
+            let into = ci_target(root, r, branch, &judged, policy, report)?;
+            let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
             // which can be another line's tip. A new branch keeps the base.
@@ -467,6 +462,13 @@ fn run_ci_ranges(
                 args.extend(["--destination", url]);
                 if let Ok(listed) = destination.listing(root) {
                     args.push("--advertisement-stdin");
+                    // --into alone denotes a landing check. Supply the
+                    // hook target only with the push-context hand-off.
+                    if base != r.local_sha {
+                        if let Some(into) = &into_arg {
+                            args.push(into);
+                        }
+                    }
                     input = Some(listed);
                 }
             }
@@ -474,6 +476,48 @@ fn run_ci_ranges(
         }
     }
     Ok(())
+}
+
+/// The target the hook hands `codeflow ci`: the branch's declared target
+/// when the same judgement `codeflow ci` makes accepts it, otherwise the
+/// destination's default.
+fn ci_target(
+    root: &Path,
+    pushed: &PushRef,
+    branch: &str,
+    judged: &Judged,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+) -> Result<Option<String>, String> {
+    use super::ci::Declared;
+    let declared = match super::ci::judged_declared_target(
+        root,
+        branch,
+        &pushed.local_sha,
+        &policy.protected_branches,
+    )? {
+        Some(Declared::Eligible(target)) => Some(target),
+        Some(Declared::Rejected { target, reason }) => {
+            report.status.push(format!(
+                "declared target '{target}' {reason}; the check uses the destination's default target"
+            ));
+            None
+        }
+        None => None,
+    };
+    let target = declared.or_else(|| match judged {
+        Judged::Target { target, .. } => Some(target.clone()),
+        _ => None,
+    });
+    if let Some(target) = &target {
+        if !codeflow_core::workgraph::is_stable_work_target(target) {
+            return Err(format!(
+                "target '{target}' must name a stable non-task branch"
+            ));
+        }
+        codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
+    }
+    Ok(target)
 }
 
 /// Refuse the shared acquisition error once before any ref check starts.
@@ -792,7 +836,7 @@ fn run_check_with(
             }
             // A check run at the push gate's level (R-80) that still fails
             // holds a finding that keeps its block: it stops the push.
-            let kept_block = run_level.is_some() && out.status.code() == Some(1);
+            let kept_block = run_level.is_some() && matches!(out.status.code(), Some(1 | 2));
             let mut failed = violation(
                 policy,
                 format!("push set check failed: `{shown}` (output above)"),
@@ -800,9 +844,14 @@ fn run_check_with(
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
                 failed.level = codeflow_core::hooks::PolicyLevel::Block;
+                let reason = if out.status.code() == Some(2) {
+                    "the CI context could not be verified"
+                } else {
+                    "a finding there keeps its block level"
+                };
                 let _ = write!(
                     failed.message,
-                    "; a finding there keeps its block level, so the push stops although \
+                    "; {reason}, so the push stops although \
                      git.test_gate_on_push is {}",
                     policy.test_gate_on_push
                 );
@@ -1363,8 +1412,10 @@ struct RangeBase {
 /// Select a range without excluding any destination-missing commit:
 /// 1. An existing protected/integration fast-forward uses its advertised old
 ///    tip when the destination can be asked.
-/// 2. A branch with a task target at its pushed commit uses the merge base
-///    with that target's advertised tip when the tip is available locally.
+/// 2. A branch with an eligible declared target at its pushed commit uses
+///    that target's advertised tip when available locally. Protected names
+///    must share the destination default's tip. Rejected declarations and
+///    differing protected tips use the destination default instead.
 ///    An unfetched target is noted, even if the fallback finds no base.
 /// 3. An existing branch otherwise uses the historical boundary against all
 ///    locally available advertised tips and its own old sha. A rewrite is
@@ -1383,7 +1434,7 @@ fn range_base(
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
     if let Advertised::Tips(tips) = destination.advertised(root) {
-        if let Some(base) = target_base(root, r, destination.policy, tips, notices)? {
+        if let Some(base) = target_base(root, r, destination, tips, notices)? {
             return Ok(Some(base));
         }
     }
@@ -1440,17 +1491,18 @@ fn range_base(
 
 /// Match the pull request's base without excluding any destination-missing
 /// commit: the selected base is either an advertised tip or its ancestor.
-/// Line rewrites and unavailable targets retain the historical fallback.
+/// Line rewrites and unavailable eligible targets retain the historical fallback.
 fn target_base(
     root: &Path,
     r: &PushRef,
-    policy: &GitPolicy,
+    destination: &Destination<'_>,
     tips: &AdvertisedTips,
     notices: &mut Vec<String>,
 ) -> Result<Option<RangeBase>, String> {
     let Some(branch) = r.remote_branch() else {
         return Ok(None);
     };
+    let policy = destination.policy;
     let line = policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
     let (base, target) = if line {
         let Some(old) = existing_tip(root, r)? else {
@@ -1461,18 +1513,41 @@ fn target_base(
         }
         (old.to_string(), branch.to_string())
     } else {
-        let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+        let declared = super::ci::judged_declared_target(
             root,
             branch,
             &r.local_sha,
-        )
-        .map_err(|error| error.to_string())?;
-        let Some(target) = target else {
+            &policy.protected_branches,
+        )?;
+        let Some(declared) = declared else {
             return Ok(None);
         };
-        if !codeflow_core::workgraph::is_stable_work_target(&target) {
-            return Ok(None);
-        }
+        let default = match destination.answer(root) {
+            Ok(Ok(answer)) => answer.default.as_ref(),
+            _ => None,
+        };
+        let target = match declared {
+            super::ci::Declared::Eligible(target)
+                if !policy.branch_is_protected(&target)
+                    || default.is_some_and(|(_, tip)| {
+                        tips.branches.get(&target) == Some(&tip.to_string())
+                    }) =>
+            {
+                target
+            }
+            super::ci::Declared::Eligible(target)
+            | super::ci::Declared::Rejected { target, .. } => {
+                let Some((name, _)) = default else {
+                    return Err(format!(
+                        "declared target '{target}' cannot bound the range and the destination has no default target"
+                    ));
+                };
+                notices.push(format!(
+                    "declared target '{target}' cannot bound the range; using the destination's default target '{name}'"
+                ));
+                name.clone()
+            }
+        };
         let target = target.as_str();
         let Some(tip) = tips.branches.get(target) else {
             return Ok(None);

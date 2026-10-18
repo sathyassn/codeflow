@@ -725,7 +725,8 @@ fn release_impact_depends_on_base_or_breaking_commit() {
         command.output().unwrap()
     };
     for (extra, env, accepted) in [
-        (&[][..], &[][..], true),
+        // A commit-ID base shared by several destinations needs context.
+        (&[][..], &[][..], false),
         (&["--into", "main"][..], &[][..], false),
         (&["--into", "integration/line"][..], &[][..], true),
         (&[][..], &[("GITHUB_BASE_REF", "main")][..], false),
