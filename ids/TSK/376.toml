@@ -1,0 +1,11 @@
+id = "TSK-376"
+uid = "82f48c7a-39d6-411e-b9a3-8e0856543a62"
+kind = "TSK"
+title = "Keep integrate merge checkouts clean on Windows"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T10:12:50Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
