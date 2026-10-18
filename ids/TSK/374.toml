@@ -1,0 +1,11 @@
+id = "TSK-374"
+uid = "f8d56602-b62c-4eed-a8f0-fb710d9c4aef"
+kind = "TSK"
+title = "Make room in the command and capability guides"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T06:55:19Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
