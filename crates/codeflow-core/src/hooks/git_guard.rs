@@ -1552,7 +1552,7 @@ const WRITING_PROGRAMS: &[&str] = &[
 
 /// A word as the guard shows it in a message: a command substitution the
 /// tokenizer cut out reads as `$(...)`.
-fn shown_word(word: &str) -> String {
+pub(crate) fn shown_word(word: &str) -> String {
     word.replace([git_target::SUBSTITUTED, SUBSTITUTED_BARE], "$(...)")
 }
 
@@ -1775,7 +1775,11 @@ fn unknown_dir_name_violation(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
-fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+pub(crate) fn token_integrity_path(
+    token: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<&'static str> {
     if token.is_empty() {
         return None;
     }
@@ -2659,7 +2663,7 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
 /// (`hooks/pre-commit` under `.git/hooks`). An absolute word, or one from
 /// the home directory, does not depend on the directory and is judged as
 /// written; an option's value after `=` is read as a word.
-fn word_could_name(word: &str) -> Option<&'static str> {
+pub(crate) fn word_could_name(word: &str) -> Option<&'static str> {
     // A word is read whole, and by the value an option or an assignment
     // gives it: `--output=FILE`, `of=FILE` and, for a short option, its
     // attached operand (`-oFILE`, `-OFILE`), since a program writes there.
@@ -3132,14 +3136,35 @@ fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
 }
 
 fn integrity_disk_case(path: &Path) -> Result<PathBuf, String> {
+    integrity_disk_case_with(path, |real| {
+        if let Some(metadata) =
+            crate::absence::existing_metadata(real).map_err(|error| error.to_string())?
+        {
+            super::edit_guard::normalize_case(real, &metadata)?;
+        }
+        Ok(())
+    })
+}
+
+fn integrity_disk_case_with(
+    path: &Path,
+    mut inspect: impl FnMut(&mut PathBuf) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     let mut real = PathBuf::new();
     for component in path.components() {
         real.push(component);
-        if let Some(metadata) =
-            crate::absence::existing_metadata(&real).map_err(|error| error.to_string())?
-        {
-            super::edit_guard::normalize_case(&mut real, &metadata)?;
+        // A prefix is not an entry: `\\?\C:` is incomplete until its root
+        // separator arrives. Canonicalizing a plain `C:` can also read the
+        // drive's working directory instead of the path we are walking.
+        // Inspect names only, as edit_guard::normalized does. Errors on
+        // actual entries still propagate, including unreadable ancestors.
+        if matches!(
+            component,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir
+        ) {
+            continue;
         }
+        inspect(&mut real)?;
     }
     Ok(real)
 }
@@ -3659,54 +3684,89 @@ fn worktree_text(text: &str) -> Option<&'static str> {
 /// The enforcement path a command line names, as text or through a glob
 /// word that reaches one from `cwd` once expanded and resolved
 /// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
-fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    if let Some(p) = enforcement_text(line) {
-        return Some(p.to_string());
-    }
-    // Each word, as split at blanks and as the shell reads it (quotes and
-    // escapes removed, `policy"".json`), and the value of an assignment
-    // (`x=alias/policy.json`), after brace expansion: a glob is expanded,
-    // and a plain path is resolved through symbolic links (TSK-216 round
-    // 16).
+pub(crate) fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
+    line_names_where(line, cwd, payload_cwd, &|_| true, false)
+}
+
+/// Each word of `line` as [`line_names`] reads it: as split at blanks and
+/// as the shell reads it (quotes and escapes removed, `policy"".json`),
+/// and the value of an assignment (`x=alias/policy.json`), before brace
+/// expansion.
+pub(crate) fn line_path_words(line: &str) -> Vec<String> {
     let tokens: Vec<String> = expand_commands(line)
         .iter()
         .flat_map(|segment| shell_tokens(segment))
         .collect();
-    let found = line_words(line)
-        .chain(tokens.iter().map(String::as_str))
+    line_words(line)
+        .map(str::to_string)
+        .chain(tokens)
         .flat_map(|word| {
             let value = word
                 .split_once('=')
                 .filter(|(name, _)| assignment_name(name))
-                .map(|(_, value)| value);
-            std::iter::once(word).chain(value)
+                .map(|(_, value)| value.to_string());
+            std::iter::once(word.clone()).chain(value)
         })
-        .find_map(|word| {
-            let Some(words) = word_readings(word) else {
-                return Some(BRACE_UNREAD.to_string());
-            };
-            words.iter().find_map(|w| {
-                if has_glob(w) {
-                    glob_reach(w, cwd, payload_cwd)
-                } else {
-                    let path = integrity_shell_path(w, cwd);
-                    if w.is_empty() {
-                        return None;
-                    }
-                    match super::edit_guard::repository_enforcement_target(
-                        &path,
-                        payload_cwd,
-                        false,
-                    ) {
-                        Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
-                        Ok(false) => None,
-                        Err(error) => {
-                            Some(format!("cannot read repository enforcement paths: {error}"))
-                        }
+        .collect()
+}
+
+/// The paths a glob word reaches from `cwd`, or `None` when the guard
+/// cannot list them (an unreadable path, or more entries than it reads).
+pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
+    WordGlob::new(word, cwd).expand().ok()
+}
+
+/// [`line_names`] that resolves a plain word only when `worth` says its
+/// path may be an enforcement path, so a caller with a cheap test of its
+/// own skips the file system reads for the rest (TSK-302 review F4). The
+/// text check is unchanged. With `quoted_literal`, a word holding a blank
+/// or a shell operator, which the shell only passes when it was quoted and
+/// therefore never globs, is read as a plain path rather than a glob
+/// (TSK-302 review round 3); git-guard's own reading keeps it off.
+pub(crate) fn line_names_where(
+    line: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+    worth: &dyn Fn(&Path) -> bool,
+    quoted_literal: bool,
+) -> Option<String> {
+    if let Some(p) = enforcement_text(line) {
+        return Some(p.to_string());
+    }
+    // Each word, as split at blanks and as the shell reads it, and the
+    // value of an assignment, after brace expansion: a glob is expanded,
+    // and a plain path is resolved through symbolic links (TSK-216 round
+    // 16).
+    let words = line_path_words(line);
+    let found = words.iter().find_map(|word| {
+        let Some(words) = word_readings(word) else {
+            return Some(BRACE_UNREAD.to_string());
+        };
+        let quoted = quoted_literal
+            && word.contains(|c: char| {
+                matches!(
+                    c,
+                    ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
+                )
+            });
+        words.iter().find_map(|w| {
+            if has_glob(w) && !quoted {
+                glob_reach(w, cwd, payload_cwd)
+            } else {
+                let path = integrity_shell_path(w, cwd);
+                if w.is_empty() || !worth(&path) {
+                    return None;
+                }
+                match super::edit_guard::repository_enforcement_target(&path, payload_cwd, false) {
+                    Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
+                    Ok(false) => None,
+                    Err(error) => {
+                        Some(format!("cannot read repository enforcement paths: {error}"))
                     }
                 }
-            })
-        });
+            }
+        })
+    });
     found
 }
 
@@ -4223,7 +4283,7 @@ fn sed_text_violation(
 /// `None` when that part can select a path in a way the guard does not
 /// model (`-o`, `!`, `-not`, `(`, path or regex tests), so every path may
 /// reach it.
-fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
+pub(crate) fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     let mut names = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -4246,7 +4306,7 @@ fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     (!names.is_empty()).then_some(names)
 }
 
-fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
+pub(crate) fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     let Some(filter) = filter else {
         return true;
     };
@@ -10565,7 +10625,7 @@ fn take_digits(chars: &mut std::str::Chars<'_>, radix: u32, max: usize) -> Optio
 /// \E \f \n \r \t \v \\ \' \" \?`, octal `\NNN`, hex `\xHH`, `\uHHHH`,
 /// `\UHHHHHHHH` and `\cX`. A byte above 0x7f reads as the character of that
 /// number; a NUL is dropped. An unknown escape keeps its backslash.
-fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
+pub(crate) fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
     let mut out = String::new();
     while let Some(c) = chars.next() {
         if c == '\'' {
@@ -10747,6 +10807,18 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         });
     }
     words
+}
+
+/// The shell words of `line` that hold any quoted part, as the shell joins
+/// and decodes them: adjacent quoted pieces form one word
+/// (`'.cla''ude/settings.json'`) and `$'...'` is decoded (TSK-302 review
+/// round 9). A word written with no quote at all is left out.
+pub(crate) fn quoted_shell_words(line: &str) -> Vec<String> {
+    shell_words(line)
+        .into_iter()
+        .filter(|word| word.unquoted_prefix < word.text.len())
+        .map(|word| word.text)
+        .collect()
 }
 
 /// The argument vector the program receives: the segment's words without its
@@ -11285,7 +11357,34 @@ fn flag_value<'a>(args: &'a [&'a str], names: &[&str]) -> Option<&'a str> {
 }
 
 #[cfg(test)]
+mod owned_fixture {
+    use super::*;
+
+    // Injected contexts judge commands in an owned, unborn repository before
+    // its first fetch. The configured origin lets fetch commands be judged too.
+    // Tests of actual refs and policy use evaluate_report_at with their own
+    // populated fixtures. Never consult this source checkout.
+    pub(super) fn evaluate_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init_opts(
+            dir.path(),
+            git2::RepositoryInitOptions::new().initial_head("main"),
+        )
+        .unwrap();
+        let origin = dir.path().join("origin.git");
+        git2::Repository::init_bare(&origin).unwrap();
+        repo.remote("origin", origin.to_str().unwrap()).unwrap();
+        evaluate_report_at(command, context, dir.path())
+    }
+
+    pub(super) fn evaluate(command: &str, context: &GuardContext<'_>) -> Vec<Violation> {
+        evaluate_report(command, context).violations
+    }
+}
+
+#[cfg(test)]
 mod registry_guard_tests {
+    use super::owned_fixture::evaluate;
     use super::*;
 
     fn verdict(command: &str) -> Vec<Violation> {
@@ -11356,6 +11455,85 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disk_case_inspects_names_without_opening_structural_roots() {
+        use std::path::{Component, Path};
+        // Model a platform that cannot open a structural prefix as a file.
+        // Windows canonical temp paths start with a verbatim drive prefix;
+        // it is not a complete directory until the root separator is added.
+        let path = Path::new("/repo/src/notes.txt");
+        let mut inspected = Vec::new();
+        let result = super::integrity_disk_case_with(path, |part| {
+            if !matches!(part.components().next_back(), Some(Component::Normal(_))) {
+                return Err("structural path is not a directory entry".to_string());
+            }
+            inspected.push(part.clone());
+            Ok(())
+        });
+        assert_eq!(result.unwrap(), path);
+        assert_eq!(inspected.len(), 3);
+    }
+
+    #[test]
+    fn disk_case_keeps_unreadable_enforcement_names_as_errors() {
+        let error = super::integrity_disk_case_with(
+            std::path::Path::new("/repo/.codeflow/policy.json"),
+            |part| {
+                if part.ends_with(".codeflow") {
+                    Err("cannot read enforcement directory".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "cannot read enforcement directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disk_case_resolves_verbatim_temp_paths_and_keeps_patterns() {
+        let temp = tempfile::tempdir().unwrap();
+        let verbatim = temp.path().canonicalize().unwrap();
+        let plain = crate::portable_path::canonicalize(temp.path()).unwrap();
+        std::fs::create_dir(verbatim.join("src")).unwrap();
+        for suffix in ["", "src", "src/*.py", "${arr[*]}", "missing/notes.txt"] {
+            assert_eq!(
+                super::integrity_disk_case(&verbatim.join(suffix)).unwrap(),
+                plain.join(suffix),
+                "{suffix}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disk_case_preserves_windows_short_name_resolution() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("Long directory name for path case");
+        std::fs::create_dir(&directory).unwrap();
+        let long: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+        // SAFETY: the input is terminated; a null output queries the size.
+        let size = unsafe { GetShortPathNameW(long.as_ptr(), std::ptr::null_mut(), 0) };
+        assert!(size > 0, "{}", std::io::Error::last_os_error());
+        let mut short = vec![0; size as usize];
+        // SAFETY: the output has the exact size returned by the first call.
+        let written = unsafe { GetShortPathNameW(long.as_ptr(), short.as_mut_ptr(), size) };
+        assert!(written > 0 && written < size);
+        short.truncate(written as usize);
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&short));
+        // Volumes with short names disabled return the long spelling. Both
+        // spellings must resolve; an enabled 8.3 alias exercises that path.
+        assert_eq!(
+            super::integrity_disk_case(&short).unwrap(),
+            crate::portable_path::canonicalize(&directory).unwrap()
+        );
+    }
+
+    use super::owned_fixture::{evaluate, evaluate_report};
     // R22-GUARD-TESTS-BEGIN
     #[cfg(unix)]
     #[test]
@@ -11577,7 +11755,7 @@ mod tests {
             std::env::set_current_dir(dir.path()).unwrap();
             std::fs::remove_dir(dir.path()).unwrap();
             let policy = default_policy();
-            let result = evaluate_report("git status", &ctx(&policy, "feat/x"));
+            let result = super::evaluate_report("git status", &ctx(&policy, "feat/x"));
             assert!(result
                 .violations
                 .iter()
@@ -17796,6 +17974,7 @@ const DISCARD_MISC_OPTIONS: OptionSpec = OptionSpec {
 
 #[cfg(test)]
 mod discard_integration_tests {
+    use super::owned_fixture::evaluate;
     use super::*;
     use std::path::Path;
 
@@ -18053,12 +18232,7 @@ mod sed_grammar_tests {
     /// A repository with enforcement files and ordinary notes.
     fn project() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        // The disk case of a verbatim `\\?\` path cannot be read on Windows.
-        let root = if cfg!(windows) {
-            dir.path().to_path_buf()
-        } else {
-            dir.path().canonicalize().unwrap()
-        };
+        let root = dir.path().canonicalize().unwrap();
         git2::Repository::init(&root).unwrap();
         std::fs::create_dir_all(root.join(".codeflow")).unwrap();
         std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();

@@ -879,7 +879,9 @@ fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(crate::git::remote_query::display_urls(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 
@@ -894,7 +896,9 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
         Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(crate::git::remote_query::display_urls(
+            String::from_utf8_lossy(&out.stderr).trim(),
+        ))
     }
 }
 

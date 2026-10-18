@@ -955,6 +955,9 @@ fn release_role_problem(record: &RecordView, graph: &Graph) -> Option<String> {
 /// A new completion of an already complete task must retain its old review.
 /// An equal active block still counts when the archived history changes.
 pub(super) fn is_recompletion(before: Option<&RecordView>, after: &RecordView) -> bool {
+    if before.is_some_and(|old| super::redaction::preserves(old, after).is_ok()) {
+        return false;
+    }
     let blocks = |record: &RecordView| {
         record
             .superseded_blocks()

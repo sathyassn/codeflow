@@ -255,7 +255,7 @@ catalog! {
         "restore the record's `uid` line as the target has it (`git restore --source <target> -- <path>` restores the whole record), since a uid is written once";
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
-        "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+        "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target; see cf-method/references/project-organization.md#acceptance-waivers-and-redactions for its field and format, or the record-only redaction route ({note})";
     /// A PR body whose Reviews section does not approve the commit the
     /// task's acceptance block binds (issue 121).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
@@ -342,6 +342,10 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// An interpreter given an argument that names, or may name, an
+    /// enforcement path (TSK-302).
+    INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
+        "an interpreter can write any file its arguments name, so the guard refuses one given an enforcement path, or a value it cannot read on a line that names one: read an enforcement file with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin (`python3 tool.py < file`); give ordinary files as literal paths; hooks and policy change through a human or `codeflow update` (ADR-0009)";
     /// A recursive delete of a registered worktree or a directory holding one.
     WORKTREE_DELETE = Step::Git("git worktree remove"),
         "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
@@ -499,9 +503,9 @@ catalog! {
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
-    /// A destination that did not answer for its branches.
+    /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote <remote>` answer (network, credentials), then push again";
+        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";

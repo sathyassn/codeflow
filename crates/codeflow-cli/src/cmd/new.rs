@@ -111,6 +111,17 @@ pub struct TaskArgs {
 /// Task subcommands.
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
+    /// Redact acceptance and criteria text without changing results or review provenance.
+    Redact {
+        /// Task id.
+        id: String,
+        /// Entire replacement record, in a file outside the repository.
+        #[arg(long)]
+        replacement: PathBuf,
+        /// Recheckable reference to the review of this redaction.
+        #[arg(long)]
+        review: String,
+    },
     /// Allocate the next independent `TSK-NNN` and scaffold it.
     New {
         /// Parent epic id. Mutually exclusive with --standalone-reason.
@@ -264,6 +275,30 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
 /// Run `codeflow task`.
 pub fn run_task(args: &TaskArgs) -> i32 {
     let (epic, standalone_reason, integration_target, title) = match &args.command {
+        TaskCommand::Redact {
+            id,
+            replacement,
+            review,
+        } => {
+            let result = super::repo_root().and_then(|root| {
+                let text = std::fs::read_to_string(replacement).map_err(|e| e.to_string())?;
+                codeflow_core::workgraph::status_verb::redact(&root, id, &text, review)
+                    .map_err(|e| e.to_string())
+            });
+            return match result {
+                Ok(path) => {
+                    println!(
+                        "{id}: redacted {}; results and review provenance retained",
+                        path.display()
+                    );
+                    0
+                }
+                Err(error) => {
+                    eprintln!("error: {id}: {error}");
+                    1
+                }
+            };
+        }
         TaskCommand::New {
             follow_up_of: Some(source),
             title,

@@ -59,9 +59,12 @@ impl Git {
     /// Returns an error when git cannot be started.
     pub fn output(&self, args: &[&str]) -> Result<Output, IdsError> {
         self.check_history(args)?;
-        self.command(args)
-            .output()
-            .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))
+        self.command(args).output().map_err(|error| {
+            IdsError::Git(format!(
+                "git {}: {error}",
+                crate::git::remote_query::display_urls(&args.join(" "))
+            ))
+        })
     }
 
     /// Run git with extra environment and return its raw output.
@@ -75,9 +78,12 @@ impl Git {
         for (key, value) in env {
             command.env(key, value);
         }
-        command
-            .output()
-            .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))
+        command.output().map_err(|error| {
+            IdsError::Git(format!(
+                "git {}: {error}",
+                crate::git::remote_query::display_urls(&args.join(" "))
+            ))
+        })
     }
 
     /// Run git and return stdout, failing on a nonzero exit.
@@ -119,8 +125,13 @@ impl Git {
     /// Returns an error naming the command and git's stderr.
     pub fn run_input(&self, args: &[&str], input: &[u8]) -> Result<String, IdsError> {
         self.check_history(args)?;
-        let output = crate::git::output_with_input(&mut self.command(args), input)
-            .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))?;
+        let output =
+            crate::git::output_with_input(&mut self.command(args), input).map_err(|error| {
+                IdsError::Git(format!(
+                    "git {}: {error}",
+                    crate::git::remote_query::display_urls(&args.join(" "))
+                ))
+            })?;
         checked(args, &output)
     }
 
@@ -451,14 +462,14 @@ fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
         String::from_utf8(output.stdout.clone()).map_err(|_| {
             IdsError::Git(format!(
                 "git {}: the answer is not valid UTF-8",
-                args.join(" ")
+                crate::git::remote_query::display_urls(&args.join(" "))
             ))
         })
     } else {
         Err(IdsError::Git(format!(
             "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            crate::git::remote_query::display_urls(&args.join(" ")),
+            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
         )))
     }
 }
@@ -469,8 +480,8 @@ fn checked_bytes(args: &[&str], output: Output) -> Result<Vec<u8>, IdsError> {
     } else {
         Err(IdsError::Git(format!(
             "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            crate::git::remote_query::display_urls(&args.join(" ")),
+            crate::git::remote_query::display_urls(String::from_utf8_lossy(&output.stderr).trim())
         )))
     }
 }
@@ -526,6 +537,26 @@ pub fn z_records(bytes: &[u8]) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_git_commands_redact_url_arguments_and_stderr() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let url = "https://u:FAKE_REGISTRY_TOKEN@host.invalid/repo";
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(128 << 8),
+            stdout: Vec::new(),
+            stderr: format!("fatal: cannot fetch '{url}'").into_bytes(),
+        };
+        for error in [
+            checked(&["fetch", url], &output).unwrap_err(),
+            checked_bytes(&["fetch", url], output).unwrap_err(),
+        ] {
+            let text = error.to_string();
+            assert!(!text.contains("FAKE_REGISTRY_TOKEN"));
+            assert_eq!(text.matches("https://***@host.invalid/repo").count(), 2);
+        }
+    }
 
     #[cfg(unix)]
     fn r20_malformed_answer_child(test: &str, body: &str) -> bool {
