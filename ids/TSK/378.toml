@@ -1,0 +1,11 @@
+id = "TSK-378"
+uid = "4641b36e-0ed5-42c4-9a95-77c0c7e81388"
+kind = "TSK"
+title = "The guards judge every script interpreter the way they judge python and node"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:21:44Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
