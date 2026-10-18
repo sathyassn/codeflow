@@ -138,16 +138,16 @@ epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0011, ADR-0019]
 ```
 
-`codeflow update` refreshes managed scaffold files by ownership class:
+`codeflow update` refreshes managed scaffold files:
 
-- Unmodified files are replaced.
-- User-modified files get a three-way merge from `.codeflow/.baseline/`. A
-  conflict produces a `.new` file and a report.
-- Managed regions are updated in place.
-- User-owned schema-versioned files gain new keys with defaults.
-
-Update also installs missing in-tier manifest entries. It never clobbers and
-never silently skips.
+| Case | Update action |
+|---|---|
+| Unmodified file | Replaces it |
+| User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and a report |
+| Managed region | Updates it in place |
+| User-owned schema-versioned file | Adds new keys with defaults |
+| Missing in-tier manifest entry | Installs it |
+| All classes | Never clobbers or silently skips |
 
 | Version case | What update and a repeated init do |
 |---|---|
