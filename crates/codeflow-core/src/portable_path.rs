@@ -32,7 +32,9 @@ pub fn without_verbatim(path: PathBuf) -> PathBuf {
         // Strip before parsing components: a mixed-separator verbatim path
         // treats `/` as part of a name, and pushing onto a verbatim path
         // collapses `..` before a guard can resolve links or expand globs.
-        if units.starts_with(&[92, 92, 63, 92])
+        if units
+            .get(..4)
+            .is_some_and(|prefix| matches!(prefix, [47 | 92, 47 | 92, 63, 47 | 92]))
             && units
                 .get(4)
                 .is_some_and(|c| matches!(c, 65..=90 | 97..=122))
@@ -263,10 +265,16 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_verbatim_drive_path_reads_as_the_plain_drive() {
-        assert_eq!(
-            without_verbatim(PathBuf::from(r"\\?\C:\Users\a\b.txt")),
-            PathBuf::from(r"C:\Users\a\b.txt")
-        );
+        for path in [
+            r"\\?\C:\Users\a\b.txt",
+            r"\\?\C:/Users/a/b.txt",
+            "//?/C:/Users/a/b.txt",
+        ] {
+            assert_eq!(
+                without_verbatim(PathBuf::from(path)),
+                PathBuf::from(r"C:\Users\a\b.txt")
+            );
+        }
         assert_eq!(
             without_verbatim(PathBuf::from(r"\\?\UNC\server\share\x")),
             PathBuf::from(r"\\?\UNC\server\share\x")

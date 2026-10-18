@@ -484,6 +484,12 @@ mod tests {
         git2::Repository::init(&standalone).unwrap();
         let mut wrong = Vec::new();
         for root in [&standalone, &repo.root, &repo.linked] {
+            let discovered = crate::hooks::repo::open(root).unwrap().unwrap();
+            assert!(
+                crate::hooks::edit_guard::is_own_checkout_location(root, root, false).unwrap(),
+                "checkout {root:?}, discovered workdir {:?}",
+                discovered.workdir()
+            );
             std::fs::create_dir_all(root.join("src")).unwrap();
             for (dir, command) in [
                 (root.clone(), "python3 tool.py ."),
@@ -842,8 +848,13 @@ mod tests {
         let repo = repo();
         let word = format!("{}/.*", repo.linked.display());
         let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root, &repo.root).unwrap();
-        assert!(paths.contains(&repo.linked.join(".git")), "{paths:?}");
-        assert!(paths.contains(&repo.linked.join(".claude")), "{paths:?}");
+        for name in [".git", ".claude"] {
+            let expected = crate::portable_path::canonicalize(&repo.linked.join(name)).unwrap();
+            assert!(
+                paths.contains(&expected),
+                "expected {expected:?}: {paths:?}"
+            );
+        }
         assert_refused(
             &repo,
             &repo.root,
