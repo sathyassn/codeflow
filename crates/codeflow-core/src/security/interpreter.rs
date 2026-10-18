@@ -472,8 +472,7 @@ mod tests {
                 (root.clone(), "python3 -m ruff check ."),
                 (root.clone(), "node x.js ."),
                 (root.join("src"), "python3 tool.py .."),
-                (root.clone(), "python3 tool.py /"),
-                (root.clone(), "python3 tool.py /tmp"),
+                (root.join("src"), "python3 tool.py ."),
             ] {
                 let findings = judge_in(&repo, &dir, root, command, PolicyLevel::Block);
                 if !findings.is_empty() {
@@ -482,6 +481,31 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn linked_checkout_ancestors_refuse() {
+        let repo = repo();
+        let commands = [
+            "python3 tool.py ../..".to_string(),
+            "python3 tool.py \"@ROOT@\"".to_string(),
+            "python3 tool.py ../../.worktrees".to_string(),
+            "python3 tool.py ..".to_string(),
+        ];
+        #[cfg(unix)]
+        let commands = {
+            let mut commands = Vec::from(commands);
+            let alias = repo.root.parent().unwrap().join("ancestor-alias");
+            std::os::unix::fs::symlink(&repo.root, &alias).unwrap();
+            commands.push(format!("python3 tool.py \"{}\"", alias.display()));
+            commands
+        };
+        assert_refused(
+            &repo,
+            &repo.linked,
+            &repo.linked,
+            &commands.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
     }
 
     #[cfg(unix)]

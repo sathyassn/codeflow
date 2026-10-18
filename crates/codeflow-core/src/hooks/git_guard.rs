@@ -1916,7 +1916,7 @@ pub(crate) fn resolved_path_integrity(
 }
 
 /// Interpreter operands share the writer's file checks. A project location
-/// equal to or above the checkout the interpreter runs in does not itself
+/// equal to the checkout the interpreter runs in does not itself
 /// name a different checkout to modify.
 pub(crate) fn interpreter_path_integrity(
     path: &Path,
@@ -1926,7 +1926,7 @@ pub(crate) fn interpreter_path_integrity(
     path_integrity(path, cwd, payload_cwd)
         .map(str::to_string)
         .or_else(
-            || match super::edit_guard::own_checkout_ancestor(path, cwd) {
+            || match super::edit_guard::is_own_checkout_root(path, cwd) {
                 Ok(true) => None,
                 Ok(false) => checkout_under(path, cwd, payload_cwd, None)
                     .map(|checkout| format!("the registered worktree {}", checkout.description())),

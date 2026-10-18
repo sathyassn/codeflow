@@ -8457,6 +8457,10 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     // main checkout's are refused too.
     for command in [
         "python3 tool.py .git".to_string(),
+        "python3 tool.py ../..".to_string(),
+        format!("python3 tool.py \"{repo}\""),
+        "python3 tool.py ../../.worktrees".to_string(),
+        "python3 tool.py ..".to_string(),
         "python3 edit.py .codeflow/policy.json".to_string(),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
     ] {
@@ -8481,11 +8485,16 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             "python3 -m pip install -e .",
             "python3 -m ruff check .",
             "node x.js .",
-            "cd src && python3 tool.py ..",
         ] {
             let out = exec_guard_contract_3(cwd, command);
             if out.status.code() != Some(0) {
                 wrong.push(format!("should allow in {cwd:?}: {command}: {out:?}"));
+            }
+        }
+        for command in ["python3 tool.py ..", "python3 tool.py ."] {
+            let out = exec_guard_contract_3(&cwd.join("src"), command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}/src: {command}: {out:?}"));
             }
         }
     }
@@ -8496,6 +8505,12 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         std::fs::create_dir(&plain).unwrap();
         std::os::unix::fs::symlink(&root, &alias).unwrap();
         std::os::unix::fs::symlink(&linked, plain.join("x")).unwrap();
+        let command = format!("python3 tool.py \"{}\"", shell_path(&alias));
+        let out = exec_guard_contract_3(&linked, &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("should refuse ancestor alias: {command}: {out:?}"));
+        }
         for path in [
             alias.join(".worktrees/w/.git"),
             alias.join(".worktrees/w/.g*"),

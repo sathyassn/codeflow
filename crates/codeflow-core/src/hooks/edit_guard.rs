@@ -826,10 +826,10 @@ fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, 
     })
 }
 
-/// An interpreter commonly receives its own checkout or an ancestor as a
+/// An interpreter commonly receives its own checkout as a
 /// project location. This exemption is only for checkout-root reach; exact
 /// enforcement files and directories still take their normal checks.
-pub(crate) fn own_checkout_ancestor(target: &Path, root: &Path) -> Result<bool, String> {
+pub(crate) fn is_own_checkout_root(target: &Path, root: &Path) -> Result<bool, String> {
     let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(false);
     };
@@ -837,7 +837,7 @@ pub(crate) fn own_checkout_ancestor(target: &Path, root: &Path) -> Result<bool, 
         return Ok(false);
     };
     let target = normalized(target, true).map_err(|error| error.to_string())?;
-    Ok(own[1].starts_with(target))
+    Ok(target == own[1])
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
