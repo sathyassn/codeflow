@@ -1,0 +1,11 @@
+id = "TSK-380"
+uid = "40e1e95a-c954-4108-8483-756e5a933834"
+kind = "TSK"
+title = "A search pattern given to rg or grep is never read as a write target"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
