@@ -61,7 +61,8 @@ GREEN_JOBS = [job("codeflow gates (coverage)"), job("codeflow gates"), job("wind
 
 def run(**changes):
     record = {"id": 77, "run_number": 5, "run_attempt": 1, "event": "pull_request", "head_sha": HEAD,
-              "path": WORKFLOW, "status": "completed", "conclusion": "success"}
+              "path": WORKFLOW, "status": "completed", "conclusion": "success",
+              "pull_requests": [{"number": 95, "base": {"ref": "main"}}]}
     record.update(changes)
     return record
 
@@ -142,6 +143,24 @@ class DecisionTests(unittest.TestCase):
     def test_the_newest_run_decides_even_when_an_older_one_passed(self):
         runs = [run(), run(id=78, run_number=6, conclusion="failure")]
         self.assertIn("run 78", self.skipped(api=FakeApi(runs=runs)))
+
+    def test_a_newer_success_for_another_pull_request_is_not_reused(self):
+        runs = [run(), run(id=78, run_number=6,
+                           pull_requests=[{"number": 96, "base": {"ref": "main"}}])]
+        self.assertIn("merged pull request #95 into main",
+                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+
+    def test_a_newer_success_into_integration_is_not_reused(self):
+        runs = [run(), run(id=78, run_number=6,
+                           pull_requests=[{"number": 95, "base": {"ref": "integration/epic"}}])]
+        self.assertIn("merged pull request #95 into main",
+                      self.skipped(api=FakeApi(runs=runs, jobs={77: GREEN_JOBS, 78: GREEN_JOBS})))
+
+    def test_a_run_without_pull_request_associations_is_not_reused(self):
+        for associations in ([], None):
+            with self.subTest(associations=associations):
+                self.assertIn("merged pull request #95 into main",
+                              self.skipped(api=FakeApi(runs=[run(pull_requests=associations)])))
 
     def test_another_workflow_another_event_or_another_head_runs_everything(self):
         for other in (run(path=".github/workflows/codeflow-policy.yml"), run(event="push"),

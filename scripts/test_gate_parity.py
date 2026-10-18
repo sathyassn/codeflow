@@ -675,6 +675,7 @@ class HostedEventParityControls(unittest.TestCase):
         return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
 
     def test_ready_integration_conditions_keep_both_verdict_contracts(self):
+        self.assertEqual(gate_event_condition(WORKFLOW), self.READY)
         workflow = self.ready_workflow()
         self.assertEqual(parity.gate_part_problems(CONFIG, workflow), [])
         self.assertEqual(parity.windows_verdict_problems(workflow), [])
