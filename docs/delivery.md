@@ -135,7 +135,7 @@ or CI runs.**
 |---|---|---|
 | Start | The task record exists and is anchored: in the epic's planning change, or, for a standalone task, at head on its own branch. Code predecessors are complete, or reviewed and pinned with `--on TSK-NNN@<sha>` | `codeflow work claim`, `codeflow work start`; CI applies the same read-only check once per pull request |
 | Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
-| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Every other record's criteria stay frozen, except that a pull request of planning records only that names a completed standalone task, or its follow-up, may correct the wording of that task's criteria, keeping every criterion and tag (ADR-0080) | `codeflow ci` |
+| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Other records' criteria stay frozen except for completed standalone wording corrections (ADR-0080) and record-only redactions (ADR-0084). Both preserve every criterion and tag; see [acceptance waivers and redactions](#acceptance-waivers-and-redactions) | `codeflow ci` |
 | Evidence | The builder cites targeted tests and the quick gate (`codeflow test --mode quick`) with revision and command. The pull request stays a draft until its evidence exists | The reviewer |
 | Review | Every criterion not marked deferred has evidence on the reviewed revision, the needed checks are green, no material finding is open and every nit has a disposition | The other-lineage reviewer |
 | Landing | Each completion is bound to its reviewed commit. A merge from the first-parent line of the target tip the run is judged against (CI's base, never a local branch), whose recorded result equals the conflict-free automatic merge of its parents, keeps the binding, so the builder can take a moved target without a new review; any other later change unbinds it. Predecessors are complete at the merge base | `codeflow ci`, `codeflow task status complete` |
@@ -149,13 +149,41 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Acceptance waivers and redactions
+
+A completed task can have personal or customer names removed from its
+criteria wording and acceptance evidence without losing its results.
+`codeflow task redact TSK-NNN --replacement <file> --review <reference>`
+reads an edited copy outside the repository and writes the record with its
+original SHA-256 digest, source commit and separate redaction review.
+
+- The pull request changes only that task record, on a `plan/` branch from
+  its integration target, and names the task on its `Task:` line.
+- Status, criterion identifiers and tags, every result, `reviewed`, original
+  review provenance and verdict remain unchanged. Superseded blocks can be
+  redacted too, and unrelated commits already on the line do not prevent it.
+- A reviewer confirms unchanged meaning. The original text remains in Git
+  history; the command removes it from the current record only.
+
+A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
+`acceptance.criteria` records a changed criterion result. The amendment
+changes that criterion and planning records only, and the completion
+contains it. A task may name an amendment on its target. Before its first
+landing, its own record-only amendment may also be after the range's
+merge-base and strictly before `reviewed` in ancestry, never equal to either
+endpoint. Reopened ranges do not use that own-range allowance.
+
+The installed `cf-method/references/project-organization.md` section
+"Acceptance waivers and redactions" owns the field definitions and workflow.
+ADR-0084 records the redaction exception to the frozen-record rule.
+
 ### When something changes midway
 
 | Situation | What happens |
 |---|---|
 | It changes intent, behaviour, an interface or a safety boundary | Both seats weigh it and the operator decides the intent; the change rides in one epic amendment on a `plan/` branch |
 | It is inside the open task's outcome | Handled in the same open pull request: a finding is fixed and its finder confirms; a sharper criterion is printed by CI and approved by the reviewer |
-| It affects a task already landed | That task is reopened and fixed in one pull request |
+| It affects a task already landed | That task is reopened and fixed in one pull request, unless it qualifies for a wording correction or record-only redaction |
 | It is a new or split outcome | One batched epic amendment with one other-lineage reviewer; nothing plans again per task |
 | A predecessor built on changes after review | Rebase on its new reviewed head and recheck what it touches |
 | The batch gate is red | Diagnose first. When evidence attributes the failure to a member, drop it and its dependents, fix in that task's pull request and regate the rest; a runner or environment defect is fixed at its owner and the same candidate regated |

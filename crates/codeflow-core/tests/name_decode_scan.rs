@@ -4569,6 +4569,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:record-section-markdown-lines",
     ),
+    // Redaction compares Markdown bodies after restoring allowed regions; LF/CRLF separates record lines, never Git paths or review references.
+    (
+        "crates/codeflow-core/src/workgraph/redaction.rs",
+        "preserves",
+        "lines",
+        2,
+        "framing:record-redaction-lines",
+    ),
+    // Only rejects blank or placeholder review prose; the stored provenance and its comparison remain exact.
+    (
+        "crates/codeflow-core/src/workgraph/redaction.rs",
+        "preserves",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
+    // Removes the renderer's trailing LF before restoring a redacted acceptance block into its existing Markdown fence.
+    (
+        "crates/codeflow-core/src/workgraph/redaction.rs",
+        "retained_completion",
+        "trim_end_matches",
+        1,
+        "format-contract",
+    ),
     // A failed read shortens the chain, and each consumer of contains-false is the strict side: off_line refuses the bridge, uncovered withholds legacy, and line_of None judges the merge as direct work.
     (
         "crates/codeflow-core/src/workgraph/release_line.rs",
@@ -5571,6 +5595,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "recall-index-file-records",
         "crates/codeflow-core/src/recall.rs",
         "index_file",
+    ),
+    (
+        "record-redaction-lines",
+        "crates/codeflow-core/src/workgraph/redaction.rs",
+        "preserves",
     ),
     (
         "record-section-lines",
