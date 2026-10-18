@@ -1,0 +1,11 @@
+id = "TSK-402"
+uid = "646db483-9a9a-420a-9bb8-b0163ff42136"
+kind = "TSK"
+title = "A landed task reaches another line through a checked merge, and its landed branches can be cleaned up"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T18:04:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
