@@ -445,6 +445,9 @@ catalog! {
     /// A base git itself refuses to resolve, naming git's own cause.
     CI_BASE_REFUSED = Step::Codeflow("codeflow ci"),
         "fix the cause git names, such as a replace ref it cannot follow or a `GIT_REPLACE_REF_BASE` without a trailing slash, which git 2.55 and later refuse; then rerun `codeflow ci --base <ref> --head <ref>`";
+    /// A named range base differs from the branch's declared acceptance target.
+    CI_BASE_TARGET_DIFFER = Step::Codeflow("codeflow ci"),
+        "name both choices explicitly: `codeflow ci --base <ref> --into <target>` uses the base for the range and the target for acceptance binding";
     /// A range git could not diff or list.
     CI_RANGE_UNREADABLE = Step::Git("git fetch"),
         "fetch the whole range (`git fetch --unshallow`, or a CI checkout with fetch-depth 0), then rerun `codeflow ci`";
