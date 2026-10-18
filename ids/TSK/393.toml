@@ -1,0 +1,11 @@
+id = "TSK-393"
+uid = "6cc32056-6052-4eaa-8702-87e7acdc1cbc"
+kind = "TSK"
+title = "A re-push judges project paths from the target's policy"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:23:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
