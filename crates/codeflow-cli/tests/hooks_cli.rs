@@ -8308,6 +8308,35 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         format!("W={tree}; python3 - \"$W/.claude/settings.json\" <<'PY'\nimport sys\nPY"),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
         format!("python3 edit.py \"{tree}/.claude/settings.json\""),
+        format!("python3 tool.py \"{tree}/\".*"),
+        format!("python3 tool.py \"{tree}/\".cla*"),
+        format!("python3 tool.py \"{repo}/\".worktrees/*"),
+        "python3 tool.py .worktrees/w/{.git,.claude}".to_string(),
+        "python3 tool.py .worktrees/{w,x}/.git".to_string(),
+        "python3 tool.py .worktrees/w/.git{,}".to_string(),
+        "python3 tool.py .worktrees/w/.git".to_string(),
+        "python3 tool.py .WORKTREES/W/.GIT".to_string(),
+        "node tool.js .worktrees/w/.git".to_string(),
+        "python3 tool.py .claude".to_string(),
+        "python3 tool.py .worktrees/w".to_string(),
+        "python3 tool.py .worktrees".to_string(),
+        "python3 tool.py .worktrees/w/*(D)".to_string(),
+        "python3 tool.py .claude/*(D)".to_string(),
+        "python3 tool.py .cla(ude)/settings.json".to_string(),
+        "python3 tool.py .worktrees/w/(.git|x)".to_string(),
+        "python3 tool.py .worktrees/w/.g(i)t".to_string(),
+        "python3 tool.py .worktrees/w/@(.git|.claude)".to_string(),
+        "python3 tool.py .worktrees/w/^src(D)".to_string(),
+        "python3 tool.py *(D)".to_string(),
+        "python3 tool.py .worktrees/w/<1-9>".to_string(),
+        "cd .cla* && python3 tool.py settings.json".to_string(),
+        "cd .c?aude && python3 tool.py settings.json".to_string(),
+        "cd .[c]laude && python3 tool.py settings.json".to_string(),
+        "cd {.claude,x} && python3 tool.py settings.json".to_string(),
+        "pushd .cla* && python3 tool.py settings.json".to_string(),
+        "env -C .cla* python3 tool.py settings.json".to_string(),
+        "ruby -C .cla* tool.rb settings.json".to_string(),
+        "cd .wor* && python3 tool.py w/.g*".to_string(),
         "python3 -c 'import sys' .claude/settings.json".to_string(),
         "node -e 'x' .codeflow/policy.json".to_string(),
         "perl -i -pe 's/a/b/' .claude/settings.json".to_string(),
@@ -8373,6 +8402,19 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "osascript -e 'do shell script \"python3 tool.py .git/config\"'".to_string(),
     ];
     let allowed = [
+        "python3 tool.py \"foo (bar)\"",
+        "python3 tool.py \"x (y)\"",
+        "python3 tool.py \"x (y)\" notes.txt",
+        "python3 tool.py \"print(x)\"",
+        "python3 tool.py \"my file(1).txt\"",
+        "python3 tool.py 'notes (draft).md'",
+        "node x.js --filter \"(a|b)\"",
+        "python3 tool.py .",
+        "python3 -m pytest .",
+        "python3 -m black .",
+        "python3 -m pip install -e .",
+        "python3 -m ruff check .",
+        "node x.js .",
         "python3 edit.py notes.txt out.json",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
@@ -8458,6 +8500,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     // From inside the linked worktree, its own enforcement files and the
     // main checkout's are refused too.
     for command in [
+        "python3 tool.py .git".to_string(),
+        "python3 tool.py ../..".to_string(),
+        format!("python3 tool.py \"{repo}\""),
+        "python3 tool.py ../../.worktrees".to_string(),
+        "python3 tool.py ..".to_string(),
         "python3 edit.py .codeflow/policy.json".to_string(),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
     ] {
@@ -8472,6 +8519,229 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             let err = String::from_utf8_lossy(&out.stderr);
             wrong.push(format!("should allow: {command}: {err}"));
         }
+    }
+    for cwd in [&root, &linked] {
+        std::fs::create_dir_all(cwd.join("src")).unwrap();
+        for command in [
+            "python3 tool.py .",
+            "python3 -m pytest .",
+            "python3 -m black .",
+            "python3 -m pip install -e .",
+            "python3 -m ruff check .",
+            "node x.js .",
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}: {command}: {out:?}"));
+            }
+        }
+        for command in ["python3 tool.py ..", "python3 tool.py ."] {
+            let out = exec_guard_contract_3(&cwd.join("src"), command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}/src: {command}: {out:?}"));
+            }
+        }
+    }
+    let src = root.join("src");
+    let parent = shell_path(root.parent().unwrap());
+    for (cwd, paths) in [
+        (
+            &linked,
+            vec!["../..", "..", "../../..", "../../.worktrees", &repo],
+        ),
+        (&root, vec!["..", &parent]),
+        (&src, vec!["../.."]),
+    ] {
+        for path in paths {
+            for command in [
+                format!(r#"python3 -c 'import shutil; shutil.rmtree("{path}")'"#),
+                format!(r#"node -e 'require("fs").rmSync("{path}",{{recursive:true}})'"#),
+                format!(r#"perl -e 'use File::Path qw(remove_tree); remove_tree("{path}")'"#),
+                format!(r#"ruby -e 'require "fileutils"; FileUtils.rm_rf("{path}")'"#),
+            ] {
+                let out = exec_guard_contract_3(cwd, &command);
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!(
+                        "should refuse code path in {cwd:?}: {command}: {out:?}"
+                    ));
+                }
+            }
+        }
+    }
+    let filesystem_root = root.ancestors().last().unwrap().to_string_lossy();
+    let plain_root = filesystem_root
+        .trim_start_matches(r"\\?\")
+        .replace('\\', "/");
+    for cwd in [&root, &linked, &src] {
+        for suffix in ["", ".", ".."] {
+            let path = format!("{plain_root}{suffix}");
+            let command = format!(r#"python3 -c 'print("{path}")'"#);
+            let out = exec_guard_contract_3(cwd, &command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code root in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+        for command in [
+            r#"python3 -c 'print("/.")'"#,
+            r#"python3 -c 'print("/..")'"#,
+            r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code fragment in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        let alias = tmp.path().join("alias");
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        std::os::unix::fs::symlink(&linked, plain.join("x")).unwrap();
+        let command = format!("python3 tool.py \"{}\"", shell_path(&alias));
+        let out = exec_guard_contract_3(&linked, &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("should refuse ancestor alias: {command}: {out:?}"));
+        }
+        for path in [
+            alias.join(".worktrees/w/.git"),
+            alias.join(".worktrees/w/.g*"),
+            alias.join(".worktrees/*/.git"),
+            plain.join("x/.git"),
+        ] {
+            // Each harness runs both hooks. Interpreter arguments belong
+            // to exec-guard; writer operands and redirects to git-guard.
+            for (hook, command) in [
+                (
+                    "exec-guard",
+                    format!("python3 tool.py {}", shell_path(&path)),
+                ),
+                ("git-guard", format!("cp x {}", shell_path(&path))),
+                ("git-guard", format!("echo hi > {}", shell_path(&path))),
+            ] {
+                let out = if hook == "exec-guard" {
+                    exec_guard_contract_3(&root, &command)
+                } else {
+                    guard_run(&command, &root)
+                };
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!("{hook} should refuse alias: {command}: {out:?}"));
+                }
+            }
+        }
+    }
+    let command = "python3 tool.py ~/repo/.worktrees/w/.git";
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!("should refuse: {command}: {out:?}"));
+    }
+    let many = root.join("many");
+    std::fs::create_dir(&many).unwrap();
+    for n in 0..5000 {
+        std::fs::write(many.join(format!("f{n}")), "").unwrap();
+    }
+    let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(0) {
+        wrong.push(format!("should allow the contained ordinary glob: {err}"));
+    }
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": "python3 tool.py many/*"}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("GIT_CONFIG_GLOBAL", many.join("f0"))
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!(
+            "should refuse a glob holding configured authority: {out:?}"
+        ));
+    }
+    for command in [
+        "python3 tool.py many/*/../../.claude/settings.json",
+        "python3 tool.py many/*/../.claude/x",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+            wrong.push(format!("should refuse an escaping glob: {command}: {err}"));
+        }
+    }
+    for (command, refuse) in [
+        ("tee many/*/../../.cla[u]de/settings.json < x", true),
+        ("tee many/*/../.claude/x < x", true),
+        ("rm many/*.o", false),
+        ("printf '%s\\n' many/* | xargs rm", false),
+    ] {
+        let out = guard_run(command, &root);
+        let err = String::from_utf8_lossy(&out.stderr);
+        let correct = if refuse {
+            out.status.code() == Some(2) && err.contains("git.hook_integrity")
+        } else {
+            out.status.code() == Some(0)
+        };
+        if !correct {
+            wrong.push(format!("{command}: refuse={refuse}: {err}"));
+        }
+    }
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/many", "many/linked"],
+    );
+    for protected in ["linked", ".claude"] {
+        if protected == ".claude" {
+            git(&root, &["worktree", "remove", "many/linked"]);
+            std::fs::create_dir(many.join(protected)).unwrap();
+        }
+        for (hook, command) in [
+            ("exec-guard", "python3 tool.py many/*"),
+            ("git-guard", "tee many/* < x"),
+        ] {
+            let out = if hook == "exec-guard" {
+                exec_guard_contract_3(&root, command)
+            } else {
+                guard_run(command, &root)
+            };
+            let err = String::from_utf8_lossy(&out.stderr);
+            if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+                wrong.push(format!(
+                    "should refuse glob holding {protected}: {command}: {err}"
+                ));
+            }
+        }
+    }
+    let other = tmp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    enforced_repo(&other);
+    git(&other, &["worktree", "add", "-b", "task/away", "away/w"]);
+    let command = format!("env -C \"{}\" python3 tool.py away/w", shell_path(&other));
+    let out = exec_guard_contract_3(&root, &command);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2) || !err.contains("interpreter") {
+        wrong.push(format!(
+            "should refuse in another repository: {command}: {err}"
+        ));
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

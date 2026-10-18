@@ -535,9 +535,7 @@ pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
 /// shell sentence named remote-tracking metadata for it).
 pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuration file";
 
-// File edits cannot establish which config keys are safe. The Git command
-// checker still permits ordinary `git config --global user.name ...` updates.
-pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
+fn global_git_config_paths(root: &Path) -> Vec<PathBuf> {
     // Every home a shell of this user may read, as the startup class
     // reads them: `HOME`, and `USERPROFILE` where it names another
     // directory (TSK-242 review round 14).
@@ -558,6 +556,26 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
             paths.push(root.join(path));
         }
     }
+    paths
+}
+
+/// A glob fallback must not hide a configured authority file beneath its
+/// enclosing directory, even when that file has an ordinary name.
+pub(crate) fn holds_global_git_config(target: &Path, root: &Path) -> bool {
+    let paths = global_git_config_paths(root);
+    [false, true].into_iter().any(|resolve| {
+        normalized(target, resolve).map_or(true, |target| {
+            paths.iter().any(|path| {
+                normalized(path, resolve).map_or(true, |path| path.starts_with(&target))
+            })
+        })
+    })
+}
+
+// File edits cannot establish which config keys are safe. The Git command
+// checker still permits ordinary `git config --global user.name ...` updates.
+pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
+    let paths = global_git_config_paths(root);
     // git reads its system file under the prefix it was built with
     // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
     // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
@@ -648,7 +666,7 @@ pub(crate) fn included_git_config_files(
 
 /// Every checkout sharing this repository: its own working tree, the main
 /// working tree and each registered linked worktree.
-fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
     let mut roots = Vec::new();
     if let Some(workdir) = repo.workdir() {
         roots.push(workdir.to_path_buf());
@@ -694,6 +712,13 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         .collect();
     let mut protected = Vec::new();
     for root in checkout_roots(repo)? {
+        // A linked checkout's pointer is an enforcement file in its own
+        // right. Resolve this path like every other protected path, so an
+        // alias outside the repository cannot hide the checkout spelling.
+        // Its ancestor base is itself: an ordinary checkout root is not
+        // an enforcement directory merely because it contains this file.
+        let marker = root.join(".git");
+        protected.push((marker.clone(), false, marker));
         for (relative, directory) in &patterns {
             // A linked checkout's .git is a pointer file. Git-owned paths
             // below it live in the shared administrative directory instead.
@@ -746,8 +771,18 @@ type Protected = std::rc::Rc<Vec<ProtectedPath>>;
 
 type ProtectedCache = std::collections::HashMap<PathBuf, Result<Option<Protected>, String>>;
 
+struct CheckoutPaths {
+    own: Option<[PathBuf; 2]>,
+    roots: Vec<(PathBuf, [PathBuf; 2])>,
+}
+
+type CheckoutCache =
+    std::collections::HashMap<PathBuf, Result<Option<std::rc::Rc<CheckoutPaths>>, String>>;
+
 thread_local! {
     static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
+        const { std::cell::RefCell::new(None) };
+    static CHECKOUTS: std::cell::RefCell<Option<CheckoutCache>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -769,6 +804,9 @@ impl RepoFactsScope {
             }
             outer
         });
+        if outer {
+            CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+        }
         Self { outer }
     }
 }
@@ -777,8 +815,52 @@ impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
+            CHECKOUTS.with(|cache| *cache.borrow_mut() = None);
         }
     }
+}
+
+fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, String> {
+    let read = || {
+        let Some(repo) = super::repo::open(root)? else {
+            return Ok(None);
+        };
+        let both = |path: &Path| -> Result<[PathBuf; 2], String> {
+            Ok([
+                normalized(path, false).map_err(|error| error.to_string())?,
+                normalized(path, true).map_err(|error| error.to_string())?,
+            ])
+        };
+        let own = repo.workdir().map(both).transpose()?;
+        let roots = checkout_roots(&repo)?
+            .into_iter()
+            .map(|root| both(&root).map(|paths| (root, paths)))
+            .collect::<Result<_, _>>()?;
+        Ok(Some(std::rc::Rc::new(CheckoutPaths { own, roots })))
+    };
+    CHECKOUTS.with(|cache| match cache.borrow_mut().as_mut() {
+        Some(map) => map.entry(root.to_path_buf()).or_insert_with(read).clone(),
+        None => read(),
+    })
+}
+
+/// An argv operand can name its current checkout as a project location.
+/// A code string can also name the filesystem root as a fragment, such as
+/// "/." in a runtime concatenation. Other ancestors still reach registered
+/// checkouts. Neither exemption applies to enforcement files.
+pub(crate) fn is_own_checkout_location(
+    target: &Path,
+    root: &Path,
+    code_literal: bool,
+) -> Result<bool, String> {
+    let Some(checkouts) = checkout_paths_at(root)? else {
+        return Ok(false);
+    };
+    let Some(own) = &checkouts.own else {
+        return Ok(false);
+    };
+    let target = normalized(target, true).map_err(|error| error.to_string())?;
+    Ok(target == own[1] || (code_literal && target.has_root() && target.parent().is_none()))
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
@@ -942,20 +1024,19 @@ pub(crate) fn registered_checkout_under(
     root: &Path,
     except: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(repo) = super::repo::open(root)? else {
+    let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(None);
     };
-    let checkouts = checkout_roots(&repo)?;
     let except: Vec<PathBuf> = except
         .into_iter()
         .flat_map(|path| [normalized(path, false), normalized(path, true)])
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    for resolve in [false, true] {
+    for (reading, resolve) in [false, true].into_iter().enumerate() {
         let target = normalized(target, resolve).map_err(|e| e.to_string())?;
-        for checkout in &checkouts {
-            let path = normalized(checkout, resolve).map_err(|e| e.to_string())?;
-            if path.starts_with(&target) && !except.contains(&path) {
+        for (checkout, paths) in &checkouts.roots {
+            let path = &paths[reading];
+            if path.starts_with(&target) && !except.contains(path) {
                 return Ok(Some(checkout.clone()));
             }
         }

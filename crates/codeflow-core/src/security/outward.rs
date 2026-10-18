@@ -27,7 +27,7 @@ pub(crate) fn evaluate_at(
     for code in &parsed.code {
         let words = literal_words(code);
         for at in 0..words.len() {
-            argv(&words[at..], cwd, 0, &mut embedded);
+            argv(&words[at..], None, cwd, 0, &mut embedded);
         }
     }
     let mut families = parsed.families;
@@ -142,6 +142,8 @@ pub(crate) struct InterpreterCall {
     /// word after the code or script boundary. Inline code is left out.
     /// Any of them can name a file the program writes.
     pub(crate) args: Vec<String>,
+    /// Whether each argument held unquoted pattern or brace syntax.
+    pub(crate) patterns: Vec<bool>,
     /// The directory the call runs in; `None` after a `cd` the guard
     /// cannot follow.
     pub(crate) cwd: Option<PathBuf>,
@@ -321,8 +323,10 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         .or_else(|| crate::hooks::git_guard::configuration_line_backstop(command));
     let mut directories = vec![cwd.map(Path::to_path_buf)];
     for segment in expand_commands(command) {
-        let mut words = command_argv(&segment);
+        let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
+        let before = words.len();
         strip_reserved_words(&mut words);
+        patterns.drain(..before - words.len());
         let trigger = crate::hooks::git_guard::configuration_environment_trigger(&words);
         if skip_assignments(&words).is_empty() {
             persistent = trigger.clone().or(persistent);
@@ -330,17 +334,25 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         persistent = crate::hooks::git_guard::configuration_shell_change(&segment).or(persistent);
         out.config_trigger = trigger.or_else(|| persistent.clone());
         let mut assigned = skip_assignments(&words).to_vec();
+        let mut assigned_patterns = patterns[words.len() - assigned.len()..].to_vec();
         if let Some(setting) = words
             .iter()
             .take_while(|s| s.contains('='))
             .find(|s| s.starts_with("GIT_DIR="))
         {
             assigned.splice(0..0, ["env".to_string(), setting.clone()]);
+            assigned_patterns.splice(0..0, [false, false]);
         }
         let args = assigned.as_slice();
         let before = out.stdin_interpreter;
         for dir in &directories {
-            argv(args, dir.as_deref(), depth + 1, out);
+            argv(
+                args,
+                Some(&assigned_patterns),
+                dir.as_deref(),
+                depth + 1,
+                out,
+            );
         }
         if out.stdin_interpreter > before && command.contains("<<") {
             if let Some((_, body)) = command.split_once('\n') {
@@ -654,6 +666,27 @@ fn env_options(
     Some(at)
 }
 
+/// Resolve a directory operand consistently for shell, env and Ruby moves.
+pub(crate) fn directory_operand(operand: &str, home: Option<&Path>) -> DirChange {
+    if crate::hooks::git_guard::unresolved_word(operand)
+        || crate::hooks::git_guard::has_glob(operand)
+        || operand.contains(['{', '}'])
+        || operand == "-"
+    {
+        return DirChange::Unknown;
+    }
+    if let Some(tail) = operand
+        .strip_prefix("~/")
+        .or((operand == "~").then_some(""))
+    {
+        return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
+    }
+    if operand.starts_with(['~', '+']) {
+        return DirChange::Unknown;
+    }
+    DirChange::To(PathBuf::from(operand))
+}
+
 fn launcher_changes(
     words: &[String],
     home: Option<&Path>,
@@ -679,21 +712,7 @@ fn launcher_changes(
         return;
     };
     let rest = &words[at + 1..];
-    let target = |operand: &str| -> DirChange {
-        if crate::hooks::git_guard::unresolved_word(operand) || operand == "-" {
-            return DirChange::Unknown;
-        }
-        if let Some(tail) = operand
-            .strip_prefix("~/")
-            .or((operand == "~").then_some(""))
-        {
-            return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
-        }
-        if operand.starts_with(['~', '+']) {
-            return DirChange::Unknown;
-        }
-        DirChange::To(PathBuf::from(operand))
-    };
+    let target = |operand: &str| directory_operand(operand, home);
     // A GNU-prefixed coreutils name (`genv`, `gtimeout`) is the launcher it
     // names, as git-guard reads it.
     let name = crate::hooks::git_guard::launcher_name(program);
@@ -832,16 +851,29 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
 }
 
 #[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
-fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
+fn argv(
+    args: &[String],
+    patterns: Option<&[bool]>,
+    cwd: Option<&Path>,
+    depth: usize,
+    out: &mut Parsed,
+) {
     if depth > 32 {
         return;
     }
     let args = skip_assignments(args);
+    let patterns = pattern_tail(patterns, args.len());
     let possible_command = crate::hooks::git_guard::configuration_assignment_tail(args);
     if possible_command.len() < args.len() {
         // An unresolved prefix may be an assignment or an executable path.
         // Inspect both readings; never discard a program containing `=`.
-        argv(possible_command, cwd, depth + 1, out);
+        argv(
+            possible_command,
+            pattern_tail(patterns, possible_command.len()),
+            cwd,
+            depth + 1,
+            out,
+        );
     }
     let Some(program) = args.first() else {
         return;
@@ -894,12 +926,12 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             if inner.first().is_some_and(|s| s == "git") {
                 let mut target = vec!["git".into(), format!("--git-dir={dir}")];
                 target.extend_from_slice(&inner[1..]);
-                argv(&target, cwd, depth + 1, out);
+                argv(&target, None, cwd, depth + 1, out);
                 return;
             }
         }
     }
-    record_interpreter(name, rest, cwd, out);
+    record_interpreter(name, rest, pattern_tail(patterns, rest.len()), cwd, out);
     if let Err(reason) = direct_family(name, rest, cwd, out, true) {
         out.unreadable.push(reason);
     }
@@ -916,7 +948,13 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                     .strip_prefix("--chdir=")
                     .or_else(|| rest.get(at + 1).map(String::as_str));
                 if let (Some(cwd), Some(path), Some(inner)) = (cwd, path, skip_env(rest)) {
-                    argv(inner, Some(&cwd.join(path)), depth + 1, out);
+                    argv(
+                        inner,
+                        pattern_tail(patterns, inner.len()),
+                        Some(&cwd.join(path)),
+                        depth + 1,
+                        out,
+                    );
                 }
             }
             if let Some(at) = rest.iter().position(|a| a == "-S" || a == "--split-string") {
@@ -981,7 +1019,13 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                         in_dir: matches!(word.as_str(), "-execdir" | "-okdir"),
                     };
                     let outer = out.supplier.replace(supplier);
-                    argv(&tail[..end], cwd, depth + 1, out);
+                    argv(
+                        &tail[..end],
+                        pattern_tail(patterns, tail.len()).map(|p| &p[..end]),
+                        cwd,
+                        depth + 1,
+                        out,
+                    );
                     out.supplier = outer;
                 }
             }
@@ -993,12 +1037,18 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                 if let Some(program) = inner.first_mut() {
                     *program = package_bin(program);
                 }
-                argv(&inner, cwd, depth + 1, out);
+                argv(
+                    &inner,
+                    pattern_tail(patterns, inner.len()),
+                    cwd,
+                    depth + 1,
+                    out,
+                );
             }
             None
         }
         _ => {
-            unmodeled_launch(name, rest, depth, out);
+            unmodeled_launch(name, rest, pattern_tail(patterns, rest.len()), depth, out);
             None
         }
     };
@@ -1008,7 +1058,13 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         } else {
             out.supplier.clone()
         };
-        argv(inner, cwd, depth + 1, out);
+        argv(
+            inner,
+            pattern_tail(patterns, inner.len()),
+            cwd,
+            depth + 1,
+            out,
+        );
         out.supplier = outer;
     }
 }
@@ -1052,7 +1108,13 @@ const MODELED_LAUNCHERS: &[&str] = &[
 /// `echo` and `printf` only print their operands, so their quoted words and
 /// option values are data, never script strings: documentation text written
 /// with them stays allowed (TSK-302 AC-5).
-fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed) {
+fn unmodeled_launch(
+    name: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    depth: usize,
+    out: &mut Parsed,
+) {
     if name == "git" || interpreter_family(name).is_some() {
         return;
     }
@@ -1093,7 +1155,13 @@ fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed)
         }
         let bare = crate::hooks::git_guard::launcher_name(word);
         if MODELED_LAUNCHERS.contains(&bare) || interpreter_family(bare).is_some() {
-            argv(&rest[at..], None, depth + 1, &mut inner);
+            argv(
+                &rest[at..],
+                pattern_tail(patterns, rest.len() - at),
+                None,
+                depth + 1,
+                &mut inner,
+            );
             break;
         }
     }
@@ -1167,7 +1235,13 @@ fn interpreter_family(name: &str) -> Option<&'static str> {
     }
 }
 
-fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
+fn record_interpreter(
+    name: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+    cwd: Option<&Path>,
+    out: &mut Parsed,
+) {
     if let Some(name) = interpreter_family(name) {
         let flag = if name.starts_with("python") {
             "-c"
@@ -1217,9 +1291,11 @@ fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut
         // that may be code; the arguments come from the family's own option
         // grammar, so a word after the code or script boundary is never
         // dropped as code (TSK-302 review F1).
-        let (args, chdir) = interpreter_arguments(name, rest);
+        let (arguments, chdir) = interpreter_arguments(name, rest, patterns);
+        let (args, patterns) = arguments.into_iter().unzip();
         out.calls.push(InterpreterCall {
             args,
+            patterns,
             cwd: cwd.map(Path::to_path_buf),
             chdir,
             code: out.code[code_from..].to_vec(),
@@ -1291,6 +1367,11 @@ fn long_takes_value(family: &str, name: &str) -> bool {
     }
 }
 
+/// Keep expansion provenance aligned when a launcher consumes a prefix.
+fn pattern_tail(patterns: Option<&[bool]>, len: usize) -> Option<&[bool]> {
+    patterns.map(|patterns| &patterns[patterns.len() - len..])
+}
+
 /// The words an interpreter hands its program, read by the family's
 /// option grammar, and a `ruby -C` directory. Its own options' values are
 /// kept, inline code is left out, and the script and every word after the
@@ -1298,11 +1379,22 @@ fn long_takes_value(family: &str, name: &str) -> bool {
 /// script ends the options, and so does node's eval code; perl and ruby
 /// read options until the first other word. An option the table does not
 /// know is a flag, so a word after it stays an argument either way.
-fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<String>) {
+fn interpreter_arguments(
+    family: &str,
+    rest: &[String],
+    patterns: Option<&[bool]>,
+) -> (Vec<(String, bool)>, Vec<String>) {
     let mut args = Vec::new();
     let mut chdir = Vec::new();
     let mut at = 0;
-    let after = |at: usize| rest.get(at..).unwrap_or_default().to_vec();
+    let argument = |at: usize, text: String| (text, patterns.is_none_or(|patterns| patterns[at]));
+    let after = |at: usize| {
+        rest.iter()
+            .enumerate()
+            .skip(at)
+            .map(|(at, text)| argument(at, text.clone()))
+            .collect::<Vec<_>>()
+    };
     while let Some(word) = rest.get(at) {
         at += 1;
         if word == "--" {
@@ -1323,10 +1415,10 @@ fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<Str
                 return (args, chdir);
             }
             if value.is_none() && long_takes_value(family, name) {
-                args.extend(rest.get(at).cloned());
+                args.extend(rest.get(at).map(|text| argument(at, text.clone())));
                 at += 1;
             } else {
-                args.push(word.clone());
+                args.push(argument(at - 1, word.clone()));
             }
             continue;
         }
@@ -1337,10 +1429,11 @@ fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<Str
             let attached = !tail.is_empty() && !matches!(family, "node" | "nodejs");
             let value = |at: &mut usize| {
                 if attached {
-                    Some(tail.to_string())
+                    Some(argument(*at - 1, tail.to_string()))
                 } else {
                     *at += 1;
-                    rest.get(*at - 1).cloned()
+                    rest.get(*at - 1)
+                        .map(|text| argument(*at - 1, text.clone()))
                 }
             };
             match short_option(family, letter) {
@@ -1359,7 +1452,7 @@ fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<Str
                     }
                 }
                 Short::Value => args.extend(value(&mut at)),
-                Short::Chdir => chdir.extend(value(&mut at)),
+                Short::Chdir => chdir.extend(value(&mut at).map(|(text, _)| text)),
                 Short::Module => {
                     // `-m MODULE`: a module name, not a path; the words
                     // after it are the program's argv (TSK-302 R2-4).
@@ -1793,7 +1886,7 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         args.extend_from_slice(&rest[..end]);
         args.extend(words);
         args.extend_from_slice(&sub[1..]);
-        argv(&args, cwd, depth + 1, out);
+        argv(&args, None, cwd, depth + 1, out);
     } else {
         out.families.push(("release", source));
     }
@@ -1964,7 +2057,7 @@ fn read_program_sources(
     let substituted = |code: &str| code.contains("$(") || code.contains('`');
     let reads_stdin = if let Some(family) = family {
         let mut inline = Parsed::default();
-        record_interpreter(name, rest, None, &mut inline);
+        record_interpreter(name, rest, None, None, &mut inline);
         if inline.code.iter().any(|code| substituted(code)) {
             out.opaque = true;
         }
