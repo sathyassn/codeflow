@@ -988,6 +988,31 @@ commit "exemptions beyond the diagnostic byte budget"
 expect bounded-ignore-bytes 1 new.txt:1
 MESSAGE=
 
+# A one-parent commit cannot carry a legacy remerge fingerprint. Its secret
+# stays blocked, and the diagnostic must not suggest creating an exemption.
+new_repo one-parent-fingerprint
+printf '%s\n' "$PLANTED" >"$REPO/f.txt"
+commit "one-parent finding"
+SINGLE=$(tip)
+[ "$(git -C "$REPO" rev-list --parents -n 1 "$SINGLE" -- | wc -w | tr -d ' ')" = 2 ]
+SINGLE_ENTRY="$SINGLE:b/f.txt:generic-api-key:1"
+printf '%s\n' "$SINGLE_ENTRY" >"$REPO/.gitleaksignore"
+commit "misnamed one-parent fingerprint"
+cp "$REPO/.gitleaksignore" "$TMP/one-parent-ignore"
+MESSAGE="one-parent commit $SINGLE; no replacement inferred for $SINGLE_ENTRY"
+after_step() {
+  if grep -Eq 'legacy remerge fingerprint|review and replace with' "$TMP/one-parent-fingerprint.out"; then
+    printf 'one-parent diagnostic classifies a legacy entry or suggests a replacement\n'
+    return 1
+  fi
+  for ignore in "$runner"/gitleaks-trusted.*/ignore; do
+    cmp "$ignore" "$TMP/one-parent-ignore" || return 1
+  done
+}
+expect one-parent-fingerprint 1 f.txt:1
+after_step() { :; }
+MESSAGE=
+
 # git configuration the runner sets does not change the patch gitleaks reads.
 # With diff.noprefix, gitleaks would drop dir/ and the trusted exemption for
 # a top-level leak.txt would cover dir/leak.txt.

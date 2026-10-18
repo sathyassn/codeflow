@@ -1171,12 +1171,21 @@ jobs:
                           if exists(commit, path):
                               warning(f".gitleaksignore line {number}: existing b/ path for {fingerprint}; keep this fingerprint unchanged")
                           elif exists(commit, path[2:]):
+                              result = query("rev-list", "--parents", "-n", "1", commit, "--")
+                              parents = result.stdout.split()
+                              if result.returncode or not parents or parents[0] != commit.encode("ascii"):
+                                  raise ValueError
+                              count = len(parents) - 1
+                              if count != 2:
+                                  kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
+                                  warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
+                                  continue
                               replacement = f"{commit}:{path[2:]}:{rule}:{line}"
                               warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
                           else:
                               warning(f".gitleaksignore line {number}: neither path exists for {fingerprint}; no replacement inferred")
                       except ValueError:
-                          warning(f".gitleaksignore line {number}: cannot inspect paths for {fingerprint}; no replacement inferred")
+                          warning(f".gitleaksignore line {number}: cannot inspect commit or paths for {fingerprint}; no replacement inferred")
               except (TimeoutError, subprocess.TimeoutExpired):
                   clipped = True
               if clipped:

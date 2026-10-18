@@ -342,6 +342,7 @@ as extra steps when your stack warrants:
   and a final `--` in `--log-opts`, so a tracked path named `HEAD` cannot
   change the scan. A change scans its own commits; a schedule scans the
   full history reachable from its resolved head.
+  A wrapper can run `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<base-sha>..<head-sha> --"` with resolved commit ids.
   The GitHub workflow reads every exemption from the trusted commit: the
   pull request's base, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its
@@ -408,10 +409,12 @@ as extra steps when your stack warrants:
   cannot move a finding to another path. Older remerge scans could record
   `<commit>:b/<path>:<rule>:<line>` for a conflicted merge's unprefixed file.
   The step diagnoses that legacy fingerprint only when the commit is
-  readable, the prefixed path is absent and the unprefixed path exists.
+  readable with exactly two parents, the prefixed path is absent and the
+  unprefixed path exists.
   It prints the exact replacement for review, leaving the ignore file and
   its exemptions unchanged. An existing `b/` path and an unreadable commit
-  receive distinct messages; neither is called legacy. Review the finding
+  receive distinct messages; neither is called legacy. A one-parent commit
+  also gets its own message without replacement advice. Review the finding
   and land the replacement through the normal reviewed exemption path.
   A head-only exemption cannot authorize itself on a pull request. The
   diagnostic checks at most 64 KiB and 50 candidates within five seconds,

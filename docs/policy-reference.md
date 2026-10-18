@@ -136,11 +136,12 @@ gitleaks reports a conflicted merge's actual path. Older scans could record
 `<commit>:<path>:<rule>:<line>` in `.gitleaksignore`.
 
 The scan checks the trusted ignore file and offers the exact replacement
-only when the commit is readable, `b/<path>` is absent from that commit,
-and `<path>` exists. It reports an existing `b/` path separately and keeps
-its fingerprint unchanged. An unreadable commit needs fetching or manual
-investigation before a replacement can be inferred. Neither case is
-classified as a legacy fingerprint.
+only when the commit is readable with exactly two parents, `b/<path>` is
+absent from that commit, and `<path>` exists. A one-parent commit receives
+its own message without replacement advice. The scan reports an existing
+`b/` path separately and keeps its fingerprint unchanged. An unreadable
+commit needs fetching or manual investigation before a replacement can be
+inferred. None of these cases is classified as a legacy fingerprint.
 
 Review the finding, confirm that the exemption still applies, and submit
 the suggested replacement as a reviewed ignore-file change. A pull

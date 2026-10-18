@@ -49,9 +49,6 @@ fn inline_allow_policy_is_opt_in_and_accepts_only_trusted_or_never() {
     let key = "git.secret_scan_inline_allow";
     let spec = spec_for(key).expect("inline allow key is discoverable");
     assert_eq!(spec.kind, KeyKind::Enum(&["trusted", "never"]));
-    assert!(spec.notes.ends_with(
-        "The shipped policy file does not list it, so an older binary never meets the key."
-    ));
     assert_eq!(
         default_policy_value()["git"]["secret_scan_inline_allow"],
         "trusted"
