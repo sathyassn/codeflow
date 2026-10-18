@@ -16,14 +16,19 @@
 //! Every line prints its marker in at least one shell, which shows the
 //! construct composes it there.
 //!
-//! The shells: `bash` on `PATH`, `/bin/bash` when it is another version,
-//! `zsh` (skipped when it is not installed), and `/bin/sh` and `dash` read
-//! as POSIX `sh`. Each runs in an empty directory with a fixed `HOME`,
+//! The required shells: `bash` and `zsh` on `PATH`, `/bin/sh` (`sh` on
+//! Windows) and `dash` read as POSIX `sh`. Unix also checks `/bin/bash`
+//! when it is another version. A missing shell fails the prerequisite check.
+//! When `CODEFLOW_DIFFERENTIAL_SHELL_DIR` is set, all four shells must come
+//! from that directory, with no fallback. Only this test's shell children
+//! receive that directory on `PATH`, so nested shell commands also use it.
+//! Each runs in an empty directory with a fixed `HOME`,
 //! `LC_ALL=C`, no startup files, and `CF_PART=1733` as the one variable the
 //! lines read from outside.
 
 use codeflow_core::security::composed::{final_output, Composed, Dialect};
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// (construct family, expectation, line).
@@ -741,12 +746,12 @@ const CASES: &[(&str, &str, &str)] = &[
 
 struct Shell {
     label: String,
-    program: String,
+    program: PathBuf,
     args: &'static [&'static str],
     dialect: Dialect,
 }
 
-fn version(program: &str) -> Option<String> {
+fn version(program: &Path) -> Option<String> {
     let out = Command::new(program)
         .arg("-c")
         .arg("echo \"$BASH_VERSION$ZSH_VERSION\"")
@@ -757,51 +762,82 @@ fn version(program: &str) -> Option<String> {
         .then(|| String::from_utf8(out.stdout).unwrap_or_default())
 }
 
-fn shells() -> (Vec<Shell>, Vec<String>) {
+fn shells(shell_dir: Option<&Path>) -> (Vec<Shell>, Vec<String>) {
+    let executable = |name: &str| {
+        shell_dir.map_or_else(
+            || PathBuf::from(name),
+            |dir| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+        )
+    };
     let mut found = Vec::new();
     let mut skipped = Vec::new();
     let mut bash_versions = Vec::new();
-    for program in ["bash", "/bin/bash"] {
-        match version(program) {
+    let bash_programs: &[&str] = if cfg!(windows) || shell_dir.is_some() {
+        &["bash"]
+    } else {
+        &["bash", "/bin/bash"]
+    };
+    for &program in bash_programs {
+        let program = executable(program);
+        match version(&program) {
             Some(v) if !bash_versions.contains(&v) => {
                 bash_versions.push(v.clone());
                 found.push(Shell {
-                    label: format!("{program} {}", v.split('(').next().unwrap_or_default()),
-                    program: program.to_string(),
+                    label: format!(
+                        "{} {}",
+                        program.display(),
+                        v.split('(').next().unwrap_or_default()
+                    ),
+                    program,
                     args: &["--norc", "--noprofile"],
                     dialect: Dialect::Bash,
                 });
             }
             Some(_) => {}
-            None => skipped.push(program.to_string()),
+            None => skipped.push(program.display().to_string()),
         }
     }
-    match version("zsh") {
+    let zsh = executable("zsh");
+    match version(&zsh) {
         Some(v) => found.push(Shell {
-            label: format!("zsh {}", v.split('\n').next().unwrap_or_default()),
-            program: "zsh".to_string(),
+            label: format!(
+                "{} {}",
+                zsh.display(),
+                v.split('\n').next().unwrap_or_default()
+            ),
+            program: zsh,
             args: &["-f"],
             dialect: Dialect::Zsh,
         }),
-        None => skipped.push("zsh".to_string()),
+        None => skipped.push(zsh.display().to_string()),
     }
-    for program in ["/bin/sh", "dash"] {
-        if version(program).is_some() {
+    let sh = if cfg!(windows) || shell_dir.is_some() {
+        "sh"
+    } else {
+        "/bin/sh"
+    };
+    for program in [sh, "dash"] {
+        let program = executable(program);
+        if version(&program).is_some() {
             found.push(Shell {
-                label: program.to_string(),
-                program: program.to_string(),
+                label: program.display().to_string(),
+                program,
                 args: &[],
                 dialect: Dialect::Sh,
             });
         } else {
-            skipped.push(program.to_string());
+            skipped.push(program.display().to_string());
         }
     }
     (found, skipped)
 }
 
-fn run(shell: &Shell, line: &str, dir: &Path) -> Vec<u8> {
-    Command::new(&shell.program)
+fn run(shell: &Shell, line: &str, dir: &Path, child_path: Option<&OsStr>) -> Vec<u8> {
+    let mut command = Command::new(&shell.program);
+    if let Some(path) = child_path {
+        command.env("PATH", path);
+    }
+    command
         .args(shell.args)
         .arg("-c")
         .arg(line)
@@ -829,7 +865,24 @@ struct Tally {
 #[test]
 fn layer_one_values_match_the_shells_byte_for_byte() {
     let dir = tempfile::tempdir().unwrap();
-    let (shells, skipped) = shells();
+    let shell_dir = std::env::var_os("CODEFLOW_DIFFERENTIAL_SHELL_DIR").map(|value| {
+        assert!(
+            !value.is_empty(),
+            "CODEFLOW_DIFFERENTIAL_SHELL_DIR must not be empty"
+        );
+        // Resolve relative directories before the shell's working directory changes.
+        std::env::current_dir().unwrap().join(value)
+    });
+    let child_path = shell_dir.as_ref().map(|dir| {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        std::env::join_paths(std::iter::once(dir.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("CODEFLOW_DIFFERENTIAL_SHELL_DIR must be usable in a child PATH")
+    });
+    let (shells, skipped) = shells(shell_dir.as_deref());
+    assert!(
+        skipped.is_empty(),
+        "required differential shells unavailable: {skipped:?}; install bash, zsh, sh and dash in CODEFLOW_DIFFERENTIAL_SHELL_DIR when set, otherwise on PATH (with /bin/sh and /bin/bash on Unix); configured directories never fall back to PATH"
+    );
     assert!(
         shells.iter().any(|s| s.dialect == Dialect::Bash),
         "no bash to compare against"
@@ -839,7 +892,7 @@ fn layer_one_values_match_the_shells_byte_for_byte() {
     for (family, expect, line) in CASES {
         let mut marked = false;
         for shell in &shells {
-            let printed = run(shell, line, dir.path());
+            let printed = run(shell, line, dir.path(), child_path.as_deref());
             marked |= printed.windows(6).any(|w| w == b"173302")
                 || printed.windows(9).any(|w| w == b"notes.txt");
             tally.runs += 1;
