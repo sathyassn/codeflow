@@ -291,6 +291,8 @@ jobs:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       # The key the single coverage part saved under, so the shards restore
@@ -521,6 +523,17 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install the differential shells
+        id: shells
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          install: bash zsh dash
+      - name: Select the differential shell directory
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.shells.outputs.msys2-location }}
+        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\usr\bin"
       # The tests run git, and a cargo they find on PATH resolves the pinned
       # toolchain; nothing is compiled here.
       - name: Install Rust (rust-toolchain.toml)

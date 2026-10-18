@@ -8,7 +8,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((ROOT / ".codeflow/test-config.json").read_text())
+CONFIG = json.loads((ROOT / ".codeflow/test-config.json").read_text(encoding="utf-8"))
 
 
 class WindowsPortalTarget(unittest.TestCase):

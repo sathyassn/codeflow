@@ -15,6 +15,9 @@ mod acceptance_fix;
 mod base_policy;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
+#[cfg(unix)]
+#[path = "ci_cli/destination.rs"]
+mod destination;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 #[path = "ci_cli/secret_scan_exemption.rs"]
@@ -32,7 +35,11 @@ fn isolated_home() -> &'static Path {
 }
 
 fn codeflow() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    codeflow_at(Path::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+fn codeflow_at(binary: &Path) -> Command {
+    let mut cmd = Command::new(binary);
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -80,14 +87,26 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output()
-        .expect("git runs");
-    assert!(out.status.success(), "git {args:?}");
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .env("CODEFLOW_HOME", isolated_home())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
+    let out = cmd.output().expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed with {}: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// A repo with a `main` base commit and a `feat/x` branch carrying one commit
@@ -976,33 +995,6 @@ fn ci_default_level_warns_on_an_added_dash_and_passes() {
 
 // -- managed content is CodeFlow's (ADR-0067 note, 2026-09-25) ----------------
 
-/// Run a git command with the binary under test first on `PATH`, so the
-/// hooks `codeflow init` wires run this build.
-fn git_with_binary(dir: &Path, args: &[&str]) {
-    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
-    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))
-    .unwrap();
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("PATH", path)
-        .env("CODEFLOW_HOME", isolated_home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .expect("git runs");
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
 /// A `trunk` commit, then `codeflow init --standard` committed on
 /// `feat/x`, with the scaffolded policy raised to `block` so any finding
 /// would fail the run. The range `trunk..HEAD` is the scaffold pull request.
@@ -1020,8 +1012,8 @@ fn scaffolded_standard(dir: &Path) {
         "init: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    git_with_binary(dir, &["add", "-A"]);
-    git_with_binary(dir, &["commit", "-q", "-m", "chore: scaffold codeflow"]);
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "chore: scaffold codeflow"]);
     let path = dir.join(".codeflow/policy.json");
     let mut policy: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1081,8 +1073,8 @@ fn ci_adopter_edited_managed_file_is_scanned() {
     let line = first_dash_line(&skill);
     skill.push_str("\nA local note, added by the adopter.\n");
     std::fs::write(&path, skill).unwrap();
-    git_with_binary(dir.path(), &["add", "."]);
-    git_with_binary(
+    git(dir.path(), &["add", "."]);
+    git(
         dir.path(),
         &["commit", "-m", "docs: note the evaluation fixtures"],
     );
@@ -1108,8 +1100,8 @@ fn ci_non_managed_docs_file_in_a_scaffolded_repo_is_scanned() {
         "# Notes\n\nA line \u{2014} added.\n",
     )
     .unwrap();
-    git_with_binary(dir.path(), &["add", "."]);
-    git_with_binary(dir.path(), &["commit", "-m", "docs: add notes"]);
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add notes"]);
     let (code, all) = ci_scaffold_range(dir.path());
     assert_eq!(code, Some(1), "{all}");
     assert!(

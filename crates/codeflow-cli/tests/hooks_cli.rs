@@ -6038,7 +6038,19 @@ fn push_hook_over_http(
     dir: &Path,
     url: &str,
     askpass: &Path,
+    helper: &Path,
 ) -> (Option<i32>, String, std::time::Duration) {
+    git(dir, &["config", "--local", "credential.helper", ""]);
+    git(
+        dir,
+        &[
+            "config",
+            "--local",
+            "--add",
+            "credential.helper",
+            helper.to_str().unwrap(),
+        ],
+    );
     git(dir, &["remote", "add", "dest", url]);
     let head = rev(dir, "HEAD");
     let started = std::time::Instant::now();
@@ -6046,6 +6058,7 @@ fn push_hook_over_http(
         codeflow()
             .args(["git-hook", "pre-push", "dest", url])
             .env("GIT_ASKPASS", askpass)
+            .env("HOME", askpass.parent().unwrap())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .current_dir(dir),
         &format!("refs/heads/feat/h {head} refs/heads/feat/h {ZERO_SHA}\n"),
@@ -6061,8 +6074,8 @@ fn push_hook_over_http(
 #[test]
 fn push_set_never_prompts_and_bounds_the_destination_query() {
     // NB-2: a destination asking for credentials gets no askpass prompt, and
-    // one that never answers is abandoned at the deadline; either way the
-    // hook says why, and refuses the unjudged push (SPC-013 R-120).
+    // one that never answers is abandoned after bounded timeout retries.
+    // Both refuse the unjudged push (SPC-013 R-120).
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().unwrap();
     let marker = scratch.path().join("askpass-called");
@@ -6076,24 +6089,42 @@ fn push_set_never_prompts_and_bounds_the_destination_query() {
     )
     .unwrap();
     std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let helper = scratch.path().join("credential-helper");
+    let calls = scratch.path().join("helper-calls");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\nexit 0\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(true), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(true), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(!marker.exists(), "askpass was invoked: {err}");
+    assert!(std::fs::read_to_string(&calls)
+        .unwrap()
+        .lines()
+        .any(|line| line == "get"));
     assert!(took < std::time::Duration::from_secs(10), "{took:?}: {err}");
     assert!(
-        err.contains("cannot prove push inputs") && err.contains("`git ls-remote` failed"),
+        err.contains("cannot prove push inputs") && err.contains("remote authentication failed"),
         "{err}"
     );
 
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/h");
-    let (code, err, took) = push_hook_over_http(dir.path(), &http_destination(false), &askpass);
+    let (code, err, took) =
+        push_hook_over_http(dir.path(), &http_destination(false), &askpass, &helper);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("no answer within 10s"), "{err}");
-    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(err.contains("3 attempts"), "{err}");
+    assert!(took < std::time::Duration::from_secs(50), "{took:?}");
 }
 
 #[test]
@@ -8207,6 +8238,216 @@ fn git_guard_reads_a_sed_script_by_its_grammar() {
         ],
         "git.hook_integrity",
     );
+}
+
+/// TSK-302 AC-6 (issue 173): in a fresh project with a linked worktree,
+/// the built binary's exec-guard refuses an interpreter whose arguments
+/// name an enforcement path, the issue's commands included, through the
+/// wrappers it reads, and still allows ordinary arguments and reads.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey: refusal payloads, then controls.
+fn exec_guard_judges_the_paths_an_interpreter_is_given() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    let linked = root.join(".worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&linked)],
+    );
+    let repo = shell_path(&root);
+    let tree = shell_path(&linked);
+    let refused = [
+        format!("W={repo}; python3 -I -B - \"$W/.claude/settings.json\" <<'PY'\nimport json, sys\np = sys.argv[1]\nopen(p, 'w').write('')\nPY"),
+        format!("python3 - \"{repo}/.codeflow/policy.json\" <<'PY'\nimport sys\nPY"),
+        format!("W={tree}; python3 - \"$W/.claude/settings.json\" <<'PY'\nimport sys\nPY"),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+        format!("python3 edit.py \"{tree}/.claude/settings.json\""),
+        "python3 -c 'import sys' .claude/settings.json".to_string(),
+        "node -e 'x' .codeflow/policy.json".to_string(),
+        "perl -i -pe 's/a/b/' .claude/settings.json".to_string(),
+        "ruby script.rb .codeflow/policy.json".to_string(),
+        "python3 -c 'import sys' .git/config".to_string(),
+        "env -S 'python3 edit.py .claude/settings.json'".to_string(),
+        "bash -c 'python3 edit.py .claude/settings.json'".to_string(),
+        "echo .claude/settings.json | xargs python3 edit.py".to_string(),
+        "find . -name settings.json -exec python3 edit.py {} +".to_string(),
+        "cd .claude && python3 edit.py settings.json".to_string(),
+        "P=.codeflow/policy.json; python3 edit.py \"$P\"".to_string(),
+        // TSK-302 review F1 to F3.
+        "cd .claude && python3 -c 'import sys' -c settings.json".to_string(),
+        "python3 -c 'import argparse' -o.claude/settings.json".to_string(),
+        "cd -- .claude && python3 -c 'import sys' settings.json".to_string(),
+        "cd -P .claude && python3 -c 'import sys' settings.json".to_string(),
+        "find . -name '*.json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "echo .git/config | xargs python3 tool.py".to_string(),
+        "python3 tool.py .git/con*".to_string(),
+        // Round 2: untracked directory changes, composed chdir, clusters,
+        // merged authority, and the known conservative refusals.
+        "command cd .claude && python3 tool.py settings.json".to_string(),
+        "builtin cd .claude && python3 tool.py settings.json".to_string(),
+        "pushd .claude >/dev/null && python3 tool.py settings.json".to_string(),
+        "env -C.claude python3 tool.py settings.json".to_string(),
+        "cd .claude && command cd .. && python3 tool.py .claude/settings.json".to_string(),
+        "cd .claude && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "python3 tool.py .claude/settings.json .git/config".to_string(),
+        "python3 -c 'import argparse' -vo.claude/settings.json".to_string(),
+        "command cd .git && python3 tool.py config".to_string(),
+        "cd .claude && cd .. && python3 tool.py settings.json".to_string(),
+        "find . -execdir python3 lint.py notes.txt \\;".to_string(),
+        // Round 3: launcher grammar, source, execdir from the line set and
+        // find's own spelling, and code literals in an unknown directory.
+        "env -u FOO -C.claude python3 tool.py settings.json".to_string(),
+        "nice env -C.claude python3 tool.py settings.json".to_string(),
+        "env -iC.claude python3 tool.py settings.json".to_string(),
+        "source go.sh && python3 tool.py settings.json".to_string(),
+        "command cd .claude && find settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "find . -path '*cla*json' -execdir python3 tool.py settings.json \\;".to_string(),
+        "find .claude/settings.json -execdir python3 tool.py settings.json \\;".to_string(),
+        "D=.claude; cd \"$D\" && python3 -c 'open(\"settings.json\",\"w\")'".to_string(),
+        "command cd .git && find config -execdir python3 tool.py config \\;".to_string(),
+        // Round 4: unmodeled words before a directory change, zsh
+        // precommands and GNU-prefixed or macOS launchers.
+        "noglob cd .claude && python3 tool.py settings.json".to_string(),
+        "true; - cd .git && python3 tool.py config".to_string(),
+        "bash -c 'builtin -- cd .git && python3 tool.py config'".to_string(),
+        "caffeinate env -C.claude python3 tool.py settings.json".to_string(),
+        "xcrun env -C.git python3 tool.py config".to_string(),
+        "genv -C.git python3 tool.py config".to_string(),
+        "gtimeout 5 env -C.claude python3 tool.py settings.json".to_string(),
+        // An unknown program that launches an interpreter.
+        "frobnicate env -C.claude python3 tool.py settings.json".to_string(),
+        "frobnicate env -C.git python3 tool.py config".to_string(),
+        // A bare `--` does not hide the interpreter (Grok round 5 F1).
+        "sandbox-exec -p '(version 1)(allow default)' -- python3 tool.py .git/config".to_string(),
+        "taskpolicy -- python3 tool.py .claude/settings.json".to_string(),
+        // A script string an unknown program runs (Grok round 6 F1).
+        "expect -c 'spawn python3 tool.py .claude/settings.json'".to_string(),
+        "expect -c 'spawn python3 tool.py .git/config'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .claude/settings.json\"'".to_string(),
+        "osascript -e 'do shell script \"python3 tool.py .git/config\"'".to_string(),
+    ];
+    let allowed = [
+        "python3 edit.py notes.txt out.json",
+        "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
+        "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
+        "python3 tool.py \"$INPUT\"",
+        "find . -name '*.py' -exec python3 -m py_compile {} +",
+        "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
+        "python3 tool.py -v -n3 -o out.json",
+        "cd src && python3 app.py settings.json",
+        "find . -name '*.rs' -execdir python3 lint.py {} +",
+        "find src -execdir python3 lint.py notes.txt \\;",
+        "cd .codex && python3 -c 'print(1)'",
+        "cd .codeflow/git-hooks && python3 -c 'print(1)'",
+        "source go.sh && python3 tool.py notes.txt",
+        "nice python3 tool.py data.json",
+        "timeout 5 node x.js out.json",
+        "noglob cd .claude && python3 tool.py notes.txt",
+        "caffeinate python3 tool.py data.json",
+        "docker run img python3 app.py data.json",
+        "cargo run -- python3",
+        "npm run x -- --flag",
+        "taskpolicy -- python3 tool.py notes.txt",
+        "echo -e 'hello'",
+        "cargo test -- --nocapture",
+        "cargo run -- python3 -c 'print(1)'",
+        "git commit -m \"python3 x\"",
+        "python3 <<< 'print(1)'",
+        "echo 'print(1)' | python3",
+        "expect -c 'spawn python3 tool.py {notes.txt}'",
+        "python3 <<< 'print(x)'",
+        "echo x | python3",
+        "python3 /dev/stdin <<< 'print(1)'",
+        "source <(echo 'python3 tool.py notes.txt')",
+        "python3 <<< $'print(17330\\x32)'",
+        "printf '%b' 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
+        "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
+        "print -r '.cla\\x75de/settings.json'",
+    ];
+    let mut wrong = Vec::new();
+    for command in &refused {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        // Refused for what the interpreter is given, not for its code.
+        if out.status.code() != Some(2)
+            || !err.contains("git.hook_integrity")
+            || !err.contains("interpreter")
+            || err.contains("interpreter code")
+        {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // Code a shell or interpreter takes from a here-string, a process
+    // substitution or a pipe (review round 7): the refusal may name the code
+    // or the line, so only the rule and exit are checked.
+    for command in [
+        "sh <<< 'python3 tool.py .git/config'",
+        "python3 <<< 'open(\".claude/settings.json\",\"w\").write(\"x\")'",
+        "bash <(printf '%s\\n' 'python3 tool.py .claude/settings.json')",
+        "echo 'open(\".git/config\").read()' | python3",
+        "expect -c 'spawn python3 tool.py {.git/config}'",
+        // Round 8: descriptors, `source <(...)`, a literal `-c` that runs
+        // its stdin.
+        "python3 /dev/fd/3 3<<< 'open(\".git/config\").read()'",
+        "source <(echo 'python3 tool.py .claude/settings.json')",
+        "python3 -c 'import sys; exec(sys.stdin.read())' <<< 'open(\".git/config\").read()'",
+        // Round 9: `$'...'` decoded, `printf` joins.
+        "python3 <<< $'open(\".gi\\x74/config\").read()'",
+        "printf -v p '%s%s' '.cla' 'ude/settings.json'; python3 tool.py \"$p\"",
+        // Round 10: printf escapes, empty-separator joins, echo -e decode.
+        "printf '%b' '.gi\\x74/config' | python3 -c 'import sys; print(open(sys.stdin.read().strip()).read())'",
+        "IFS=; arr=('.cla' 'ude/settings.json'); python3 -c \"open(\\\"${arr[*]}\\\",\\\"w\\\")\"",
+        "echo -e '.cla\\x75de/settings.json' | python3 -c 'import sys; open(sys.stdin.read().strip(),\"w\")'",
+        // Round 11: a value built from an expansion, a format from a
+        // variable; each resolved exactly or refused as cannot-verify.
+        "a=.cla; b=\"${a}ude/settings.json\"; python3 -c \"open('$b','w')\"",
+        "f='.cla\\x75de/settings.json'; printf \"$f\" | python3 -c 'import sys; open(sys.stdin.read(),\"w\")'",
+    ] {
+        let out = exec_guard_contract_3(&root, command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("should refuse: {command}: {err}"));
+        }
+    }
+    // From inside the linked worktree, its own enforcement files and the
+    // main checkout's are refused too.
+    for command in [
+        "python3 edit.py .codeflow/policy.json".to_string(),
+        format!("python3 edit.py \"{repo}/.claude/settings.json\""),
+    ] {
+        let out = exec_guard_contract_3(&linked, &command);
+        if out.status.code() != Some(2) {
+            wrong.push(format!("should refuse in the worktree: {command}"));
+        }
+    }
+    for command in allowed {
+        let out = exec_guard_contract_3(&root, command);
+        if out.status.code() != Some(0) {
+            let err = String::from_utf8_lossy(&out.stderr);
+            wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The exec-guard's answer to `command` from `dir` through the hook
+/// contract the harness presets name, `--contract 3`.
+fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    run_with_stdin(
+        codeflow()
+            .env("SHELL", "/bin/zsh")
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(dir),
+        &payload,
+    )
 }
 
 #[cfg(unix)]

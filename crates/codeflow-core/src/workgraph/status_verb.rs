@@ -187,6 +187,65 @@ pub fn set_status(
     })
 }
 
+/// Replace only a task's acceptance and criteria wording, keeping its results.
+/// The replacement is the entire edited record; the verb writes the digest
+/// and review annotation and refuses unrelated work in the same range.
+///
+/// # Errors
+/// Refuses an unreadable source, changed results, or work outside the record.
+pub fn redact(
+    repo_root: &Path,
+    id: &str,
+    replacement: &str,
+    review: &str,
+) -> Result<PathBuf, VerbError> {
+    let refuse = |message: String| VerbError::Refused(vec![message]);
+    let graph = Graph::from_worktree(repo_root).map_err(refuse)?;
+    let old = graph
+        .records
+        .get(id)
+        .filter(|r| r.kind == RecordKind::Task)
+        .ok_or_else(|| VerbError::NotFound(id.into()))?;
+    let repo = git2::Repository::discover(repo_root).map_err(|e| refuse(e.to_string()))?;
+    let head = repo
+        .head()
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| refuse(e.to_string()))?
+        .id();
+    let target =
+        super::work_start::resolve_work_target(repo_root, old.integration_target.as_deref())
+            .map_err(|e| refuse(e.to_string()))?;
+    let target = target_commit(&repo, target.as_deref())
+        .map_err(refuse)?
+        .ok_or_else(|| refuse("redaction target does not resolve".into()))?;
+    let source = history::merge_base(&repo, target, head).map_err(|e| refuse(e.to_string()))?;
+    let original = super::acceptance::blob_at(&repo, source, &old.path)
+        .map_err(refuse)?
+        .ok_or_else(|| refuse("redaction source has no record".into()))?;
+    if original != old.content {
+        return Err(refuse(
+            "the source record must be unchanged; put the replacement in a separate file".into(),
+        ));
+    }
+    let paths =
+        super::lifecycle::changed_paths(&repo, &source.to_string(), None).map_err(refuse)?;
+    if let Some(path) = paths.iter().find(|path| *path != &old.path) {
+        return Err(refuse(format!("redaction changes {path} outside the record; keep the replacement file outside the repository")));
+    }
+    let note = serde_json::json!({"source": source.to_string(), "sha256": crate::scaffold::sha256_hex(original.as_bytes()), "review": review});
+    let proposed =
+        set_frontmatter_value(replacement, "redaction", &note.to_string()).map_err(refuse)?;
+    let new = RecordView::parse(RecordKind::Task, &old.path, &proposed).map_err(refuse)?;
+    super::redaction::preserves(old, &new).map_err(refuse)?;
+    replace_if_unchanged(
+        repo_root,
+        &old.path,
+        Sha256::digest(old.content.as_bytes()).as_slice(),
+        &proposed,
+    )?;
+    Ok(repo_root.join(&old.path))
+}
+
 /// Bind a completion (R-60): a task's block to its reviewed commit, after
 /// its reopened criteria stay frozen, and an epic's own block (R-33), each
 /// with its own remedy.

@@ -274,3 +274,274 @@ fn task_landing_carries_ancestor_review_but_not_a_reopened_fix() {
         combined(&out)
     );
 }
+
+fn redaction_fixture(superseded: bool) -> (tempfile::TempDir, String, String) {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
+    commit(root, "chore: adopt default policy");
+    git(root, &["switch", "-qc", "task/TSK-001-first"]);
+    std::fs::write(root.join("work.rs"), "// work\n").unwrap();
+    let planned = std::fs::read_to_string(root.join(TASK)).unwrap().replace(
+        "the system shall work",
+        "the system shall serve customer-name",
+    );
+    std::fs::write(root.join(TASK), planned).unwrap();
+    let reviewed = commit(root, "feat: work");
+    task(
+        root,
+        "complete",
+        &block(&reviewed).replace("unit", "customer-name unit"),
+    );
+    let record = std::fs::read_to_string(root.join(TASK)).unwrap().replace(
+        "the system shall work",
+        "the system shall serve customer-name",
+    );
+    std::fs::write(root.join(TASK), record).unwrap();
+    commit(root, "docs: complete task");
+    merge(root, "task/TSK-001-first");
+    std::fs::write(root.join("other.rs"), "// direct commit\n").unwrap();
+    let mut source = commit(root, "fix: direct change");
+    if superseded {
+        let out = run_in(
+            root,
+            &[
+                "task",
+                "status",
+                "TSK-001",
+                "todo",
+                "--reason",
+                "repair needed",
+            ],
+        );
+        assert!(out.status.success(), "{}", combined(&out));
+        source = commit(root, "docs: reopen task");
+    }
+    git(root, &["switch", "-qc", "plan/redact"]);
+    let old = std::fs::read_to_string(root.join(TASK)).unwrap();
+    (dir, old, source)
+}
+
+fn redacted(old: &str, source: &str) -> String {
+    let digest = codeflow_core::scaffold::sha256_hex(old.as_bytes());
+    old.replace("customer-name", "customer").replacen(
+        "---\n", &format!("---\nredaction: {{source: {source}, sha256: {digest}, review: 'https://example.test/redaction/1'}}\n"), 1)
+}
+
+#[test]
+fn redaction_after_a_direct_commit_keeps_the_landed_results() {
+    let (dir, old, source) = redaction_fixture(false);
+    std::fs::write(dir.path().join(TASK), redacted(&old, &source)).unwrap();
+    let head = commit(dir.path(), "docs: redact record");
+    let out = ci(dir.path(), "plan/redact", true);
+    assert!(out.status.success(), "{}", combined(&out));
+    let reviewed = ci_reviewed(dir.path(), "plan/redact", true, &reviews(&head));
+    assert!(reviewed.status.success(), "{}", combined(&reviewed));
+}
+
+#[test]
+fn redaction_keeps_a_reopened_records_superseded_results() {
+    let (dir, old, source) = redaction_fixture(true);
+    std::fs::write(dir.path().join(TASK), redacted(&old, &source)).unwrap();
+    commit(dir.path(), "docs: redact superseded record");
+    let out = ci(dir.path(), "plan/redact", true);
+    assert!(out.status.success(), "{}", combined(&out));
+}
+
+#[test]
+fn redaction_refuses_changed_results_review_and_unrelated_files() {
+    for (field, from, to, diagnostic) in [
+        ("result", "AC-1: verified", "AC-1: waived", "AC-1 result"),
+        (
+            "reviewed",
+            "  reviewed: ",
+            "  reviewed: a",
+            "changes reviewed",
+        ),
+        (
+            "review",
+            "https://example.test/review/1",
+            "https://example.test/review/2",
+            "review provenance",
+        ),
+        (
+            "journey",
+            "journey: verified",
+            "journey: failed",
+            "journey result",
+        ),
+        (
+            "verdict",
+            "verdict: approved",
+            "verdict: changes_requested",
+            "changes verdict",
+        ),
+        ("digest", "sha256: ", "sha256: a", "sha256 does not match"),
+        (
+            "outside",
+            "unused",
+            "unused",
+            "outside.rs outside the record",
+        ),
+        (
+            "review missing",
+            "https://example.test/redaction/1",
+            "",
+            "redaction review is empty",
+        ),
+    ] {
+        let (dir, old, source) = redaction_fixture(false);
+        let new = redacted(&old, &source).replace(from, to);
+        std::fs::write(dir.path().join(TASK), new).unwrap();
+        if field == "outside" {
+            std::fs::write(dir.path().join("outside.rs"), "// unrelated\n").unwrap();
+        }
+        commit(dir.path(), "docs: attempt redaction");
+        let out = ci(dir.path(), "plan/redact", true);
+        let text = combined(&out);
+        assert!(
+            !out.status.success() && text.contains(diagnostic),
+            "{field}: {text}"
+        );
+    }
+}
+
+#[test]
+fn redaction_command_and_pre_push_accept_the_record_only_journey() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let install = tempfile::tempdir().unwrap();
+    let binary = install
+        .path()
+        .join(format!("codeflow{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(env!("CARGO_BIN_EXE_codeflow"), &binary).unwrap();
+    let installed = || super::codeflow_at(&binary);
+    let (dir, old, source) = redaction_fixture(false);
+    let replacement = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(replacement.path(), old.replace("customer-name", "customer")).unwrap();
+    let out = installed()
+        .current_dir(dir.path())
+        .args([
+            "task",
+            "redact",
+            "TSK-001",
+            "--replacement",
+            replacement.path().to_str().unwrap(),
+            "--review",
+            "https://example.test/redaction/1",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", combined(&out));
+    let after = std::fs::read_to_string(dir.path().join(TASK)).unwrap();
+    assert!(!after.contains("customer-name"));
+    assert!(after.contains(&source));
+    let head = commit(dir.path(), "docs: redact record");
+    let body = "## Summary\nRedact names.\n\n- Keep results.\n\nTask: TSK-001\n\n## Changes\n- Redact wording.\n";
+    let out = installed()
+        .current_dir(dir.path())
+        .args([
+            "ci",
+            "--base",
+            LINE,
+            "--head",
+            "HEAD",
+            "--branch",
+            "plan/redact",
+            "--pr-body",
+            body,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", combined(&out));
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "--bare", "-q"]);
+    let url = remote.path().to_str().unwrap();
+    git(dir.path(), &["remote", "add", "origin", url]);
+    git(
+        remote.path(),
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{LINE}")],
+    );
+    git(dir.path(), &["push", "-q", "origin", "main", LINE]);
+    let mut child = installed()
+        .args(["git-hook", "pre-push", "origin", url])
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/plan/redact {head} refs/heads/plan/redact {}",
+        "0".repeat(40)
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", combined(&out));
+}
+
+#[test]
+fn a_redacted_superseded_record_can_complete_its_later_fix() {
+    let (dir, old, source) = redaction_fixture(true);
+    let root = dir.path();
+    std::fs::write(root.join(TASK), redacted(&old, &source)).unwrap();
+    commit(root, "docs: redact superseded record");
+    merge(root, "plan/redact");
+    git(root, &["switch", "-qc", "task/TSK-001-fix"]);
+    std::fs::write(root.join("work.rs"), "// fix\n").unwrap();
+    let reviewed = commit(root, "fix: finish repair");
+    let acceptance = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        acceptance.path(),
+        block(&reviewed)
+            .replace("```yaml\n", "")
+            .replace("```\n", ""),
+    )
+    .unwrap();
+    let out = run_in(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            acceptance.path().to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "{}", combined(&out));
+    commit(root, "docs: complete repair");
+    let out = ci_reviewed(root, "task/TSK-001-fix", true, &reviews(&reviewed));
+    assert!(out.status.success(), "{}", combined(&out));
+    merge(root, "task/TSK-001-fix");
+    let findings = codeflow_core::workgraph::acceptance::pull_request_findings(
+        root,
+        "main",
+        "HEAD",
+        &codeflow_core::workgraph::acceptance::Criteria::Amendable,
+    )
+    .unwrap();
+    assert!(findings.iter().all(|finding| finding.note), "{findings:?}");
+}
+
+#[test]
+fn a_line_carries_the_record_only_redaction_at_its_landing() {
+    use codeflow_core::workgraph::acceptance::{pull_request_findings, Criteria};
+    let (dir, old, source) = redaction_fixture(false);
+    let root = dir.path();
+    std::fs::write(root.join(TASK), redacted(&old, &source)).unwrap();
+    commit(root, "docs: redact record");
+    merge(root, "plan/redact");
+    std::fs::write(root.join("later.rs"), "// later line work\n").unwrap();
+    commit(root, "feat: later line work");
+    let findings = pull_request_findings(root, "main", "HEAD", &Criteria::Amendable).unwrap();
+    assert!(findings.iter().all(|finding| finding.note), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.message.contains("record-only redaction")),
+        "{findings:?}"
+    );
+}

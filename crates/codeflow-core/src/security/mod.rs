@@ -26,6 +26,8 @@
 //! history if ADR-0008 ever wires one.
 
 pub mod actions;
+pub(crate) mod arguments;
+pub mod composed;
 pub mod dangerous;
 mod deletion;
 pub mod git;

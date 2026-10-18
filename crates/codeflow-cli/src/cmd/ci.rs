@@ -522,25 +522,44 @@ pub fn run(args: &CiArgs) -> i32 {
         },
         release: std::cell::OnceCell::new(),
     };
+    // Resolve the shared scope before either dependent check. An unreadable
+    // destination refuses once; records and acceptance cannot judge it.
+    let scope_range = base_sha.as_deref().map(|base| classification::Range {
+        base,
+        head: &head,
+        target: &line_target,
+    });
+    let scope_ready = match release_of(&root, &names, scope_range.as_ref()) {
+        Ok(_) => true,
+        Err(violation) => {
+            tagged.push(TaggedViolation {
+                sha: None,
+                violation,
+            });
+            false
+        }
+    };
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
-    record_checks(
-        &root,
-        &base_candidates,
-        &head,
-        args.baseline_from.as_deref(),
-        match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("codeflow ci: {error}");
-                return 2;
-            }
-        },
-        &names,
-        &line_target,
-        &mut tagged,
-        &mut ran,
-    );
+    if scope_ready {
+        record_checks(
+            &root,
+            &base_candidates,
+            &head,
+            args.baseline_from.as_deref(),
+            match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("codeflow ci: {error}");
+                    return 2;
+                }
+            },
+            &names,
+            &line_target,
+            &mut tagged,
+            &mut ran,
+        );
+    }
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -599,20 +618,24 @@ pub fn run(args: &CiArgs) -> i32 {
             Some(change_class::classify(Some(&inventory), &project))
         }
     };
-    let work_class = work_checks(
-        &root,
-        git,
-        pr_body.as_deref(),
-        pr_context,
-        change.is_some_and(|class| class.light),
-        &names,
-        &base_candidates,
-        &head,
-        &line_target,
-        &stacked,
-        &mut tagged,
-        &mut ran,
-    );
+    let work_class = if scope_ready {
+        work_checks(
+            &root,
+            git,
+            pr_body.as_deref(),
+            pr_context,
+            change.is_some_and(|class| class.light),
+            &names,
+            &base_candidates,
+            &head,
+            &line_target,
+            &stacked,
+            &mut tagged,
+            &mut ran,
+        )
+    } else {
+        None
+    };
 
     let level = git.work_planning_level();
     let own_task = own_branch_preflight(
@@ -899,17 +922,15 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
-    if let (Some(body), Some(task_id)) = (
+    tagged.extend(tracked_review(
+        root,
+        git,
         pr_body,
-        class.as_ref().and_then(classification::Class::review_task),
-    ) {
-        if let Some(violation) = review_row_check(root, git, body, head, task_id, light) {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation,
-            });
-        }
-    }
+        class.as_ref(),
+        range_parts.as_ref(),
+        head,
+        light,
+    ));
     class
 }
 
@@ -929,6 +950,35 @@ fn range_tracks_work(root: &Path, range: &classification::Range<'_>) -> Result<b
 /// `review_names_revision` (the full commit, a verdict cell of exactly
 /// `approved` or `approve`); `work claim --on` reads its pin with the
 /// permissive `reviewed_revisions` (prose verdicts, abbreviations).
+fn tracked_review(
+    root: &Path,
+    git: &GitPolicy,
+    body: Option<&str>,
+    class: Option<&classification::Class>,
+    range: Option<&classification::Range<'_>>,
+    head: &str,
+    light: bool,
+) -> Option<TaggedViolation> {
+    let (Some(body), Some(task_id)) = (body, class.and_then(classification::Class::review_task))
+    else {
+        return None;
+    };
+    // A redaction records its own review and preserves the original
+    // completion's provenance; it does not claim a new completion.
+    let redaction = range.is_some_and(|range| {
+        codeflow_core::workgraph::acceptance::records_redaction(root, range.base, head, task_id)
+            .unwrap_or(false)
+    });
+    if redaction {
+        None
+    } else {
+        review_row_check(root, git, body, head, task_id, light).map(|violation| TaggedViolation {
+            sha: None,
+            violation,
+        })
+    }
+}
+
 fn review_row_check(
     root: &Path,
     git: &GitPolicy,
@@ -2328,13 +2378,13 @@ pub(super) struct Names<'a> {
     /// from (TSK-220).
     pub candidate: Option<&'a str>,
     /// The release scope, asked once per run and shared by the checks.
-    pub release: std::cell::OnceCell<
+    release: std::cell::OnceCell<
         Result<
             Option<(
                 codeflow_core::workgraph::release_line::Destination,
                 codeflow_core::workgraph::release_line::Scope,
             )>,
-            String,
+            acceptance::ScopeError,
         >,
     >,
 }

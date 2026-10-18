@@ -118,6 +118,62 @@ struct Parsed {
     stdin_interpreter: usize,
     commands: Vec<Vec<String>>,
     created_tags: Vec<(PathBuf, String)>,
+    calls: Vec<InterpreterCall>,
+    /// What gives the command being read more arguments, while the
+    /// command an `xargs` or `find -exec` runs is read.
+    supplier: Option<Supplier>,
+    /// A shell or interpreter on the line takes its code from somewhere the
+    /// guard cannot read in full (TSK-302 review round 7): stdin from a
+    /// pipe, a here-string, a process substitution, or a `-c`/`-e` value
+    /// holding a substitution.
+    opaque: bool,
+    /// A shell (`source` and `.` included) or an interpreter family runs
+    /// somewhere on the line (TSK-302 review round 8).
+    runs: bool,
+}
+
+/// One interpreter call (TSK-302, issue 173): the words it receives other
+/// than its inline code, the directory it runs in, and what else gives it
+/// arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InterpreterCall {
+    /// The words the interpreter hands its program, read by the family's
+    /// own option grammar: the values of its options, a script, and every
+    /// word after the code or script boundary. Inline code is left out.
+    /// Any of them can name a file the program writes.
+    pub(crate) args: Vec<String>,
+    /// The directory the call runs in; `None` after a `cd` the guard
+    /// cannot follow.
+    pub(crate) cwd: Option<PathBuf>,
+    /// The directories the interpreter changes to, in order, before it
+    /// runs the program (`ruby -C a -C b`), each relative to the last.
+    pub(crate) chdir: Vec<String>,
+    /// The inline code the call carries, as read for the code checks.
+    pub(crate) code: Vec<String>,
+    /// The `xargs` or `find -exec` that runs the interpreter, if one does.
+    pub(crate) supplier: Option<Supplier>,
+}
+
+/// A command that runs an interpreter with arguments the line does not
+/// spell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Supplier {
+    /// `xargs` adds words read from its input or an argument file.
+    Xargs,
+    /// `find -exec` puts each path it visits in place of `{}`.
+    Find {
+        /// The starting points, as written.
+        starts: Vec<String>,
+        /// The expression before the `-exec`, whose `-name` tests decide
+        /// which paths reach it.
+        before: Vec<String>,
+        /// The directory `find` runs in; `None` when the guard cannot
+        /// follow it.
+        cwd: Option<PathBuf>,
+        /// `-execdir` or `-okdir`: the command runs in the directory of
+        /// each path `find` visits.
+        in_dir: bool,
+    },
 }
 
 pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
@@ -126,10 +182,121 @@ pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
     parsed.commands
 }
 
+/// What the line's shells and interpreters read (TSK-302 review rounds 7
+/// and 8). The first value: whether one runs code the guard cannot read in
+/// full, its program coming from stdin through a pipe or a here-string,
+/// from a descriptor (`/dev/stdin`, `/dev/fd/N`), from a process
+/// substitution, or from a `-c`/`-e` value holding a substitution; every
+/// word on such a line is judged by its trailing components. The second:
+/// whether a shell (`source` and `.` included) or an interpreter family
+/// runs on the line at all, so every quoted string on it may be code.
+pub(crate) fn code_sources(command: &str) -> (bool, bool) {
+    let mut parsed = Parsed::default();
+    visit(command, None, 0, &mut parsed);
+    let runs = parsed.runs || !parsed.calls.is_empty();
+    (parsed.opaque, runs)
+}
+
+/// Every quoted string on a line, read as the shell quotes it: the text of
+/// each single- or double-quoted region, a command substitution or
+/// backtick inside a double-quoted one read whole, quotes and all; each
+/// `$'...'` region decoded as bash does; and each shell word that holds a
+/// quoted part, its adjacent pieces joined (TSK-302 review round 9).
+pub(crate) fn quoted_texts(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut found = crate::hooks::git_guard::quoted_shell_words(line);
+    let mut at = 0;
+    while let Some(&ch) = chars.get(at) {
+        at += 1;
+        match ch {
+            '\\' => at += 1,
+            '$' if chars.get(at) == Some(&'\'') => {
+                let rest: String = chars[at + 1..].iter().collect();
+                let mut text = rest.chars();
+                found.push(crate::hooks::git_guard::ansi_c_text(&mut text));
+                at = chars.len() - text.count();
+            }
+            '\'' => {
+                let mut text = String::new();
+                while let Some(&c) = chars.get(at) {
+                    at += 1;
+                    if c == '\'' {
+                        break;
+                    }
+                    text.push(c);
+                }
+                found.push(text);
+            }
+            '"' => {
+                let mut text = String::new();
+                let mut depth = 0usize;
+                let mut inner: Option<char> = None;
+                while let Some(&c) = chars.get(at) {
+                    at += 1;
+                    if c == '\\' {
+                        text.push(c);
+                        text.extend(chars.get(at));
+                        at += 1;
+                        continue;
+                    }
+                    if let Some(q) = inner {
+                        if c == q {
+                            inner = None;
+                        }
+                    } else if depth > 0 && matches!(c, '\'' | '"') {
+                        inner = Some(c);
+                    } else if c == '$' && chars.get(at) == Some(&'(') {
+                        depth += 1;
+                        text.push(c);
+                        text.push('(');
+                        at += 1;
+                        continue;
+                    } else if depth > 0 && c == '(' {
+                        depth += 1;
+                    } else if depth > 0 && c == ')' {
+                        depth -= 1;
+                    } else if depth == 0 && c == '"' {
+                        break;
+                    }
+                    text.push(c);
+                }
+                found.push(text);
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Whether a program operand is a descriptor the guard does not read:
+/// `/dev/stdin`, `/dev/fd/N` or `/proc/self/fd/N`.
+pub(crate) fn descriptor_program(operand: &str) -> bool {
+    operand == "/dev/stdin"
+        || ["/dev/fd/", "/proc/self/fd/"].iter().any(|prefix| {
+            operand
+                .strip_prefix(prefix)
+                .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        })
+}
+
 pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
     let mut parsed = Parsed::default();
     visit(command, None, 0, &mut parsed);
     parsed.code
+}
+
+/// Every interpreter call on the line, read through the launchers,
+/// wrappers and `cd` changes this parser follows, starting in `cwd`.
+pub(crate) fn interpreter_calls(command: &str, cwd: &Path) -> Vec<InterpreterCall> {
+    let mut parsed = Parsed::default();
+    visit(command, Some(cwd), 0, &mut parsed);
+    let mut calls = Vec::new();
+    for call in parsed.calls {
+        if !calls.contains(&call) {
+            calls.push(call);
+        }
+    }
+    calls
 }
 
 pub(crate) fn literal_words(code: &str) -> Vec<String> {
@@ -181,9 +348,8 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
         if args.first().is_some_and(|s| s == "cd") {
-            if let Some(path) = args
-                .get(1)
-                .and_then(|p| crate::hooks::git_guard::inherited_path(p))
+            if let Some(path) =
+                cd_operand(&args[1..]).and_then(crate::hooks::git_guard::inherited_path)
             {
                 let next: Vec<_> = directories
                     .iter()
@@ -196,6 +362,473 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
     }
     out.config_trigger = inherited;
+}
+
+/// Every directory a line may run an interpreter in (TSK-302 review round
+/// 2): the session directory and each one a directory change anywhere on
+/// the line may reach, applied in order to every directory listed before
+/// it, whether or not it succeeds. `unknown` is set when a change cannot be
+/// resolved, so a command may run anywhere.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct DirSet {
+    pub(crate) dirs: Vec<PathBuf>,
+    pub(crate) unknown: bool,
+}
+
+/// The most directories a [`DirSet`] lists before it reads as unknown.
+const DIR_SET_LIMIT: usize = 64;
+
+impl DirSet {
+    /// Apply one change: a literal directory joins every listed one, a
+    /// change the guard cannot resolve makes the set unknown.
+    pub(crate) fn change(&mut self, change: &DirChange) {
+        match change {
+            DirChange::To(target) => {
+                let next: Vec<PathBuf> = self
+                    .dirs
+                    .iter()
+                    .map(|dir| lexical_join(dir, target))
+                    .collect();
+                for dir in next {
+                    if !self.dirs.contains(&dir) {
+                        self.dirs.push(dir);
+                    }
+                }
+                if self.dirs.len() > DIR_SET_LIMIT {
+                    self.unknown = true;
+                }
+            }
+            DirChange::Unknown => self.unknown = true,
+        }
+    }
+}
+
+/// `dir` joined with `target`, `.` and `..` removed by spelling, as the
+/// shell's logical `cd` reads them. An absolute target replaces `dir`.
+pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in dir.join(target).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A directory change one simple command makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirChange {
+    To(PathBuf),
+    Unknown,
+}
+
+/// The directory changes the words of one simple command make (TSK-302
+/// review round 3). Within the modeled grammar the answer is exact;
+/// anything outside it is [`DirChange::Unknown`], never "no change":
+///
+/// - `cd`, `chdir` and `pushd` with any options; `cd` alone goes to
+///   `home`; `cd -`, a stack index, `~user` and a value filled in at run
+///   time are unknown. `popd` and `dirs` return to directories already
+///   listed.
+/// - `source` and `.` can move the shell to anywhere: unknown.
+/// - The launchers `command`, `builtin`, `exec`, `nohup`, `nice`,
+///   `timeout`, `stdbuf`, `time`, `env` and `xargs` are unwrapped through
+///   their option grammar, values included, attached or separate, and
+///   the command they run is read in turn. `env -C`, `-CDIR`, `--chdir`
+///   and `--chdir=` change directory. An option the grammar does not list,
+///   `env -S`, and `sudo` are unknown.
+/// - `git -C DIR` counts as a change.
+/// - Any other program cannot move the shell, so it makes no change.
+pub(crate) fn dir_changes(words: &[String], home: Option<&Path>) -> Vec<DirChange> {
+    let mut found = Vec::new();
+    launcher_changes(words, home, 0, &mut found);
+    found
+}
+
+/// A launcher's option grammar: the options that take a value, and the
+/// flags. `None` for a word with no modeled options.
+fn launcher_options(launcher: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    Some(match launcher {
+        "command" | "time" => (&[], &["-p"]),
+        "caffeinate" => (&["-t", "-w"], &["-d", "-i", "-m", "-s", "-u"]),
+        "xcrun" => (
+            &["--sdk", "--toolchain"],
+            &[
+                "-v",
+                "--verbose",
+                "-l",
+                "--log",
+                "-n",
+                "--no-cache",
+                "-r",
+                "--run",
+                "-k",
+                "--kill-cache",
+            ],
+        ),
+        "ionice" => (
+            &[
+                "-c",
+                "--class",
+                "-n",
+                "--classdata",
+                "-p",
+                "--pid",
+                "-P",
+                "--pgid",
+                "-u",
+                "--uid",
+            ],
+            &["-t", "--ignore"],
+        ),
+        "exec" => (&["-a"], &["-c", "-l", "-cl", "-lc"]),
+        "nice" => (&["-n", "--adjustment"], &[]),
+        "timeout" => (
+            &["-s", "--signal", "-k", "--kill-after"],
+            &["--foreground", "--preserve-status", "-v", "--verbose"],
+        ),
+        "stdbuf" => (&["-i", "-o", "-e", "--input", "--output", "--error"], &[]),
+        "xargs" => (
+            &[
+                "-I",
+                "-L",
+                "-n",
+                "-P",
+                "-s",
+                "-d",
+                "-E",
+                "-a",
+                "--arg-file",
+                "--delimiter",
+                "--eof",
+                "--max-lines",
+                "--max-args",
+                "--max-procs",
+                "--max-chars",
+                "--replace",
+                "--process-slot-var",
+            ],
+            &[
+                "-0",
+                "-r",
+                "-t",
+                "-p",
+                "-x",
+                "--null",
+                "--no-run-if-empty",
+                "--verbose",
+                "--interactive",
+                "--exit",
+                "--open-tty",
+            ],
+        ),
+        _ => return None,
+    })
+}
+
+/// How an option of a launcher reads: `Some(true)` takes a value,
+/// `Some(false)` is a flag, `None` is outside the modeled grammar.
+fn launcher_option(launcher: &str, option: &str) -> Option<bool> {
+    let (valued, flags) = launcher_options(launcher)?;
+    if valued.contains(&option) {
+        Some(true)
+    } else {
+        flags.contains(&option).then_some(false)
+    }
+}
+
+/// Read one launcher's options from `rest`, returning where its command
+/// starts, or `None` for an option the grammar does not know. A long
+/// option's value may follow `=`; a short one's may be attached
+/// (`-n5`, `-oL`), or be the next word.
+fn skip_launcher_options(launcher: &str, rest: &[String]) -> Option<usize> {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        if word == "--" {
+            return Some(at + 1);
+        }
+        if !word.starts_with('-') || word == "-" {
+            return Some(at);
+        }
+        // `nice -5`: a legacy numeric adjustment.
+        if launcher == "nice" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+            at += 1;
+            continue;
+        }
+        if let Some((name, _)) = word.split_once('=').filter(|_| word.starts_with("--")) {
+            launcher_option(launcher, name)?;
+            at += 1;
+            continue;
+        }
+        if let Some(valued) = launcher_option(launcher, word) {
+            at += if valued { 2 } else { 1 };
+            continue;
+        }
+        // A short option with its value attached: `-n5`, `-oL`, `-I{}`.
+        let short = word.get(..2).filter(|_| !word.starts_with("--"))?;
+        if launcher_option(launcher, short)? {
+            at += 1;
+            continue;
+        }
+        return None;
+    }
+    Some(at)
+}
+
+/// Read env's options: flags, `-u NAME`, `-C DIR` in every spelling and
+/// clusters such as `-iC.claude`; `NAME=value` settings follow them.
+/// Returns where the command starts, or `None` for an option it does not
+/// know (and for `-S`, whose string can hold more options).
+fn env_options(
+    rest: &[String],
+    target: &dyn Fn(&str) -> DirChange,
+    found: &mut Vec<DirChange>,
+) -> Option<usize> {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            break;
+        }
+        if word == "-" {
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "ignore-environment"
+                | "null"
+                | "debug"
+                | "block-signal"
+                | "default-signal"
+                | "ignore-signal"
+                | "list-signal-handling" => {}
+                "unset" | "chdir" => {
+                    let value = if let Some(value) = value {
+                        value.to_string()
+                    } else {
+                        at += 1;
+                        rest.get(at - 1)?.clone()
+                    };
+                    if name == "chdir" {
+                        found.push(target(&value));
+                    }
+                }
+                _ => return None,
+            }
+            continue;
+        }
+        if let Some(letters) = word.strip_prefix('-') {
+            for (i, letter) in letters.char_indices() {
+                let tail = &letters[i + letter.len_utf8()..];
+                match letter {
+                    'i' | '0' | 'v' => {}
+                    'u' | 'C' => {
+                        let value = if tail.is_empty() {
+                            at += 1;
+                            rest.get(at - 1)?.clone()
+                        } else {
+                            tail.to_string()
+                        };
+                        if letter == 'C' {
+                            found.push(target(&value));
+                        }
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+            continue;
+        }
+        if word.contains('=') {
+            continue;
+        }
+        return Some(at - 1);
+    }
+    Some(at)
+}
+
+fn launcher_changes(
+    words: &[String],
+    home: Option<&Path>,
+    depth: usize,
+    found: &mut Vec<DirChange>,
+) {
+    if depth > 8 {
+        found.push(DirChange::Unknown);
+        return;
+    }
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let assignment = word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if word == "!" || assignment {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    let Some(program) = words.get(at) else {
+        return;
+    };
+    let rest = &words[at + 1..];
+    let target = |operand: &str| -> DirChange {
+        if crate::hooks::git_guard::unresolved_word(operand) || operand == "-" {
+            return DirChange::Unknown;
+        }
+        if let Some(tail) = operand
+            .strip_prefix("~/")
+            .or((operand == "~").then_some(""))
+        {
+            return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
+        }
+        if operand.starts_with(['~', '+']) {
+            return DirChange::Unknown;
+        }
+        DirChange::To(PathBuf::from(operand))
+    };
+    // A GNU-prefixed coreutils name (`genv`, `gtimeout`) is the launcher it
+    // names, as git-guard reads it.
+    let name = crate::hooks::git_guard::launcher_name(program);
+    let inner = |from: Option<usize>, found: &mut Vec<DirChange>| match from {
+        Some(from) => launcher_changes(&rest[from.min(rest.len())..], home, depth + 1, found),
+        None => found.push(DirChange::Unknown),
+    };
+    match name {
+        "cd" | "chdir" | "pushd" => {
+            found.extend(cd_destination(name, rest, home, &target));
+        }
+        "popd" | "dirs" => {}
+        "source" | "." | "sudo" | "doas" => found.push(DirChange::Unknown),
+        // zsh precommands run the command after them in this shell.
+        "noglob" | "nocorrect" | "-" => inner(Some(0), found),
+        "builtin" => inner(
+            Some(usize::from(rest.first().is_some_and(|w| w == "--"))),
+            found,
+        ),
+        // `xcrun -f` and `--find` only print a tool's path.
+        "xcrun"
+            if rest
+                .first()
+                .is_some_and(|w| matches!(w.as_str(), "-f" | "--find")) => {}
+        // `command -v` and `-V` only print what a name is.
+        "command"
+            if rest
+                .first()
+                .is_some_and(|w| matches!(w.as_str(), "-v" | "-V")) => {}
+        "command" | "exec" | "nohup" | "nice" | "stdbuf" | "time" | "xargs" | "caffeinate"
+        | "xcrun" | "ionice" => {
+            let from = skip_launcher_options(name, rest);
+            inner(from, found);
+        }
+        "timeout" => {
+            // The duration follows the options.
+            let from = skip_launcher_options(name, rest).map(|from| from + 1);
+            inner(from, found);
+        }
+        "env" => {
+            let from = env_options(rest, &target, found);
+            inner(from, found);
+        }
+        "git" => {
+            let mut words = rest.iter();
+            while let Some(word) = words.next() {
+                if word == "-C" {
+                    found.extend(words.next().map(|dir| target(dir)));
+                } else if !word.starts_with('-') {
+                    break;
+                }
+            }
+        }
+        // Any other word: a program that cannot move this shell, unless a
+        // directory-change token follows it that the grammar above did not
+        // consume. Then the word is an unmodeled launcher, and the
+        // directory is unknown rather than unchanged (TSK-302 review round
+        // 4): the guard never fails open on a word it does not know.
+        _ => {
+            if hides_a_directory_change(rest) {
+                found.push(DirChange::Unknown);
+            }
+        }
+    }
+}
+
+/// Where a `cd`, `chdir` or `pushd` moves: its operand, home when it has
+/// none, or `None` for a directory already in the set (a `pushd` with no
+/// operand or a stack index).
+fn cd_destination(
+    name: &str,
+    rest: &[String],
+    home: Option<&Path>,
+    target: &dyn Fn(&str) -> DirChange,
+) -> Option<DirChange> {
+    let mut operands = rest.iter();
+    let mut operand = None;
+    while let Some(word) = operands.next() {
+        if word == "--" {
+            operand = operands.next();
+            break;
+        }
+        // Every dash word is an option (`-L`, `-P`, `-q`, `-e`, `-@`); `-`
+        // alone is the previous directory, and a `pushd` stack index (`-1`)
+        // rotates to one already listed.
+        if word.starts_with('-') && word.len() > 1 {
+            if name == "pushd" && word[1..].chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            continue;
+        }
+        operand = Some(word);
+        break;
+    }
+    match operand {
+        Some(operand) if name == "pushd" && operand.starts_with('+') => None,
+        Some(operand) => Some(target(operand)),
+        None if name == "pushd" => None,
+        None => Some(home.map_or(DirChange::Unknown, |home| DirChange::To(home.to_path_buf()))),
+    }
+}
+
+/// Whether the words after an unmodeled program hold a directory-change
+/// token: `cd`, `chdir`, `pushd` or `popd`, or `-C` or `--chdir` in any
+/// spelling after an env-like word.
+fn hides_a_directory_change(rest: &[String]) -> bool {
+    let mut env_like = false;
+    for word in rest {
+        if matches!(word.as_str(), "cd" | "chdir" | "pushd" | "popd") {
+            return true;
+        }
+        if crate::hooks::git_guard::launcher_name(word) == "env" {
+            env_like = true;
+        } else if env_like && (word.starts_with("-C") || word.starts_with("--chdir")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The directory set of `command` from `cwd`: every simple command the
+/// line runs, nested bodies included, read in order.
+pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
+    let mut set = DirSet {
+        dirs: vec![cwd.to_path_buf()],
+        unknown: false,
+    };
+    for segment in expand_commands(command) {
+        let mut words = command_argv(&segment);
+        strip_reserved_words(&mut words);
+        for change in dir_changes(&words, home) {
+            set.change(&change);
+        }
+    }
+    set
 }
 
 #[allow(clippy::too_many_lines)] // Keep each launcher dispatch beside the shared recursion bound.
@@ -213,7 +846,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     let Some(program) = args.first() else {
         return;
     };
-    let name = program.rsplit('/').next().unwrap_or(program);
+    let name = crate::hooks::git_guard::launcher_name(program);
     out.commands.push(args.to_vec());
     let rest = &args[1..];
     if name == "git" {
@@ -266,7 +899,7 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
     }
-    record_interpreter(name, rest, out);
+    record_interpreter(name, rest, cwd, out);
     if let Err(reason) = direct_family(name, rest, cwd, out, true) {
         out.unreadable.push(reason);
     }
@@ -294,7 +927,11 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             skip_env(rest)
         }
         "command" | "builtin" | "exec" | "nohup" | "setsid" | "caffeinate" | "unbuffer"
-        | "time" => Some(skip_options(rest, &["-a"])),
+        | "time" => Some(skip_options(rest, &["-a", "-t", "-w"])),
+        // zsh precommands run the command after them in this shell.
+        "noglob" | "nocorrect" | "-" => Some(rest),
+        "xcrun" => Some(skip_options(rest, &["--sdk", "--toolchain"])),
+        "ionice" => Some(skip_options(rest, &["-c", "-n", "-p", "-P", "-u"])),
         "nice" => Some(skip_options(rest, &["-n", "--adjustment"])),
         "stdbuf" => Some(skip_options(rest, &["-i", "-o", "-e"])),
         "timeout" => Some(
@@ -337,7 +974,15 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
                         .iter()
                         .position(|s| s == ";" || s == "+")
                         .unwrap_or(tail.len());
+                    let supplier = Supplier::Find {
+                        starts: find_starts(rest),
+                        before: rest[..at].to_vec(),
+                        cwd: cwd.map(Path::to_path_buf),
+                        in_dir: matches!(word.as_str(), "-execdir" | "-okdir"),
+                    };
+                    let outer = out.supplier.replace(supplier);
                     argv(&tail[..end], cwd, depth + 1, out);
+                    out.supplier = outer;
                 }
             }
             None
@@ -352,24 +997,185 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
             None
         }
-        _ => None,
+        _ => {
+            unmodeled_launch(name, rest, depth, out);
+            None
+        }
     };
     if let Some(inner) = inner {
+        let outer = if name == "xargs" {
+            out.supplier.replace(Supplier::Xargs)
+        } else {
+            out.supplier.clone()
+        };
         argv(inner, cwd, depth + 1, out);
+        out.supplier = outer;
     }
 }
 
-fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
-    if matches!(
-        name,
-        "python" | "python3" | "node" | "nodejs" | "perl" | "ruby"
-    ) {
+/// The launchers `argv` unwraps, read by their bare name.
+const MODELED_LAUNCHERS: &[&str] = &[
+    "env",
+    "command",
+    "builtin",
+    "exec",
+    "nohup",
+    "setsid",
+    "caffeinate",
+    "unbuffer",
+    "time",
+    "noglob",
+    "nocorrect",
+    "xcrun",
+    "ionice",
+    "nice",
+    "stdbuf",
+    "timeout",
+    "xargs",
+];
+
+/// A program the grammar does not model may itself launch what follows it
+/// (`frobnicate env -C.claude python3 tool.py settings.json`), or run a
+/// script string it is given (`expect -c '...'`, `osascript -e '...'`,
+/// `ssh host '...'`). Each such reading is a possible call whose directory
+/// is unknown, so its known words are judged by their trailing components
+/// and authority keeps its fixed level (TSK-302, review rounds 5 and 6):
+///
+/// - a later word in a command position that is a modeled launcher or an
+///   interpreter starts a call made of the rest of the segment; a bare
+///   `--` does not end the walk (`taskpolicy -- python3`);
+/// - before a `--`, the value of `-c` or `-e` is read as a command line;
+/// - any word that holds a blank or a shell operator was quoted, and is read
+///   as a command line too;
+/// - before a `--`, a single-word `-m` value is a message, never a command.
+///
+/// `echo` and `printf` only print their operands, so their quoted words and
+/// option values are data, never script strings: documentation text written
+/// with them stays allowed (TSK-302 AC-5).
+fn unmodeled_launch(name: &str, rest: &[String], depth: usize, out: &mut Parsed) {
+    if name == "git" || interpreter_family(name).is_some() {
+        return;
+    }
+    // Only the calls are kept: the rest of what these readings find stays
+    // with the checks that read the modeled grammar.
+    let mut inner = Parsed {
+        supplier: out.supplier.clone(),
+        ..Parsed::default()
+    };
+    let prints = matches!(name, "echo" | "printf");
+    let mut operands = false;
+    let mut words = rest.iter().enumerate();
+    while let Some((at, word)) = words.next() {
+        match word.as_str() {
+            "--" if !operands => {
+                operands = true;
+                continue;
+            }
+            "-c" | "-e" if !operands && !prints => {
+                if let Some((_, script)) = words.next() {
+                    visit(script, None, depth + 1, &mut inner);
+                }
+                continue;
+            }
+            "-m" if !operands => {
+                if let Some((_, message)) = words.next() {
+                    if !prints && holds_a_command_line(message) {
+                        visit(message, None, depth + 1, &mut inner);
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if !prints && holds_a_command_line(word) {
+            visit(word, None, depth + 1, &mut inner);
+            continue;
+        }
+        let bare = crate::hooks::git_guard::launcher_name(word);
+        if MODELED_LAUNCHERS.contains(&bare) || interpreter_family(bare).is_some() {
+            argv(&rest[at..], None, depth + 1, &mut inner);
+            break;
+        }
+    }
+    out.calls.extend(inner.calls);
+    out.opaque |= inner.opaque;
+    out.runs |= inner.runs;
+}
+
+/// Whether one word holds more than a bare name: a shell blank (space,
+/// tab, newline) or a shell operator, which the shell only leaves in a word
+/// that was quoted.
+fn holds_a_command_line(word: &str) -> bool {
+    word.contains([' ', '\t', '\n', ';', '&', '|'])
+}
+
+/// The starting points of a `find` call: the words before its expression,
+/// after the `-H`, `-L` and `-P` options, or `.` when there are none.
+fn find_starts(args: &[String]) -> Vec<String> {
+    let rest = &args[args
+        .iter()
+        .take_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
+        .count()..];
+    let starts: Vec<String> = rest
+        .iter()
+        .take_while(|a| !a.starts_with('-') && !matches!(a.as_str(), "!" | "("))
+        .cloned()
+        .collect();
+    if starts.is_empty() {
+        vec![".".to_string()]
+    } else {
+        starts
+    }
+}
+
+/// The directory operand of a `cd`, after its options (`-L`, `-P`, `-e`,
+/// `-@`) and an ending `--`; `None` for `cd` alone, which goes home.
+fn cd_operand(args: &[String]) -> Option<&str> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            return words.next().map(String::as_str);
+        }
+        let options = word.strip_prefix('-').filter(|letters| {
+            !letters.is_empty() && letters.chars().all(|c| matches!(c, 'L' | 'P' | 'e' | '@'))
+        });
+        if options.is_none() {
+            return Some(word);
+        }
+    }
+    None
+}
+
+/// The interpreter a program name runs, by its family name: a version
+/// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
+/// interpreter they name.
+fn interpreter_family(name: &str) -> Option<&'static str> {
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    // The name without its version suffix: the digits and dots it ends with.
+    let end = name
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map_or(0, |(at, c)| at + c.len_utf8());
+    match &name[..end] {
+        "python" => Some("python"),
+        "node" => Some("node"),
+        "nodejs" => Some("nodejs"),
+        "perl" => Some("perl"),
+        "ruby" => Some("ruby"),
+        _ => None,
+    }
+}
+
+fn record_interpreter(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
+    if let Some(name) = interpreter_family(name) {
         let flag = if name.starts_with("python") {
             "-c"
         } else {
             "-e"
         };
         let mut found = false;
+        let code_from = out.code.len();
         for (at, arg) in rest.iter().enumerate() {
             let cluster = arg
                 .strip_prefix('-')
@@ -407,7 +1213,165 @@ fn record_interpreter(name: &str, rest: &[String], out: &mut Parsed) {
         if !found {
             out.stdin_interpreter += 1;
         }
+        // The code collected above is read conservatively, from any word
+        // that may be code; the arguments come from the family's own option
+        // grammar, so a word after the code or script boundary is never
+        // dropped as code (TSK-302 review F1).
+        let (args, chdir) = interpreter_arguments(name, rest);
+        out.calls.push(InterpreterCall {
+            args,
+            cwd: cwd.map(Path::to_path_buf),
+            chdir,
+            code: out.code[code_from..].to_vec(),
+            supplier: out.supplier.clone(),
+        });
     }
+}
+
+/// How a short option of an interpreter family reads.
+enum Short {
+    /// Takes no value.
+    Flag,
+    /// Takes inline code, attached or as the next word.
+    Code,
+    /// Takes a value, attached or as the next word.
+    Value,
+    /// Takes the next word as a module and ends the options (`python -m`).
+    Module,
+    /// Changes directory to its value, attached or the next word (`ruby -C`).
+    Chdir,
+    /// Takes an optional value attached to it, which is the rest of the word.
+    Attached,
+}
+
+fn short_option(family: &str, letter: char) -> Short {
+    match (family, letter) {
+        ("python", 'c')
+        | ("perl" | "ruby", 'e')
+        | ("perl", 'E')
+        | ("node" | "nodejs", 'e' | 'p') => Short::Code,
+        ("python", 'm') => Short::Module,
+        ("python", 'W' | 'X')
+        | ("perl", 'I' | 'M' | 'm')
+        | ("ruby", 'I' | 'r' | 'E')
+        | ("node" | "nodejs", 'r' | 'C') => Short::Value,
+        ("ruby", 'C') => Short::Chdir,
+        ("perl", 'i' | 'x' | '0' | 'l' | 'F' | 'd' | 'D' | 'C' | 'V')
+        | ("ruby", 'i' | 'x' | '0' | 'F' | 'K' | 'T' | 'W') => Short::Attached,
+        _ => Short::Flag,
+    }
+}
+
+/// Long options that take the next word as their value when written
+/// without `=`.
+fn long_takes_value(family: &str, name: &str) -> bool {
+    match family {
+        "python" => name == "check-hash-based-pycs",
+        "ruby" => matches!(
+            name,
+            "encoding" | "external-encoding" | "internal-encoding" | "enable" | "disable"
+        ),
+        "node" | "nodejs" => matches!(
+            name,
+            "require"
+                | "import"
+                | "conditions"
+                | "input-type"
+                | "loader"
+                | "experimental-loader"
+                | "env-file"
+                | "title"
+                | "redirect-warnings"
+                | "diagnostic-dir"
+                | "report-directory"
+                | "cpu-prof-dir"
+                | "heap-prof-dir"
+        ),
+        _ => false,
+    }
+}
+
+/// The words an interpreter hands its program, read by the family's
+/// option grammar, and a `ruby -C` directory. Its own options' values are
+/// kept, inline code is left out, and the script and every word after the
+/// boundary are kept whole: `python -c CODE`, `-m MODULE`, `-`, `--` or a
+/// script ends the options, and so does node's eval code; perl and ruby
+/// read options until the first other word. An option the table does not
+/// know is a flag, so a word after it stays an argument either way.
+fn interpreter_arguments(family: &str, rest: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut args = Vec::new();
+    let mut chdir = Vec::new();
+    let mut at = 0;
+    let after = |at: usize| rest.get(at..).unwrap_or_default().to_vec();
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            args.extend(after(at));
+            return (args, chdir);
+        }
+        if word == "-" || !word.starts_with('-') {
+            args.extend(after(at - 1));
+            return (args, chdir);
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                at += usize::from(value.is_none());
+                args.extend(after(at));
+                return (args, chdir);
+            }
+            if value.is_none() && long_takes_value(family, name) {
+                args.extend(rest.get(at).cloned());
+                at += 1;
+            } else {
+                args.push(word.clone());
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        for (i, letter) in letters.char_indices() {
+            let tail = &letters[i + letter.len_utf8()..];
+            // Node never attaches a value to a short option (`-pe CODE`).
+            let attached = !tail.is_empty() && !matches!(family, "node" | "nodejs");
+            let value = |at: &mut usize| {
+                if attached {
+                    Some(tail.to_string())
+                } else {
+                    *at += 1;
+                    rest.get(*at - 1).cloned()
+                }
+            };
+            match short_option(family, letter) {
+                Short::Flag => continue,
+                Short::Attached => {}
+                Short::Code => {
+                    if matches!(family, "node" | "nodejs") && !tail.is_empty() {
+                        // `-pe`: the code is the next word.
+                        at += 1;
+                    } else {
+                        value(&mut at);
+                    }
+                    if !matches!(family, "perl" | "ruby") {
+                        args.extend(after(at));
+                        return (args, chdir);
+                    }
+                }
+                Short::Value => args.extend(value(&mut at)),
+                Short::Chdir => chdir.extend(value(&mut at)),
+                Short::Module => {
+                    // `-m MODULE`: a module name, not a path; the words
+                    // after it are the program's argv (TSK-302 R2-4).
+                    value(&mut at);
+                    args.extend(after(at));
+                    return (args, chdir);
+                }
+            }
+            break;
+        }
+    }
+    (args, chdir)
 }
 
 // Only cross flags that do not consume a value. In particular, the `e` in
@@ -835,6 +1799,207 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
     }
 }
 
+/// Where an interpreter family takes its program from.
+#[derive(PartialEq, Eq)]
+enum Program {
+    /// `-c`, `-e` or `--eval` code on the command line.
+    Inline,
+    /// `python -m MODULE`.
+    Module,
+    /// A script operand other than `-`.
+    Script,
+    /// Standard input: no script, or the script `-`.
+    Stdin,
+}
+
+/// Where an interpreter family of `family` takes its program from, read by
+/// the same option grammar as [`interpreter_arguments`].
+fn family_program(family: &str, rest: &[String]) -> Program {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        at += 1;
+        if word == "--" {
+            return match rest.get(at) {
+                Some(script) if script != "-" && !descriptor_program(script) => Program::Script,
+                _ => Program::Stdin,
+            };
+        }
+        if word == "-" || descriptor_program(word) {
+            return Program::Stdin;
+        }
+        if !word.starts_with('-') {
+            return Program::Script;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if matches!(family, "node" | "nodejs") && matches!(name, "eval" | "print") {
+                return Program::Inline;
+            }
+            if value.is_none() && long_takes_value(family, name) {
+                at += 1;
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        for (i, letter) in letters.char_indices() {
+            let attached = !letters[i + letter.len_utf8()..].is_empty()
+                && !matches!(family, "node" | "nodejs");
+            match short_option(family, letter) {
+                Short::Flag => continue,
+                Short::Code => return Program::Inline,
+                Short::Module => return Program::Module,
+                Short::Value | Short::Chdir => at += usize::from(!attached),
+                Short::Attached => {}
+            }
+            break;
+        }
+    }
+    Program::Stdin
+}
+
+/// The bodies of the process substitutions (`<(...)`, `>(...)`) in one
+/// segment, read outside quotes.
+fn process_substitutions(segment: &str) -> Vec<String> {
+    let chars: Vec<(usize, char)> = segment.char_indices().collect();
+    let mut found = Vec::new();
+    let mut quote = None;
+    let mut at = 0;
+    while let Some(&(_, ch)) = chars.get(at) {
+        at += 1;
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        let Some(&(open, '(')) = chars.get(at).filter(|_| matches!(ch, '<' | '>')) else {
+            continue;
+        };
+        // The body runs to the matching parenthesis, quotes respected.
+        let mut depth = 0;
+        let mut inner = None;
+        let mut end = segment.len();
+        at += 1;
+        while let Some(&(offset, c)) = chars.get(at) {
+            at += 1;
+            if let Some(q) = inner {
+                if c == q {
+                    inner = None;
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' => inner = Some(c),
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = offset;
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        found.push(segment[open + 1..end].to_string());
+    }
+    found
+}
+
+/// The text after a here-string operator (`<<<`) in one segment, read
+/// outside quotes, as written.
+fn here_string(segment: &str) -> Option<String> {
+    let mut quote = None;
+    for (at, ch) in segment.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        if segment[at..].starts_with("<<<") {
+            // Kept as written: the readers split on quotes and blanks. A
+            // `$'...'` body is decoded first, as bash hands it over.
+            let body = &segment[at + 3..];
+            let start = body.find(|c| c != ' ' && c != '\t').unwrap_or(body.len());
+            if let Some(quoted) = body[start..].strip_prefix("$'") {
+                return Some(crate::hooks::git_guard::ansi_c_text(&mut quoted.chars()));
+            }
+            return Some(body.to_string());
+        }
+    }
+    None
+}
+
+/// Read where a shell or interpreter in one pipeline segment takes its
+/// code from (TSK-302 review round 7). Code the guard can read, a quoted
+/// producer, a here-string or a process substitution, is kept as that
+/// program's code so its paths are judged precisely; any program fed from
+/// a pipe, a here-string, a process substitution or a `-c`/`-e` value
+/// holding a substitution marks the line opaque.
+fn read_program_sources(
+    name: &str,
+    rest: &[String],
+    segment: &str,
+    producers: &str,
+    out: &mut Parsed,
+) {
+    let shell = matches!(
+        name,
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "source" | "."
+    );
+    let family = interpreter_family(name);
+    if !shell && family.is_none() {
+        return;
+    }
+    out.runs = true;
+    let substituted = |code: &str| code.contains("$(") || code.contains('`');
+    let reads_stdin = if let Some(family) = family {
+        let mut inline = Parsed::default();
+        record_interpreter(name, rest, None, &mut inline);
+        if inline.code.iter().any(|code| substituted(code)) {
+            out.opaque = true;
+        }
+        family_program(family, rest) == Program::Stdin
+    } else if let Some(script) = shell_command_string(rest) {
+        if substituted(script) {
+            out.code.push(script.to_string());
+            out.opaque = true;
+        }
+        false
+    } else {
+        let operand = rest.iter().find(|a| !a.starts_with('-'));
+        operand.is_none_or(|operand| descriptor_program(operand))
+            || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
+                a.strip_prefix('-')
+                    .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
+            })
+    };
+    let substitutions = process_substitutions(segment);
+    if !substitutions.is_empty() {
+        out.opaque = true;
+        out.code.extend(substitutions);
+    }
+    if reads_stdin {
+        if let Some(body) = here_string(segment) {
+            out.opaque = true;
+            out.code.push(body);
+        }
+        if !producers.is_empty() {
+            out.opaque = true;
+            out.code.push(producers.to_string());
+        }
+    }
+}
+
 // Keep pipeline boundaries and quoted producer text. Only a shell that reads
 // stdin makes that text code; ordinary pipes and separate commands stay data.
 fn shell_inputs(command: &str, out: &mut Parsed) {
@@ -871,21 +2036,7 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
         let words = command_argv(segment);
         if let Some((program, rest)) = strip_launchers(&words) {
             let name = program.rsplit('/').next().unwrap_or(program);
-            if matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash") {
-                if let Some(script) = shell_command_string(rest) {
-                    if script.contains("$(") || script.contains('`') {
-                        out.code.push(script.to_string());
-                    }
-                } else if !producers.is_empty()
-                    && (rest.iter().all(|a| a.starts_with('-'))
-                        || rest.iter().take_while(|a| a.as_str() != "--").any(|a| {
-                            a.strip_prefix('-')
-                                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('s'))
-                        }))
-                {
-                    out.code.push(producers.clone());
-                }
-            }
+            read_program_sources(name, rest, segment, &producers, out);
         }
         if ch == '|' && !command[at..].starts_with("||") {
             producers.push_str(segment);
@@ -1414,6 +2565,25 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn interpreter_directory_keeps_cd_options_and_inherited_paths() {
+        let home = std::env::var("HOME").expect("test environment has HOME");
+        let cwd = Path::new("/workspace");
+        let calls = interpreter_calls(
+            r#"cd -P -- "$HOME" && python3 -c 'pass' .claude/settings.json"#,
+            cwd,
+        );
+        assert!(
+            calls.iter().any(|call| {
+                call.cwd.as_deref() == Some(Path::new(&home))
+                    && call.args == [".claude/settings.json"]
+                    && call.code == ["pass"]
+            }),
+            "{calls:?}"
+        );
+    }
+
     #[test]
     fn bare_tags_are_resolved_in_the_command_repository() {
         let temp = tempfile::tempdir().unwrap();
@@ -1426,6 +2596,7 @@ mod tests {
         for command in [
             "git -C other push origin release-candidate",
             "cd other && git push origin release-candidate",
+            "cd -P -- other && git push origin release-candidate",
             "env -C other git push origin release-candidate",
         ] {
             let findings = evaluate_at(command, &SecuritySection::default(), Some(temp.path()));
@@ -1586,5 +2757,151 @@ mod r22_tests {
             Some(dir.path())
         )
         .is_empty());
+    }
+
+    /// Round 2 item 7: a differential test over directory-changing
+    /// prefixes. For each prefix, `<prefix>; pwd` is run natively in a
+    /// disposable fixture, and the directory the shell reports must be in
+    /// `line_directories`'s set, or the set must be unknown. Nothing
+    /// touches an enforcement file. It runs under bash, and under zsh where
+    /// that shell is installed; it is skipped, with a printed note, on a
+    /// host that has neither.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One corpus, read under each shell.
+    fn directory_prefixes_match_the_native_shell() {
+        use std::process::Command;
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        for dir in ["sub", "a/b", ".claude", ".codeflow", "with space"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // Every reviewer payload's prefix, plus ordinary and unknown ones.
+        let prefixes = [
+            "cd sub",
+            "cd -- sub",
+            "cd -P -L sub",
+            "cd -q sub",
+            "command cd sub",
+            "command -p cd sub",
+            "builtin cd sub",
+            "! cd sub",
+            "pushd sub >/dev/null",
+            "chdir sub",
+            "env -C sub true",
+            "env -Csub true",
+            "env --chdir=sub true",
+            "cd a && cd b",
+            "cd a/b",
+            "cd .claude && cd ..",
+            "cd 'with space'",
+            "cd sub && cd ..",
+            "cd",
+            "cd \"$UNSET\"",
+            "cd -",
+            // Round 4: zsh precommands and `builtin --`.
+            "builtin -- cd sub",
+            "noglob cd sub",
+            "nocorrect cd sub",
+            "true; - cd sub",
+            "noglob cd .claude && cd ..",
+        ];
+        // Words that only zsh reads as precommands.
+        let zsh_only = ["noglob", "nocorrect", "true; -"];
+        let shells: Vec<&str> = ["bash", "zsh"]
+            .into_iter()
+            .filter(|shell| {
+                Command::new(shell)
+                    .arg("-c")
+                    .arg("exit 0")
+                    .status()
+                    .is_ok_and(|status| status.success())
+            })
+            .collect();
+        if shells.is_empty() {
+            eprintln!("skipped: neither bash nor zsh is installed");
+            return;
+        }
+        // Launcher lines whose child reports its own directory (Codex R3-1):
+        // the line itself prints, so the directory compared is the child's.
+        let children = [
+            "env -C sub /bin/pwd -P",
+            "env -Csub /bin/pwd -P",
+            "env --chdir=sub /bin/pwd -P",
+            "env -u FOO -C sub /bin/pwd -P",
+            "env -u FOO -Csub /bin/pwd -P",
+            "env -iCsub /bin/pwd -P",
+            "nice env -C sub /bin/pwd -P",
+            "nice -n 5 env -Csub /bin/pwd -P",
+            "nohup env -C sub /bin/pwd -P",
+            "command env -C sub /bin/pwd -P",
+            "time -p env -C sub /bin/pwd -P",
+            "stdbuf -oL env -C sub /bin/pwd -P",
+            "timeout 5 env -C sub /bin/pwd -P",
+            "command cd sub && /bin/pwd -P",
+            "cd .claude && command cd .. && /bin/pwd -P",
+            // Round 4: launchers read by name, installed or not.
+            "caffeinate env -Csub /bin/pwd -P",
+            "caffeinate env -C sub /bin/pwd -P",
+            "caffeinate -i env -Csub /bin/pwd -P",
+            "xcrun env -Csub /bin/pwd -P",
+            "genv -Csub /bin/pwd -P",
+            "gtimeout 5 env -Csub /bin/pwd -P",
+            "ionice -c 3 env -Csub /bin/pwd -P",
+            "noglob env -Csub /bin/pwd -P",
+            "builtin -- cd sub && /bin/pwd -P",
+        ];
+        let mut skipped = Vec::new();
+        for shell in shells {
+            let runs = prefixes
+                .iter()
+                .map(|prefix| (*prefix, format!("{prefix} 2>/dev/null; pwd -P")))
+                .chain(
+                    children
+                        .iter()
+                        .map(|line| (*line, format!("{line} 2>/dev/null"))),
+                );
+            for (line, script) in runs {
+                // `chdir` is a zsh builtin, not a bash one.
+                if line.starts_with("chdir") && shell == "bash" {
+                    continue;
+                }
+                if shell == "bash" && zsh_only.iter().any(|word| line.starts_with(word)) {
+                    skipped.push(format!("{shell}: {line} (zsh only)"));
+                    continue;
+                }
+                let set = line_directories(line, &root, Some(&home));
+                let output = Command::new(shell)
+                    .arg("-c")
+                    .arg(&script)
+                    .current_dir(&root)
+                    .env("HOME", &home)
+                    .env_remove("CDPATH")
+                    .env_remove("UNSET")
+                    .output()
+                    .unwrap();
+                let printed = String::from_utf8(output.stdout).unwrap();
+                let Some(reported) = printed.lines().next_back() else {
+                    // The launcher is not installed here (`timeout`,
+                    // `stdbuf` on macOS): nothing ran, so nothing to compare.
+                    skipped.push(format!("{shell}: {line}"));
+                    continue;
+                };
+                let reported = std::fs::canonicalize(reported).unwrap_or_else(|_| reported.into());
+                let covered = set.unknown
+                    || set.dirs.iter().any(|dir| {
+                        std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()) == reported
+                    });
+                assert!(
+                    covered,
+                    "{shell}: `{line}` ran in {reported:?}, not in {:?} (unknown={})",
+                    set.dirs, set.unknown
+                );
+            }
+        }
+        if !skipped.is_empty() {
+            eprintln!("skipped, launcher not installed or not this shell's: {skipped:?}");
+        }
     }
 }
