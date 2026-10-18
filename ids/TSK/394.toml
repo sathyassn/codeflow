@@ -1,0 +1,11 @@
+id = "TSK-394"
+uid = "64b7b5e9-804a-4f50-a28f-205117c7d151"
+kind = "TSK"
+title = "Task-line and document-index classification failures get separate remedies"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:23:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
