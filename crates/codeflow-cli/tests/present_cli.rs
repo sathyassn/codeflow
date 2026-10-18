@@ -997,38 +997,37 @@ fn unreadable_command_line_processes() -> Vec<StandIn> {
     [not_utf8, oversize]
         .iter()
         .map(|argument| {
-            StandIn(
-                Command::new("/bin/sh")
-                    .args(["-c", "sleep 120 & wait", "stand-in-unrelated"])
-                    .arg(argument)
-                    .process_group(0)
-                    .spawn()
-                    .unwrap(),
-            )
+            StandIn(vec![Command::new("/bin/sh")
+                .args(["-c", "read -r line", "stand-in-unrelated"])
+                .stdin(std::process::Stdio::piped())
+                .arg(argument)
+                .process_group(0)
+                .spawn()
+                .unwrap()])
         })
         .collect()
 }
 
 /// Starts a stand-in browser that carries the session's profile and instance
-/// arguments and records it in the session as its browser.
+/// arguments and records it in the session as its browser. A shell builtin
+/// waits on our open stdin pipe without spawning an orphan-prone helper.
 fn register_stand_in_browser(fixture: &TestProject, session_id: &str) -> StandIn {
     use std::os::unix::process::CommandExt as _;
 
     let profile = runtime_session(fixture, session_id).join("browser-profile");
     let instance = "0b5a3a6e-7c55-4c1e-9b8e-3f1d2a4c5e6f";
-    let browser = StandIn(
-        Command::new("/bin/sh")
-            .args(["-c", "sleep 120 & wait", "stand-in-browser"])
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--cf-present-instance={instance}"))
-            .process_group(0)
-            .spawn()
-            .unwrap(),
-    );
+    let browser = StandIn(vec![Command::new("/bin/sh")
+        .args(["-c", "read -r line", "stand-in-browser"])
+        .stdin(std::process::Stdio::piped())
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg(format!("--cf-present-instance={instance}"))
+        .process_group(0)
+        .spawn()
+        .unwrap()]);
     let session_path = session_dir(fixture, session_id).join("session.json");
     let mut session: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&session_path).unwrap()).unwrap();
-    session["browser_pid"] = browser.0.id().into();
+    session["browser_pid"] = browser.0[0].id().into();
     session["browser_instance"] = instance.into();
     fs::write(&session_path, serde_json::to_string(&session).unwrap()).unwrap();
     browser
@@ -1042,7 +1041,7 @@ fn close_ignores_other_processes_with_unreadable_command_lines() {
     let unrelated = unreadable_command_line_processes();
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
-    drop(register_stand_in_browser(&fixture, &session_id));
+    drop(register_stand_in_browser(&fixture, &session_id).with_unreaped_member());
 
     close_and_clear(&fixture, &session_id);
     drop(unrelated);
@@ -1055,7 +1054,7 @@ fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
     let unrelated = unreadable_command_line_processes();
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
-    drop(register_stand_in_browser(&fixture, &session_id));
+    drop(register_stand_in_browser(&fixture, &session_id).with_unreaped_member());
 
     let shown = require_success(&codeflow(
         &fixture.project,
@@ -1084,7 +1083,7 @@ fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
     let browser = register_stand_in_browser(&fixture, &session_id);
-    let group = i32::try_from(browser.0.id()).unwrap();
+    let group = i32::try_from(browser.0[0].id()).unwrap();
     // Not reaped until the end: it stays in the group as a zombie.
     let mut exited = Command::new("/bin/sh")
         .args(["-c", "exit 0"])
@@ -1115,16 +1114,56 @@ fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
     exited.wait().unwrap();
 }
 
-/// A stand-in browser process group, killed when the test ends or fails.
-struct StandIn(std::process::Child);
+/// A stand-in process group whose children are killed and reaped on drop.
+struct StandIn(Vec<std::process::Child>);
+
+impl StandIn {
+    /// Hold an exited group member unreaped until teardown, reproducing a busy
+    /// host that does not reap the old fixture's orphaned sleep promptly.
+    fn with_unreaped_member(mut self) -> Self {
+        use std::os::unix::process::CommandExt as _;
+
+        let group = i32::try_from(self.0[0].id()).unwrap();
+        let member = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(group)
+            .spawn()
+            .unwrap();
+        let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        // SAFETY: waits only for our child and writes into a valid siginfo_t.
+        // WNOWAIT observes its exit without reaping it.
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    member.id(),
+                    status.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        eprintln!(
+            "stand-in group {group}: holding exited member {} unreaped",
+            member.id()
+        );
+        self.0.push(member);
+        self
+    }
+}
 
 impl Drop for StandIn {
     fn drop(&mut self) {
-        if let Ok(group) = i32::try_from(self.0.id()) {
+        if let Ok(group) = i32::try_from(self.0[0].id()) {
             // SAFETY: signals only the stand-in's own process group.
             unsafe { libc::kill(-group, libc::SIGKILL) };
         }
-        let _ = self.0.wait();
+        // Every member is our child. Reap them all before another command can
+        // observe a leaderless group, including on macOS where zombies still
+        // answer the group signal probe.
+        for child in &mut self.0 {
+            let _ = child.wait();
+        }
     }
 }
 
