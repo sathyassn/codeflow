@@ -106,6 +106,7 @@ pub(crate) fn evaluate(
         root,
         home,
         names: ProtectedNames::load(root, home),
+        run_names: HashMap::new(),
         line_enforcement: HashMap::new(),
         line_authority: HashMap::new(),
     };
@@ -204,6 +205,7 @@ struct Facts<'a> {
     root: &'a Path,
     home: Option<&'a Path>,
     names: ProtectedNames,
+    run_names: HashMap<PathBuf, ProtectedNames>,
     line_enforcement: HashMap<Option<PathBuf>, Option<String>>,
     line_authority: HashMap<Option<PathBuf>, Option<String>>,
 }
@@ -906,7 +908,7 @@ fn value_reach_at(
 /// A literal argument, its braces and globs expanded: authority metadata
 /// first, then an enforcement path. Only candidate paths take the writer's
 /// full checks, once each, without reinterpreting the original word.
-fn literal_reach(value: &str, dir: &Path, facts: &Facts<'_>) -> Option<Reach> {
+fn literal_reach(value: &str, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach> {
     let paths = match literal_paths(value, dir, facts.home) {
         Ok(paths) => paths,
         Err(why) => {
@@ -920,8 +922,24 @@ fn literal_reach(value: &str, dir: &Path, facts: &Facts<'_>) -> Option<Reach> {
             );
         }
     };
+    // The writer checks both the payload repository and the resolved run
+    // directory. Cache the latter's candidate names too, once per directory.
+    // A proved-absent directory cannot introduce another repository. Its
+    // arguments still take the payload repository's candidate checks.
+    let run_names = (dir != facts.root && !crate::absence::cannot_exist(dir).unwrap_or(false))
+        .then(|| {
+            facts
+                .run_names
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| ProtectedNames::load(dir, facts.home))
+        });
     let mut enforcement = None;
-    for path in paths.iter().filter(|path| facts.names.may_reach(path)) {
+    for path in paths.iter().filter(|path| {
+        facts.names.may_reach(path)
+            || run_names
+                .as_ref()
+                .is_some_and(|names| names.may_reach(path))
+    }) {
         let reached =
             git_guard::resolved_path_integrity(path, dir, facts.payload_cwd).or_else(|| {
                 // The explicit home can differ from the guard process's home.

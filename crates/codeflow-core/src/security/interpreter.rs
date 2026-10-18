@@ -412,6 +412,26 @@ mod tests {
             ],
         );
         assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
+        // A launcher can run in a different repository. Its registered
+        // checkout roots must qualify for the same candidate checks.
+        let other = self::repo();
+        let moved = other.root.join("away/w");
+        std::fs::create_dir(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&other.linked, &moved).unwrap();
+        std::fs::write(
+            other.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", moved.join(".git").display()),
+        )
+        .unwrap();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[&format!(
+                "env -C \"{}\" python3 tool.py away/w",
+                other.root.display()
+            )],
+        );
     }
 
     /// An expanded directory operand cannot be followed as literal text.

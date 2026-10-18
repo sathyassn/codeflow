@@ -8483,6 +8483,18 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             "should refuse the incomplete glob with its entry limit: {err}"
         ));
     }
+    let other = tmp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    enforced_repo(&other);
+    git(&other, &["worktree", "add", "-b", "task/away", "away/w"]);
+    let command = format!("env -C \"{}\" python3 tool.py away/w", shell_path(&other));
+    let out = exec_guard_contract_3(&root, &command);
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2) || !err.contains("interpreter") {
+        wrong.push(format!(
+            "should refuse in another repository: {command}: {err}"
+        ));
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
