@@ -8264,9 +8264,9 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         format!("W={tree}; python3 - \"$W/.claude/settings.json\" <<'PY'\nimport sys\nPY"),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
         format!("python3 edit.py \"{tree}/.claude/settings.json\""),
-        format!("python3 tool.py \"{tree}/.*\""),
-        format!("python3 tool.py \"{tree}/.cla*\""),
-        format!("python3 tool.py \"{repo}/.worktrees/*\""),
+        format!("python3 tool.py \"{tree}/\".*"),
+        format!("python3 tool.py \"{tree}/\".cla*"),
+        format!("python3 tool.py \"{repo}/\".worktrees/*"),
         "python3 tool.py .worktrees/w/{.git,.claude}".to_string(),
         "python3 tool.py .worktrees/{w,x}/.git".to_string(),
         "python3 tool.py .worktrees/w/.git{,}".to_string(),
@@ -8276,7 +8276,15 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py .claude".to_string(),
         "python3 tool.py .worktrees/w".to_string(),
         "python3 tool.py .worktrees".to_string(),
-        "python3 tool.py .".to_string(),
+        "python3 tool.py .worktrees/w/*(D)".to_string(),
+        "python3 tool.py .claude/*(D)".to_string(),
+        "python3 tool.py .cla(ude)/settings.json".to_string(),
+        "python3 tool.py .worktrees/w/(.git|x)".to_string(),
+        "python3 tool.py .worktrees/w/.g(i)t".to_string(),
+        "python3 tool.py .worktrees/w/@(.git|.claude)".to_string(),
+        "python3 tool.py .worktrees/w/^src(D)".to_string(),
+        "python3 tool.py *(D)".to_string(),
+        "python3 tool.py .worktrees/w/<1-9>".to_string(),
         "cd .cla* && python3 tool.py settings.json".to_string(),
         "cd .c?aude && python3 tool.py settings.json".to_string(),
         "cd .[c]laude && python3 tool.py settings.json".to_string(),
@@ -8354,7 +8362,15 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py \"x (y)\"",
         "python3 tool.py \"x (y)\" notes.txt",
         "python3 tool.py \"print(x)\"",
+        "python3 tool.py \"my file(1).txt\"",
+        "python3 tool.py 'notes (draft).md'",
         "node x.js --filter \"(a|b)\"",
+        "python3 tool.py .",
+        "python3 -m pytest .",
+        "python3 -m black .",
+        "python3 -m pip install -e .",
+        "python3 -m ruff check .",
+        "node x.js .",
         "python3 edit.py notes.txt out.json",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
@@ -8454,6 +8470,58 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         if out.status.code() != Some(0) {
             let err = String::from_utf8_lossy(&out.stderr);
             wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    for cwd in [&root, &linked] {
+        std::fs::create_dir_all(cwd.join("src")).unwrap();
+        for command in [
+            "python3 tool.py .",
+            "python3 -m pytest .",
+            "python3 -m black .",
+            "python3 -m pip install -e .",
+            "python3 -m ruff check .",
+            "node x.js .",
+            "cd src && python3 tool.py ..",
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!("should allow in {cwd:?}: {command}: {out:?}"));
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        let alias = tmp.path().join("alias");
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        std::os::unix::fs::symlink(&linked, plain.join("x")).unwrap();
+        for path in [
+            alias.join(".worktrees/w/.git"),
+            alias.join(".worktrees/w/.g*"),
+            alias.join(".worktrees/*/.git"),
+            plain.join("x/.git"),
+        ] {
+            // Each harness runs both hooks. Interpreter arguments belong
+            // to exec-guard; writer operands and redirects to git-guard.
+            for (hook, command) in [
+                (
+                    "exec-guard",
+                    format!("python3 tool.py {}", shell_path(&path)),
+                ),
+                ("git-guard", format!("cp x {}", shell_path(&path))),
+                ("git-guard", format!("echo hi > {}", shell_path(&path))),
+            ] {
+                let out = if hook == "exec-guard" {
+                    exec_guard_contract_3(&root, &command)
+                } else {
+                    guard_run(&command, &root)
+                };
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!("{hook} should refuse alias: {command}: {out:?}"));
+                }
+            }
         }
     }
     let command = "python3 tool.py ~/repo/.worktrees/w/.git";

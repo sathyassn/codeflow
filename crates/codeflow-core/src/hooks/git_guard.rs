@@ -1915,6 +1915,26 @@ pub(crate) fn resolved_path_integrity(
         })
 }
 
+/// Interpreter operands share the writer's file checks. A project location
+/// equal to or above the checkout the interpreter runs in does not itself
+/// name a different checkout to modify.
+pub(crate) fn interpreter_path_integrity(
+    path: &Path,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<String> {
+    path_integrity(path, cwd, payload_cwd)
+        .map(str::to_string)
+        .or_else(
+            || match super::edit_guard::own_checkout_ancestor(path, cwd) {
+                Ok(true) => None,
+                Ok(false) => checkout_under(path, cwd, payload_cwd, None)
+                    .map(|checkout| format!("the registered worktree {}", checkout.description())),
+                Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
+            },
+        )
+}
+
 /// [`token_integrity_path`] for the token as written, without expanding a
 /// glob in it.
 fn token_integrity_path_literal(
@@ -3750,6 +3770,27 @@ pub(crate) fn line_path_words(line: &str) -> Vec<String> {
         .collect()
 }
 
+/// Line evidence with the parser's expansion provenance. Raw fragments
+/// still supply literal name evidence; only parsed shell words expand.
+pub(crate) fn line_path_readings(line: &str) -> Vec<(String, bool)> {
+    let tokens = expand_commands(line)
+        .iter()
+        .flat_map(|segment| shell_words(segment))
+        .map(|word| (word.text, word.pattern))
+        .collect::<Vec<_>>();
+    line_words(line)
+        .map(|word| (word.to_string(), false))
+        .chain(tokens)
+        .flat_map(|(word, pattern)| {
+            let value = word
+                .split_once('=')
+                .filter(|(name, _)| assignment_name(name))
+                .map(|(_, value)| (value.to_string(), pattern));
+            std::iter::once((word, pattern)).chain(value)
+        })
+        .collect()
+}
+
 /// The paths a glob word reaches from `cwd`, preserving the reason an
 /// incomplete expansion must refuse. Each word is expanded once.
 pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, &'static str> {
@@ -3761,10 +3802,8 @@ pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, &'stati
 /// [`line_names`] that resolves a plain word only when `worth` says its
 /// path may be an enforcement path, so a caller with a cheap test of its
 /// own skips the file system reads for the rest (TSK-302 review F4). The
-/// text check is unchanged. With `quoted_literal`, a word holding a blank
-/// or a shell operator, which the shell only passes when it was quoted and
-/// therefore never globs, is read as a plain path rather than a glob
-/// (TSK-302 review round 3); git-guard's own reading keeps it off.
+/// text check is unchanged. With `quoted_literal`, expansion follows the
+/// parser's quote provenance; git-guard's own reading keeps it off.
 pub(crate) fn line_names_where(
     line: &str,
     cwd: &Path,
@@ -3779,20 +3818,24 @@ pub(crate) fn line_names_where(
     // value of an assignment, after brace expansion: a glob is expanded,
     // and a plain path is resolved through symbolic links (TSK-216 round
     // 16).
-    let words = line_path_words(line);
-    let found = words.iter().find_map(|word| {
-        let Some(words) = word_readings(word) else {
+    let words = if quoted_literal {
+        line_path_readings(line)
+    } else {
+        line_path_words(line)
+            .into_iter()
+            .map(|word| (word, true))
+            .collect()
+    };
+    let found = words.iter().find_map(|(word, pattern)| {
+        let Some(words) = (if *pattern {
+            word_readings(word)
+        } else {
+            Some(vec![word.clone()])
+        }) else {
             return Some(BRACE_UNREAD.to_string());
         };
-        let quoted = quoted_literal
-            && word.contains(|c: char| {
-                matches!(
-                    c,
-                    ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
-                )
-            });
         words.iter().find_map(|w| {
-            if has_glob(w) && !quoted {
+            if has_glob(w) && *pattern {
                 glob_reach(w, cwd, payload_cwd)
             } else {
                 let path = integrity_shell_path(w, cwd);
@@ -10642,6 +10685,9 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 struct ShellWord {
     text: String,
     unquoted_prefix: usize,
+    /// Pattern or brace syntax outside quotes and escapes, including after
+    /// a quoted prefix (`"some directory"/*(D)`).
+    pattern: bool,
     /// Whether the shell fills in part of the word when the command runs: a
     /// `$` or a backtick outside single quotes and not escaped. A `$` in
     /// single quotes is text, as in a `sed` script's `$p` or `[^/]*$`.
@@ -10739,6 +10785,14 @@ fn capture_array_initializer(chars: &mut std::str::Chars<'_>) -> String {
     array
 }
 
+/// Characters that can introduce a shell pattern or brace expansion.
+fn pattern_character(c: char) -> bool {
+    matches!(
+        c,
+        '*' | '?' | '[' | '(' | ')' | '|' | '^' | '#' | '<' | '{' | '}' | '~'
+    )
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -10749,6 +10803,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut unquoted_prefix: usize = 0;
     let mut dollar_pending = false;
     let mut expands = false;
+    let mut pattern = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -10823,6 +10878,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     words.push(ShellWord {
                         text: std::mem::take(&mut cur),
                         unquoted_prefix,
+                        pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                     });
                     started = false;
@@ -10833,6 +10889,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             c => {
                 cur.push(c);
                 started = true;
+                pattern |= !in_single && !in_double && pattern_character(c);
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
@@ -10845,6 +10902,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         words.push(ShellWord {
             text: cur,
             unquoted_prefix,
+            pattern,
             expands,
         });
     }
@@ -10868,8 +10926,15 @@ pub(crate) fn quoted_shell_words(line: &str) -> Vec<String> {
 /// shell removes before the program runs. The integrity checks keep reading
 /// the full token list, where a redirect is the evidence.
 pub(crate) fn command_argv(segment: &str) -> Vec<String> {
+    command_argv_patterns(segment).0
+}
+
+/// The same argument vector with the parser's expansion provenance for
+/// each word. Keep these parallel vectors together when slicing launchers.
+pub(crate) fn command_argv_patterns(segment: &str) -> (Vec<String>, Vec<bool>) {
     let words = shell_words(segment);
     let mut argv = Vec::with_capacity(words.len());
+    let mut patterns = Vec::with_capacity(words.len());
     let mut i = 0;
     while i < words.len() {
         let word = &words[i];
@@ -10880,10 +10945,13 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
                     i += 1; // a bare operator: its target is the next word
                 }
             }
-            _ => argv.push(word.text.clone()),
+            _ => {
+                argv.push(word.text.clone());
+                patterns.push(word.pattern);
+            }
         }
     }
-    argv
+    (argv, patterns)
 }
 
 /// Byte length of the redirection operator a word starts with: an optional

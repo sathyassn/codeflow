@@ -694,6 +694,13 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         .collect();
     let mut protected = Vec::new();
     for root in checkout_roots(repo)? {
+        // A linked checkout's pointer is an enforcement file in its own
+        // right. Resolve this path like every other protected path, so an
+        // alias outside the repository cannot hide the checkout spelling.
+        // Its ancestor base is itself: an ordinary checkout root is not
+        // an enforcement directory merely because it contains this file.
+        let marker = root.join(".git");
+        protected.push((marker.clone(), false, marker));
         for (relative, directory) in &patterns {
             // A linked checkout's .git is a pointer file. Git-owned paths
             // below it live in the shared administrative directory instead.
@@ -746,8 +753,18 @@ type Protected = std::rc::Rc<Vec<ProtectedPath>>;
 
 type ProtectedCache = std::collections::HashMap<PathBuf, Result<Option<Protected>, String>>;
 
+struct CheckoutPaths {
+    own: Option<[PathBuf; 2]>,
+    roots: Vec<(PathBuf, [PathBuf; 2])>,
+}
+
+type CheckoutCache =
+    std::collections::HashMap<PathBuf, Result<Option<std::rc::Rc<CheckoutPaths>>, String>>;
+
 thread_local! {
     static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
+        const { std::cell::RefCell::new(None) };
+    static CHECKOUTS: std::cell::RefCell<Option<CheckoutCache>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -769,6 +786,9 @@ impl RepoFactsScope {
             }
             outer
         });
+        if outer {
+            CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
+        }
         Self { outer }
     }
 }
@@ -777,8 +797,47 @@ impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
+            CHECKOUTS.with(|cache| *cache.borrow_mut() = None);
         }
     }
+}
+
+fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, String> {
+    let read = || {
+        let Some(repo) = super::repo::open(root)? else {
+            return Ok(None);
+        };
+        let both = |path: &Path| -> Result<[PathBuf; 2], String> {
+            Ok([
+                normalized(path, false).map_err(|error| error.to_string())?,
+                normalized(path, true).map_err(|error| error.to_string())?,
+            ])
+        };
+        let own = repo.workdir().map(both).transpose()?;
+        let roots = checkout_roots(&repo)?
+            .into_iter()
+            .map(|root| both(&root).map(|paths| (root, paths)))
+            .collect::<Result<_, _>>()?;
+        Ok(Some(std::rc::Rc::new(CheckoutPaths { own, roots })))
+    };
+    CHECKOUTS.with(|cache| match cache.borrow_mut().as_mut() {
+        Some(map) => map.entry(root.to_path_buf()).or_insert_with(read).clone(),
+        None => read(),
+    })
+}
+
+/// An interpreter commonly receives its own checkout or an ancestor as a
+/// project location. This exemption is only for checkout-root reach; exact
+/// enforcement files and directories still take their normal checks.
+pub(crate) fn own_checkout_ancestor(target: &Path, root: &Path) -> Result<bool, String> {
+    let Some(checkouts) = checkout_paths_at(root)? else {
+        return Ok(false);
+    };
+    let Some(own) = &checkouts.own else {
+        return Ok(false);
+    };
+    let target = normalized(target, true).map_err(|error| error.to_string())?;
+    Ok(own[1].starts_with(target))
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
@@ -942,20 +1001,19 @@ pub(crate) fn registered_checkout_under(
     root: &Path,
     except: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(repo) = super::repo::open(root)? else {
+    let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(None);
     };
-    let checkouts = checkout_roots(&repo)?;
     let except: Vec<PathBuf> = except
         .into_iter()
         .flat_map(|path| [normalized(path, false), normalized(path, true)])
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    for resolve in [false, true] {
+    for (reading, resolve) in [false, true].into_iter().enumerate() {
         let target = normalized(target, resolve).map_err(|e| e.to_string())?;
-        for checkout in &checkouts {
-            let path = normalized(checkout, resolve).map_err(|e| e.to_string())?;
-            if path.starts_with(&target) && !except.contains(&path) {
+        for (checkout, paths) in &checkouts.roots {
+            let path = &paths[reading];
+            if path.starts_with(&target) && !except.contains(path) {
                 return Ok(Some(checkout.clone()));
             }
         }

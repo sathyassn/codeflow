@@ -408,7 +408,6 @@ mod tests {
                 "python3 tool.py .claude",
                 "python3 tool.py .worktrees/w",
                 "python3 tool.py .worktrees",
-                "python3 tool.py .",
             ],
         );
         assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
@@ -432,6 +431,106 @@ mod tests {
                 other.root.display()
             )],
         );
+    }
+
+    #[test]
+    fn unquoted_shell_patterns_reach_protected_paths() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py .worktrees/w/*(D)",
+                "python3 tool.py .claude/*(D)",
+                "python3 tool.py .cla(ude)/settings.json",
+                "python3 tool.py .worktrees/w/(.git|x)",
+                "python3 tool.py .worktrees/w/.g(i)t",
+                "python3 tool.py .worktrees/w/@(.git|.claude)",
+                "python3 tool.py .worktrees/w/^src(D)",
+                "python3 tool.py *(D)",
+                "python3 tool.py .worktrees/w/<1-9>",
+                "env python3 tool.py \".worktrees/w/\"*(D)",
+                "nice python3 tool.py .worktrees/w/*(D)",
+            ],
+        );
+    }
+
+    #[test]
+    fn interpreter_project_locations_stay_allowed() {
+        let repo = repo();
+        let standalone = repo.root.parent().unwrap().join("standalone");
+        git2::Repository::init(&standalone).unwrap();
+        let mut wrong = Vec::new();
+        for root in [&standalone, &repo.root, &repo.linked] {
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            for (dir, command) in [
+                (root.clone(), "python3 tool.py ."),
+                (root.clone(), "python3 -m pytest ."),
+                (root.clone(), "python3 -m black ."),
+                (root.clone(), "python3 -m pip install -e ."),
+                (root.clone(), "python3 -m ruff check ."),
+                (root.clone(), "node x.js ."),
+                (root.join("src"), "python3 tool.py .."),
+                (root.clone(), "python3 tool.py /"),
+                (root.clone(), "python3 tool.py /tmp"),
+            ] {
+                let findings = judge_in(&repo, &dir, root, command, PolicyLevel::Block);
+                if !findings.is_empty() {
+                    wrong.push(format!("{dir:?}: {command}: {findings:?}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_aliases_cannot_hide_linked_git_pointers() {
+        let repo = repo();
+        let base = repo.root.parent().unwrap();
+        let alias = base.join("alias");
+        let plain = base.join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        std::os::unix::fs::symlink(&repo.root, &alias).unwrap();
+        std::os::unix::fs::symlink(&repo.linked, plain.join("x")).unwrap();
+        for path in [
+            alias.join(".worktrees/w/.git"),
+            alias.join(".worktrees/w/.g*"),
+            alias.join(".worktrees/*/.git"),
+            plain.join("x/.git"),
+        ] {
+            assert_refused(
+                &repo,
+                &repo.root,
+                &repo.root,
+                &[&format!("python3 tool.py {}", path.display())],
+            );
+            for command in [
+                format!("cp x {}", path.display()),
+                format!("echo hi > {}", path.display()),
+            ] {
+                let policy = crate::hooks::policy::GitPolicy::default();
+                let context = crate::hooks::git_guard::GuardContext {
+                    policy: &policy,
+                    current_branch: "task/alias",
+                    integrate_token: false,
+                    pr_base_lookup: None,
+                    dir_target_lookup: None,
+                    alias_lookup: None,
+                    discard_lookup: None,
+                    branch_lookup: None,
+                    root_checkout: None,
+                };
+                let findings =
+                    crate::hooks::git_guard::evaluate_report_at(&command, &context, &repo.root)
+                        .violations;
+                assert!(
+                    integrity_refusal(&findings).is_some(),
+                    "{command}: {findings:?}"
+                );
+            }
+        }
     }
 
     /// An expanded directory operand cannot be followed as literal text.
@@ -550,7 +649,7 @@ mod tests {
             &repo.root,
             &[
                 "python3 tool.py @LINKED@/.*",
-                "python3 tool.py \"@LINKED@/.*\"",
+                "python3 tool.py \"@LINKED@/\".*",
                 "python3 tool.py @LINKED@/.cla*",
                 "python3 tool.py @LINKED@/.g*",
                 "python3 tool.py @ROOT@/.worktrees/*",
@@ -591,7 +690,7 @@ mod tests {
                     ".worktrees/w/.claude/*",
                     ".worktrees/w/.*",
                 ] {
-                    let command = format!(r#"python3 tool.py "{spelling}/{suffix}""#);
+                    let command = format!(r#"python3 tool.py "{spelling}/"{suffix}"#);
                     let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
                     let result = format!("cwd={root:?}; {command}: {findings:?}");
                     results.push(result.clone());
@@ -670,7 +769,15 @@ mod tests {
                 "python3 tool.py \"x (y)\"",
                 "python3 tool.py \"x (y)\" notes.txt",
                 "python3 tool.py \"print(x)\"",
+                "python3 tool.py \"my file(1).txt\"",
+                "python3 tool.py 'notes (draft).md'",
                 "node x.js --filter \"(a|b)\"",
+                "python3 tool.py .",
+                "python3 -m pytest .",
+                "python3 -m black .",
+                "python3 -m pip install -e .",
+                "python3 -m ruff check .",
+                "node x.js .",
                 "python3 edit.py notes.txt out.json",
                 "python3 -m json.tool data.json out.json",
                 "python3 -W ignore src/app.py",
@@ -872,6 +979,7 @@ mod tests {
                     "find .git -name config -exec python3 tool.py {} \\;",
                     "P=.git/config; python3 tool.py \"$P\"",
                     "python3 tool.py .git/con*",
+                    "python3 tool.py .{claude,git}/*",
                     "python3 tool.py \"$(echo .git/config)\"",
                 ],
                 level,

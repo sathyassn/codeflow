@@ -94,6 +94,7 @@ pub(crate) fn evaluate(
     root: &Path,
     home: Option<&Path>,
 ) -> Vec<Violation> {
+    let _scope = edit_guard::RepoFactsScope::enter();
     let calls = outward::interpreter_calls(line, payload_cwd);
     let (opaque, runs) = outward::code_sources(line);
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
@@ -240,15 +241,15 @@ impl Facts<'_> {
             return found.clone();
         }
         let from = dir.unwrap_or(self.payload_cwd);
-        let found = git_guard::line_path_words(self.line)
+        let found = git_guard::line_path_readings(self.line)
             .into_iter()
-            .find(|word| {
+            .find(|(word, pattern)| {
                 // A glob the guard cannot list is left to the enforcement
                 // reading of the line, which refuses it near protected paths.
-                literal_paths(word, from, self.home)
+                literal_paths(word, *pattern, from, self.home)
                     .is_ok_and(|paths| paths.iter().any(|path| self.authority(path)))
             })
-            .map(|word| git_guard::shown_word(&word));
+            .map(|(word, _)| git_guard::shown_word(&word));
         self.line_authority.insert(key, found.clone());
         found
     }
@@ -264,17 +265,13 @@ impl Facts<'_> {
 /// globs, preserving the reason when the guard cannot list them.
 fn literal_paths(
     word: &str,
+    pattern: bool,
     dir: &Path,
     home: Option<&Path>,
 ) -> Result<Vec<PathBuf>, &'static str> {
-    // A word holding a blank or a shell operator was quoted, and the shell
-    // expands no glob or brace in a quoted word: it is one literal path.
-    if word.contains(|c: char| {
-        matches!(
-            c,
-            ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
-        )
-    }) {
+    // Quote removal happens in the argv parser. Characters left in the
+    // value cannot tell us whether the shell saw a pattern or literal text.
+    if !pattern {
         return Ok(vec![literal_target(word, dir, home)]);
     }
     let mut paths = Vec::new();
@@ -650,7 +647,7 @@ fn call_reaches(
 ) -> Vec<Reach> {
     let dirs = dir_options(&call_dirs(call, line_dirs, facts));
     let mut found = Vec::new();
-    for word in &call.args {
+    for (word, pattern) in call.args.iter().zip(&call.patterns) {
         // `find` and `xargs -I {}` fill in `{}`; what they supply is judged
         // below.
         if call.supplier.is_some() && word.contains("{}") {
@@ -668,7 +665,7 @@ fn call_reaches(
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
-                value_reach(value, dir, facts)
+                value_reach(value, *pattern, dir, facts)
             }));
             // A Tcl or brace-quoted word loses one `{}` pair before it runs
             // (`expect -c 'spawn ... {.git/config}'`, review round 7 F2).
@@ -678,7 +675,7 @@ fn call_reaches(
                 .filter(|inner| !inner.is_empty())
             {
                 found.extend(strongest_over_dirs(inner, &dirs, |dir| {
-                    value_reach(inner, dir, facts)
+                    value_reach(inner, *pattern, dir, facts)
                 }));
             }
         }
@@ -722,8 +719,13 @@ fn names_authority(reached: &str) -> bool {
         .any(|name| reached.contains(name))
 }
 
-fn value_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
-    value_reach_at(value, dir, false, facts)
+fn value_reach(
+    value: &str,
+    pattern: bool,
+    dir: Option<&Path>,
+    facts: &mut Facts<'_>,
+) -> Option<Reach> {
+    value_reach_at(value, pattern, dir, false, facts)
 }
 
 /// The words of the string literals in interpreter code: the text between
@@ -881,11 +883,12 @@ fn empty_spans(value: &str) -> Option<String> {
 /// source, not a shell operand, so an unresolved one is not read by the
 /// line's writer rule (TSK-302 review round 2, Grok F1).
 fn code_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
-    value_reach_at(value, dir, true, facts)
+    value_reach_at(value, false, dir, true, facts)
 }
 
 fn value_reach_at(
     value: &str,
+    pattern: bool,
     dir: Option<&Path>,
     code: bool,
     facts: &mut Facts<'_>,
@@ -895,7 +898,7 @@ fn value_reach_at(
         || (value.starts_with('~') && !value.starts_with("~/") && value != "~");
     let absolute = value.starts_with('/') || value.starts_with("~/") || value == "~";
     match (unresolved, dir.or(absolute.then_some(facts.payload_cwd))) {
-        (false, Some(dir)) => literal_reach(value, dir, facts),
+        (false, Some(dir)) => literal_reach(value, pattern, dir, facts),
         // A code literal whose directory is unknown is judged by its
         // trailing components, as an argument is; an unresolved expression
         // inside code stays exempt (TSK-302 review round 3, R3-2).
@@ -908,8 +911,8 @@ fn value_reach_at(
 /// A literal argument, its braces and globs expanded: authority metadata
 /// first, then an enforcement path. Only candidate paths take the writer's
 /// full checks, once each, without reinterpreting the original word.
-fn literal_reach(value: &str, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach> {
-    let paths = match literal_paths(value, dir, facts.home) {
+fn literal_reach(value: &str, pattern: bool, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach> {
+    let paths = match literal_paths(value, pattern, dir, facts.home) {
         Ok(paths) => paths,
         Err(why) => {
             let message = format!("cannot inspect interpreter argument `{value}`: {why}");
@@ -933,7 +936,21 @@ fn literal_reach(value: &str, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach
                 .entry(dir.to_path_buf())
                 .or_insert_with(|| ProtectedNames::load(dir, facts.home))
         });
-    let mut enforcement = None;
+    // Authority keeps its fixed level even when an earlier candidate names
+    // ordinary enforcement state. Most candidates cannot name authority.
+    for path in &paths {
+        if (facts.names.may_reach_authority(path)
+            && edit_guard::repository_authority_target(path, facts.root, true))
+            || run_names.as_ref().is_some_and(|names| {
+                names.may_reach_authority(path)
+                    && edit_guard::repository_authority_target(path, dir, true)
+            })
+        {
+            return Some(Reach::Authority(format!(
+                "an interpreter argument `{value}` may reach policy authority metadata"
+            )));
+        }
+    }
     for path in paths.iter().filter(|path| {
         facts.names.may_reach(path)
             || run_names
@@ -941,7 +958,7 @@ fn literal_reach(value: &str, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach
                 .is_some_and(|names| names.may_reach(path))
     }) {
         let reached =
-            git_guard::resolved_path_integrity(path, dir, facts.payload_cwd).or_else(|| {
+            git_guard::interpreter_path_integrity(path, dir, facts.payload_cwd).or_else(|| {
                 // The explicit home can differ from the guard process's home.
                 // Keep its native-edit protections for candidates beneath it.
                 let Some(text) = path.to_str() else {
@@ -970,9 +987,9 @@ fn literal_reach(value: &str, dir: &Path, facts: &mut Facts<'_>) -> Option<Reach
         if names_authority(&reached) {
             return Some(Reach::Authority(message));
         }
-        enforcement.get_or_insert(Reach::Enforcement(message));
+        return Some(Reach::Enforcement(message));
     }
-    enforcement
+    None
 }
 
 /// Whether an unreadable value's spelled part is worth git-guard's full
@@ -1268,6 +1285,7 @@ fn resolved_existing(path: &Path) -> Option<PathBuf> {
 /// and with symbolic links resolved, skip the full repository checks.
 struct ProtectedNames {
     names: Vec<String>,
+    authority_names: Vec<String>,
     /// Git configuration files named by full path (`XDG_CONFIG_HOME`,
     /// `GIT_CONFIG_GLOBAL`), each folded, as spelled and resolved.
     configs: Vec<String>,
@@ -1284,6 +1302,7 @@ impl ProtectedNames {
         let mut unknown = false;
         let mut checkouts = Vec::new();
         let mut names: Vec<String> = Vec::new();
+        let mut authority_names = vec![".git".into(), ".gitconfig".into(), "gitconfig".into()];
         for rule in &actions::table().claude_edit_denies {
             let first = rule
                 .strip_prefix("Edit(")
@@ -1319,7 +1338,10 @@ impl ProtectedNames {
                 }
                 match repo.commondir().components().next_back() {
                     Some(Component::Normal(name)) => match folded(name) {
-                        Some(name) => names.push(name),
+                        Some(name) => {
+                            authority_names.push(name.clone());
+                            names.push(name);
+                        }
                         None => unknown = true,
                     },
                     _ => unknown = true,
@@ -1359,10 +1381,28 @@ impl ProtectedNames {
         }
         Self {
             names,
+            authority_names,
             configs: folded_configs,
             checkouts,
             unknown,
         }
+    }
+
+    fn may_reach_authority(&self, target: &Path) -> bool {
+        if self.unknown {
+            return true;
+        }
+        let Some(resolved) = resolved_existing(target) else {
+            return true;
+        };
+        [target, resolved.as_path()].iter().any(|path| {
+            path.components().any(|component| match component {
+                Component::Normal(name) => {
+                    folded(name).is_none_or(|name| self.authority_names.contains(&name))
+                }
+                _ => false,
+            }) || folded(path.as_os_str()).is_none_or(|path| self.configs.contains(&path))
+        })
     }
 
     /// Whether `target` may be an enforcement path or authority metadata,
