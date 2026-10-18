@@ -387,6 +387,77 @@ mod tests {
         );
     }
 
+    /// Every resolved reading uses the writer's directory and checkout
+    /// protection, including literal and brace-expanded operands.
+    #[test]
+    fn interpreter_directory_and_checkout_arguments_refuse() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py .worktrees/w/{.git,.claude}",
+                "python3 tool.py .worktrees/{w,x}/.git",
+                "python3 tool.py .worktrees/w/.git{,}",
+                "python3 tool.py .worktrees/w/.git",
+                "python3 tool.py .WORKTREES/W/.GIT",
+                "node tool.js .worktrees/w/.git",
+                "python3 tool.py ~/repo/.worktrees/w/.git",
+                "python3 tool.py .claude",
+                "python3 tool.py .worktrees/w",
+                "python3 tool.py .worktrees",
+                "python3 tool.py .",
+            ],
+        );
+        assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
+    }
+
+    /// An expanded directory operand cannot be followed as literal text.
+    #[test]
+    fn interpreter_pattern_directory_changes_are_unknown() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd .cla* && python3 tool.py settings.json",
+                "cd .c?aude && python3 tool.py settings.json",
+                "cd .[c]laude && python3 tool.py settings.json",
+                "cd {.claude,x} && python3 tool.py settings.json",
+                "pushd .cla* && python3 tool.py settings.json",
+                "env -C .cla* python3 tool.py settings.json",
+                "ruby -C .cla* tool.rb settings.json",
+                "cd .wor* && python3 tool.py w/.g*",
+            ],
+        );
+    }
+
+    /// An incomplete ordinary glob refuses with the actual entry budget.
+    #[test]
+    fn interpreter_incomplete_glob_reports_limit() {
+        let repo = repo();
+        let many = repo.root.join("many");
+        std::fs::create_dir(&many).unwrap();
+        for n in 0..5000 {
+            std::fs::write(many.join(format!("f{n}")), "").unwrap();
+        }
+        let findings = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "python3 tool.py many/*",
+            PolicyLevel::Block,
+        );
+        assert!(
+            integrity_refusal(&findings)
+                .is_some_and(|refusal| refusal.message.contains("more than 4096 entries")),
+            "{findings:?}"
+        );
+    }
+
     /// TSK-302 AC-2: the interpreter is found through the wrappers the
     /// parser reads, and `xargs` and `find -exec` supply its path.
     #[test]
@@ -575,6 +646,11 @@ mod tests {
         assert_allowed(
             &repo,
             &[
+                "python3 tool.py \"foo (bar)\"",
+                "python3 tool.py \"x (y)\"",
+                "python3 tool.py \"x (y)\" notes.txt",
+                "python3 tool.py \"print(x)\"",
+                "node x.js --filter \"(a|b)\"",
                 "python3 edit.py notes.txt out.json",
                 "python3 -m json.tool data.json out.json",
                 "python3 -W ignore src/app.py",

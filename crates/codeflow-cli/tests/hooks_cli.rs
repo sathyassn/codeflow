@@ -8267,6 +8267,24 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         format!("python3 tool.py \"{tree}/.*\""),
         format!("python3 tool.py \"{tree}/.cla*\""),
         format!("python3 tool.py \"{repo}/.worktrees/*\""),
+        "python3 tool.py .worktrees/w/{.git,.claude}".to_string(),
+        "python3 tool.py .worktrees/{w,x}/.git".to_string(),
+        "python3 tool.py .worktrees/w/.git{,}".to_string(),
+        "python3 tool.py .worktrees/w/.git".to_string(),
+        "python3 tool.py .WORKTREES/W/.GIT".to_string(),
+        "node tool.js .worktrees/w/.git".to_string(),
+        "python3 tool.py .claude".to_string(),
+        "python3 tool.py .worktrees/w".to_string(),
+        "python3 tool.py .worktrees".to_string(),
+        "python3 tool.py .".to_string(),
+        "cd .cla* && python3 tool.py settings.json".to_string(),
+        "cd .c?aude && python3 tool.py settings.json".to_string(),
+        "cd .[c]laude && python3 tool.py settings.json".to_string(),
+        "cd {.claude,x} && python3 tool.py settings.json".to_string(),
+        "pushd .cla* && python3 tool.py settings.json".to_string(),
+        "env -C .cla* python3 tool.py settings.json".to_string(),
+        "ruby -C .cla* tool.rb settings.json".to_string(),
+        "cd .wor* && python3 tool.py w/.g*".to_string(),
         "python3 -c 'import sys' .claude/settings.json".to_string(),
         "node -e 'x' .codeflow/policy.json".to_string(),
         "perl -i -pe 's/a/b/' .claude/settings.json".to_string(),
@@ -8332,6 +8350,11 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "osascript -e 'do shell script \"python3 tool.py .git/config\"'".to_string(),
     ];
     let allowed = [
+        "python3 tool.py \"foo (bar)\"",
+        "python3 tool.py \"x (y)\"",
+        "python3 tool.py \"x (y)\" notes.txt",
+        "python3 tool.py \"print(x)\"",
+        "node x.js --filter \"(a|b)\"",
         "python3 edit.py notes.txt out.json",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
@@ -8417,6 +8440,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     // From inside the linked worktree, its own enforcement files and the
     // main checkout's are refused too.
     for command in [
+        "python3 tool.py .git".to_string(),
         "python3 edit.py .codeflow/policy.json".to_string(),
         format!("python3 edit.py \"{repo}/.claude/settings.json\""),
     ] {
@@ -8431,6 +8455,33 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             let err = String::from_utf8_lossy(&out.stderr);
             wrong.push(format!("should allow: {command}: {err}"));
         }
+    }
+    let command = "python3 tool.py ~/repo/.worktrees/w/.git";
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+    });
+    let out = run_with_stdin(
+        codeflow()
+            .env("HOME", tmp.path())
+            .env("USERPROFILE", tmp.path())
+            .args(["hook", "exec-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload.to_string(),
+    );
+    if out.status.code() != Some(2) {
+        wrong.push(format!("should refuse: {command}: {out:?}"));
+    }
+    let many = root.join("many");
+    std::fs::create_dir(&many).unwrap();
+    for n in 0..5000 {
+        std::fs::write(many.join(format!("f{n}")), "").unwrap();
+    }
+    let out = exec_guard_contract_3(&root, "python3 tool.py many/*");
+    let err = String::from_utf8_lossy(&out.stderr);
+    if out.status.code() != Some(2) || !err.contains("more than 4096 entries") {
+        wrong.push(format!(
+            "should refuse the incomplete glob with its entry limit: {err}"
+        ));
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

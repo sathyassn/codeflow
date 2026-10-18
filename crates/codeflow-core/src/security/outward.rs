@@ -654,6 +654,27 @@ fn env_options(
     Some(at)
 }
 
+/// Resolve a directory operand consistently for shell, env and Ruby moves.
+pub(crate) fn directory_operand(operand: &str, home: Option<&Path>) -> DirChange {
+    if crate::hooks::git_guard::unresolved_word(operand)
+        || crate::hooks::git_guard::has_glob(operand)
+        || operand.contains(['{', '}'])
+        || operand == "-"
+    {
+        return DirChange::Unknown;
+    }
+    if let Some(tail) = operand
+        .strip_prefix("~/")
+        .or((operand == "~").then_some(""))
+    {
+        return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
+    }
+    if operand.starts_with(['~', '+']) {
+        return DirChange::Unknown;
+    }
+    DirChange::To(PathBuf::from(operand))
+}
+
 fn launcher_changes(
     words: &[String],
     home: Option<&Path>,
@@ -679,21 +700,7 @@ fn launcher_changes(
         return;
     };
     let rest = &words[at + 1..];
-    let target = |operand: &str| -> DirChange {
-        if crate::hooks::git_guard::unresolved_word(operand) || operand == "-" {
-            return DirChange::Unknown;
-        }
-        if let Some(tail) = operand
-            .strip_prefix("~/")
-            .or((operand == "~").then_some(""))
-        {
-            return home.map_or(DirChange::Unknown, |home| DirChange::To(home.join(tail)));
-        }
-        if operand.starts_with(['~', '+']) {
-            return DirChange::Unknown;
-        }
-        DirChange::To(PathBuf::from(operand))
-    };
+    let target = |operand: &str| directory_operand(operand, home);
     // A GNU-prefixed coreutils name (`genv`, `gtimeout`) is the launcher it
     // names, as git-guard reads it.
     let name = crate::hooks::git_guard::launcher_name(program);

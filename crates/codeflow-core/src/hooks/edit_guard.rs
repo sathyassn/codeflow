@@ -648,7 +648,7 @@ pub(crate) fn included_git_config_files(
 
 /// Every checkout sharing this repository: its own working tree, the main
 /// working tree and each registered linked worktree.
-fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
     let mut roots = Vec::new();
     if let Some(workdir) = repo.workdir() {
         roots.push(workdir.to_path_buf());

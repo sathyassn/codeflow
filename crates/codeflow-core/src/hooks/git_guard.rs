@@ -1830,8 +1830,13 @@ fn token_integrity_path_spelled(
     token_integrity_path_literal(token, cwd, payload_cwd).or_else(|| {
         // A glob is expanded as the shell will, and each path it reaches is
         // judged through symbolic links (TSK-216 round 4).
-        (has_glob(token) && glob_reach(token, cwd, payload_cwd).is_some())
-            .then_some("repository enforcement files")
+        if !has_glob(token) {
+            return None;
+        }
+        match glob_integrity(token, cwd, payload_cwd) {
+            Ok(found) => found.map(|_| "repository enforcement files"),
+            Err(stop) => Some(stop.reason()),
+        }
     })
 }
 
@@ -1893,6 +1898,21 @@ fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'stati
         Ok(false) => None,
         Err(_) => Some("repository enforcement paths (cannot read repository state)"),
     }
+}
+
+/// Judge one resolved operand with the writer's protection for files,
+/// directory ancestors and registered checkouts. Never expand its text again.
+pub(crate) fn resolved_path_integrity(
+    path: &Path,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<String> {
+    path_integrity(path, cwd, payload_cwd)
+        .map(str::to_string)
+        .or_else(|| {
+            checkout_under(path, cwd, payload_cwd, None)
+                .map(|checkout| format!("the registered worktree {}", checkout.description()))
+        })
 }
 
 /// [`token_integrity_path`] for the token as written, without expanding a
@@ -2267,8 +2287,8 @@ fn unknown_tilde_rest(word: &str) -> Option<&str> {
 }
 
 /// The most directory entries one glob expansion reads before it stops. It
-/// bounds the guard's work: a glob over a larger tree is judged by the
-/// directory it starts from instead (see [`glob_reach`]).
+/// bounds the guard's work: an incomplete expansion refuses because the
+/// guard cannot establish every path it reaches (see [`glob_reach`]).
 const GLOB_ENTRY_LIMIT: usize = 4096;
 
 /// Why a glob expansion stopped before it read every entry.
@@ -2278,6 +2298,15 @@ enum GlobStop {
     TooManyEntries,
     /// An existing path could not be classified or enumerated.
     Unreadable,
+}
+
+impl GlobStop {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::TooManyEntries => "cannot inspect every glob path: more than 4096 entries",
+            Self::Unreadable => "cannot read paths reached through a glob",
+        }
+    }
 }
 
 /// One file-name component of a shell pattern, read so that it matches at
@@ -2668,25 +2697,17 @@ fn expand_components(
 /// expansions resolves to, symbolic links followed. An incomplete expansion
 /// cannot establish what the shell will reach, so it refuses.
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    let glob = WordGlob::new(word, cwd);
-    let reached = |path: &Path| {
-        path_integrity(path, cwd, payload_cwd)
-            .map(str::to_string)
-            .or_else(|| {
-                checkout_under(path, cwd, payload_cwd, None)
-                    .map(|c| format!("the registered worktree {}", c.description()))
-            })
-    };
-    match glob.expand() {
-        Ok(paths) => paths
-            .iter()
-            .find_map(|path| reached(path))
-            .map(|p| format!("{p} (through `{word}`)")),
-        Err(GlobStop::Unreadable) => Some(format!("cannot read paths reached through `{word}`")),
-        Err(GlobStop::TooManyEntries) => Some(format!(
-            "cannot inspect every path reached through `{word}`: more than {GLOB_ENTRY_LIMIT} entries"
-        )),
+    match glob_integrity(word, cwd, payload_cwd) {
+        Ok(found) => found.map(|path| format!("{path} (through `{word}`)")),
+        Err(stop) => Some(format!("{} (through `{word}`)", stop.reason())),
     }
+}
+
+fn glob_integrity(word: &str, cwd: &Path, payload_cwd: &Path) -> Result<Option<String>, GlobStop> {
+    Ok(WordGlob::new(word, cwd)
+        .expand()?
+        .iter()
+        .find_map(|path| resolved_path_integrity(path, cwd, payload_cwd)))
 }
 
 /// The enforcement path a relative word could name from a directory the
@@ -2928,11 +2949,11 @@ fn add_run_dir(run: &mut RunDirs, dir: PathBuf) -> bool {
     true
 }
 
-/// The directories a move to `target` reaches from each listed directory,
-/// a glob expanded; a target filled in at run time reaches none and marks
-/// the directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
+/// The directories a literal move to `target` reaches from each listed
+/// directory. A glob, brace or value filled in at run time marks the
+/// directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
 fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
-    if unresolved_word(target) {
+    if unresolved_word(target) || has_glob(target) || target.contains(['{', '}']) {
         run.unknown.get_or_insert_with(|| {
             format!(
                 "`{}`, a directory filled in at run time",
@@ -2954,22 +2975,7 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
         } else {
             shell_path_with_home(target, dir, run.home.as_deref())
         };
-        if target.contains(['*', '?', '[']) {
-            match WordGlob::new(target, dir).expand() {
-                Ok(found) => reached.extend(found),
-                Err(GlobStop::Unreadable) => {
-                    run.unknown
-                        .get_or_insert_with(|| format!("cannot read directory glob `{target}`"));
-                }
-                Err(GlobStop::TooManyEntries) => {
-                    run.unknown.get_or_insert_with(|| {
-                        format!("`{target}`, a directory glob over too many entries")
-                    });
-                }
-            }
-        } else {
-            reached.push(path);
-        }
+        reached.push(path);
         if reached.len() > RUN_DIR_LIMIT {
             run.unknown = Some(format!(
                 "more than {RUN_DIR_LIMIT} directories the line can move to"
@@ -3744,10 +3750,12 @@ pub(crate) fn line_path_words(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The paths a glob word reaches from `cwd`, or `None` when the guard
-/// cannot list them (an unreadable path, or more entries than it reads).
-pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
-    WordGlob::new(word, cwd).expand().ok()
+/// The paths a glob word reaches from `cwd`, preserving the reason an
+/// incomplete expansion must refuse. Each word is expanded once.
+pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Result<Vec<PathBuf>, &'static str> {
+    WordGlob::new(word, cwd)
+        .expand()
+        .map_err(|stop| stop.reason())
 }
 
 /// [`line_names`] that resolves a plain word only when `worth` says its
@@ -11495,7 +11503,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         std::os::unix::fs::symlink("entry-loop", root.join("entry-loop")).unwrap();
-        let paths = super::glob_paths("entry*/child", root);
+        let paths = super::glob_paths("entry*/child", root).ok();
         let refusal = super::line_names("python3 tool.py entry*/child", root, root);
         assert!(
             paths.is_none() && refusal.is_some(),
@@ -15461,7 +15469,17 @@ mod tests {
             WordGlob::new("*", &many).expand(),
             Err(GlobStop::TooManyEntries)
         );
-        assert!(glob_reach("many/*", dir.path(), dir.path()).is_some());
+        for refusal in [
+            glob_reach("many/*", dir.path(), dir.path()),
+            token_integrity_path("many/*", dir.path(), dir.path()).map(str::to_string),
+        ] {
+            assert!(
+                refusal
+                    .as_deref()
+                    .is_some_and(|why| why.contains("more than 4096 entries")),
+                "{refusal:?}"
+            );
+        }
     }
 
     /// A file name that is not UTF-8 counts as a match of any wildcard
