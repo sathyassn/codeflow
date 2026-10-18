@@ -867,7 +867,11 @@ def literal_script_paths(command: str) -> list[str]:
     unquoted = re.findall(
         r'''(?<![\w./\\?:-])((?:\\\\\?\\)?(?:[A-Za-z]:)?[/\\\w.-]+'''
         + extension + r''')(?=$|[\s"';&|()<>])''', command)
-    return quoted + unquoted
+    # Keep the original scanner too: colons and question marks can separate
+    # an embedded script operand, even when the whole token looks like a drive.
+    embedded = re.findall(
+        r'''(?<![\w./-])([/\w.-]+''' + extension + r''')(?=$|[\s"';&|()<>])''', command)
+    return list(dict.fromkeys(quoted + unquoted + embedded))
 
 
 def script_uses_codeflow_bin(command: str, cwd: Path) -> bool:
