@@ -2432,14 +2432,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // The sole caller (git_guard.rs, the root checkout exemption) passes the result as an exception; None removes the exemption, so an unread repository only refuses more, and hooks::repo::open already refuses an unreadable repository first.
-    (
-        "crates/codeflow-core/src/hooks/edit_guard.rs",
-        "checkout_root_of",
-        "obtain-absent:Repository::discover",
-        1,
-        "unproven",
-    ),
     // A ref that cannot be peeled is left out of the kept tips, which can only leave a deleted tip unbacked and return the discard refusal; it never adds backing.
     (
         "crates/codeflow-core/src/hooks/git_discard.rs",

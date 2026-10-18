@@ -488,6 +488,7 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    let path = crate::portable_path::without_verbatim(path.to_path_buf());
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -1070,8 +1071,8 @@ pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool
 
 /// The working tree of the checkout holding `dir`, when it is one.
 pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
-    git2::Repository::discover(dir)
-        .ok()?
+    super::repo::open(dir)
+        .ok()??
         .workdir()
         .map(Path::to_path_buf)
 }

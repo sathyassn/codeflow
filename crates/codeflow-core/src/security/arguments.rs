@@ -695,12 +695,15 @@ fn call_reaches(
 
 /// The file a literal argument names from `dir`.
 fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
+    let dir = crate::portable_path::without_verbatim(dir.to_path_buf());
     match (
         value.strip_prefix("~/").or((value == "~").then_some("")),
         home,
     ) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => dir.join(value),
+        (Some(rest), Some(home)) => {
+            crate::portable_path::without_verbatim(home.to_path_buf()).join(rest)
+        }
+        _ => dir.join(crate::portable_path::without_verbatim(PathBuf::from(value))),
     }
 }
 
@@ -1302,7 +1305,7 @@ fn resolved_existing(path: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-    let mut resolved = std::fs::canonicalize(&existing).ok()?;
+    let mut resolved = crate::portable_path::canonicalize(&existing).ok()?;
     resolved.extend(rest.iter().rev());
     Some(resolved)
 }

@@ -141,7 +141,7 @@ pub fn linked_worktrees(repo: &git2::Repository) -> Result<Vec<LinkedWorktree>, 
 }
 
 /// Git writes exactly one LF after the administrative checkout path.
-fn gitdir_checkout(admin: &std::path::Path) -> Result<PathBuf, String> {
+pub(crate) fn gitdir_checkout(admin: &std::path::Path) -> Result<PathBuf, String> {
     let text = std::fs::read(admin.join("gitdir"))
         .map_err(|error| format!("cannot read worktree gitdir {}: {error}", admin.display()))?;
     let bytes = text.strip_suffix(b"\n").unwrap_or(&text);

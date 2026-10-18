@@ -103,6 +103,17 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
     match Repository::discover(start) {
         Ok(repo) => {
+            if repo.is_worktree() {
+                // libgit2's dirname reader treats a native backslash path in
+                // the administrative gitdir file as `./`. Read that same
+                // registration with native path semantics before checking
+                // discovery boundaries. `false` updates this handle only.
+                let registered = crate::git::gitdir_checkout(repo.path())?;
+                let workdir = crate::portable_path::without_verbatim(repo.path().to_path_buf())
+                    .join(crate::portable_path::without_verbatim(registered));
+                repo.set_workdir(&workdir, false)
+                    .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
+            }
             check_discovery_boundaries(start, &repo)?;
             Ok(Some(repo))
         }
@@ -466,6 +477,38 @@ mod tests {
                 .canonicalize()
                 .unwrap(),
         );
+        // A canonical native registration uses backslashes and a verbatim
+        // prefix on Windows. Discovery must preserve the checkout identity
+        // without rewriting either pointer file.
+        let native = wt.canonicalize().unwrap();
+        let admin = Repository::open(&wt).unwrap().path().to_path_buf();
+        let pointer = std::fs::read(native.join(".git")).unwrap();
+        std::fs::create_dir(native.join("src")).unwrap();
+        for registration in [
+            format!("{}\n", native.join(".git").display()),
+            "../../../../wt/.git\n".to_string(),
+        ] {
+            std::fs::write(admin.join("gitdir"), &registration).unwrap();
+            for start in [&native, &native.join("src")] {
+                let discovered = RepoInfo::discover(start).unwrap().unwrap();
+                assert_eq!(discovered.root.canonicalize().unwrap(), native);
+                assert!(discovered.is_worktree);
+                assert_eq!(
+                    crate::hooks::edit_guard::checkout_root_of(start)
+                        .unwrap()
+                        .canonicalize()
+                        .unwrap(),
+                    native
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(admin.join("gitdir")).unwrap(),
+                registration
+            );
+            assert_eq!(std::fs::read(native.join(".git")).unwrap(), pointer);
+        }
+        std::fs::write(admin.join("gitdir"), "\n").unwrap();
+        assert!(crate::git::gitdir_checkout(&admin).is_err());
     }
 }
 
