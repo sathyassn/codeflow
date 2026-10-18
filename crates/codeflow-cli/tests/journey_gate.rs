@@ -267,24 +267,34 @@ fn the_gate_runs_on_the_linux_gate_job_and_the_windows_job() {
 fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     let workflow = read(".github/workflows/codeflow-ci.yml");
     let trigger = workflow.split("permissions:").next().unwrap();
-    assert!(trigger.contains("  pull_request:\n  push:"));
+    assert!(trigger.contains(
+        "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:"
+    ));
     assert!(trigger.contains("integration/**"));
-    let condition = "github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push'";
+    let condition = "github.event_name == 'pull_request' && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push'";
     for id in [
         "gates",
         "gates-coverage",
         "gates-coverage-report",
-        "gates-verdict",
+        "windows-build",
         "windows-tests",
         "windows",
+        "windows-release-journey",
         "windows-journeys",
     ] {
         assert!(
             job(&workflow, id).contains(condition),
-            "{id} must run for protected-base PRs and line pushes"
+            "{id} must run for ready integration PRs, main and master PRs, and line pushes"
         );
     }
-    for id in ["secret-scan", "security-review"] {
+    let verdict_condition = condition;
+    for id in ["gates-verdict", "windows-verdict"] {
+        assert!(
+            job(&workflow, id).contains(verdict_condition),
+            "{id} must report the selected gate results"
+        );
+    }
+    for id in ["secret-scan", "gitleaks-canary", "security-review"] {
         assert!(
             !job(&workflow, id)
                 .lines()
@@ -292,15 +302,9 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
             "{id} runs for every PR"
         );
     }
-    // Task PR: security only. Main PR, integration push and main push: all.
-    for (event, base, heavy) in [
-        ("pull_request", "integration/EPC-020-delivery-system", false),
-        ("pull_request", "main", true),
-        ("push", "integration/EPC-020-delivery-system", true),
-        ("push", "main", true),
-    ] {
-        assert_eq!(event == "push" || matches!(base, "main" | "master"), heavy);
-    }
+    assert!(trigger.contains("    branches: [main, master, \"integration/**\"]"));
+    assert!(trigger.contains("  schedule:\n"));
+    assert!(trigger.contains("  workflow_dispatch:"));
     assert!(!workflow.contains("  rust:\n"));
     assert!(!workflow.contains("  coverage:\n"));
 }
