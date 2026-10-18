@@ -19,6 +19,14 @@ WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-ci.yml"
 DIST_CONFIG = ROOT / "dist-workspace.toml"
 
 
+def repository_text(path: Path) -> str:
+    """Repository files are strict UTF-8, independent of the runner locale."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{path}: repository text must be UTF-8: {error}") from error
+
+
 def norm(cmd: str) -> str:
     return " ".join(cmd.split())
 
@@ -91,7 +99,7 @@ PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
 def planned_partitions(data: Path | None = None) -> int:
     """The partition count scripts/windows-partitions.py plans for."""
-    return int(json.loads((data or PARTITION_DATA).read_text())["partitions"])
+    return int(json.loads(repository_text(data or PARTITION_DATA))["partitions"])
 
 
 def matrix_partitions(job: str) -> list[int]:
@@ -779,7 +787,7 @@ def version_file_problems(root: Path, pin: str) -> tuple[str | None, list[str]]:
     if not path.is_file():
         return None, [f"{pin} does not exist; it must hold the Node version "
                       "its target runs on"]
-    text = path.read_text(encoding="utf-8").strip()
+    text = repository_text(path).strip()
     match = EXACT_VERSION.match(text)
     if not match:
         return None, [f"{pin} must hold one exact Node version such as 24.18.0; "
@@ -815,7 +823,7 @@ def node_pin_problems(cfg: dict, workflow: str, root: Path = ROOT) -> list[str]:
         directory = str(Path(pin).parent).replace("\\", "/")
         package = root / directory / "package.json"
         if package.is_file():
-            engines = json.loads(package.read_text()).get("engines", {}).get("node", "")
+            engines = json.loads(repository_text(package)).get("engines", {}).get("node", "")
             exact = EXACT_VERSION.match(engines)
             if exact and exact.group(1) != version:
                 problems.append(
@@ -857,7 +865,7 @@ def script_uses_codeflow_bin(command: str, cwd: Path) -> bool:
         command)
     for name in scripts:
         path = (cwd / name).resolve()
-        if path not in structural and path.is_file() and re.search(r"\bCODEFLOW_BIN\b", path.read_text()):
+        if path not in structural and path.is_file() and re.search(r"\bCODEFLOW_BIN\b", repository_text(path)):
             return True
     return False
 
@@ -950,7 +958,7 @@ def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> l
                 "carry `timeout-minutes`); call a workflow under .github/workflows/ as `./.github/workflows/<file>`"]
     if relative.as_posix() in seen:
         return [f"job '{name}'{where} calls `{target}`, which calls itself again"]
-    callee = timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+    callee = timeout_problems(repository_text(ROOT / relative), relative.as_posix(),
                               seen=seen | {relative.as_posix()})
     return [f"job '{name}'{where} calls `{target}`, whose own jobs are not all bounded: {callee}"] if callee else []
 
@@ -990,7 +998,7 @@ def workflow_files() -> list[Path]:
     found = []
     for directory in WORKFLOW_DIRS:
         for path in sorted((ROOT / directory).glob("*.y*ml")):
-            text = path.read_text()
+            text = repository_text(path)
             # assets/base/ci also holds other CI systems' files; a workflow
             # names its triggers and jobs at the top level.
             if directory.parts[0] == ".github" or re.search(r"^(on|\"on\"|'on'|jobs|\"jobs\"|'jobs'):", text, re.M):
@@ -1002,7 +1010,7 @@ def all_timeout_problems() -> list[str]:
     files = workflow_files()
     problems = [] if files else ["no workflow files were found to check for timeouts"]
     for relative in files:
-        problems += timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+        problems += timeout_problems(repository_text(ROOT / relative), relative.as_posix(),
                                      UNBOUNDED_BY_DESIGN.get(relative.as_posix()))
     return problems
 
@@ -1049,7 +1057,7 @@ def all_pin_problems() -> list[str]:
     files = workflow_files()
     problems = [] if files else ["no workflow files were found to check for action pins"]
     for relative in files:
-        problems += pin_problems((ROOT / relative).read_text(), relative.as_posix(),
+        problems += pin_problems(repository_text(ROOT / relative), relative.as_posix(),
                                  shipped=relative.parts[0] != ".github")
     return problems
 
@@ -1064,7 +1072,7 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
     release = release or ROOT / ".github" / "workflows" / "release.yml"
     if not release.exists() or not config_path.exists():
         return []
-    allowed = tomllib.loads(config_path.read_text()).get("dist", {}).get("allow-dirty", [])
+    allowed = tomllib.loads(repository_text(config_path)).get("dist", {}).get("allow-dirty", [])
     # cargo-dist reads a list; `in` on a string is a substring test, so
     # "ci" or "preci" as a string must not pass.
     if isinstance(allowed, list) and "ci" in allowed:
@@ -1173,8 +1181,8 @@ def playwright_problems(workflow: str) -> list[str]:
 
 
 def main() -> int:
-    cfg = json.loads(CONFIG.read_text())
-    workflow = WORKFLOW.read_text()
+    cfg = json.loads(repository_text(CONFIG))
+    workflow = repository_text(WORKFLOW)
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
             + all_timeout_problems() + all_pin_problems() + dist_problems() + playwright_problems(workflow)
@@ -1195,8 +1203,8 @@ def main() -> int:
 
 def rust_parity() -> int:
     notes: list[str] = []
-    local = local_rust_commands(json.loads(CONFIG.read_text()), notes)
-    ci = ci_rust_job_commands(WORKFLOW.read_text())
+    local = local_rust_commands(json.loads(repository_text(CONFIG)), notes)
+    ci = ci_rust_job_commands(repository_text(WORKFLOW))
     if not ci:
         print("gate-parity: could not find the Windows jobs' cargo commands; "
               "the workflow layout changed; update this guard.", file=sys.stderr)
