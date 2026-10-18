@@ -488,6 +488,7 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    let path = crate::portable_path::without_verbatim(path.to_path_buf());
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {

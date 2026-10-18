@@ -695,12 +695,15 @@ fn call_reaches(
 
 /// The file a literal argument names from `dir`.
 fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
+    let dir = crate::portable_path::without_verbatim(dir.to_path_buf());
     match (
         value.strip_prefix("~/").or((value == "~").then_some("")),
         home,
     ) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => dir.join(value),
+        (Some(rest), Some(home)) => {
+            crate::portable_path::without_verbatim(home.to_path_buf()).join(rest)
+        }
+        _ => dir.join(crate::portable_path::without_verbatim(PathBuf::from(value))),
     }
 }
 
@@ -741,16 +744,30 @@ fn code_literal_words(code: &str) -> Vec<String> {
             continue;
         }
         let mut literal = String::new();
+        let mut spelled = String::new();
         let mut closed = false;
         while let Some(next) = chars.next() {
             if next == '\\' {
-                literal.extend(chars.next());
+                spelled.push(next);
+                if let Some(escaped) = chars.next() {
+                    spelled.push(escaped);
+                    literal.push(escaped);
+                }
             } else if next == ch {
                 closed = true;
                 break;
             } else {
+                spelled.push(next);
                 literal.push(next);
             }
+        }
+        // Native Windows path literals also use backslashes as separators.
+        // Keep that reading before escape removal can erase their identity.
+        if cfg!(windows) && Path::new(&spelled).is_absolute() {
+            let path = crate::portable_path::without_verbatim(PathBuf::from(&spelled));
+            words.extend(outward::literal_words(&crate::portable_path::slashed(
+                &path,
+            )));
         }
         words.extend(outward::literal_words(&literal));
         if !closed {
@@ -919,7 +936,10 @@ fn literal_reach(
     code: bool,
     facts: &mut Facts<'_>,
 ) -> Option<Reach> {
-    let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, facts.home) {
+    // Code strings do not undergo shell tilde expansion. A runtime call
+    // such as expanduser("~") is beyond this literal-path reading.
+    let home = if code { None } else { facts.home };
+    let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, home) {
         Ok(paths) => paths,
         Err(why) => {
             let message = format!("cannot inspect interpreter argument `{value}`: {why}");
@@ -1281,7 +1301,7 @@ fn resolved_existing(path: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-    let mut resolved = std::fs::canonicalize(&existing).ok()?;
+    let mut resolved = crate::portable_path::canonicalize(&existing).ok()?;
     resolved.extend(rest.iter().rev());
     Some(resolved)
 }

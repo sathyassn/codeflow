@@ -402,7 +402,6 @@ mod tests {
                 "python3 tool.py .worktrees/{w,x}/.git",
                 "python3 tool.py .worktrees/w/.git{,}",
                 "python3 tool.py .worktrees/w/.git",
-                "python3 tool.py .WORKTREES/W/.GIT",
                 "node tool.js .worktrees/w/.git",
                 "python3 tool.py ~/repo/.worktrees/w/.git",
                 "python3 tool.py .claude",
@@ -411,6 +410,20 @@ mod tests {
             ],
         );
         assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
+        std::fs::write(repo.root.join("case-probe"), "probe").unwrap();
+        let folds_case = repo.root.join("CASE-PROBE").exists();
+        let findings = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "python3 tool.py .WORKTREES/W/.GIT",
+            PolicyLevel::Block,
+        );
+        assert_eq!(
+            integrity_refusal(&findings).is_some(),
+            folds_case,
+            "{findings:?}"
+        );
         // A launcher can run in a different repository. Its registered
         // checkout roots must qualify for the same candidate checks.
         let other = self::repo();
@@ -481,6 +494,14 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn code_tilde_is_literal_when_home_contains_the_checkout() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_allowed(&repo, &[r#"python3 -c 'print("~")'"#]);
+        assert_refused(&repo, &repo.root, &repo.root, &["python3 tool.py ~"]);
     }
 
     #[test]

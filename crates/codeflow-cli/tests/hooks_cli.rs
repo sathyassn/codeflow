@@ -8302,6 +8302,14 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     );
     let repo = shell_path(&root);
     let tree = shell_path(&linked);
+    std::fs::write(root.join("case-probe"), "probe").unwrap();
+    let folds_case = root.join("CASE-PROBE").exists();
+    let case_result = exec_guard_contract_3(&root, "python3 tool.py .WORKTREES/W/.GIT");
+    assert_eq!(
+        case_result.status.code(),
+        Some(if folds_case { 2 } else { 0 }),
+        "{case_result:?}"
+    );
     let refused = [
         format!("W={repo}; python3 -I -B - \"$W/.claude/settings.json\" <<'PY'\nimport json, sys\np = sys.argv[1]\nopen(p, 'w').write('')\nPY"),
         format!("python3 - \"{repo}/.codeflow/policy.json\" <<'PY'\nimport sys\nPY"),
@@ -8315,7 +8323,6 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py .worktrees/{w,x}/.git".to_string(),
         "python3 tool.py .worktrees/w/.git{,}".to_string(),
         "python3 tool.py .worktrees/w/.git".to_string(),
-        "python3 tool.py .WORKTREES/W/.GIT".to_string(),
         "node tool.js .worktrees/w/.git".to_string(),
         "python3 tool.py .claude".to_string(),
         "python3 tool.py .worktrees/w".to_string(),
