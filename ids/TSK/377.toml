@@ -1,0 +1,11 @@
+id = "TSK-377"
+uid = "0345d0ee-7a41-48a2-bc80-646e6f62183b"
+kind = "TSK"
+title = "Interpreter checkout paths follow native filesystem identity"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T13:34:45Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
