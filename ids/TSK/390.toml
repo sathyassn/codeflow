@@ -1,0 +1,11 @@
+id = "TSK-390"
+uid = "99905cf6-a345-4b21-8361-d3539a76807b"
+kind = "TSK"
+title = "Regenerating the CLI reference keeps prose other tasks landed"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:22:53Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
