@@ -446,6 +446,31 @@ mod tests {
         .is_empty());
     }
 
+    #[test]
+    fn interpreter_hidden_worktree_glob_refuses() {
+        let repo = repo();
+        let word = format!("{}/.*", repo.linked.display());
+        let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root).unwrap();
+        assert!(paths.contains(&repo.linked.join(".git")), "{paths:?}");
+        assert!(paths.contains(&repo.linked.join(".claude")), "{paths:?}");
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py @LINKED@/.*",
+                "python3 tool.py \"@LINKED@/.*\"",
+                "python3 tool.py @LINKED@/.cla*",
+                "python3 tool.py @LINKED@/.g*",
+                "python3 tool.py @ROOT@/.worktrees/*",
+            ],
+        );
+        for command in ["python3 tool.py src/*", "python3 tool.py src/missing*"] {
+            let findings = judge_in(&repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_repository_spellings_keep_ordinary_arguments_and_enforcement_refusals() {
@@ -458,11 +483,17 @@ mod tests {
             plain.display().to_string().replace('\\', "/"),
             plain.display().to_string().to_uppercase(),
         ];
+        let mut results = Vec::new();
+        let mut mismatches = Vec::new();
         for root in [&plain, &verbatim] {
             for spelling in &spellings {
                 let ordinary = format!(r#"W={spelling}; python3 tool.py "$W/src/app.py""#);
                 let findings = judge_in(&repo, root, root, &ordinary, PolicyLevel::Block);
-                assert!(findings.is_empty(), "{ordinary}: {findings:?}");
+                let result = format!("cwd={root:?}; {ordinary}: {findings:?}");
+                results.push(result.clone());
+                if !findings.is_empty() {
+                    mismatches.push(result);
+                }
                 for suffix in [
                     ".claude/settings.json",
                     ".worktrees/w/.claude/settings.json",
@@ -471,13 +502,16 @@ mod tests {
                 ] {
                     let command = format!(r#"python3 tool.py "{spelling}/{suffix}""#);
                     let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
-                    assert!(
-                        integrity_refusal(&findings).is_some(),
-                        "{command}: {findings:?}"
-                    );
+                    let result = format!("cwd={root:?}; {command}: {findings:?}");
+                    results.push(result.clone());
+                    if integrity_refusal(&findings).is_none() {
+                        mismatches.push(result);
+                    }
                 }
             }
         }
+        println!("{}", results.join("\n"));
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     /// TSK-302 AC-4: a value the guard cannot read takes git-guard's rule

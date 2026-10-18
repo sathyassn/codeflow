@@ -940,6 +940,19 @@ fn literal_reach(value: &str, dir: &Path, facts: &Facts<'_>) -> Option<Reach> {
             }
         }
     }
+    // File-edit checks above do not protect ancestors or registered
+    // checkout roots. A wildcard can hand those directories to a writer,
+    // so retain the shell guard's reach check even after expansion succeeds.
+    // It also refuses an expansion whose filesystem reads cannot be proved.
+    if git_guard::has_glob(value) {
+        let reached = git_guard::token_integrity_path(value, dir, facts.payload_cwd)?;
+        let message = format!("an interpreter argument `{value}` may reach `{reached}`");
+        return Some(if names_authority(reached) {
+            Reach::Authority(message)
+        } else {
+            Reach::Enforcement(message)
+        });
+    }
     None
 }
 

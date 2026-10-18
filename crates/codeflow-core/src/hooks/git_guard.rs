@@ -1873,7 +1873,10 @@ const BRACE_UNREAD_DIR: &str =
 /// to nothing), so the file-system checks run on the exact path, links
 /// followed (OS text rule, issue 79).
 fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
-    let shown = crate::portable_path::slashed(path);
+    // Slash conversion must not turn a verbatim drive marker into a UNC
+    // server named `?`. Read the plain drive spelling before converting.
+    let shown =
+        crate::portable_path::slashed(&crate::portable_path::without_verbatim(path.to_path_buf()));
     if crate::git::key_is_text(&shown) {
         return token_integrity_path_literal(&shown, cwd, payload_cwd);
     }
@@ -2403,6 +2406,18 @@ struct WordGlob {
 
 impl WordGlob {
     fn new(word: &str, cwd: &Path) -> Self {
+        // Read separators in a complete verbatim drive consistently.
+        // Rust treats `/` inside a verbatim path as a name character;
+        // shell path arguments also use mixed separators. The conservative
+        // reading must reach the same files as the plain spelling.
+        #[cfg(windows)]
+        let word = if windows_pattern_body(word).len() < word.len() {
+            std::borrow::Cow::Owned(word.replace('/', "\\"))
+        } else {
+            std::borrow::Cow::Borrowed(word)
+        };
+        #[cfg(windows)]
+        let word = word.as_ref();
         let pattern = integrity_shell_path(word, cwd);
         let own = if word == "~" || word == "~+" {
             ""
@@ -2634,15 +2649,24 @@ fn expand_components(
         }
         current = next;
     }
-    current.retain(|path| std::fs::symlink_metadata(path).is_ok());
-    Ok(current)
+    let mut found = Vec::new();
+    for path in current {
+        // A failed leaf read is not an empty expansion. Only proved
+        // absence may discard a candidate; other errors fail closed.
+        if crate::absence::existing_metadata(&path)
+            .map_err(|_| GlobStop::Unreadable)?
+            .is_some()
+        {
+            found.push(path);
+        }
+    }
+    Ok(found)
 }
 
 /// What a glob word reaches from `cwd`, judged by the file-system-aware
 /// checks: the enforcement path or registered worktree one of its
-/// expansions resolves to, symbolic links followed. When the expansion
-/// stops, the directory it starts from decides: one that holds or lies in
-/// enforcement files or a registered worktree counts as reached.
+/// expansions resolves to, symbolic links followed. An incomplete expansion
+/// cannot establish what the shell will reach, so it refuses.
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     let glob = WordGlob::new(word, cwd);
     let reached = |path: &Path| {
@@ -2659,22 +2683,9 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             .find_map(|path| reached(path))
             .map(|p| format!("{p} (through `{word}`)")),
         Err(GlobStop::Unreadable) => Some(format!("cannot read paths reached through `{word}`")),
-        Err(GlobStop::TooManyEntries) => {
-            let prefix = glob.prefix();
-            let holds =
-                match super::edit_guard::holds_enforcement_files(&prefix, cwd).and_then(|first| {
-                    super::edit_guard::holds_enforcement_files(&prefix, payload_cwd)
-                        .map(|second| first || second)
-                }) {
-                    Ok(holds) => holds,
-                    Err(error) => return Some(format!("cannot read enforcement paths: {error}")),
-                };
-            (holds || reached(&prefix).is_some()).then(|| {
-                format!(
-                    "`{word}`, which reads more than {GLOB_ENTRY_LIMIT} entries under a directory that holds enforcement files"
-                )
-            })
-        }
+        Err(GlobStop::TooManyEntries) => Some(format!(
+            "cannot inspect every path reached through `{word}`: more than {GLOB_ENTRY_LIMIT} entries"
+        )),
     }
 }
 
@@ -11478,6 +11489,20 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn glob_leaf_read_failure_is_not_an_empty_expansion() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::os::unix::fs::symlink("entry-loop", root.join("entry-loop")).unwrap();
+        let paths = super::glob_paths("entry*/child", root);
+        let refusal = super::line_names("python3 tool.py entry*/child", root, root);
+        assert!(
+            paths.is_none() && refusal.is_some(),
+            "unreadable leaf: paths={paths:?}, refusal={refusal:?}"
+        );
+    }
+
     #[test]
     fn verbatim_drive_prefix_is_not_a_wildcard() {
         // Exercise the Windows lexical reader on every host, before any
@@ -11508,8 +11533,8 @@ mod tests {
         std::fs::create_dir(&src).unwrap();
         let file = src.join("app.py");
         std::fs::write(&file, "").unwrap();
-        for suffix in [r"src\*.py", r"src\**"] {
-            let word = root.join(suffix).display().to_string();
+        for suffix in [r"src\*.py", r"src\**", "src/*.py", "src/**"] {
+            let word = format!(r"{}\{suffix}", root.display());
             let glob = super::WordGlob::new(&word, &root);
             assert_eq!(glob.prefix(), src, "{word}");
             let paths = glob.expand().unwrap();
@@ -15422,10 +15447,10 @@ mod tests {
         );
     }
 
-    /// A glob over more entries than the guard reads stops, and is then
-    /// judged by the directory it starts from: harmless there, it passes.
+    /// A glob over more entries than the guard reads cannot prove that
+    /// every match is harmless, even outside a checkout.
     #[test]
-    fn test_glob_over_many_entries_is_judged_by_its_directory() {
+    fn glob_entry_limit_refuses_without_complete_expansion() {
         let dir = tempfile::tempdir().unwrap();
         let many = dir.path().join("many");
         std::fs::create_dir_all(&many).unwrap();
@@ -15436,7 +15461,7 @@ mod tests {
             WordGlob::new("*", &many).expand(),
             Err(GlobStop::TooManyEntries)
         );
-        assert!(glob_reach("many/*", dir.path(), dir.path()).is_none());
+        assert!(glob_reach("many/*", dir.path(), dir.path()).is_some());
     }
 
     /// A file name that is not UTF-8 counts as a match of any wildcard
