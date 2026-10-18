@@ -625,6 +625,7 @@ mod tests {
             &[
                 r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
                 r#"python3 -c 'print("/.")'"#,
+                r#"python3 -c 'print("/..")'"#,
             ],
         );
         assert_refused(
@@ -644,6 +645,85 @@ mod tests {
             &repo.root,
             &["python3 -c 'open(\"@LINKED@\", \"w\")'"],
         );
+        let main = repo.root.to_string_lossy().replace('\\', "/");
+        let parent = repo
+            .root
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let src = repo.root.join("src");
+        let mut wrong = Vec::new();
+        for (cwd, paths) in [
+            (
+                &repo.linked,
+                vec!["../..", "..", "../../..", "../../.worktrees", &main],
+            ),
+            (&repo.root, vec!["..", &parent]),
+            (&src, vec!["../.."]),
+        ] {
+            for path in paths {
+                for command in [
+                    format!(r#"python3 -c 'import shutil; shutil.rmtree("{path}")'"#),
+                    format!(r#"node -e 'require("fs").rmSync("{path}",{{recursive:true}})'"#),
+                    format!(r#"perl -e 'use File::Path qw(remove_tree); remove_tree("{path}")'"#),
+                    format!(r#"ruby -e 'require "fileutils"; FileUtils.rm_rf("{path}")'"#),
+                ] {
+                    let findings = judge_in(&repo, cwd, cwd, &command, PolicyLevel::Block);
+                    if integrity_refusal(&findings).is_none() {
+                        wrong.push(format!("should refuse in {cwd:?}: {command}: {findings:?}"));
+                    }
+                }
+            }
+        }
+        // Code roots remain fragments, including normalized dot components.
+        let filesystem_root = repo.root.ancestors().last().unwrap().to_string_lossy();
+        let plain_root = filesystem_root.trim_start_matches(r"\\?\");
+        #[cfg(windows)]
+        let native_roots = [plain_root.to_string(), format!(r"\\?\{plain_root}")];
+        #[cfg(not(windows))]
+        let native_roots = [plain_root.to_string()];
+        for cwd in [&repo.root, &repo.linked, &src] {
+            // Exercise native normalization directly for verbatim roots too.
+            for root in &native_roots {
+                for suffix in ["", ".", ".."] {
+                    let path = format!("{root}{suffix}");
+                    assert!(
+                        crate::hooks::edit_guard::is_own_checkout_location(
+                            Path::new(&path),
+                            cwd,
+                            true,
+                        )
+                        .unwrap(),
+                        "code root {path:?} in {cwd:?}"
+                    );
+                    assert!(
+                        !crate::hooks::edit_guard::is_own_checkout_location(
+                            Path::new(&path),
+                            cwd,
+                            false,
+                        )
+                        .unwrap(),
+                        "argv root {path:?} in {cwd:?}"
+                    );
+                }
+            }
+            for suffix in ["", ".", ".."] {
+                let path = format!("{}{suffix}", plain_root.replace('\\', "/"));
+                let command = format!(r#"python3 -c 'print("{path}")'"#);
+                let findings = judge_in(&repo, cwd, cwd, &command, PolicyLevel::Block);
+                if !findings.is_empty() {
+                    wrong.push(format!("should allow in {cwd:?}: {command}: {findings:?}"));
+                }
+            }
+            let command =
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#;
+            let findings = judge_in(&repo, cwd, cwd, command, PolicyLevel::Block);
+            if !findings.is_empty() {
+                wrong.push(format!("should allow in {cwd:?}: {command}: {findings:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// TSK-302 AC-2: the interpreter is found through the wrappers the

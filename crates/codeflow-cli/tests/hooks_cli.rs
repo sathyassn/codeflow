@@ -8542,6 +8542,61 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
             }
         }
     }
+    let src = root.join("src");
+    let parent = shell_path(root.parent().unwrap());
+    for (cwd, paths) in [
+        (
+            &linked,
+            vec!["../..", "..", "../../..", "../../.worktrees", &repo],
+        ),
+        (&root, vec!["..", &parent]),
+        (&src, vec!["../.."]),
+    ] {
+        for path in paths {
+            for command in [
+                format!(r#"python3 -c 'import shutil; shutil.rmtree("{path}")'"#),
+                format!(r#"node -e 'require("fs").rmSync("{path}",{{recursive:true}})'"#),
+                format!(r#"perl -e 'use File::Path qw(remove_tree); remove_tree("{path}")'"#),
+                format!(r#"ruby -e 'require "fileutils"; FileUtils.rm_rf("{path}")'"#),
+            ] {
+                let out = exec_guard_contract_3(cwd, &command);
+                let err = String::from_utf8_lossy(&out.stderr);
+                if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+                    wrong.push(format!(
+                        "should refuse code path in {cwd:?}: {command}: {out:?}"
+                    ));
+                }
+            }
+        }
+    }
+    let filesystem_root = root.ancestors().last().unwrap().to_string_lossy();
+    let plain_root = filesystem_root
+        .trim_start_matches(r"\\?\")
+        .replace('\\', "/");
+    for cwd in [&root, &linked, &src] {
+        for suffix in ["", ".", ".."] {
+            let path = format!("{plain_root}{suffix}");
+            let command = format!(r#"python3 -c 'print("{path}")'"#);
+            let out = exec_guard_contract_3(cwd, &command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code root in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+        for command in [
+            r#"python3 -c 'print("/.")'"#,
+            r#"python3 -c 'print("/..")'"#,
+            r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+        ] {
+            let out = exec_guard_contract_3(cwd, command);
+            if out.status.code() != Some(0) {
+                wrong.push(format!(
+                    "should allow code fragment in {cwd:?}: {command}: {out:?}"
+                ));
+            }
+        }
+    }
     #[cfg(unix)]
     {
         let alias = tmp.path().join("alias");

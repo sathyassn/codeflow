@@ -1917,8 +1917,8 @@ pub(crate) fn resolved_path_integrity(
 
 /// Interpreter operands share the writer's file checks. A project location
 /// equal to the current checkout does not itself name a different checkout.
-/// Code string fragments also retain their ancestor reading; shell argv
-/// operands never receive that exemption.
+/// Code string fragments also exempt the filesystem root; other ancestors
+/// and shell argv operands still receive the registered-checkout check.
 pub(crate) fn interpreter_path_integrity(
     path: &Path,
     cwd: &Path,
