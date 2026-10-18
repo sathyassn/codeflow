@@ -425,6 +425,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     if let Some(path) = text {
+        let path = crate::git::display_key(path);
         for (side, at) in [("target", base), ("head", head)] {
             if let Some((kind, entry)) = first_special(repo, at) {
                 return Some(format!(
@@ -697,6 +698,26 @@ mod tests {
             let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
             let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
             assert!(problem.contains(escaped), "{problem:?}");
+            assert!(
+                !problem.contains(path),
+                "raw control character: {problem:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn special_tree_refusal_escapes_the_document_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let base = crate::git::add_commit_modes(&repo, &[(b"link", b"target", 0o120_000)]);
+        for (path, escaped) in [
+            ("docs/index\x1b.md", r"docs/index\x1b.md"),
+            ("docs/index\n.md", r"docs/index\x0a.md"),
+        ] {
+            let head = crate::git::add_commit(&repo, &[(path.as_bytes(), b"y")]);
+            let problem = range_problem(&repo, base, head, &[path.to_string()]).unwrap();
+            assert!(problem.contains("symbolic link"), "{problem:?}");
+            assert_eq!(problem.matches(escaped).count(), 2, "{problem:?}");
             assert!(
                 !problem.contains(path),
                 "raw control character: {problem:?}"

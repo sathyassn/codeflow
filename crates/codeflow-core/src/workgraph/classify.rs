@@ -115,7 +115,7 @@ impl ProjectPaths {
     pub fn validate(&self) -> Result<(), String> {
         for path in &self.document_indexes {
             if !valid_document_index(path) {
-                return Err(format!("invalid git.document_indexes path {path:?}; use an exact repository-relative documentation file (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"));
+                return Err(format!("invalid git.document_indexes path {path:?}; use an exact repository-relative documentation file (.md, .mdx, .rst or .adoc; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"));
             }
         }
         for (key, patterns) in [
@@ -147,15 +147,22 @@ pub(crate) fn valid_document_index(path: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let documentation = name
-        .rsplit_once('.')
-        .is_some_and(|(_, extension)| matches!(extension, "md" | "mdx" | "rst" | "adoc" | "txt"));
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((name.as_str(), ""));
+    let documentation = matches!(extension, "md" | "mdx" | "rst" | "adoc");
     let instructions = INSTRUCTION_STEMS
         .iter()
         .chain(["agent.", "warp.", "qwen.", "crush."].iter())
         .any(|stem| name.starts_with(stem));
+    let reserved = matches!(name.as_str(), "skill.md" | "conventions.md")
+        || (name.starts_with("llms") && extension == "md");
+    let short_name = stem
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == b'~' && pair[1].is_ascii_digit());
     documentation
         && !instructions
+        && !reserved
+        && !short_name
         && !path.contains(['\\', '*', '?', '[', ']', ':'])
         && !path.chars().any(char::is_control)
         && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
@@ -788,6 +795,18 @@ mod tests {
             "QWEN.md",
             "CRUSH.md",
             "CLAUDE.md",
+            "CMakeLists.txt",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "constraints-prod.txt",
+            "llms-full.txt",
+            "index.txt",
+            "CONVENTIONS.md",
+            "conventions.MD",
+            "llms.md",
+            "LLMS-full.MD",
+            "skills/example/SKILL.md",
+            "handbook/skill.MD",
         ] {
             let project = ProjectPaths {
                 document_indexes: vec![path.into()],
@@ -801,7 +820,7 @@ mod tests {
             "index.mdx",
             "index.rst",
             "index.adoc",
-            "index.txt",
+            "index~draft.md",
         ] {
             let project = ProjectPaths {
                 document_indexes: vec![path.into()],
@@ -809,6 +828,18 @@ mod tests {
             };
             project.validate().unwrap();
             assert_eq!(amendment_path(path, &project), Some(AmendmentPath::Doc));
+        }
+    }
+
+    #[test]
+    fn document_indexes_refuse_short_file_name_aliases() {
+        for path in ["AGENTS~1.MD", "handbook/CLAUD~2.md", "INDEX~9.mdx"] {
+            let project = ProjectPaths {
+                document_indexes: vec![path.into()],
+                ..ProjectPaths::default()
+            };
+            assert!(project.validate().is_err(), "{path} must be invalid");
+            assert_eq!(amendment_path(path, &project), None, "{path}");
         }
     }
 

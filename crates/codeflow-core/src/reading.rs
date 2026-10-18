@@ -1016,6 +1016,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "index.md",
     // An adopter's document index, named by the planning amendment example.
     "DOC-INDEX.md",
+    // Adopter-owned tool inputs named as forbidden index declarations.
+    "CONVENTIONS.md",
+    "llms*.md",
     "portal.config.json",
     "epics/EPC-NNN.md",
     "specs/SPC-NNN.md",

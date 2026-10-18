@@ -632,16 +632,23 @@ pub const SCHEMA: [KeySpec; 69] = [
     KeySpec {
         path: "git.document_indexes",
         kind: KeyKind::StringList,
-        valid: "an array of exact repository-relative documentation files (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), without globs or dot components",
+        valid: "an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components",
         purpose: "Document index files a planning amendment may update alongside records and plans.",
-        notes: "Empty by default. Declare the files in a prior task pull request. The hosted check reads \
-                the target policy; pre-push reads the range base, an existing \
-                branch's earlier pushed tip. The hosted check enforces target \
-                authority. Product and watched paths, hidden paths and \
-                non-regular files stay excluded. Index file names beginning \
-                AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH. are \
-                excluded without case. Root AGENTS.md keeps its separate \
-                project-section exception. The shipped policy file omits this key.",
+        notes: "Empty by default. Declare the files in a prior task pull request. \
+                The hosted check reads the target policy. On a re-push of a \
+                plan/ branch, pre-push can fall back to the earlier pushed tip; \
+                with an advertised work target it judges from the merge base \
+                with that target. The hosted check enforces the target-policy \
+                boundary. A declaration is a reviewed policy change on the \
+                target and must not name a file a harness or build tool loads. \
+                Product and watched paths, hidden paths and non-regular files \
+                stay excluded. Index file names beginning AGENT., AGENTS., \
+                CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, \
+                CONVENTIONS.md and llms*.md, are excluded without case. A file \
+                name stem containing a tilde followed by a digit is refused \
+                as a possible short-name alias. Root AGENTS.md keeps its \
+                separate project-section exception. The shipped policy file \
+                omits this key.",
     },
     KeySpec {
         path: "git.direct_changes",
@@ -1132,7 +1139,7 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 if !crate::workgraph::classify::valid_document_index(entry) {
                     errors.push(PolicyError {
                         key: path.to_string(),
-                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative documentation file (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"),
+                        message: format!("invalid path {entry:?} in {path}; use an exact repository-relative documentation file (.md, .mdx, .rst or .adoc; case-insensitive extension), excluding instruction names, without globs, backslashes or dot components"),
                     });
                 }
             }
@@ -1612,7 +1619,20 @@ mod tests {
 
     #[test]
     fn document_index_policy_refuses_patterns_and_non_documentation_entries() {
-        for path in ["Cargo.toml", "Makefile", "docs/**", "WARP.md"] {
+        for path in [
+            "Cargo.toml",
+            "Makefile",
+            "docs/**",
+            "WARP.md",
+            "CMakeLists.txt",
+            "requirements-dev.txt",
+            "constraints.txt",
+            "llms.txt",
+            "CONVENTIONS.md",
+            "skills/example/SKILL.md",
+            "LLMS-full.MD",
+            "AGENTS~1.MD",
+        ] {
             let policy = serde_json::json!({"git": {"document_indexes": [path]}});
             let errors = validate_policy_str(&policy.to_string()).unwrap_err();
             assert!(

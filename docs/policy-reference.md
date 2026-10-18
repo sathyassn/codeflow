@@ -60,7 +60,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.automation_profiles` | profile list | `[]` | an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line} | Trusted bots whose pull requests skip branch naming, the commit message shape rules and the PR Summary shape (SPC-013 R-82). | Applies in `codeflow ci` only when the actor the workflow passes and the head branch both match, read from the target side of the range. Locally and on fork pull requests the actor is `unknown` and nothing applies. Tests, the secret scan, AI attribution, emoji, policy characters, PR sections and the release declaration still run at their configured level; `sections` only supplies content for headings the bot body omits. |
 | `git.pr_section_mapping` | object | `` | {state: diagnosed \| accepted \| refused \| custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none} | The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84). | Absent by default. `init` and `update` write `diagnosed` with a proposed mapping; `accepted` checks the mapped headings, `refused` and `custom` check pr_required_sections. While diagnosed the check runs at warn only when init created the policy file without a pr_sections key; a pr_sections key in the file always wins (R-115). |
 | `git.product_paths` | string list | `null` | an array of path globs (e.g. src/**) | The project's product code extends the adopter-facing paths requiring a journey criterion (SPC-013 R-114); every PR names its task or epic (R-70). | `codeflow init` writes the default for the detected stack and `codeflow update` adds it once; a value the project sets is kept. Absent, the binary assumes the stack default. The shared adopter-facing paths continue to require journey coverage. |
-| `git.document_indexes` | string list | `[]` | an array of exact repository-relative documentation files (.md, .mdx, .rst, .adoc or .txt; case-insensitive extension), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Declare the files in a prior task pull request. The hosted check reads the target policy; pre-push reads the range base, an existing branch's earlier pushed tip. The hosted check enforces target authority. Product and watched paths, hidden paths and non-regular files stay excluded. Index file names beginning AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH. are excluded without case. Root AGENTS.md keeps its separate project-section exception. The shipped policy file omits this key. |
+| `git.document_indexes` | string list | `[]` | an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Declare the files in a prior task pull request. The hosted check reads the target policy. On a re-push of a plan/ branch, pre-push can fall back to the earlier pushed tip; with an advertised work target it judges from the merge base with that target. The hosted check enforces the target-policy boundary. A declaration is a reviewed policy change on the target and must not name a file a harness or build tool loads. Product and watched paths, hidden paths and non-regular files stay excluded. Index file names beginning AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, CONVENTIONS.md and llms*.md, are excluded without case. A file name stem containing a tilde followed by a digit is refused as a possible short-name alias. Root AGENTS.md keeps its separate project-section exception. The shipped policy file omits this key. |
 | `git.direct_changes` | enum | `allow` | allow \| forbid | Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
 | `git.release_branch_pattern` | string | `` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
@@ -107,22 +107,31 @@ index files from `git.document_indexes` in the target policy, such as
 keeping its managed block byte for byte.
 
 Declare index files in a prior task PR after upgrading the pinned binary.
-The hosted check reads the target's policy and enforces that declaration.
-Pre-push reads the range base, which for an already-pushed branch is its
-earlier pushed tip; it does not enforce the hosted target-policy boundary.
+A declaration is a reviewed policy change on the target and must not name a
+file a harness or build tool loads. The hosted check reads the target's
+policy and enforces that declaration. On a re-push of a `plan/` branch,
+pre-push can fall back to the earlier pushed tip; with an advertised work
+target it judges from the merge base with that target. The hosted check
+enforces the target-policy boundary.
+
 The list defaults to empty and admits exact repository-relative documentation
-files with extensions `.md`, `.mdx`, `.rst`, `.adoc` or `.txt`, checked without
-case (`index.MD` is valid). Globs and dot components are refused.
+files with extensions `.md`, `.mdx`, `.rst` or `.adoc`, checked without case
+(`index.MD` is valid). Globs and dot components are refused. Text files are
+excluded because build, dependency and harness tools can load them.
 
 A declaration never overrides product or watched globs or hidden-path
 exclusions. Declared indexes cannot have file names beginning `AGENT.`,
 `AGENTS.`, `CLAUDE.`, `GEMINI.`, `WARP.`, `QWEN.` or `CRUSH.`, checked without
-case. Independently of declarations, planning paths exclude file names
-beginning `AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its
-project-section exception. Files must be regular. When carrying
-documentation, indexes or `AGENTS.md`, both trees must have no symbolic links
-or submodules. A refusal names the excluded path and the admitted set;
-carry an excluded file in a task PR.
+case. `SKILL.md`, `CONVENTIONS.md` and `llms*.md` are also refused without
+case, as is a file name whose stem contains a tilde followed by a digit,
+which could be a Windows short-name alias. These exclusions do not identify
+every file a tool loads; the policy review must check that boundary.
+Independently of declarations, planning paths exclude file names beginning
+`AGENTS.`, `CLAUDE.` or `GEMINI.`; root `AGENTS.md` keeps its project-section
+exception. Files must be regular. When carrying documentation, indexes or
+`AGENTS.md`, both trees must have no symbolic links or submodules. A refusal
+names the excluded path and the admitted set; carry an excluded file in a
+task PR.
 
 ## Destination lookup failures
 
