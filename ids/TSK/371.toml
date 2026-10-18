@@ -1,0 +1,11 @@
+id = "TSK-371"
+uid = "3e1ec288-9683-4cf6-944e-9b9b468334c7"
+kind = "TSK"
+title = "Restore hosted shell and Windows guard checks"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T01:09:09Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
