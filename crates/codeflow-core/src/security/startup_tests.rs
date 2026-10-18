@@ -1283,8 +1283,40 @@ fn only_a_user_home_path_is_an_unreadable_home() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Grok round two, finding 3: an oversized glob whose last segment is a
-/// literal that is not a class name falls through to the ordinary rule.
+/// A flat oversized glob can allow only after proving its literal prefix
+/// contains no startup paths, anywhere-protected names or outward links.
+#[test]
+fn a_large_flat_glob_requires_a_prefix_without_startup_paths() {
+    let f = Fixture::new();
+    let many = f.project.join("many");
+    std::fs::create_dir(&many).unwrap();
+    for n in 0..4200 {
+        std::fs::write(many.join(format!("f{n}")), "").unwrap();
+    }
+    let mut wrong = Vec::new();
+    for command in ["python3 tool.py many/*", "tee many/*.o < x"] {
+        if !f.judge(command).is_empty() {
+            wrong.push(format!("refused contained ordinary glob: {command}"));
+        }
+    }
+    #[cfg(unix)]
+    {
+        let alias = many.join("alias");
+        std::os::unix::fs::symlink(f.home.join(".zshrc"), &alias).unwrap();
+        if !refused(&f.judge("python3 tool.py many/*")) {
+            wrong.push("allowed an outward startup alias".to_string());
+        }
+        std::fs::remove_file(alias).unwrap();
+    }
+    std::fs::write(many.join(".envrc"), "").unwrap();
+    if !refused(&f.judge("python3 tool.py many/*")) {
+        wrong.push("allowed an anywhere-protected startup name".to_string());
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Oversized recursive patterns retain the startup reader's conservative
+/// boundary, including patterns whose last component can name the class.
 #[test]
 fn an_oversized_glob_ending_in_a_plain_name_is_judged_by_its_directory() {
     let f = Fixture::new();

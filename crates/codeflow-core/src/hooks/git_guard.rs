@@ -1830,8 +1830,13 @@ fn token_integrity_path_spelled(
     token_integrity_path_literal(token, cwd, payload_cwd).or_else(|| {
         // A glob is expanded as the shell will, and each path it reaches is
         // judged through symbolic links (TSK-216 round 4).
-        (has_glob(token) && glob_reach(token, cwd, payload_cwd).is_some())
-            .then_some("repository enforcement files")
+        if !has_glob(token) {
+            return None;
+        }
+        match glob_integrity(token, cwd, payload_cwd) {
+            Ok(found) => found.map(|_| "repository enforcement files"),
+            Err(stop) => Some(stop.reason()),
+        }
     })
 }
 
@@ -1873,7 +1878,10 @@ const BRACE_UNREAD_DIR: &str =
 /// to nothing), so the file-system checks run on the exact path, links
 /// followed (OS text rule, issue 79).
 fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
-    let shown = crate::portable_path::slashed(path);
+    // Slash conversion must not turn a verbatim drive marker into a UNC
+    // server named `?`. Read the plain drive spelling before converting.
+    let shown =
+        crate::portable_path::slashed(&crate::portable_path::without_verbatim(path.to_path_buf()));
     if crate::git::key_is_text(&shown) {
         return token_integrity_path_literal(&shown, cwd, payload_cwd);
     }
@@ -1890,6 +1898,43 @@ fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'stati
         Ok(false) => None,
         Err(_) => Some("repository enforcement paths (cannot read repository state)"),
     }
+}
+
+/// Judge one resolved operand with the writer's protection for files,
+/// directory ancestors and registered checkouts. Never expand its text again.
+pub(crate) fn resolved_path_integrity(
+    path: &Path,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<String> {
+    path_integrity(path, cwd, payload_cwd)
+        .map(str::to_string)
+        .or_else(|| {
+            checkout_under(path, cwd, payload_cwd, None)
+                .map(|checkout| format!("the registered worktree {}", checkout.description()))
+        })
+}
+
+/// Interpreter operands share the writer's file checks. A project location
+/// equal to the current checkout does not itself name a different checkout.
+/// Code string fragments also exempt the filesystem root; other ancestors
+/// and shell argv operands still receive the registered-checkout check.
+pub(crate) fn interpreter_path_integrity(
+    path: &Path,
+    cwd: &Path,
+    payload_cwd: &Path,
+    code_literal: bool,
+) -> Option<String> {
+    path_integrity(path, cwd, payload_cwd)
+        .map(str::to_string)
+        .or_else(
+            || match super::edit_guard::is_own_checkout_location(path, cwd, code_literal) {
+                Ok(true) => None,
+                Ok(false) => checkout_under(path, cwd, payload_cwd, None)
+                    .map(|checkout| format!("the registered worktree {}", checkout.description())),
+                Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
+            },
+        )
 }
 
 /// [`token_integrity_path`] for the token as written, without expanding a
@@ -2264,8 +2309,8 @@ fn unknown_tilde_rest(word: &str) -> Option<&str> {
 }
 
 /// The most directory entries one glob expansion reads before it stops. It
-/// bounds the guard's work: a glob over a larger tree is judged by the
-/// directory it starts from instead (see [`glob_reach`]).
+/// bounds the expanded candidate list. At the limit, only a pattern proved
+/// contained in an unprotected directory can use that directory instead.
 const GLOB_ENTRY_LIMIT: usize = 4096;
 
 /// Why a glob expansion stopped before it read every entry.
@@ -2275,6 +2320,15 @@ enum GlobStop {
     TooManyEntries,
     /// An existing path could not be classified or enumerated.
     Unreadable,
+}
+
+impl GlobStop {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::TooManyEntries => "cannot inspect every glob path: more than 4096 entries",
+            Self::Unreadable => "cannot read paths reached through a glob",
+        }
+    }
 }
 
 /// One file-name component of a shell pattern, read so that it matches at
@@ -2403,6 +2457,18 @@ struct WordGlob {
 
 impl WordGlob {
     fn new(word: &str, cwd: &Path) -> Self {
+        // Read separators in a complete verbatim drive consistently.
+        // Rust treats `/` inside a verbatim path as a name character;
+        // shell path arguments also use mixed separators. The conservative
+        // reading must reach the same files as the plain spelling.
+        #[cfg(windows)]
+        let word = if windows_pattern_body(word).len() < word.len() {
+            std::borrow::Cow::Owned(word.replace('/', "\\"))
+        } else {
+            std::borrow::Cow::Borrowed(word)
+        };
+        #[cfg(windows)]
+        let word = word.as_ref();
         let pattern = integrity_shell_path(word, cwd);
         let own = if word == "~" || word == "~+" {
             ""
@@ -2475,6 +2541,102 @@ impl WordGlob {
         }
         Ok(found)
     }
+
+    /// At the entry limit, an unprotected enclosing directory can stand
+    /// for its descendants only after proving the pattern stays inside it.
+    fn guarded_paths(&self, cwd: &Path, payload_cwd: &Path) -> Result<Vec<PathBuf>, GlobStop> {
+        match self.expand() {
+            Err(GlobStop::TooManyEntries) => {
+                let prefix = self.prefix();
+                let leaves = self
+                    .pattern
+                    .components()
+                    .skip(prefix.components().count())
+                    .any(|part| matches!(part, std::path::Component::ParentDir));
+                if leaves
+                    || resolved_path_integrity(&prefix, cwd, payload_cwd).is_some()
+                    || [cwd, payload_cwd].iter().any(|root| {
+                        super::edit_guard::holds_enforcement_files(&prefix, root).unwrap_or(true)
+                            || super::edit_guard::holds_global_git_config(&prefix, root)
+                    })
+                    || !glob_prefix_is_contained(&prefix, |_| false)
+                {
+                    return Err(GlobStop::TooManyEntries);
+                }
+                Ok(vec![prefix])
+            }
+            result => result,
+        }
+    }
+}
+
+/// Stream the prefix's entries without materializing glob candidates.
+/// Protected names and links escaping the prefix invalidate containment.
+/// Directory traversal stays bounded even for deep or cyclic trees; a flat
+/// ordinary build directory can have more files than the expansion limit.
+fn glob_prefix_is_contained(prefix: &Path, protected_name: impl Fn(&str) -> bool) -> bool {
+    let Ok(base) = std::fs::canonicalize(prefix) else {
+        return false;
+    };
+    let protected_names: Vec<_> = crate::security::actions::table()
+        .claude_edit_denies
+        .iter()
+        .filter_map(|rule| rule.strip_prefix("Edit(/"))
+        .filter_map(|path| path.strip_suffix(')'))
+        .filter_map(|path| path.split('/').next())
+        .collect();
+    let mut pending = vec![base.clone()];
+    let mut entered = std::collections::HashSet::new();
+    while let Some(dir) = pending.pop() {
+        if !entered.insert(dir.clone()) {
+            continue;
+        }
+        if entered.len() > GLOB_ENTRY_LIMIT {
+            return false;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return false;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            let name = entry.file_name();
+            if name.to_str().is_none_or(|name| {
+                protected_name(name)
+                    || protected_names
+                        .iter()
+                        .any(|protected| name.eq_ignore_ascii_case(protected))
+                    || integrity_target(&name.to_lowercase()).is_some()
+                    || (name.eq_ignore_ascii_case("gitconfig")
+                        && dir
+                            .file_name()
+                            .is_some_and(|name| name.eq_ignore_ascii_case("etc")))
+            }) {
+                return false;
+            }
+            let Ok(kind) = entry.file_type() else {
+                return false;
+            };
+            if kind.is_symlink() || kind.is_dir() {
+                let Ok(real) = std::fs::canonicalize(entry.path()) else {
+                    return false;
+                };
+                if !real.starts_with(&base) {
+                    return false;
+                }
+                // Contained symbolic links point into the physical tree
+                // already being read; do not follow them around a cycle.
+                if kind.is_dir() && !entered.contains(&real) {
+                    if pending.len() >= GLOB_ENTRY_LIMIT {
+                        return false;
+                    }
+                    pending.push(real);
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Missing paths, paths that cannot exist and known non-directories have no
@@ -2536,9 +2698,28 @@ pub(crate) fn startup_glob_paths(
     base: &Path,
     pattern: &Path,
     match_hidden: bool,
+    class: &crate::security::startup::Class,
 ) -> Option<Vec<PathBuf>> {
     let literal = base.components().count();
-    expand_components(&base.join(pattern), literal, false, match_hidden, &mut 0).ok()
+    let recursive = pattern.components().any(|part| {
+        let text = part.as_os_str().to_string_lossy();
+        text.len() > 1 && text.chars().all(|c| c == '*')
+    });
+    match expand_components(&base.join(pattern), literal, false, match_hidden, &mut 0) {
+        // Preserve the startup reader's recursive-glob boundary. A single
+        // ordinary component can use its prefix when no class path or
+        // anywhere-protected name lies there and no link escapes it.
+        Err(GlobStop::TooManyEntries)
+            if pattern.components().count() == 1
+                && !recursive
+                && class.target(base).is_none()
+                && class.placement(base).is_none()
+                && glob_prefix_is_contained(base, |name| class.knows_name(name)) =>
+        {
+            Some(vec![base.to_path_buf()])
+        }
+        result => result.ok(),
+    }
 }
 
 /// [`WordGlob::expand`] one component at a time; the first `literal`
@@ -2634,48 +2815,36 @@ fn expand_components(
         }
         current = next;
     }
-    current.retain(|path| std::fs::symlink_metadata(path).is_ok());
-    Ok(current)
+    let mut found = Vec::new();
+    for path in current {
+        // A failed leaf read is not an empty expansion. Only proved
+        // absence may discard a candidate; other errors fail closed.
+        if crate::absence::existing_metadata(&path)
+            .map_err(|_| GlobStop::Unreadable)?
+            .is_some()
+        {
+            found.push(path);
+        }
+    }
+    Ok(found)
 }
 
 /// What a glob word reaches from `cwd`, judged by the file-system-aware
 /// checks: the enforcement path or registered worktree one of its
-/// expansions resolves to, symbolic links followed. When the expansion
-/// stops, the directory it starts from decides: one that holds or lies in
-/// enforcement files or a registered worktree counts as reached.
+/// expansions resolves to, symbolic links followed. At the entry limit,
+/// only a proved-safe enclosing directory can stand for the expansion.
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    let glob = WordGlob::new(word, cwd);
-    let reached = |path: &Path| {
-        path_integrity(path, cwd, payload_cwd)
-            .map(str::to_string)
-            .or_else(|| {
-                checkout_under(path, cwd, payload_cwd, None)
-                    .map(|c| format!("the registered worktree {}", c.description()))
-            })
-    };
-    match glob.expand() {
-        Ok(paths) => paths
-            .iter()
-            .find_map(|path| reached(path))
-            .map(|p| format!("{p} (through `{word}`)")),
-        Err(GlobStop::Unreadable) => Some(format!("cannot read paths reached through `{word}`")),
-        Err(GlobStop::TooManyEntries) => {
-            let prefix = glob.prefix();
-            let holds =
-                match super::edit_guard::holds_enforcement_files(&prefix, cwd).and_then(|first| {
-                    super::edit_guard::holds_enforcement_files(&prefix, payload_cwd)
-                        .map(|second| first || second)
-                }) {
-                    Ok(holds) => holds,
-                    Err(error) => return Some(format!("cannot read enforcement paths: {error}")),
-                };
-            (holds || reached(&prefix).is_some()).then(|| {
-                format!(
-                    "`{word}`, which reads more than {GLOB_ENTRY_LIMIT} entries under a directory that holds enforcement files"
-                )
-            })
-        }
+    match glob_integrity(word, cwd, payload_cwd) {
+        Ok(found) => found.map(|path| format!("{path} (through `{word}`)")),
+        Err(stop) => Some(format!("{} (through `{word}`)", stop.reason())),
     }
+}
+
+fn glob_integrity(word: &str, cwd: &Path, payload_cwd: &Path) -> Result<Option<String>, GlobStop> {
+    Ok(WordGlob::new(word, cwd)
+        .guarded_paths(cwd, payload_cwd)?
+        .iter()
+        .find_map(|path| resolved_path_integrity(path, cwd, payload_cwd)))
 }
 
 /// The enforcement path a relative word could name from a directory the
@@ -2917,11 +3086,11 @@ fn add_run_dir(run: &mut RunDirs, dir: PathBuf) -> bool {
     true
 }
 
-/// The directories a move to `target` reaches from each listed directory,
-/// a glob expanded; a target filled in at run time reaches none and marks
-/// the directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
+/// The directories a literal move to `target` reaches from each listed
+/// directory. A glob, brace or value filled in at run time marks the
+/// directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
 fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
-    if unresolved_word(target) {
+    if unresolved_word(target) || has_glob(target) || target.contains(['{', '}']) {
         run.unknown.get_or_insert_with(|| {
             format!(
                 "`{}`, a directory filled in at run time",
@@ -2943,22 +3112,7 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
         } else {
             shell_path_with_home(target, dir, run.home.as_deref())
         };
-        if target.contains(['*', '?', '[']) {
-            match WordGlob::new(target, dir).expand() {
-                Ok(found) => reached.extend(found),
-                Err(GlobStop::Unreadable) => {
-                    run.unknown
-                        .get_or_insert_with(|| format!("cannot read directory glob `{target}`"));
-                }
-                Err(GlobStop::TooManyEntries) => {
-                    run.unknown.get_or_insert_with(|| {
-                        format!("`{target}`, a directory glob over too many entries")
-                    });
-                }
-            }
-        } else {
-            reached.push(path);
-        }
+        reached.push(path);
         if reached.len() > RUN_DIR_LIMIT {
             run.unknown = Some(format!(
                 "more than {RUN_DIR_LIMIT} directories the line can move to"
@@ -3733,19 +3887,44 @@ pub(crate) fn line_path_words(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The paths a glob word reaches from `cwd`, or `None` when the guard
-/// cannot list them (an unreadable path, or more entries than it reads).
-pub(crate) fn glob_paths(word: &str, cwd: &Path) -> Option<Vec<PathBuf>> {
-    WordGlob::new(word, cwd).expand().ok()
+/// Line evidence with the parser's expansion provenance. Raw fragments
+/// still supply literal name evidence; only parsed shell words expand.
+pub(crate) fn line_path_readings(line: &str) -> Vec<(String, bool)> {
+    let tokens = expand_commands(line)
+        .iter()
+        .flat_map(|segment| shell_words(segment))
+        .map(|word| (word.text, word.pattern))
+        .collect::<Vec<_>>();
+    line_words(line)
+        .map(|word| (word.to_string(), false))
+        .chain(tokens)
+        .flat_map(|(word, pattern)| {
+            let value = word
+                .split_once('=')
+                .filter(|(name, _)| assignment_name(name))
+                .map(|(_, value)| (value.to_string(), pattern));
+            std::iter::once((word, pattern)).chain(value)
+        })
+        .collect()
+}
+
+/// The paths a glob word reaches, or its proved-safe enclosing directory
+/// at the entry limit. Each word is expanded once; other failures refuse.
+pub(crate) fn glob_paths(
+    word: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Result<Vec<PathBuf>, &'static str> {
+    WordGlob::new(word, cwd)
+        .guarded_paths(cwd, payload_cwd)
+        .map_err(|stop| stop.reason())
 }
 
 /// [`line_names`] that resolves a plain word only when `worth` says its
 /// path may be an enforcement path, so a caller with a cheap test of its
 /// own skips the file system reads for the rest (TSK-302 review F4). The
-/// text check is unchanged. With `quoted_literal`, a word holding a blank
-/// or a shell operator, which the shell only passes when it was quoted and
-/// therefore never globs, is read as a plain path rather than a glob
-/// (TSK-302 review round 3); git-guard's own reading keeps it off.
+/// text check is unchanged. With `quoted_literal`, expansion follows the
+/// parser's quote provenance; git-guard's own reading keeps it off.
 pub(crate) fn line_names_where(
     line: &str,
     cwd: &Path,
@@ -3760,20 +3939,24 @@ pub(crate) fn line_names_where(
     // value of an assignment, after brace expansion: a glob is expanded,
     // and a plain path is resolved through symbolic links (TSK-216 round
     // 16).
-    let words = line_path_words(line);
-    let found = words.iter().find_map(|word| {
-        let Some(words) = word_readings(word) else {
+    let words = if quoted_literal {
+        line_path_readings(line)
+    } else {
+        line_path_words(line)
+            .into_iter()
+            .map(|word| (word, true))
+            .collect()
+    };
+    let found = words.iter().find_map(|(word, pattern)| {
+        let Some(words) = (if *pattern {
+            word_readings(word)
+        } else {
+            Some(vec![word.clone()])
+        }) else {
             return Some(BRACE_UNREAD.to_string());
         };
-        let quoted = quoted_literal
-            && word.contains(|c: char| {
-                matches!(
-                    c,
-                    ' ' | '\t' | '\n' | ';' | '(' | ')' | '|' | '&' | '<' | '>'
-                )
-            });
         words.iter().find_map(|w| {
-            if has_glob(w) && !quoted {
+            if has_glob(w) && *pattern {
                 glob_reach(w, cwd, payload_cwd)
             } else {
                 let path = integrity_shell_path(w, cwd);
@@ -10623,6 +10806,9 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
 struct ShellWord {
     text: String,
     unquoted_prefix: usize,
+    /// Pattern or brace syntax outside quotes and escapes, including after
+    /// a quoted prefix (`"some directory"/*(D)`).
+    pattern: bool,
     /// Whether the shell fills in part of the word when the command runs: a
     /// `$` or a backtick outside single quotes and not escaped. A `$` in
     /// single quotes is text, as in a `sed` script's `$p` or `[^/]*$`.
@@ -10720,6 +10906,14 @@ fn capture_array_initializer(chars: &mut std::str::Chars<'_>) -> String {
     array
 }
 
+/// Characters that can introduce a shell pattern or brace expansion.
+fn pattern_character(c: char) -> bool {
+    matches!(
+        c,
+        '*' | '?' | '[' | '(' | ')' | '|' | '^' | '#' | '<' | '{' | '}' | '~'
+    )
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -10730,6 +10924,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut unquoted_prefix: usize = 0;
     let mut dollar_pending = false;
     let mut expands = false;
+    let mut pattern = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -10804,6 +10999,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     words.push(ShellWord {
                         text: std::mem::take(&mut cur),
                         unquoted_prefix,
+                        pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                     });
                     started = false;
@@ -10814,6 +11010,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             c => {
                 cur.push(c);
                 started = true;
+                pattern |= !in_single && !in_double && pattern_character(c);
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
@@ -10826,6 +11023,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         words.push(ShellWord {
             text: cur,
             unquoted_prefix,
+            pattern,
             expands,
         });
     }
@@ -10849,8 +11047,15 @@ pub(crate) fn quoted_shell_words(line: &str) -> Vec<String> {
 /// shell removes before the program runs. The integrity checks keep reading
 /// the full token list, where a redirect is the evidence.
 pub(crate) fn command_argv(segment: &str) -> Vec<String> {
+    command_argv_patterns(segment).0
+}
+
+/// The same argument vector with the parser's expansion provenance for
+/// each word. Keep these parallel vectors together when slicing launchers.
+pub(crate) fn command_argv_patterns(segment: &str) -> (Vec<String>, Vec<bool>) {
     let words = shell_words(segment);
     let mut argv = Vec::with_capacity(words.len());
+    let mut patterns = Vec::with_capacity(words.len());
     let mut i = 0;
     while i < words.len() {
         let word = &words[i];
@@ -10861,10 +11066,13 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
                     i += 1; // a bare operator: its target is the next word
                 }
             }
-            _ => argv.push(word.text.clone()),
+            _ => {
+                argv.push(word.text.clone());
+                patterns.push(word.pattern);
+            }
         }
     }
-    argv
+    (argv, patterns)
 }
 
 /// Byte length of the redirection operator a word starts with: an optional
@@ -11478,6 +11686,20 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn glob_leaf_read_failure_is_not_an_empty_expansion() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::os::unix::fs::symlink("entry-loop", root.join("entry-loop")).unwrap();
+        let paths = super::glob_paths("entry*/child", root, root).ok();
+        let refusal = super::line_names("python3 tool.py entry*/child", root, root);
+        assert!(
+            paths.is_none() && refusal.is_some(),
+            "unreadable leaf: paths={paths:?}, refusal={refusal:?}"
+        );
+    }
+
     #[test]
     fn verbatim_drive_prefix_is_not_a_wildcard() {
         // Exercise the Windows lexical reader on every host, before any
@@ -11508,8 +11730,8 @@ mod tests {
         std::fs::create_dir(&src).unwrap();
         let file = src.join("app.py");
         std::fs::write(&file, "").unwrap();
-        for suffix in [r"src\*.py", r"src\**"] {
-            let word = root.join(suffix).display().to_string();
+        for suffix in [r"src\*.py", r"src\**", "src/*.py", "src/**"] {
+            let word = format!(r"{}\{suffix}", root.display());
             let glob = super::WordGlob::new(&word, &root);
             assert_eq!(glob.prefix(), src, "{word}");
             let paths = glob.expand().unwrap();
@@ -15422,11 +15644,12 @@ mod tests {
         );
     }
 
-    /// A glob over more entries than the guard reads stops, and is then
-    /// judged by the directory it starts from: harmless there, it passes.
+    /// The entry limit can use a safe prefix, but never a pattern that
+    /// escapes it or a tree holding protected names or outward links.
     #[test]
-    fn test_glob_over_many_entries_is_judged_by_its_directory() {
+    fn glob_entry_limit_requires_a_contained_unprotected_prefix() {
         let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
         let many = dir.path().join("many");
         std::fs::create_dir_all(&many).unwrap();
         for n in 0..=GLOB_ENTRY_LIMIT {
@@ -15436,7 +15659,41 @@ mod tests {
             WordGlob::new("*", &many).expand(),
             Err(GlobStop::TooManyEntries)
         );
-        assert!(glob_reach("many/*", dir.path(), dir.path()).is_none());
+        let mut wrong = Vec::new();
+        let mut check = |word: &str, refuse: bool| {
+            for finding in [
+                glob_reach(word, dir.path(), dir.path()),
+                token_integrity_path(word, dir.path(), dir.path()).map(str::to_string),
+            ] {
+                if finding.is_some() != refuse {
+                    wrong.push(format!("{word}: refuse={refuse}: {finding:?}"));
+                }
+            }
+        };
+        check("many/*", false);
+        check("many/*.o", false);
+        check("many/*/../../.cla[u]de/settings.json", true);
+        check("many/*/../.claude/x", true);
+        #[cfg(unix)]
+        {
+            let contained = many.join("contained");
+            std::os::unix::fs::symlink(many.join("f0"), &contained).unwrap();
+            check("many/*", false);
+            std::fs::remove_file(contained).unwrap();
+            let link = many.join("outward");
+            std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+            check("many/*", true);
+            check("many/*/README.md", true);
+            std::fs::remove_file(link).unwrap();
+            std::fs::create_dir(many.join("inner")).unwrap();
+            let nested = many.join("inner/outward");
+            std::os::unix::fs::symlink(dir.path(), &nested).unwrap();
+            check("many/*/*/README.md", true);
+            std::fs::remove_file(nested).unwrap();
+        }
+        std::fs::create_dir(many.join(".claude")).unwrap();
+        check("many/*", true);
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// A file name that is not UTF-8 counts as a match of any wildcard

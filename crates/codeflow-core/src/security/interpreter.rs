@@ -387,6 +387,345 @@ mod tests {
         );
     }
 
+    /// Every resolved reading uses the writer's directory and checkout
+    /// protection, including literal and brace-expanded operands.
+    #[test]
+    fn interpreter_directory_and_checkout_arguments_refuse() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py .worktrees/w/{.git,.claude}",
+                "python3 tool.py .worktrees/{w,x}/.git",
+                "python3 tool.py .worktrees/w/.git{,}",
+                "python3 tool.py .worktrees/w/.git",
+                "python3 tool.py .WORKTREES/W/.GIT",
+                "node tool.js .worktrees/w/.git",
+                "python3 tool.py ~/repo/.worktrees/w/.git",
+                "python3 tool.py .claude",
+                "python3 tool.py .worktrees/w",
+                "python3 tool.py .worktrees",
+            ],
+        );
+        assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
+        // A launcher can run in a different repository. Its registered
+        // checkout roots must qualify for the same candidate checks.
+        let other = self::repo();
+        let moved = other.root.join("away/w");
+        std::fs::create_dir(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&other.linked, &moved).unwrap();
+        std::fs::write(
+            other.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", moved.join(".git").display()),
+        )
+        .unwrap();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[&format!(
+                "env -C \"{}\" python3 tool.py away/w",
+                other.root.display()
+            )],
+        );
+    }
+
+    #[test]
+    fn unquoted_shell_patterns_reach_protected_paths() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py .worktrees/w/*(D)",
+                "python3 tool.py .claude/*(D)",
+                "python3 tool.py .cla(ude)/settings.json",
+                "python3 tool.py .worktrees/w/(.git|x)",
+                "python3 tool.py .worktrees/w/.g(i)t",
+                "python3 tool.py .worktrees/w/@(.git|.claude)",
+                "python3 tool.py .worktrees/w/^src(D)",
+                "python3 tool.py *(D)",
+                "python3 tool.py .worktrees/w/<1-9>",
+                "env python3 tool.py \".worktrees/w/\"*(D)",
+                "nice python3 tool.py .worktrees/w/*(D)",
+            ],
+        );
+    }
+
+    #[test]
+    fn interpreter_project_locations_stay_allowed() {
+        let repo = repo();
+        let standalone = repo.root.parent().unwrap().join("standalone");
+        git2::Repository::init(&standalone).unwrap();
+        let mut wrong = Vec::new();
+        for root in [&standalone, &repo.root, &repo.linked] {
+            std::fs::create_dir_all(root.join("src")).unwrap();
+            for (dir, command) in [
+                (root.clone(), "python3 tool.py ."),
+                (root.clone(), "python3 -m pytest ."),
+                (root.clone(), "python3 -m black ."),
+                (root.clone(), "python3 -m pip install -e ."),
+                (root.clone(), "python3 -m ruff check ."),
+                (root.clone(), "node x.js ."),
+                (root.join("src"), "python3 tool.py .."),
+                (root.join("src"), "python3 tool.py ."),
+            ] {
+                let findings = judge_in(&repo, &dir, root, command, PolicyLevel::Block);
+                if !findings.is_empty() {
+                    wrong.push(format!("{dir:?}: {command}: {findings:?}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn linked_checkout_ancestors_refuse() {
+        let repo = repo();
+        let commands = [
+            "python3 tool.py ../..".to_string(),
+            "python3 tool.py \"@ROOT@\"".to_string(),
+            "python3 tool.py ../../.worktrees".to_string(),
+            "python3 tool.py ..".to_string(),
+        ];
+        #[cfg(unix)]
+        let commands = {
+            let mut commands = Vec::from(commands);
+            let alias = repo.root.parent().unwrap().join("ancestor-alias");
+            std::os::unix::fs::symlink(&repo.root, &alias).unwrap();
+            commands.push(format!("python3 tool.py \"{}\"", alias.display()));
+            commands
+        };
+        assert_refused(
+            &repo,
+            &repo.linked,
+            &repo.linked,
+            &commands.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_aliases_cannot_hide_linked_git_pointers() {
+        let repo = repo();
+        let base = repo.root.parent().unwrap();
+        let alias = base.join("alias");
+        let plain = base.join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        std::os::unix::fs::symlink(&repo.root, &alias).unwrap();
+        std::os::unix::fs::symlink(&repo.linked, plain.join("x")).unwrap();
+        for path in [
+            alias.join(".worktrees/w/.git"),
+            alias.join(".worktrees/w/.g*"),
+            alias.join(".worktrees/*/.git"),
+            plain.join("x/.git"),
+        ] {
+            assert_refused(
+                &repo,
+                &repo.root,
+                &repo.root,
+                &[&format!("python3 tool.py {}", path.display())],
+            );
+            for command in [
+                format!("cp x {}", path.display()),
+                format!("echo hi > {}", path.display()),
+            ] {
+                let policy = crate::hooks::policy::GitPolicy::default();
+                let context = crate::hooks::git_guard::GuardContext {
+                    policy: &policy,
+                    current_branch: "task/alias",
+                    integrate_token: false,
+                    pr_base_lookup: None,
+                    dir_target_lookup: None,
+                    alias_lookup: None,
+                    discard_lookup: None,
+                    branch_lookup: None,
+                    root_checkout: None,
+                };
+                let findings =
+                    crate::hooks::git_guard::evaluate_report_at(&command, &context, &repo.root)
+                        .violations;
+                assert!(
+                    integrity_refusal(&findings).is_some(),
+                    "{command}: {findings:?}"
+                );
+            }
+        }
+    }
+
+    /// An expanded directory operand cannot be followed as literal text.
+    #[test]
+    fn interpreter_pattern_directory_changes_are_unknown() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd .cla* && python3 tool.py settings.json",
+                "cd .c?aude && python3 tool.py settings.json",
+                "cd .[c]laude && python3 tool.py settings.json",
+                "cd {.claude,x} && python3 tool.py settings.json",
+                "pushd .cla* && python3 tool.py settings.json",
+                "env -C .cla* python3 tool.py settings.json",
+                "ruby -C .cla* tool.rb settings.json",
+                "cd .wor* && python3 tool.py w/.g*",
+            ],
+        );
+    }
+
+    /// Large ordinary globs allow only with a safe enclosing directory;
+    /// an escape or a held checkout still reports the entry budget.
+    #[test]
+    fn interpreter_large_glob_requires_a_safe_prefix() {
+        let repo = repo();
+        let many = repo.root.join("many");
+        std::fs::create_dir(&many).unwrap();
+        for n in 0..5000 {
+            std::fs::write(many.join(format!("f{n}")), "").unwrap();
+        }
+        let mut wrong = Vec::new();
+        let mut check = |command: &str, refuse: bool| {
+            let findings = judge_in(&repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            let correct = if refuse {
+                integrity_refusal(&findings)
+                    .is_some_and(|v| v.message.contains("more than 4096 entries"))
+            } else {
+                findings.is_empty()
+            };
+            if !correct {
+                wrong.push(format!("{command}: refuse={refuse}: {findings:?}"));
+            }
+        };
+        check("python3 tool.py many/*", false);
+        check("python3 tool.py many/*/../../.claude/settings.json", true);
+        check("python3 tool.py many/*/../.claude/x", true);
+        let moved = many.join("linked");
+        std::fs::rename(&repo.linked, &moved).unwrap();
+        std::fs::write(
+            repo.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", moved.join(".git").display()),
+        )
+        .unwrap();
+        check("python3 tool.py many/*", true);
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// Code string fragments do not acquire recursive checkout-operand
+    /// semantics. Shell arguments after the code still take those checks.
+    #[test]
+    fn interpreter_code_fragments_are_not_checkout_operands() {
+        let repo = repo();
+        assert_allowed(
+            &repo,
+            &[
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+                r#"python3 -c 'print("/.")'"#,
+                r#"python3 -c 'print("/..")'"#,
+            ],
+        );
+        assert_refused(
+            &repo,
+            &repo.linked,
+            &repo.linked,
+            &[
+                "python3 -c 'pass' ../..",
+                "python3 tool.py ../..",
+                "python3 tool.py .git",
+                "python3 tool.py .claude/*(D)",
+            ],
+        );
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["python3 -c 'open(\"@LINKED@\", \"w\")'"],
+        );
+        let main = repo.root.to_string_lossy().replace('\\', "/");
+        let parent = repo
+            .root
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let src = repo.root.join("src");
+        let mut wrong = Vec::new();
+        for (cwd, paths) in [
+            (
+                &repo.linked,
+                vec!["../..", "..", "../../..", "../../.worktrees", &main],
+            ),
+            (&repo.root, vec!["..", &parent]),
+            (&src, vec!["../.."]),
+        ] {
+            for path in paths {
+                for command in [
+                    format!(r#"python3 -c 'import shutil; shutil.rmtree("{path}")'"#),
+                    format!(r#"node -e 'require("fs").rmSync("{path}",{{recursive:true}})'"#),
+                    format!(r#"perl -e 'use File::Path qw(remove_tree); remove_tree("{path}")'"#),
+                    format!(r#"ruby -e 'require "fileutils"; FileUtils.rm_rf("{path}")'"#),
+                ] {
+                    let findings = judge_in(&repo, cwd, cwd, &command, PolicyLevel::Block);
+                    if integrity_refusal(&findings).is_none() {
+                        wrong.push(format!("should refuse in {cwd:?}: {command}: {findings:?}"));
+                    }
+                }
+            }
+        }
+        // Code roots remain fragments, including normalized dot components.
+        let filesystem_root = repo.root.ancestors().last().unwrap().to_string_lossy();
+        let plain_root = filesystem_root.trim_start_matches(r"\\?\");
+        #[cfg(windows)]
+        let native_roots = [plain_root.to_string(), format!(r"\\?\{plain_root}")];
+        #[cfg(not(windows))]
+        let native_roots = [plain_root.to_string()];
+        for cwd in [&repo.root, &repo.linked, &src] {
+            // Exercise native normalization directly for verbatim roots too.
+            for root in &native_roots {
+                for suffix in ["", ".", ".."] {
+                    let path = format!("{root}{suffix}");
+                    assert!(
+                        crate::hooks::edit_guard::is_own_checkout_location(
+                            Path::new(&path),
+                            cwd,
+                            true,
+                        )
+                        .unwrap(),
+                        "code root {path:?} in {cwd:?}"
+                    );
+                    assert!(
+                        !crate::hooks::edit_guard::is_own_checkout_location(
+                            Path::new(&path),
+                            cwd,
+                            false,
+                        )
+                        .unwrap(),
+                        "argv root {path:?} in {cwd:?}"
+                    );
+                }
+            }
+            for suffix in ["", ".", ".."] {
+                let path = format!("{}{suffix}", plain_root.replace('\\', "/"));
+                let command = format!(r#"python3 -c 'print("{path}")'"#);
+                let findings = judge_in(&repo, cwd, cwd, &command, PolicyLevel::Block);
+                if !findings.is_empty() {
+                    wrong.push(format!("should allow in {cwd:?}: {command}: {findings:?}"));
+                }
+            }
+            let command =
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#;
+            let findings = judge_in(&repo, cwd, cwd, command, PolicyLevel::Block);
+            if !findings.is_empty() {
+                wrong.push(format!("should allow in {cwd:?}: {command}: {findings:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     /// TSK-302 AC-2: the interpreter is found through the wrappers the
     /// parser reads, and `xargs` and `find -exec` supply its path.
     #[test]
@@ -446,6 +785,31 @@ mod tests {
         .is_empty());
     }
 
+    #[test]
+    fn interpreter_hidden_worktree_glob_refuses() {
+        let repo = repo();
+        let word = format!("{}/.*", repo.linked.display());
+        let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root, &repo.root).unwrap();
+        assert!(paths.contains(&repo.linked.join(".git")), "{paths:?}");
+        assert!(paths.contains(&repo.linked.join(".claude")), "{paths:?}");
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "python3 tool.py @LINKED@/.*",
+                "python3 tool.py \"@LINKED@/\".*",
+                "python3 tool.py @LINKED@/.cla*",
+                "python3 tool.py @LINKED@/.g*",
+                "python3 tool.py @ROOT@/.worktrees/*",
+            ],
+        );
+        for command in ["python3 tool.py src/*", "python3 tool.py src/missing*"] {
+            let findings = judge_in(&repo, &repo.root, &repo.root, command, PolicyLevel::Block);
+            assert!(findings.is_empty(), "{command}: {findings:?}");
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_repository_spellings_keep_ordinary_arguments_and_enforcement_refusals() {
@@ -458,26 +822,35 @@ mod tests {
             plain.display().to_string().replace('\\', "/"),
             plain.display().to_string().to_uppercase(),
         ];
+        let mut results = Vec::new();
+        let mut mismatches = Vec::new();
         for root in [&plain, &verbatim] {
             for spelling in &spellings {
                 let ordinary = format!(r#"W={spelling}; python3 tool.py "$W/src/app.py""#);
                 let findings = judge_in(&repo, root, root, &ordinary, PolicyLevel::Block);
-                assert!(findings.is_empty(), "{ordinary}: {findings:?}");
+                let result = format!("cwd={root:?}; {ordinary}: {findings:?}");
+                results.push(result.clone());
+                if !findings.is_empty() {
+                    mismatches.push(result);
+                }
                 for suffix in [
                     ".claude/settings.json",
                     ".worktrees/w/.claude/settings.json",
                     ".worktrees/w/.claude/*",
                     ".worktrees/w/.*",
                 ] {
-                    let command = format!(r#"python3 tool.py "{spelling}/{suffix}""#);
+                    let command = format!(r#"python3 tool.py "{spelling}/"{suffix}"#);
                     let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
-                    assert!(
-                        integrity_refusal(&findings).is_some(),
-                        "{command}: {findings:?}"
-                    );
+                    let result = format!("cwd={root:?}; {command}: {findings:?}");
+                    results.push(result.clone());
+                    if integrity_refusal(&findings).is_none() {
+                        mismatches.push(result);
+                    }
                 }
             }
         }
+        println!("{}", results.join("\n"));
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     /// TSK-302 AC-4: a value the guard cannot read takes git-guard's rule
@@ -541,6 +914,19 @@ mod tests {
         assert_allowed(
             &repo,
             &[
+                "python3 tool.py \"foo (bar)\"",
+                "python3 tool.py \"x (y)\"",
+                "python3 tool.py \"x (y)\" notes.txt",
+                "python3 tool.py \"print(x)\"",
+                "python3 tool.py \"my file(1).txt\"",
+                "python3 tool.py 'notes (draft).md'",
+                "node x.js --filter \"(a|b)\"",
+                "python3 tool.py .",
+                "python3 -m pytest .",
+                "python3 -m black .",
+                "python3 -m pip install -e .",
+                "python3 -m ruff check .",
+                "node x.js .",
                 "python3 edit.py notes.txt out.json",
                 "python3 -m json.tool data.json out.json",
                 "python3 -W ignore src/app.py",
@@ -742,6 +1128,7 @@ mod tests {
                     "find .git -name config -exec python3 tool.py {} \\;",
                     "P=.git/config; python3 tool.py \"$P\"",
                     "python3 tool.py .git/con*",
+                    "python3 tool.py .{claude,git}/*",
                     "python3 tool.py \"$(echo .git/config)\"",
                 ],
                 level,

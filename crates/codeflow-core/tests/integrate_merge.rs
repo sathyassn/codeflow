@@ -36,6 +36,11 @@ fn fixture(conflict: bool) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-b", "main"]);
+    // The helper ignores host Git config; integrate's Git processes inherit it.
+    // Pin Windows checkout rules locally so both use the same conversion, and
+    // exercise CRLF restoration on every platform.
+    git(root, &["config", "core.autocrlf", "true"]);
+    git(root, &["config", "core.filemode", "false"]);
     git(root, &["config", "user.name", "Test"]);
     git(root, &["config", "user.email", "test@example.test"]);
     commit(root, ".gitignore", ".worktrees/\n");
@@ -231,6 +236,11 @@ fn merge_lands_from_linked_worktree_and_refreshes_target_checkout() {
     assert_eq!(git(dir.dir.path(), &["rev-parse", "main^2"]), source);
     assert_eq!(git(&linked, &["branch", "--show-current"]), "feat/reviewed");
     assert!(dir.dir.path().join("feature.txt").exists());
+    assert_eq!(
+        std::fs::read(dir.dir.path().join("feature.txt")).unwrap(),
+        b"reviewed\r\n",
+        "the target refresh must exercise Git's CRLF conversion"
+    );
     assert!(git(
         dir.dir.path(),
         &["status", "--porcelain", "--untracked-files=no"]
