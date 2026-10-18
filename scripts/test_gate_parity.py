@@ -17,14 +17,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gate_parity", ROOT / "scripts" / "gate-parity.py")
 parity = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parity)
 
-CONFIG = json.loads(parity.CONFIG.read_text())
-WORKFLOW = parity.WORKFLOW.read_text()
+CONFIG = json.loads(parity.CONFIG.read_text(encoding="utf-8"))
+WORKFLOW = parity.WORKFLOW.read_text(encoding="utf-8")
 CI = parity.ci_rust_job_commands(WORKFLOW)
 PORTAL = "docs-portal"
 PRESENT = "present-browser"
@@ -285,6 +286,76 @@ class GateBinaryControls(unittest.TestCase):
             self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
             consumer["requires"] = ["codeflow-bin"]
             self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_windows_script_operands_keep_the_drive_and_separators(self):
+        for script in (r'C:\repo\scripts\consumer.py', 'C:/repo/scripts/consumer.py',
+                       r'\\server\share\consumer.py', r'\\?\C:\repo\consumer.py',
+                       r'scripts\consumer.py'):
+            for command in (f'python3 -B "{script}"', f"python3 -B '{script}'",
+                            f'python3 -B {script}'):
+                with self.subTest(command=command):
+                    self.assertIn(script, parity.literal_script_paths(command))
+
+    def test_quoted_script_with_spaces_reads_the_real_binary_dependency(self):
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / "new consumer.py"
+            cfg = copy.deepcopy(CONFIG)
+            consumer = target(cfg, "model-eval-kit")
+            consumer["requires"] = []
+            for quote in ('"', "'"):
+                with self.subTest(quote=quote):
+                    consumer["modes"] = {"full": {"command": f'python3 -B {quote}{script}{quote}'}}
+                    # CRLF and UTF-8 are real bytes read by the discovery.
+                    script.write_bytes('# \u201d\r\nprint(CODEFLOW_BIN)\r\n'.encode("utf-8"))
+                    self.assertTrue(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+                    script.write_bytes(b'print("ordinary script")\r\n')
+                    self.assertFalse(any("model-eval-kit" in p for p in parity.gate_binary_problems(cfg)))
+
+    def test_script_operands_after_colons_and_questions_keep_binary_discovery(self):
+        cases = (
+            ("python3 scripts/a.py:scripts/b.py", "scripts/b.py"),
+            ("X=lib:scripts/x.py python3 scripts/x.py", "scripts/x.py"),
+            ("node --cfg=file:scripts/x.js", "scripts/x.js"),
+            ("python3 a:scripts/x.py", "scripts/x.py"),
+            ("node --cfg=file?scripts/x.js", "scripts/x.js"),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "scripts").mkdir()
+            for command, script in cases:
+                with self.subTest(command=command):
+                    (root / script).write_text("print(CODEFLOW_BIN)\n", encoding="utf-8")
+                    # Inspect the prefixed operand itself, so the second
+                    # explicit x.py in the assignment case cannot mask a miss.
+                    operand = next(word for word in command.split() if ":" in word or "?" in word)
+                    self.assertIn(script, parity.literal_script_paths(operand))
+                    self.assertIn(script, parity.literal_script_paths(command))
+                    self.assertTrue(parity.script_uses_codeflow_bin(command, root))
+
+    def test_utf8_script_discovery_with_windows_default_decoding(self):
+        # Exercise a real byte read with the cp1252 default from hosted Windows.
+        # Explicit encodings still reach Path.read_text unchanged.
+        original = Path.read_text
+
+        def windows_read(path, encoding=None, errors=None):
+            return original(path, encoding=encoding or "cp1252", errors=errors)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "consumer.py"
+            script.write_bytes('# \u201d\nprint(CODEFLOW_BIN)\n'.encode("utf-8"))
+            with mock.patch.object(Path, "read_text", windows_read):
+                self.assertTrue(parity.script_uses_codeflow_bin("python consumer.py", root))
+                script.write_bytes('# \u201d\nprint("ordinary script")\n'.encode("utf-8"))
+                self.assertFalse(parity.script_uses_codeflow_bin("python consumer.py", root))
+
+    def test_invalid_utf8_script_names_the_file_and_refuses(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "malformed.py"
+            script.write_bytes(b"# \xff\nprint(CODEFLOW_BIN)\n")
+            with self.assertRaisesRegex(ValueError, r"malformed\.py: repository text must be UTF-8"):
+                parity.script_uses_codeflow_bin("python malformed.py", root)
 
     def test_windows_portal_check_has_its_own_binary_prerequisite(self):
         portal = target(CONFIG, "docs-portal-windows")
@@ -759,7 +830,7 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertEqual(parity.all_timeout_problems(), [])
         values = []
         for relative in parity.workflow_files():
-            text = (ROOT / relative).read_text()
+            text = (ROOT / relative).read_text(encoding="utf-8")
             values += [int(v) for v in re.findall(r"^ {4}timeout-minutes: (\d+)$", text, re.M)]
         self.assertTrue(values)
         self.assertLessEqual(max(values), parity.MAX_TIMEOUT_MINUTES)
@@ -874,7 +945,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
     SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
 
     def files(self) -> dict[str, str]:
-        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+        return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
         return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
@@ -1011,7 +1082,7 @@ class JobHeaderControls(unittest.TestCase):
     CI = ".github/workflows/codeflow-ci.yml"
 
     def files(self) -> dict[str, str]:
-        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+        return {path.as_posix(): (parity.ROOT / path).read_text(encoding="utf-8") for path in parity.workflow_files()}
 
     def problems(self, path: str, text: str) -> list[str]:
         return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
@@ -1190,7 +1261,7 @@ class EveryActionIsPinnedByCommit(unittest.TestCase):
         # of any real file must fail.
         checked = 0
         for relative in parity.workflow_files():
-            text = (parity.ROOT / relative).read_text()
+            text = (parity.ROOT / relative).read_text(encoding="utf-8")
             shipped = relative.parts[0] != ".github"
             for number, line in enumerate(text.splitlines()):
                 found = parity.USES_LINE.match(line)

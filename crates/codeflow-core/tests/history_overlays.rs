@@ -141,13 +141,18 @@ mod forged_graph;
 #[test]
 fn security_forged_commit_graph_refuses_ancestry_and_merge_base() {
     let dir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
+    let repo = Repository::init_opts(
+        dir.path(),
+        git2::RepositoryInitOptions::new().initial_head("fixture-default"),
+    )
+    .unwrap();
     let base = commit(&repo, None, "base");
     let middle = commit(&repo, Some(base), "source change");
     let forged = commit(&repo, Some(middle), "revert");
     let head = commit(&repo, Some(forged), "tip");
     repo.reference("refs/heads/main", head, true, "fixture")
         .unwrap();
+    repo.set_head("refs/heads/main").unwrap();
     assert!(history::descendant_of(&repo, head, middle).unwrap());
     assert_eq!(history::merge_base(&repo, head, middle).unwrap(), middle);
     forged_graph::plant(dir.path(), &forged.to_string(), &base.to_string());
@@ -261,13 +266,18 @@ fn security_registry_spawned_history_reads_refuse_grafts() {
 #[test]
 fn security_forged_graph_in_an_alternate_is_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
+    let repo = Repository::init_opts(
+        dir.path(),
+        git2::RepositoryInitOptions::new().initial_head("fixture-default"),
+    )
+    .unwrap();
     let base = commit(&repo, None, "base");
     let middle = commit(&repo, Some(base), "middle");
     let forged = commit(&repo, Some(middle), "forged");
     let head = commit(&repo, Some(forged), "tip");
     repo.reference("refs/heads/main", head, true, "fixture")
         .unwrap();
+    repo.set_head("refs/heads/main").unwrap();
     forged_graph::plant(dir.path(), &forged.to_string(), &base.to_string());
     drop(repo);
     let objects = dir.path().join(".git/objects");
@@ -327,13 +337,18 @@ fn security_ordinary_octopus_graph_remains_allowed() {
 #[test]
 fn security_graph_planted_during_judgment_refuses_next_call() {
     let dir = tempfile::tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
+    let repo = Repository::init_opts(
+        dir.path(),
+        git2::RepositoryInitOptions::new().initial_head("fixture-default"),
+    )
+    .unwrap();
     let base = commit(&repo, None, "base");
     let middle = commit(&repo, Some(base), "source change");
     let forged = commit(&repo, Some(middle), "revert");
     let head = commit(&repo, Some(forged), "tip");
     repo.reference("refs/heads/main", head, true, "fixture")
         .unwrap();
+    repo.set_head("refs/heads/main").unwrap();
     let _judgment = history::judgment();
     history::check(&repo).unwrap();
     let mut walk = history::revwalk(&repo).unwrap();

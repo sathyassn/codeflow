@@ -127,7 +127,7 @@ fn judge(
     let (destination, scope) = match release_scope(root, names) {
         Ok(Some(release)) => release,
         Ok(None) => return None,
-        Err(error) => return Some(Err(unscoped(error))),
+        Err(error) => return Some(Err(unscoped(error.message()))),
     };
     // The scope this range is judged under: a result, not a finding. The
     // pre-push hook states a release push's scope itself.
@@ -163,26 +163,41 @@ fn judge(
     )
 }
 
+/// Acquisition failures stay separate from policy and history failures.
+pub(super) enum ScopeError {
+    Destination(String),
+    Scope(String),
+}
+
+impl ScopeError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Destination(message) | Self::Scope(message) => message,
+        }
+    }
+}
+
 /// The destination and scope of a release range, asked once per run and
 /// shared by the records rule and the acceptance check; `None` for an
 /// ordinary range.
 pub(super) fn release_scope<'n>(
     root: &Path,
     names: &'n super::Names<'_>,
-) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n str> {
+) -> Result<Option<&'n (release_line::Destination, release_line::Scope)>, &'n ScopeError> {
     names
         .release
         .get_or_init(|| {
             let destination = match (names.destination, names.advertisement) {
                 (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
                 _ => release_line::ask_destination(root, names.destination),
-            }?;
-            let scope = release_line::scope(root, &destination, names.branch, names.into)?;
+            }
+            .map_err(ScopeError::Destination)?;
+            let scope = release_line::scope(root, &destination, names.branch, names.into)
+                .map_err(ScopeError::Scope)?;
             Ok(scope.release().then_some((destination, scope)))
         })
         .as_ref()
         .map(Option::as_ref)
-        .map_err(String::as_str)
 }
 
 /// The head a release range is judged at: a pull request into a release
@@ -209,7 +224,9 @@ pub(super) fn release_owner(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Result<Option<String>, String> {
-    let Some((destination, scope)) = release_scope(root, names).map_err(str::to_string)? else {
+    let Some((destination, scope)) =
+        release_scope(root, names).map_err(|error| error.message().to_string())?
+    else {
         return Ok(None);
     };
     let head = release_head(root, range, scope)?;
@@ -225,7 +242,9 @@ pub(super) fn brought(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Result<Option<codeflow_core::workgraph::lifecycle::Brought>, String> {
-    let Some((destination, scope)) = release_scope(root, names).map_err(unscoped)? else {
+    let Some((destination, scope)) =
+        release_scope(root, names).map_err(|error| unscoped(error.message()))?
+    else {
         return Ok(None);
     };
     let head = release_head(root, range, scope)?;
@@ -233,10 +252,17 @@ pub(super) fn brought(
         .map(|judged| Some(judged.brought))
 }
 
-pub(super) fn scope_refusal(error: &str) -> Violation {
+pub(super) fn scope_refusal(error: &ScopeError) -> Violation {
+    if let ScopeError::Destination(message) = error {
+        return Violation::always_blocking(
+            release_line::DESTINATION_RULE,
+            unscoped(message),
+            &codeflow_core::remedy::PUSH_DESTINATION_SILENT.remedy(),
+        );
+    }
     Violation::always_blocking(
         FROZEN_RULE,
-        unscoped(error),
+        unscoped(error.message()),
         "repair the destination or policy named above, then rerun codeflow ci",
     )
 }

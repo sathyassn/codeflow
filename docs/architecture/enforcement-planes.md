@@ -126,7 +126,7 @@ Three PreToolUse handlers add fast, pre-git feedback.
 | Handler | Policy section | Verdict |
 |---|---|---|
 | `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
-| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads and interpreter literals refuse at their rule's level |
+| `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads, interpreter literals and enforcement paths given to an interpreter as arguments refuse at their rule's level |
 | `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
 
 The handlers are wired per harness.

@@ -45,6 +45,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+use codeflow_core::git::remote_query;
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
@@ -373,6 +374,9 @@ fn run_ci_ranges(
     if let Some(why) = &destination.fork {
         report.status.push(format!("note: {why}"));
     }
+    if !destination_available(root, destination, report) {
+        return Ok(());
+    }
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
         let judged = match judged_by(root, destination, steps) {
@@ -431,17 +435,8 @@ fn run_ci_ranges(
         if let Some(base) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
-            let mut args = vec![
-                "ci",
-                "--base",
-                &base,
-                "--head",
-                &r.local_sha,
-                "--branch",
-                branch,
-                "--run-level",
-                &running,
-            ];
+            let mut args = vec!["ci", "--base", &base, "--head", &r.local_sha];
+            args.extend(["--branch", branch, "--run-level", &running]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
             let into = ci_target(root, r, branch, &judged, policy, report)?;
@@ -523,6 +518,28 @@ fn ci_target(
         codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
     }
     Ok(target)
+}
+
+/// Refuse the shared acquisition error once before any ref check starts.
+fn destination_available(
+    root: &Path,
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> bool {
+    let unavailable = match destination.answer(root) {
+        Ok(Ok(_)) => None,
+        Ok(Err(why)) => Some(why.as_str()),
+        Err(why) => Some(why),
+    };
+    if let Some(why) = unavailable {
+        report.violations.push(Violation::always_blocking(
+            release_line::DESTINATION_RULE,
+            format!("cannot prove push inputs: the destination cannot be read, so no pushed range is judged: {why}"),
+            &remedy::PUSH_DESTINATION_SILENT.remedy(),
+        ));
+        return false;
+    }
+    true
 }
 
 fn refuse_authority(
@@ -755,17 +772,19 @@ fn run_check_with(
 ) {
     // The command a person reruns: the check at its own levels, as CI runs
     // it, without the push gate's level, and asking the destination itself
-    // instead of reading the hook's hand-off.
+    // instead of reading the hook's hand-off. A destination URL is shown
+    // without its credentials; the check itself receives the real one.
     let run_level = args.iter().position(|arg| *arg == "--run-level");
-    let rerun: Vec<&str> = args
+    let displayed: Vec<std::borrow::Cow<'_, str>> = args
         .iter()
         .enumerate()
         .filter(|(at, arg)| {
             **arg != "--advertisement-stdin"
                 && run_level.is_none_or(|level| *at != level && *at != level + 1)
         })
-        .map(|(_, arg)| *arg)
+        .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
+    let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
     let shown = format!("codeflow {}", rerun.join(" "));
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
@@ -798,14 +817,20 @@ fn run_check_with(
                 String::from_utf8_lossy(&out.stderr)
             );
             report.relayed.extend(
-                relayed_findings(&printed)
+                relayed_findings(&remote_query::display_urls(&printed))
                     .into_iter()
                     .map(|finding| format!("`{shown}`: {finding}")),
             );
         }
         Ok(out) => {
-            eprint!("{}", String::from_utf8_lossy(&out.stdout));
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            eprint!(
+                "{}",
+                remote_query::display_urls(&String::from_utf8_lossy(&out.stdout))
+            );
+            eprint!(
+                "{}",
+                remote_query::display_urls(&String::from_utf8_lossy(&out.stderr))
+            );
             if let Some(rules) = &rules_out {
                 report.refused_by.extend(rules.read());
             }
@@ -1021,7 +1046,13 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
         return Ok(None);
     };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
-    Ok((url != Some(upstream)).then(|| format!("the push goes to {}, not the configured upstream {upstream}; a pull request may target the upstream", url.unwrap_or("an unnamed destination"))))
+    Ok((url != Some(upstream)).then(|| {
+        format!(
+            "the push goes to {}, not the configured upstream {}; a pull request may target the upstream",
+            url.map_or(std::borrow::Cow::Borrowed("an unnamed destination"), remote_query::display_url),
+            remote_query::display_url(upstream)
+        )
+    }))
 }
 
 /// What judges every pushed branch: the policy at the destination default
@@ -1233,6 +1264,20 @@ fn release_base(
     // Not judging a release push is never a warning (R-80): the refusal
     // keeps its block whatever `git.test_gate_on_push` is, as CI's own
     // refusal of an unreadable release scope does.
+    let asked = match destination
+        .answer(root)
+        .and_then(|answer| answer.as_ref().map_err(String::as_str))
+    {
+        Ok(asked) => asked,
+        Err(why) => {
+            report.violations.push(Violation::always_blocking(
+                release_line::DESTINATION_RULE,
+                format!("cannot prove push inputs: the destination cannot be read: {why}"),
+                &remedy::PUSH_DESTINATION_SILENT.remedy(),
+            ));
+            return Scoped::Refused;
+        }
+    };
     let mut refuse = |message: String, sanctioned: &str| {
         report.violations.push(Violation::always_blocking(
             codeflow_core::workgraph::acceptance::FROZEN_RULE,
@@ -1240,27 +1285,6 @@ fn release_base(
             sanctioned,
         ));
         Scoped::Refused
-    };
-    let asked = match destination.answer(root) {
-        Ok(Ok(asked)) => asked,
-        Ok(Err(why)) => {
-            return refuse(
-                format!("whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"),
-                "fix what the message names at the destination, then push again",
-            )
-        }
-        Err(why) => {
-            // Never a warning (R-80), with the catalogued step that clears it.
-            let mut silent = Violation::new(
-                codeflow_core::workgraph::acceptance::FROZEN_RULE,
-                codeflow_core::hooks::PolicyLevel::Block,
-                format!("the destination did not answer, so whether '{branch}' is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): asking the destination for its branches failed ({why})"),
-                remedy::PUSH_DESTINATION_SILENT.remedy(),
-            );
-            silent.level_fixed = true;
-            report.violations.push(silent);
-            return Scoped::Refused;
-        }
     };
     // Both release-scope reads below need the default target's tip; when
     // the authority's fetch of it already failed, neither fetches again.

@@ -1485,6 +1485,11 @@ fn recovered_completion(
             }
         }
     }
+    if let Some(anchor) = anchor {
+        if let Some(retained) = super::redaction::retained_completion(repo, anchor, &old)? {
+            old = retained;
+        }
+    }
     Ok(Some(Recovered { at, old, refusal }))
 }
 
@@ -2528,6 +2533,36 @@ fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -
         && super::amendment::range_problem(repo, tips.0, tips.1, changed_paths).is_none()
 }
 
+/// Whether this range is a validated redaction of the named task. Its
+/// redaction review is separate from the preserved completion's review.
+///
+/// # Errors
+/// Returns a diagnostic when the range, record or redaction cannot be read.
+pub fn records_redaction(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    id: &str,
+) -> Result<bool, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let resolve = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| error.to_string())
+    };
+    let (base, head) = (resolve(base)?, resolve(head)?);
+    let anchor = history::merge_base(&repo, base, head).map_err(|e| e.to_string())?;
+    let before = Graph::from_revision(&repo, &anchor.to_string())?;
+    let after = Graph::from_revision(&repo, &head.to_string())?;
+    match after.records.get(id) {
+        Some(record) => {
+            super::redaction::check(&repo, anchor, head, before.records.get(id), record)
+        }
+        None => Ok(false),
+    }
+}
+
 /// Whether the range from `base` (the target tip) to `head`, which changes
 /// `changed_paths`, only corrects the records of a completed standalone
 /// task that `task_id` names or follows up (ADR-0080), and so starts no
@@ -2584,6 +2619,19 @@ pub fn records_correction(
     let (base_oid, head_oid) = (oid(base)?, oid(head)?);
     let target = Graph::from_revision(&repo, base)?;
     let at_head = Graph::from_revision(&repo, head)?;
+    let anchor = history::merge_base(&repo, base_oid, head_oid).map_err(|e| e.to_string())?;
+    let anchored = Graph::from_revision(&repo, &anchor.to_string())?;
+    if let Some(record) = at_head.records.get(task_id) {
+        if super::redaction::check(
+            &repo,
+            anchor,
+            head_oid,
+            anchored.records.get(task_id),
+            record,
+        )? {
+            return Ok(true);
+        }
+    }
     let reopened = reopened_ids(&repo, base, head, &at_head)?;
     let correcting = correctable(
         &repo,
@@ -2904,12 +2952,22 @@ pub fn completions_in_range(
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after)?;
 
-    let mut findings = Vec::new();
+    let (redacted, mut findings) = super::redaction::judge_range(
+        repo,
+        anchor,
+        head_oid,
+        &before,
+        &after,
+        *criteria == Criteria::Amendable,
+    );
     for task in after
         .records
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
     {
+        if redacted.contains(&task.id) {
+            continue;
+        }
         let block = active_block(task);
         // A predecessor completed in its own reviewed pull request, whose
         // head this branch stacks on unchanged (issue #69), is judged as
@@ -3220,13 +3278,24 @@ pub fn pull_request_findings_judged(
     let candidate = authority.map(oid).transpose()?;
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
-    let at_head = Graph::from_revision(&repo, head)?;
+    let mut at_head = Graph::from_revision(&repo, head)?;
+    let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
+    let before = Graph::from_revision(&repo, &anchor.to_string())?;
+    let (redacted, _) = super::redaction::judge_range(
+        &repo,
+        anchor,
+        head_tip,
+        &before,
+        &at_head,
+        *criteria == Criteria::Amendable,
+    );
+    for id in redacted {
+        at_head.records.remove(&id);
+    }
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
     let mut found = reopened_criteria(&repo, base, head, &at_head)?;
     if *criteria != Criteria::Amendable {
-        let anchor = history::merge_base(&repo, target_tip, head_tip)
-            .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
         let at_target = Graph::from_revision(&repo, base)?;
         let range = Range {

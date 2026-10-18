@@ -530,14 +530,17 @@ mod tests {
         let conditional = dir.path().join("conditional");
         std::fs::write(&included, "[alias]\n ship = push origin v9.9.9\n").unwrap();
         std::fs::write(&conditional, "[push]\n followTags = true\n").unwrap();
-        let git_dir = dir
-            .path()
-            .join(".git")
-            .canonicalize()
-            .unwrap()
-            .display()
-            .to_string()
-            .replace('\\', "/");
+        let output = crate::git::judging_command()
+            .current_dir(dir.path())
+            .args(["rev-parse", "--absolute-git-dir"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let git_dir = String::from_utf8(output.stdout).unwrap();
+        let git_dir = git_dir
+            .trim_end()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         std::fs::write(&global, format!("[include]\n path = included\n[includeIf \"gitdir:{git_dir}\"]\n path = conditional\n")).unwrap();
         env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
         let config = read(dir.path(), &[], &env).unwrap();
@@ -547,6 +550,15 @@ mod tests {
         );
         assert!(config.boolean("push.followtags").unwrap());
         assert_eq!(config.includes.len(), 2);
+
+        let (other, mut other_env) = fixture();
+        other_env.insert("GIT_CONFIG_GLOBAL".into(), global.to_str().unwrap().into());
+        let config = read(other.path(), &[], &other_env).unwrap();
+        assert_eq!(
+            config.get("alias.ship").unwrap(),
+            Some("push origin v9.9.9")
+        );
+        assert!(!config.boolean("push.followtags").unwrap());
     }
 
     #[test]

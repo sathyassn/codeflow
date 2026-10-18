@@ -52,6 +52,9 @@ use super::classify::is_planning_path;
 use super::lifecycle::{Brought, Graph, RecordView};
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 
+/// A destination lookup failure, independent of work-record lifecycle rules.
+pub const DESTINATION_RULE: &str = "ci.destination_unavailable";
+
 /// The `role` value of the task that owns direct release work.
 pub const RELEASE_ROLE: &str = "release-integration";
 /// The release branch pattern when the default target's policy sets none.
@@ -175,8 +178,9 @@ pub fn ask(repo_root: &Path, url: Option<&str>) -> Result<Result<Destination, St
 }
 
 /// What `url` advertises: its default branch, branches and tags (peeled),
-/// in one bounded `git ls-remote --symref`. A caller that already holds
-/// it, such as the pre-push hook, passes it on instead of asking again.
+/// in one bounded lookup (`git ls-remote --symref`, with timeout retries).
+/// A caller that already holds it, such as pre-push, passes it on instead
+/// of asking again.
 ///
 /// # Errors
 ///
@@ -186,7 +190,10 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
         repo_root,
         &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
     )
-    .map_err(|why| format!("asking the destination {url} for its default branch: {why}"))
+    .map_err(|why| {
+        let shown = crate::git::remote_query::display_url(url);
+        format!("asking the destination {shown} for its default branch: {why}")
+    })
 }
 
 /// The destination `url` is, read from its [`advertisement`].
@@ -196,6 +203,8 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
 /// Returns why the answer names no usable default target: it has branches
 /// but its HEAD names none it has.
 pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String> {
+    // Messages name the destination without any credential in its URL.
+    let shown = crate::git::remote_query::display_url(url);
     let mut symref = None;
     let mut heads = Vec::new();
     for line in listed.strip_suffix('\n').unwrap_or(listed).split('\n') {
@@ -203,7 +212,7 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
             break;
         }
         let (left, name) = line.split_once('\t').ok_or_else(|| {
-            format!("cannot read the destination {url} advertisement: malformed ref record")
+            format!("cannot read the destination {shown} advertisement: malformed ref record")
         })?;
         if let Some(target) = left.strip_prefix("ref: ") {
             if name == "HEAD" {
@@ -213,11 +222,11 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
         }
         if left.len() != 40 {
             return Err(format!(
-                "cannot read the destination {url} advertisement: expected a full object ID"
+                "cannot read the destination {shown} advertisement: expected a full object ID"
             ));
         }
         let oid = Oid::from_str(left).map_err(|error| {
-            format!("cannot read the destination {url} advertisement object ID: {error}")
+            format!("cannot read the destination {shown} advertisement object ID: {error}")
         })?;
         if let Some(branch) = name.strip_prefix("refs/heads/") {
             heads.push((branch.to_string(), oid));
@@ -229,14 +238,14 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
             None if heads.is_empty() => None,
             None => {
                 return Err(format!(
-                    "the destination {url} names '{name}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
+                    "the destination {shown} names '{name}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
                 ))
             }
         },
         None if heads.is_empty() => None,
         None => {
             return Err(format!(
-                "the destination {url} does not name a default branch it has; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
+                "the destination {shown} does not name a default branch it has; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
             ))
         }
     };
