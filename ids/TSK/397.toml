@@ -1,0 +1,11 @@
+id = "TSK-397"
+uid = "fdef389a-2b63-49cf-8d10-d266f2530a3d"
+kind = "TSK"
+title = "A cd before an interpreter narrows the directory set correctly"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-18T17:23:25Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
