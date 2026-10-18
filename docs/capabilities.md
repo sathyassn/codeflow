@@ -627,7 +627,7 @@ name: interactive-presentation-review
 area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005, EPC-014, EPC-016, EPC-020]
+epics: [EPC-005, EPC-014, EPC-016, EPC-020, EPC-022]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 
