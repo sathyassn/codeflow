@@ -140,7 +140,7 @@ adrs: [ADR-0011, ADR-0019]
 
 `codeflow update` refreshes managed scaffold files:
 
-| Ownership class | Update action |
+| Case | Update action |
 |---|---|
 | Unmodified file | Replaces it |
 | User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and a report |

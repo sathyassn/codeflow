@@ -365,7 +365,7 @@ without writing files (ADR-0079).
 | Started | Task branch's first commit by ancestry; unknown after squash, rebase or fast-forward landing, or when author times run backwards |
 | Minimum and thresholds | Printed defaults, not policy |
 
-| Outcome check | Exit |
+| Condition | Exit |
 |---|---|
 | Adopted `.codeflow/estimate.json` with a missing or unusable home; unreadable record; given forecast unreadable or invalid | 1 |
 | Unusable threshold or minimum | 2 |
@@ -422,7 +422,7 @@ fails or does not parse writes nothing for that branch. `codeflow doctor
 `codeflow test` runs the configured targets, or the tests of a detected stack,
 and CI runs it again.
 
-| Test case | Behaviour |
+| Test case | Behavior |
 |---|---|
 | No stack detected | Loud no-op, exit 0; `--strict` makes it non-zero for scripted callers |
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
