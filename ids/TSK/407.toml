@@ -1,0 +1,11 @@
+id = "TSK-407"
+uid = "040ddff5-da3d-4efd-b93c-afb869483d77"
+kind = "TSK"
+title = "A link created earlier on a command line is refused like an existing link"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-19T03:21:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
