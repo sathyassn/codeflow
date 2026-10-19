@@ -295,9 +295,17 @@ mod tests {
         command: &str,
         integrity: PolicyLevel,
     ) -> Vec<Violation> {
+        // These placeholders occur unquoted, inside shell quotes and inside
+        // code literals. Use slash paths so shell escape removal cannot
+        // change their target. The Windows matrix below quotes native forms.
+        let shell_path = |path: &Path| {
+            crate::portable_path::slashed(&crate::portable_path::without_verbatim(
+                path.to_path_buf(),
+            ))
+        };
         let command = command
-            .replace("@ROOT@", &repo.root.display().to_string())
-            .replace("@LINKED@", &repo.linked.display().to_string());
+            .replace("@ROOT@", &shell_path(&repo.root))
+            .replace("@LINKED@", &shell_path(&repo.linked));
         evaluate(
             &command,
             &SecuritySection::default(),
@@ -312,17 +320,20 @@ mod tests {
         findings.iter().find(|v| v.rule == "git.hook_integrity")
     }
 
+    fn argument_refusal(findings: &[Violation]) -> bool {
+        integrity_refusal(findings).is_some_and(|v| {
+            v.message.contains("interpreter") && !v.message.contains("interpreter code")
+        })
+    }
+
     /// Every command refuses under `git.hook_integrity` from `dir`, each
     /// with a finding about an interpreter argument, not its code.
     fn assert_refused(repo: &Repo, dir: &Path, root: &Path, commands: &[&str]) {
         let mut wrong = Vec::new();
         for command in commands {
             let findings = judge_in(repo, dir, root, command, PolicyLevel::Block);
-            match integrity_refusal(&findings) {
-                Some(v)
-                    if v.message.contains("interpreter")
-                        && !v.message.contains("interpreter code") => {}
-                _ => wrong.push(format!("should refuse: {command}: {findings:?}")),
+            if !argument_refusal(&findings) {
+                wrong.push(format!("should refuse: {command}: {findings:?}"));
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -402,7 +413,6 @@ mod tests {
                 "python3 tool.py .worktrees/{w,x}/.git",
                 "python3 tool.py .worktrees/w/.git{,}",
                 "python3 tool.py .worktrees/w/.git",
-                "python3 tool.py .WORKTREES/W/.GIT",
                 "node tool.js .worktrees/w/.git",
                 "python3 tool.py ~/repo/.worktrees/w/.git",
                 "python3 tool.py .claude",
@@ -411,6 +421,16 @@ mod tests {
             ],
         );
         assert_refused(&repo, &repo.linked, &repo.linked, &["python3 tool.py .git"]);
+        std::fs::write(repo.root.join("case-probe"), "probe").unwrap();
+        let folds_case = repo.root.join("CASE-PROBE").exists();
+        let findings = judge_in(
+            &repo,
+            &repo.root,
+            &repo.root,
+            "python3 tool.py .WORKTREES/W/.GIT",
+            PolicyLevel::Block,
+        );
+        assert_eq!(argument_refusal(&findings), folds_case, "{findings:?}");
         // A launcher can run in a different repository. Its registered
         // checkout roots must qualify for the same candidate checks.
         let other = self::repo();
@@ -427,7 +447,7 @@ mod tests {
             &repo.root,
             &repo.root,
             &[&format!(
-                "env -C \"{}\" python3 tool.py away/w",
+                "env -C '{}' python3 tool.py away/w",
                 other.root.display()
             )],
         );
@@ -463,6 +483,12 @@ mod tests {
         git2::Repository::init(&standalone).unwrap();
         let mut wrong = Vec::new();
         for root in [&standalone, &repo.root, &repo.linked] {
+            let discovered = crate::hooks::repo::open(root).unwrap().unwrap();
+            assert!(
+                crate::hooks::edit_guard::is_own_checkout_location(root, root, None).unwrap(),
+                "checkout {root:?}, discovered workdir {:?}",
+                discovered.workdir()
+            );
             std::fs::create_dir_all(root.join("src")).unwrap();
             for (dir, command) in [
                 (root.clone(), "python3 tool.py ."),
@@ -481,6 +507,76 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn code_tilde_is_literal_when_home_contains_the_checkout() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_allowed(&repo, &[r#"python3 -c 'print("~")'"#]);
+        assert_refused(&repo, &repo.root, &repo.root, &["python3 tool.py ~"]);
+        assert_allowed(
+            &repo,
+            &[
+                r#"python3 -c 'import os; open(os.path.expanduser("~")+"/."+"zsh"+"rc","a")'"#,
+                r#"node -e 'require("fs").rmSync(require("os").homedir()+"/repo/.worktrees/w", {recursive:true})'"#,
+            ],
+        );
+    }
+
+    #[test]
+    fn code_tilde_paths_judge_literal_and_home_readings() {
+        let mut repo = repo();
+        repo.home = repo.root.parent().unwrap().to_path_buf();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.worktrees/w"))'"#,
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.worktrees"))'"#,
+                r#"python3 -c 'import shutil,os; shutil.rmtree(os.path.expanduser("~/repo/.claude"))'"#,
+            ],
+        );
+        // The literal reading still protects a repository beneath a directory
+        // actually named `~`, even when its home-expanded counterpart is absent.
+        let nested = repo.root.join("~/literal");
+        std::fs::create_dir(nested.parent().unwrap()).unwrap();
+        std::fs::rename(&repo.linked, &nested).unwrap();
+        std::fs::write(
+            repo.root.join(".git/worktrees/w/gitdir"),
+            format!("{}\n", nested.join(".git").display()),
+        )
+        .unwrap();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[r#"python3 -c 'open("~/literal/.claude/settings.json", "w")'"#],
+        );
+    }
+
+    #[test]
+    fn escaped_native_code_paths_keep_checkout_identity() {
+        let repo = repo();
+        for (path, refuse) in [
+            (repo.linked.clone(), true),
+            (repo.root.join("src/app.py"), false),
+        ] {
+            for literal in [
+                serde_json::to_string(path.to_str().unwrap()).unwrap(),
+                format!("\"{}\"", path.display()),
+            ] {
+                let command = format!("python3 -c 'open({literal}, \"w\")'");
+                let findings =
+                    judge_in(&repo, &repo.root, &repo.root, &command, PolicyLevel::Block);
+                assert_eq!(
+                    integrity_refusal(&findings).is_some(),
+                    refuse,
+                    "{command}: {findings:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -692,7 +788,7 @@ mod tests {
                         crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),
                             cwd,
-                            true,
+                            Some(&path),
                         )
                         .unwrap(),
                         "code root {path:?} in {cwd:?}"
@@ -701,7 +797,7 @@ mod tests {
                         !crate::hooks::edit_guard::is_own_checkout_location(
                             Path::new(&path),
                             cwd,
-                            false,
+                            None,
                         )
                         .unwrap(),
                         "argv root {path:?} in {cwd:?}"
@@ -790,8 +886,13 @@ mod tests {
         let repo = repo();
         let word = format!("{}/.*", repo.linked.display());
         let paths = crate::hooks::git_guard::glob_paths(&word, &repo.root, &repo.root).unwrap();
-        assert!(paths.contains(&repo.linked.join(".git")), "{paths:?}");
-        assert!(paths.contains(&repo.linked.join(".claude")), "{paths:?}");
+        for name in [".git", ".claude"] {
+            let expected = crate::portable_path::canonicalize(&repo.linked.join(name)).unwrap();
+            assert!(
+                paths.contains(&expected),
+                "expected {expected:?}: {paths:?}"
+            );
+        }
         assert_refused(
             &repo,
             &repo.root,
@@ -826,7 +927,11 @@ mod tests {
         let mut mismatches = Vec::new();
         for root in [&plain, &verbatim] {
             for spelling in &spellings {
-                let ordinary = format!(r#"W={spelling}; python3 tool.py "$W/src/app.py""#);
+                // Preserve the native spelling through POSIX double quotes.
+                // In particular, `\\` must reach the path reader as two
+                // separators in a verbatim namespace prefix.
+                let quoted = spelling.replace('\\', "\\\\");
+                let ordinary = format!(r#"W="{quoted}"; python3 tool.py "$W/src/app.py""#);
                 let findings = judge_in(&repo, root, root, &ordinary, PolicyLevel::Block);
                 let result = format!("cwd={root:?}; {ordinary}: {findings:?}");
                 results.push(result.clone());
@@ -839,7 +944,7 @@ mod tests {
                     ".worktrees/w/.claude/*",
                     ".worktrees/w/.*",
                 ] {
-                    let command = format!(r#"python3 tool.py "{spelling}/"{suffix}"#);
+                    let command = format!(r#"python3 tool.py "{quoted}/"{suffix}"#);
                     let findings = judge_in(&repo, root, root, &command, PolicyLevel::Block);
                     let result = format!("cwd={root:?}; {command}: {findings:?}");
                     results.push(result.clone());

@@ -1575,6 +1575,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-config-int",
     ),
+    // Only explicit native path separators after a home prefix are removed:
+    // slash everywhere and backslash on Windows. Whitespace stays in the name.
+    (
+        "crates/codeflow-core/src/security/arguments.rs",
+        "code_reach",
+        "trim_start_matches",
+        1,
+        "grammar:native-home-path",
+    ),
     // A name that is not valid UTF-8 folds to None, and the interpreter argument prefilter sends that path to the full enforcement checks, never clears it (TSK-302).
     (
         "crates/codeflow-core/src/security/arguments.rs",
@@ -2431,14 +2440,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "display",
-    ),
-    // The sole caller (git_guard.rs, the root checkout exemption) passes the result as an exception; None removes the exemption, so an unread repository only refuses more, and hooks::repo::open already refuses an unreadable repository first.
-    (
-        "crates/codeflow-core/src/hooks/edit_guard.rs",
-        "checkout_root_of",
-        "obtain-absent:Repository::discover",
-        1,
-        "unproven",
     ),
     // A ref that cannot be peeled is left out of the kept tips, which can only leave a deleted tip unbacked and return the discard refusal; it never adds backing.
     (
@@ -6127,6 +6128,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "registered_marker", "is_file", 1, "Registration symlink metadata is read with errors propagated; only a regular file is accepted, so a symlink or another type fails closed before absence is judged."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "read_registration", "is_file", 1, "Marker metadata was obtained with errors propagated; the type selects the physical gitfile parent cross-check."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "ErrorKind::NotADirectory", 1, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "exists", 2, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "is_dir", 2, "Selects a repair path description after a failed ledger write, never converts it to successful writing."),

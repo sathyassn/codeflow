@@ -58,7 +58,7 @@ pub fn inspect(
         );
     }
     let at = target.map_or_else(|| cwd.to_path_buf(), |t| cwd.join(t.path));
-    let repo = Repository::discover(&at).map_err(|e| e.to_string())?;
+    let repo = super::repo::open(&at)?.ok_or("directory has no repository")?;
     let root = repo.workdir().ok_or("repository has no working tree")?;
     let prefix = at
         .canonicalize()
@@ -213,8 +213,14 @@ fn delete_branches(repo: &Repository, names: &[String]) -> Result<Option<String>
     Ok(None)
 }
 
+/// A relative absent target remains refused, with the bounded recovery route.
+pub(crate) const ABSENT_WORKTREE_RECOVERY: &str = "the registered worktree is absent; use `git worktree prune` or `git worktree remove --force <absolute-path>` with its exact absolute registered path";
+
 fn remove_worktree(repo: &Repository, at: &Path, path: &str) -> Result<Option<String>, String> {
     let wanted = at.join(path);
+    if !Path::new(path).is_absolute() && super::repo::absent_registered_checkout(repo, &wanted)? {
+        return Err(ABSENT_WORKTREE_RECOVERY.into());
+    }
     let wanted = wanted.canonicalize().map_err(|e| e.to_string())?;
     let mut matched = None;
     for name in &repo.worktrees().map_err(|e| e.to_string())? {

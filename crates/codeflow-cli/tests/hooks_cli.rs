@@ -9,6 +9,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[path = "hooks_cli/checkout_identity.rs"]
+mod checkout_identity;
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,
@@ -8302,6 +8305,19 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     );
     let repo = shell_path(&root);
     let tree = shell_path(&linked);
+    std::fs::write(root.join("case-probe"), "probe").unwrap();
+    let folds_case = root.join("CASE-PROBE").exists();
+    let case_result = exec_guard_contract_3(&root, "python3 tool.py .WORKTREES/W/.GIT");
+    assert_eq!(
+        case_result.status.code(),
+        Some(if folds_case { 2 } else { 0 }),
+        "{case_result:?}"
+    );
+    assert_eq!(
+        interpreter_argument_refused(&case_result),
+        folds_case,
+        "{case_result:?}"
+    );
     let refused = [
         format!("W={repo}; python3 -I -B - \"$W/.claude/settings.json\" <<'PY'\nimport json, sys\np = sys.argv[1]\nopen(p, 'w').write('')\nPY"),
         format!("python3 - \"{repo}/.codeflow/policy.json\" <<'PY'\nimport sys\nPY"),
@@ -8315,7 +8331,6 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 tool.py .worktrees/{w,x}/.git".to_string(),
         "python3 tool.py .worktrees/w/.git{,}".to_string(),
         "python3 tool.py .worktrees/w/.git".to_string(),
-        "python3 tool.py .WORKTREES/W/.GIT".to_string(),
         "node tool.js .worktrees/w/.git".to_string(),
         "python3 tool.py .claude".to_string(),
         "python3 tool.py .worktrees/w".to_string(),
@@ -8457,11 +8472,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         let out = exec_guard_contract_3(&root, command);
         let err = String::from_utf8_lossy(&out.stderr);
         // Refused for what the interpreter is given, not for its code.
-        if out.status.code() != Some(2)
-            || !err.contains("git.hook_integrity")
-            || !err.contains("interpreter")
-            || err.contains("interpreter code")
-        {
+        if !interpreter_argument_refused(&out) {
             wrong.push(format!("should refuse: {command}: {err}"));
         }
     }
@@ -8762,6 +8773,117 @@ fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
             .current_dir(dir),
         &payload,
     )
+}
+
+fn interpreter_argument_refused(output: &Output) -> bool {
+    let err = String::from_utf8_lossy(&output.stderr);
+    output.status.code() == Some(2)
+        && err.contains("git.hook_integrity")
+        && err.contains("interpreter")
+        && !err.contains("interpreter code")
+}
+
+#[test]
+fn guards_preserve_discovered_checkout_when_registration_is_rewritten() {
+    let mut wrong = Vec::new();
+    for mode in ["absolute", "relative", "repair"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        enforced_repo(&root);
+        let linked = root.join(".worktrees/w");
+        git(
+            &root,
+            &["worktree", "add", "-b", "task/w", &shell_path(&linked)],
+        );
+        let admin = root.join(".git/worktrees/w");
+        let registration = admin.join("gitdir");
+        let decoy = temp.path().join("decoy");
+        std::fs::create_dir(&decoy).unwrap();
+        if mode == "relative" {
+            git(&decoy, &["init"]);
+        } else {
+            std::fs::copy(linked.join(".git"), decoy.join(".git")).unwrap();
+        }
+        let edit = |path: &Path| {
+            run_with_stdin(
+                codeflow().args(["hook", "edit-guard"]).current_dir(&linked),
+                &serde_json::json!({
+                    "tool_name": "Write", "cwd": linked,
+                    "tool_input": {"file_path": path, "content": "{}"},
+                })
+                .to_string(),
+            )
+        };
+        for path in [&registration, &linked.join(".git")] {
+            let output = edit(path);
+            if output.status.code() != Some(2) {
+                wrong.push(format!("{mode}: edit {}: {output:?}", path.display()));
+            }
+        }
+        let r = shell_path(&registration);
+        let d = shell_path(&decoy);
+        for (guard, command) in [
+            ("git-guard", format!("printf '%s\\n' '{d}/.git' > '{r}'")),
+            (
+                "exec-guard",
+                format!(r#"python3 -c 'open("{r}", "w").write("{d}/.git")'"#),
+            ),
+            ("git-guard", format!("git worktree repair '{d}'")),
+        ] {
+            let output = run_with_stdin(
+                codeflow().args(["hook", guard]).current_dir(&linked),
+                &guard_payload(&command, &linked),
+            );
+            if output.status.code() != Some(2) {
+                wrong.push(format!("{mode}: {guard}: {command}: {output:?}"));
+            }
+        }
+        // Simulate external corruption, then exercise each guard's real
+        // discovery path. Git itself still discovers the original checkout.
+        match mode {
+            "repair" => git(&root, &["worktree", "repair", &shell_path(&decoy)]),
+            "relative" => std::fs::write(&registration, "../../../../decoy/.git\n").unwrap(),
+            _ => std::fs::write(&registration, format!("{}\n", decoy.join(".git").display()))
+                .unwrap(),
+        }
+        let output = Command::new("git")
+            .current_dir(&linked)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap(),
+        );
+        for command in ["rm -rf .claude", "python3 tool.py .claude/settings.json"] {
+            for guard in ["git-guard", "exec-guard"] {
+                let output = run_with_stdin(
+                    codeflow().args(["hook", guard]).current_dir(&linked),
+                    &guard_payload(command, &linked),
+                );
+                if output.status.code() != Some(2) {
+                    wrong.push(format!("{mode}: corrupted {guard}: {command}: {output:?}"));
+                }
+            }
+        }
+        for path in [
+            linked.join(".claude/settings.json"),
+            linked.join(".codeflow/policy.json"),
+        ] {
+            let output = edit(&path);
+            if output.status.code() != Some(2) {
+                wrong.push(format!(
+                    "{mode}: corrupted edit {}: {output:?}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[cfg(unix)]

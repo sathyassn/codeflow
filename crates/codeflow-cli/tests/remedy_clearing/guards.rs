@@ -784,3 +784,24 @@ fn clears_push_without_follow_tags() {
     run_printed(root, &step, &[], &[]);
     assert_eq!(head(root, "origin/feat/x"), head(root, "feat/x"));
 }
+
+#[test]
+fn clears_absent_worktree() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    git(root, &["worktree", "add", "-b", "task/missing", "linked"]);
+    std::fs::remove_dir_all(root.join("linked")).unwrap();
+    let printed = refused(
+        root,
+        "git-guard",
+        "git worktree remove --force linked",
+        "git.discard_uncommitted",
+        "ABSENT_WORKTREE",
+    );
+    let step = printed_command(&printed, "ABSENT_WORKTREE", None);
+    assert_eq!(step, "git worktree prune");
+    assert_passes(root, "git-guard", &step);
+    run_printed(root, &step, &[], &[]);
+    assert!(!root.join(".git/worktrees/linked").exists());
+    assert_passes(root, "git-guard", "printf hello");
+}
