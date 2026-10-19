@@ -78,6 +78,7 @@ use Proof::{Confirms, Excluded, Runs};
 /// Every catalogue row and how it is covered.
 const ROWS: &[(&str, Proof)] = &[
     ("DISCARD_LOCAL_WORK", Runs),
+    ("ABSENT_WORKTREE", Runs),
     ("OUTWARD_ACTION", Excluded(HumanAuthority)),
     ("PUSH_WITHOUT_FOLLOW_TAGS", Runs),
     ("TASK_STATUS", Runs),

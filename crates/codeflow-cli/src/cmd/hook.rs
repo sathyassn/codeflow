@@ -284,6 +284,7 @@ fn inspect_discard(
 }
 
 fn git_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
@@ -510,6 +511,7 @@ fn exec_guard_answer(
 }
 
 fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let (payload, command) = match shell_call(stdin, err) {
         Ok(Some(call)) => call,
         Ok(None) => return 0,
@@ -564,6 +566,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 }
 
 fn edit_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let request = match edit_guard::parse_payload(stdin) {
         Ok(Some(request)) => request,
         Ok(None) => return 0,

@@ -1157,3 +1157,20 @@ fn checkout_identity_prunable_folder_stays_protected_until_prune() {
     );
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+#[test]
+fn checkout_identity_relative_absent_removal_names_recovery() {
+    let f = Fixture::new();
+    std::fs::remove_dir_all(&f.linked).unwrap();
+    let output = f.command(
+        &f.root,
+        "git-guard",
+        "git worktree remove --force .worktrees/w",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(message.contains("git worktree prune"), "{message}");
+    assert!(message.contains("absolute"), "{message}");
+    assert!(message.contains("git worktree remove --force"), "{message}");
+    assert!(!message.contains("stash"), "{message}");
+}

@@ -18116,7 +18116,11 @@ fn discard_violation(level: PolicyLevel, sub: &str, why: &str) -> Violation {
         "git.discard_uncommitted",
         level,
         format!("`git {sub}` cannot safely discard local work: {why}"),
-        crate::remedy::DISCARD_LOCAL_WORK.remedy(),
+        if why == super::git_discard::ABSENT_WORKTREE_RECOVERY {
+            crate::remedy::ABSENT_WORKTREE.remedy()
+        } else {
+            crate::remedy::DISCARD_LOCAL_WORK.remedy()
+        },
     )
 }
 

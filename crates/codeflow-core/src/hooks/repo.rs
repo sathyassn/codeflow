@@ -297,6 +297,11 @@ pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
     Ok(root.join(".git"))
 }
 
+#[cfg(test)]
+thread_local! {
+    static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Both pointers must agree: the registration names a checkout containing
 /// a .git marker that opens this administrative directory, with its original
 /// common directory. Resolving only the registration's parent would let a
@@ -305,11 +310,26 @@ pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
 /// Absent targets are Git's prunable state, not live checkout roots. An
 /// unreadable target or an existing target with conflicting identity refuses.
 pub(super) fn checked_registration(admin: &Path) -> Result<Option<PathBuf>, String> {
+    super::edit_guard::registration_at(admin).map(|registration| registration.checkout)
+}
+
+#[derive(Clone)]
+pub(super) struct CheckedRegistration {
+    pub marker: PathBuf,
+    pub checkout: Option<PathBuf>,
+}
+
+pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, String> {
+    #[cfg(test)]
+    VALIDATION_READS.with(|reads| reads.set(reads.get() + 1));
     let registered = registered_marker(admin)?;
     if crate::absence::proven_absent(&registered)
         .map_err(|error| format!("cannot inspect registered target: {error}"))?
     {
-        return Ok(None);
+        return Ok(CheckedRegistration {
+            marker: registered,
+            checkout: None,
+        });
     }
     let root = canonical(
         registered
@@ -339,7 +359,10 @@ pub(super) fn checked_registration(admin: &Path) -> Result<Option<PathBuf>, Stri
         return Err("worktree registration disagrees with its checkout marker".into());
     }
     check_common_directory(&checkout)?;
-    Ok(Some(root))
+    Ok(CheckedRegistration {
+        marker: registered,
+        checkout: Some(root),
+    })
 }
 
 // A directory marker can be a symlink to either ordinary or linked
@@ -664,6 +687,35 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "a").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-m", "chore: init"]);
+    }
+
+    #[test]
+    fn registrations_are_validated_once_per_guard_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        for name in ["one", "two"] {
+            git(dir.path(), &["worktree", "add", "-b", name, name]);
+        }
+        for _ in 0..2 {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            super::VALIDATION_READS.with(|reads| reads.set(0));
+            for cwd in [dir.path().to_path_buf(), dir.path().join("one")] {
+                super::RepoInfo::discover(&cwd).unwrap().unwrap();
+                let repo = super::open(&cwd).unwrap().unwrap();
+                crate::hooks::edit_guard::checkout_roots(&repo).unwrap();
+                for target in ["build", "out"] {
+                    crate::hooks::edit_guard::repository_enforcement_target(
+                        &cwd.join(target),
+                        &cwd,
+                        true,
+                    )
+                    .unwrap();
+                    crate::hooks::edit_guard::holds_enforcement_files(&cwd.join(target), &cwd)
+                        .unwrap();
+                }
+            }
+            assert_eq!(super::VALIDATION_READS.with(std::cell::Cell::get), 2);
+        }
     }
 
     #[test]
