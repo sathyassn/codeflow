@@ -1,0 +1,11 @@
+id = "TSK-406"
+uid = "1645b1f9-9204-41c7-89f2-7b3dd492c63a"
+kind = "TSK"
+title = "Shell expansions cannot hide a checkout from the guards"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-19T03:21:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
