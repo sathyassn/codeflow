@@ -7,7 +7,7 @@
 //! policy-character / branch-naming rules, `secret_scan` (pre-commit), and
 //! `test_gate_on_push` (pre-push); the Claude `git-guard` reads the same plus `pr_merge_to_protected`
 //! and `hook_integrity`; remote protection reads the protected-branch set and its
-//! force-push / delete / push intents; and CI reads `dep_audit` and
+//! force-push / delete / push intents; and CI reads `secret_scan_inline_allow`, `dep_audit` and
 //! `security_review` (the umbrella gate for the `security-review` job) and,
 //! through `codeflow ci`, the commit and branch rules. Every field is a default
 //! the user may flip per repo. A genuinely absent optional policy file uses
@@ -89,6 +89,16 @@ impl fmt::Display for PolicyLevel {
             Self::Off => f.write_str("off"),
         }
     }
+}
+
+/// Whether the managed CI secret scan accepts inline allows on held commits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretScanInlineAllow {
+    /// Accept only on commits the trusted commit already holds.
+    Trusted,
+    /// Report inline allows on every scanned commit.
+    Never,
 }
 
 /// One trusted automation profile (SPC-013 R-82): the bot actors or app ids
@@ -411,6 +421,8 @@ pub struct GitPolicy {
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    /// Managed CI only: read from the trusted commit, default `trusted`.
+    pub secret_scan_inline_allow: SecretScanInlineAllow,
     /// Unresolved conflict markers on the lines a change adds to a text
     /// file (TSK-170): the pre-commit hook judges the staged diff and
     /// `codeflow ci` the range. Level (off/warn/allow/block); default
@@ -515,6 +527,7 @@ impl Default for GitPolicy {
             .map(ToString::to_string)
             .collect(),
             secret_scan: PolicyLevel::Block,
+            secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,

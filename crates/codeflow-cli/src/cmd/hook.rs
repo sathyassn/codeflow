@@ -232,7 +232,59 @@ fn delegate_turn(args: &HookArgs, stdin: &str) -> i32 {
     }
 }
 
+// Quoted or escaped words use the established POSIX grammar only when the
+// tool proves that grammar. Portable literal words also permit recovery in
+// other shells; repository validation still proves a force-removal target.
+fn worktree_recovery(
+    payload: &git_guard::HookPayload,
+    command: &str,
+    cwd: &std::path::Path,
+) -> bool {
+    let portable_literal = command
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " \t/._-:".contains(c));
+    if !portable_literal && payload.tool_name != "Bash" {
+        let Ok(shell) = std::env::var_os("SHELL")
+            .map(std::ffi::OsString::into_string)
+            .transpose()
+        else {
+            return false;
+        };
+        if !exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)) {
+            return false;
+        }
+    }
+    codeflow_core::hooks::repo::worktree_recovery(command, cwd)
+}
+
+fn inspect_discard(
+    payload: &git_guard::HookPayload,
+    command: &str,
+    cwd: &std::path::Path,
+    query: &git_guard::DiscardQuery<'_>,
+) -> Result<Option<String>, String> {
+    // Policy and command checks still run. Only the discard-state probe
+    // accepts a registered absent tree, with the original shell grammar.
+    if query.target.is_none()
+        && matches!(
+            query.intent,
+            codeflow_core::hooks::git_discard::Intent::ForceRemoveWorktree(_)
+        )
+        && worktree_recovery(payload, command, cwd)
+    {
+        return Ok(None);
+    }
+    if query.requires_absence {
+        return Err(
+            "literal worktree recovery requires a proven-absent checkout and known shell grammar"
+                .into(),
+        );
+    }
+    codeflow_core::hooks::git_discard::inspect(cwd, query.target, query.intent)
+}
+
 fn git_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
@@ -253,6 +305,9 @@ fn git_guard(stdin: &str) -> i32 {
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
+            if worktree_recovery(&payload, command, &cwd) {
+                return 0;
+            }
             eprintln!("codeflow: cannot read project root: {error}");
             return 2;
         }
@@ -306,8 +361,8 @@ fn git_guard(stdin: &str) -> i32 {
         git_guard::read_branch_name(&branch_cwd, target, name)
     };
     let discard_cwd = cwd.clone();
-    let discard = move |query: &git_guard::DiscardQuery<'_>| {
-        codeflow_core::hooks::git_discard::inspect(&discard_cwd, query.target, query.intent)
+    let discard = |query: &git_guard::DiscardQuery<'_>| {
+        inspect_discard(&payload, command, &discard_cwd, query)
     };
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
@@ -456,6 +511,7 @@ fn exec_guard_answer(
 }
 
 fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let (payload, command) = match shell_call(stdin, err) {
         Ok(Some(call)) => call,
         Ok(None) => return 0,
@@ -471,6 +527,9 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
+            if worktree_recovery(&payload, command, &cwd) {
+                return 0;
+            }
             eprintln!("codeflow: cannot read project root: {error}");
             return 2;
         }
@@ -507,6 +566,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 }
 
 fn edit_guard(stdin: &str) -> i32 {
+    let _facts = edit_guard::RepoFactsScope::enter();
     let request = match edit_guard::parse_payload(stdin) {
         Ok(Some(request)) => request,
         Ok(None) => return 0,

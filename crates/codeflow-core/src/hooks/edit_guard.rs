@@ -488,6 +488,7 @@ pub(crate) fn normalize_case(
 // `"`) is kept the same way. Broken links and permissions are errors, not an
 // implicit allow.
 pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+    let path = crate::portable_path::without_verbatim(path.to_path_buf());
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -681,11 +682,19 @@ pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, St
         roots.push(workdir.to_path_buf());
     }
     roots.extend(
-        crate::git::linked_worktrees(repo)?
+        super::repo::registrations(repo)?
             .into_iter()
-            .map(|worktree| worktree.path),
+            .map(|admin| super::repo::checked_registration(&admin))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten(),
     );
     Ok(roots)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROTECTED_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The enforcement paths of every checkout sharing this repository, each
@@ -695,6 +704,8 @@ pub(crate) fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, St
 /// checkout's `.claude` (`.claude/worktrees/<name>`) is therefore not an
 /// ancestor of its own files by lying inside the outer `.claude`.
 fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBuf)>, String> {
+    #[cfg(test)]
+    PROTECTED_BUILDS.with(|count| count.set(count.get() + 1));
     // Reuse the action table's repository paths for every checkout; home
     // paths remain scoped to the caller's home in enforcement_patterns.
     let patterns: Vec<_> = actions::table()
@@ -711,6 +722,25 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         })
         .collect();
     let mut protected = Vec::new();
+    // Protect the whole administrative namespace, including names Git does
+    // not list yet. Otherwise three individually allowed creates can plant
+    // a registration that locks every checkout on the next invocation.
+    protected.push((
+        repo.commondir().join("worktrees"),
+        true,
+        repo.commondir().to_path_buf(),
+    ));
+    for admin in super::repo::registrations(repo)? {
+        let registration = registration_at(&admin)?;
+        if registration.checkout.is_none() {
+            let marker = registration.marker;
+            let root = marker
+                .parent()
+                .ok_or("registration has no checkout parent")?
+                .to_path_buf();
+            protected.push((root.clone(), true, root));
+        }
+    }
     for root in checkout_roots(repo)? {
         // A linked checkout's pointer is an enforcement file in its own
         // right. Resolve this path like every other protected path, so an
@@ -742,6 +772,7 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         }
     }
     for (name, directory) in [
+        ("HEAD", false),
         ("hooks", true),
         ("refs/remotes", true),
         ("packed-refs", false),
@@ -779,7 +810,34 @@ struct CheckoutPaths {
 type CheckoutCache =
     std::collections::HashMap<PathBuf, Result<Option<std::rc::Rc<CheckoutPaths>>, String>>;
 
+type RegistrationCache = std::collections::HashMap<
+    PathBuf,
+    std::collections::HashMap<PathBuf, Result<super::repo::CheckedRegistration, String>>,
+>;
+
+/// Registration facts share the common directory across main and linked
+/// checkout readers. Errors are memoized too; no reader can bypass a conflict.
+pub(super) fn registration_at(admin: &Path) -> Result<super::repo::CheckedRegistration, String> {
+    let admin = normalized(admin, false).map_err(|error| error.to_string())?;
+    let common = admin
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("worktree registration has no common directory")?
+        .to_path_buf();
+    REGISTRATIONS.with(|cache| match cache.borrow_mut().as_mut() {
+        Some(map) => map
+            .entry(common)
+            .or_default()
+            .entry(admin.clone())
+            .or_insert_with(|| super::repo::read_registration(&admin))
+            .clone(),
+        None => super::repo::read_registration(&admin),
+    })
+}
+
 thread_local! {
+    static REGISTRATIONS: std::cell::RefCell<Option<RegistrationCache>> =
+        const { std::cell::RefCell::new(None) };
     static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
         const { std::cell::RefCell::new(None) };
     static CHECKOUTS: std::cell::RefCell<Option<CheckoutCache>> =
@@ -790,12 +848,14 @@ thread_local! {
 /// once on this thread. One guard evaluation judges many words against the
 /// same repository, which the command being judged has not changed yet
 /// (TSK-216 round 16).
-pub(crate) struct RepoFactsScope {
+pub struct RepoFactsScope {
     outer: bool,
 }
 
 impl RepoFactsScope {
-    pub(crate) fn enter() -> Self {
+    /// Start an invocation snapshot, retaining an outer scope when nested.
+    #[must_use]
+    pub fn enter() -> Self {
         let outer = PROTECTED.with(|cache| {
             let mut cache = cache.borrow_mut();
             let outer = cache.is_none();
@@ -805,6 +865,8 @@ impl RepoFactsScope {
             outer
         });
         if outer {
+            REGISTRATIONS
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
         }
         Self { outer }
@@ -814,6 +876,7 @@ impl RepoFactsScope {
 impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
+            REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
             CHECKOUTS.with(|cache| *cache.borrow_mut() = None);
         }
@@ -845,13 +908,14 @@ fn checkout_paths_at(root: &Path) -> Result<Option<std::rc::Rc<CheckoutPaths>>, 
 }
 
 /// An argv operand can name its current checkout as a project location.
-/// A code string can also name the filesystem root as a fragment, such as
+/// Exact dot and dot-slash code literals also name a project location.
+/// A code string can name the filesystem root as a fragment, such as
 /// "/." in a runtime concatenation. Other ancestors still reach registered
 /// checkouts. Neither exemption applies to enforcement files.
 pub(crate) fn is_own_checkout_location(
     target: &Path,
     root: &Path,
-    code_literal: bool,
+    code_literal: Option<&str>,
 ) -> Result<bool, String> {
     let Some(checkouts) = checkout_paths_at(root)? else {
         return Ok(false);
@@ -860,7 +924,10 @@ pub(crate) fn is_own_checkout_location(
         return Ok(false);
     };
     let target = normalized(target, true).map_err(|error| error.to_string())?;
-    Ok(target == own[1] || (code_literal && target.has_root() && target.parent().is_none()))
+    Ok(
+        ((code_literal.is_none() || matches!(code_literal, Some("." | "./"))) && target == own[1])
+            || (code_literal.is_some() && target.has_root() && target.parent().is_none()),
+    )
 }
 
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
@@ -941,7 +1008,7 @@ const CANDIDATE_WALK_LIMIT: usize = 4096;
 /// directory. A protected directory too large to walk is represented by
 /// `<dir>/*`, which every check reads as inside it.
 pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>, String> {
-    let Some(repo) = super::repo::open(root)? else {
+    let Some(protected) = protected_at(root)? else {
         return Ok(Vec::new());
     };
     let start = normalized(start, true).map_err(|error| error.to_string())?;
@@ -951,13 +1018,19 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>,
             out.push(path);
         }
     };
-    let mut held: Vec<(PathBuf, bool)> = protected_paths(&repo)?
-        .into_iter()
-        .map(|(path, directory, _)| (path, directory))
-        .collect();
-    held.extend(checkout_roots(&repo)?.into_iter().map(|path| (path, false)));
+    let mut held: Vec<(PathBuf, bool)> = protected
+        .iter()
+        .map(|entry| entry.path[1].clone().map(|path| (path, entry.directory)))
+        .collect::<Result<_, _>>()?;
+    if let Some(checkouts) = checkout_paths_at(root)? {
+        held.extend(
+            checkouts
+                .roots
+                .iter()
+                .map(|(_, paths)| (paths[1].clone(), false)),
+        );
+    }
     for (path, directory) in held {
-        let path = normalized(&path, true).map_err(|error| error.to_string())?;
         if start.starts_with(&path) && (directory || start == path) {
             push(start.clone());
             continue;
@@ -1050,15 +1123,15 @@ pub(crate) fn registered_checkout_under(
 /// it lies in, so a linked checkout's root holds its own files (TSK-216
 /// round 3).
 pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool, String> {
-    let Some(repo) = super::repo::open(root)? else {
+    let Some(protected) = protected_at(root)? else {
         return Ok(false);
     };
-    let protected = protected_paths(&repo)?;
-    for resolve in [false, true] {
+    for (reading, resolve) in [false, true].into_iter().enumerate() {
         let target = normalized(target, resolve).map_err(|e| e.to_string())?;
-        for (path, _, _) in &protected {
-            if normalized(path, resolve)
-                .map_err(|e| e.to_string())?
+        for entry in protected.iter() {
+            if entry.path[reading]
+                .as_ref()
+                .map_err(Clone::clone)?
                 .starts_with(&target)
             {
                 return Ok(true);
@@ -1070,8 +1143,8 @@ pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool
 
 /// The working tree of the checkout holding `dir`, when it is one.
 pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
-    git2::Repository::discover(dir)
-        .ok()?
+    super::repo::open(dir)
+        .ok()??
         .workdir()
         .map(Path::to_path_buf)
 }
@@ -1091,6 +1164,23 @@ pub(crate) fn holds_registered_worktrees(dir: &Path) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn protected_paths_are_built_once_per_guard_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        for _ in 0..2 {
+            let _scope = RepoFactsScope::enter();
+            PROTECTED_BUILDS.with(|count| count.set(0));
+            for name in ["build", "out"] {
+                let target = dir.path().join(name);
+                assert!(!repository_enforcement_target(&target, dir.path(), true).unwrap());
+                assert!(!holds_enforcement_files(&target, dir.path()).unwrap());
+                assert!(find_candidates(&target, dir.path()).unwrap().is_empty());
+            }
+            assert_eq!(PROTECTED_BUILDS.with(std::cell::Cell::get), 1);
+        }
+    }
+
     #[test]
     fn r17_repository_readers_distinguish_absence_from_broken_metadata() {
         let dir = tempfile::tempdir().unwrap();
@@ -1527,7 +1617,10 @@ mod tests {
         let common = f.temp.path().join("main/.git");
         // A gitfile must name real repository metadata; a dangling/empty
         // administration directory is deliberately refused by discovery.
-        git2::Repository::init(f.temp.path().join("main")).unwrap();
+        git2::Repository::init(f.temp.path().join("main"))
+            .unwrap()
+            .set_workdir(&f.root, true)
+            .unwrap();
         std::fs::write(
             f.root.join(".git"),
             format!("gitdir: {}\n", common.display()),
@@ -1595,6 +1688,12 @@ mod tests {
         .unwrap();
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
         std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        // A registered checkout needs the inverse pointer too. Keep the
+        // administrative name's exact bytes rather than its display form.
+        let mut marker = b"gitdir: ".to_vec();
+        marker.extend_from_slice(admin.as_os_str().as_bytes());
+        marker.push(b'\n');
+        std::fs::write(checkout.join(".git"), marker).unwrap();
         Some((dir, admin))
     }
 

@@ -695,12 +695,15 @@ fn call_reaches(
 
 /// The file a literal argument names from `dir`.
 fn literal_target(value: &str, dir: &Path, home: Option<&Path>) -> PathBuf {
+    let dir = crate::portable_path::without_verbatim(dir.to_path_buf());
     match (
         value.strip_prefix("~/").or((value == "~").then_some("")),
         home,
     ) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => dir.join(value),
+        (Some(rest), Some(home)) => {
+            crate::portable_path::without_verbatim(home.to_path_buf()).join(rest)
+        }
+        _ => dir.join(crate::portable_path::without_verbatim(PathBuf::from(value))),
     }
 }
 
@@ -741,18 +744,48 @@ fn code_literal_words(code: &str) -> Vec<String> {
             continue;
         }
         let mut literal = String::new();
+        let mut spelled = String::new();
         let mut closed = false;
         while let Some(next) = chars.next() {
             if next == '\\' {
-                literal.extend(chars.next());
+                spelled.push(next);
+                if let Some(escaped) = chars.next() {
+                    spelled.push(escaped);
+                    literal.push(escaped);
+                }
             } else if next == ch {
                 closed = true;
                 break;
             } else {
+                spelled.push(next);
                 literal.push(next);
             }
         }
-        words.extend(outward::literal_words(&literal));
+        // Prefer a decoded native path, then its spelling if escape removal
+        // erased the separators. Keep its identity before splitting words:
+        // `C:` and directory names are not separate relative operands.
+        let native = [&literal, &spelled]
+            .into_iter()
+            .find(|reading| {
+                cfg!(windows) && (Path::new(reading).is_absolute() || reading.starts_with("~\\"))
+            })
+            .map(|reading| {
+                let path = crate::portable_path::without_verbatim(PathBuf::from(reading));
+                crate::portable_path::slashed(&path)
+            });
+        words.extend(outward::literal_words(
+            native.as_deref().unwrap_or(&literal),
+        ));
+        // A raw home path can mix doubled and single backslashes. Decoding
+        // keeps its prefix but erases later separators, so also judge the
+        // spelling. Collapse repeated separators, never parent components.
+        if cfg!(windows) && spelled.starts_with("~\\") {
+            let path: PathBuf = Path::new(&spelled).components().collect();
+            let spelling = crate::portable_path::slashed(&path);
+            if native.as_deref() != Some(&spelling) {
+                words.extend(outward::literal_words(&spelling));
+            }
+        }
         if !closed {
             break;
         }
@@ -884,7 +917,36 @@ fn empty_spans(value: &str) -> Option<String> {
 /// source, not a shell operand, so an unresolved one is not read by the
 /// line's writer rule (TSK-302 review round 2, Grok F1).
 fn code_reach(value: &str, dir: Option<&Path>, facts: &mut Facts<'_>) -> Option<Reach> {
-    value_reach_at(value, false, dir, true, facts)
+    value_reach_at(value, false, dir, true, facts).or_else(|| {
+        // A single ~/tail literal may be consumed literally or expanded by
+        // the interpreter. Judge both without interpreting runtime joins.
+        // Bare ~ stays literal, including print("~") and split-string code.
+        value
+            .strip_prefix("~/")
+            .or_else(|| cfg!(windows).then(|| value.strip_prefix("~\\")).flatten())
+            .and_then(|tail| {
+                let home = facts.home?;
+                let tail = tail.trim_start_matches(|c| c == '/' || (cfg!(windows) && c == '\\'));
+                let expanded =
+                    crate::portable_path::without_verbatim(home.to_path_buf()).join(tail);
+                let expanded = crate::portable_path::slashed(&expanded);
+                value_reach_at(&expanded, false, dir, true, facts).or_else(|| {
+                    // A complete home-expanded code literal is a possible write
+                    // or recursive delete, not an argv project location. Include
+                    // the current checkout in its directory reach.
+                    git_guard::resolved_path_integrity(
+                        Path::new(&expanded),
+                        dir.unwrap_or(facts.payload_cwd),
+                        facts.payload_cwd,
+                    )
+                    .map(|reached| {
+                        Reach::Enforcement(format!(
+                            "an interpreter argument `{value}` may reach `{reached}`"
+                        ))
+                    })
+                })
+            })
+    })
 }
 
 fn value_reach_at(
@@ -919,7 +981,10 @@ fn literal_reach(
     code: bool,
     facts: &mut Facts<'_>,
 ) -> Option<Reach> {
-    let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, facts.home) {
+    // The literal reading of code does not undergo shell expansion;
+    // code_reach separately judges the home reading of a single ~/tail.
+    let home = if code { None } else { facts.home };
+    let paths = match literal_paths(value, pattern, dir, facts.payload_cwd, home) {
         Ok(paths) => paths,
         Err(why) => {
             let message = format!("cannot inspect interpreter argument `{value}`: {why}");
@@ -966,29 +1031,34 @@ fn literal_reach(
     }) {
         // A string fragment such as "/." is not an argv operand reaching
         // other checkouts. Exact enforcement paths still take file checks.
-        let reached = git_guard::interpreter_path_integrity(path, dir, facts.payload_cwd, code)
-            .or_else(|| {
-                // The explicit home can differ from the guard process's home.
-                // Keep its native-edit protections for candidates beneath it.
-                let Some(text) = path.to_str() else {
-                    return Some("cannot inspect a non-UTF-8 enforcement path".to_string());
-                };
-                let Some(home) = facts.home else {
-                    return Some("cannot resolve the home for enforcement paths".to_string());
-                };
-                let in_home = path.starts_with(home)
-                    || resolved_existing(path)
-                        .zip(resolved_existing(home))
-                        .is_none_or(|(path, home)| path.starts_with(home));
-                if !in_home {
-                    return None;
-                }
-                match edit_guard::enforcement_path(text, dir, facts.root, Some(home)) {
-                    Ok(false) => None,
-                    Ok(true) => Some("home enforcement files".to_string()),
-                    Err(why) => Some(format!("cannot inspect home enforcement paths: {why}")),
-                }
-            });
+        let reached = git_guard::interpreter_path_integrity(
+            path,
+            dir,
+            facts.payload_cwd,
+            code.then_some(value),
+        )
+        .or_else(|| {
+            // The explicit home can differ from the guard process's home.
+            // Keep its native-edit protections for candidates beneath it.
+            let Some(text) = path.to_str() else {
+                return Some("cannot inspect a non-UTF-8 enforcement path".to_string());
+            };
+            let Some(home) = facts.home else {
+                return Some("cannot resolve the home for enforcement paths".to_string());
+            };
+            let in_home = path.starts_with(home)
+                || resolved_existing(path)
+                    .zip(resolved_existing(home))
+                    .is_none_or(|(path, home)| path.starts_with(home));
+            if !in_home {
+                return None;
+            }
+            match edit_guard::enforcement_path(text, dir, facts.root, Some(home)) {
+                Ok(false) => None,
+                Ok(true) => Some("home enforcement files".to_string()),
+                Err(why) => Some(format!("cannot inspect home enforcement paths: {why}")),
+            }
+        });
         let Some(reached) = reached else {
             continue;
         };
@@ -1281,7 +1351,7 @@ fn resolved_existing(path: &Path) -> Option<PathBuf> {
             return None;
         }
     }
-    let mut resolved = std::fs::canonicalize(&existing).ok()?;
+    let mut resolved = crate::portable_path::canonicalize(&existing).ok()?;
     resolved.extend(rest.iter().rev());
     Some(resolved)
 }

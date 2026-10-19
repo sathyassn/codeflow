@@ -760,7 +760,8 @@ jobs:
       # the configuration as gitleaks does: GITLEAKS_CONFIG, then
       # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
       # .gitleaks.toml, else the default rules. An inline gitleaks:allow
-      # comment counts only on a commit the trusted commit already holds.
+      # comment counts only on a commit the trusted commit already holds, unless
+      # its git.secret_scan_inline_allow policy is never, which ignores all of them.
       #
       # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
       # against its working directory. It runs from a directory that holds
@@ -863,17 +864,20 @@ jobs:
           if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
+          TRUSTED_SHA=$(git rev-parse --verify "${TRUSTED_SHA}^{commit}")
           # The history the scan reads: the event's own commits when it
           # names a start the checkout holds, else all of HEAD's.
-          scan=HEAD
+          head=$(git rev-parse --verify 'HEAD^{commit}')
+          scan=$head
           case ${SCAN_FROM:-} in
             '') scope="the full history of HEAD (a scheduled or manual run)" ;;
             *[!0-9a-f]*)
               echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
             *[!0]*)
               if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
-                scan="${SCAN_FROM}..HEAD"
-                scope="the $(git rev-list --count HEAD --not "$SCAN_FROM") commit(s) HEAD holds and ${SCAN_FROM} does not"
+                start=$(git rev-parse --verify "${SCAN_FROM}^{commit}")
+                scan="${start}..${head}"
+                scope="the $(git rev-list --count "$head" --not "$start" --) commit(s) HEAD holds and ${start} does not"
               else
                 scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
               fi ;;
@@ -913,12 +917,12 @@ jobs:
           export PATH="$trusted/bin:$PATH"
           # Refuses what gitleaks cannot read reliably in the history the pull
           # request brings: what HEAD holds and the trusted commit does not.
-          python3 -I - "$TRUSTED_SHA" <<'PY'
+          python3 -I - "$TRUSTED_SHA" "$head" <<'PY'
           import re
           import subprocess
           import sys
 
-          sha = sys.argv[1]
+          sha, head = sys.argv[1:]
           unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
           rewrite = ("rewrite the pull request's commits so that none uses the name; "
                      "renaming it in a later commit leaves it in this one")
@@ -938,7 +942,7 @@ jobs:
 
 
           def where(commit):
-              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)").stdout.decode("utf-8", "replace").split()
+              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)", "--").stdout.decode("utf-8", "replace").split()
               more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
               return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
 
@@ -951,7 +955,7 @@ jobs:
               return ascii(name.decode("utf-8", "replace"))[1:-1]
 
 
-          commits = [line.split() for line in git("rev-list", "--parents", "HEAD", "--not", sha).stdout.decode().splitlines()]
+          commits = [line.split() for line in git("rev-list", "--parents", head, "--not", sha, "--").stdout.decode().splitlines()]
           for commit, *parents in commits:
               if len(parents) > 2:
                   refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
@@ -959,7 +963,7 @@ jobs:
           # Each path a commit adds, changes, renames or copies, and each path
           # a merge changes beyond its automatic result.
           listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
-                        "--no-ext-diff", "HEAD", "--not", sha).stdout.split(b"\0")
+                        "--no-ext-diff", head, "--not", sha, "--").stdout.split(b"\0")
           commit, names = None, 0
           for token in listing:
               if names:
@@ -982,12 +986,12 @@ jobs:
           for commit, *parents in commits:
               if len(parents) != 2:
                   continue
-              bases = git("merge-base", "--all", *parents, codes=(0, 1)).stdout.decode().split() or [empty]
+              bases = git("merge-base", "--all", *parents, "--", codes=(0, 1)).stdout.decode().split() or [empty]
               for base in bases:
                   for parent in parents:
-                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent).stdout.split(b"\0"):
+                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent, "--").stdout.split(b"\0"):
                           if odd(name):
-                              held = git("merge-base", "--is-ancestor", parent, sha, codes=(0, 1)).returncode == 0
+                              held = git("merge-base", "--is-ancestor", parent, sha, "--", codes=(0, 1)).returncode == 0
                               fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
                               refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
                                      f"parent {parent}; {unreadable}; {fix}")
@@ -998,8 +1002,11 @@ jobs:
           python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
           import json
           import os
+          import re
+          import signal
           import subprocess
           import sys
+          import time
           import tomllib
 
           sha, workspace, trusted = sys.argv[1:]
@@ -1028,6 +1035,30 @@ jobs:
                   refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
               return subprocess.run(["git", "cat-file", "blob", oid],
                                     capture_output=True, check=True).stdout
+
+
+          # Missing policy/key keeps the older workflow's trusted behavior.
+          # A malformed trusted value fails closed, never defaults to an allow.
+          class PolicyObject(dict):
+              def __init__(self, pairs):
+                  super().__init__(pairs)
+                  self.has_duplicates = len(pairs) != len(self)
+
+
+          policy = blob(".codeflow/policy.json")
+          try:
+              data = json.loads(policy, object_pairs_hook=PolicyObject) if policy is not None else PolicyObject([])
+              git = data.get("git", PolicyObject([]))
+              # The typed loader rejects duplicate root and Git fields too.
+              if data.has_duplicates or git.has_duplicates:
+                  raise ValueError("duplicate policy key")
+              inline_allow = git.get("secret_scan_inline_allow", "trusted")
+          except (ValueError, AttributeError):
+              refuse("cannot read git.secret_scan_inline_allow from the trusted policy; commit a JSON object with trusted or never")
+          if inline_allow not in ("trusted", "never"):
+              refuse("git.secret_scan_inline_allow on the trusted commit must be trusted or never")
+          with open(os.path.join(trusted, "inline-allow"), "w", encoding="utf-8") as handle:
+              handle.write(inline_allow)
 
 
           def in_repository(path, owner):
@@ -1090,10 +1121,110 @@ jobs:
               walk(data.decode("utf-8", "replace"), owner)
 
 
+          def diagnose_fingerprints(ignore):
+              # Advisory only: never rewrite or alias an exemption. Bound the
+              # input, candidates and total Git time independently of the scan.
+              deadline = time.monotonic() + 5
+              cache = {}
+              candidates = 0
+              clipped = len(ignore) > 65536
+              lines = ignore[:65536].splitlines(keepends=True)
+              if clipped and lines and not lines[-1].endswith(b"\n"):
+                  lines.pop()
+
+              def warning(message):
+                  message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::warning::{message}")
+
+              def query(*args):
+                  if args not in cache:
+                      remaining = deadline - time.monotonic()
+                      if remaining <= 0:
+                          raise TimeoutError
+                      with subprocess.Popen(["git", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                            start_new_session=True) as child:
+                          try:
+                              output, _ = child.communicate(timeout=remaining)
+                          except subprocess.TimeoutExpired:
+                              # A helper's descendants must not keep a pipe or
+                              # the diagnostic alive after its time budget.
+                              try:
+                                  os.killpg(child.pid, signal.SIGKILL)
+                              except ProcessLookupError:
+                                  pass
+                              child.stdout.close()
+                              child.wait()
+                              raise
+                      cache[args] = subprocess.CompletedProcess(args, child.returncode, output)
+                  return cache[args]
+
+              def exists(commit, path):
+                  result = query("ls-tree", "-z", "--full-tree", commit, "--", path)
+                  if result.returncode:
+                      raise ValueError
+                  if not result.stdout:
+                      return False
+                  if result.stdout.split(b"\t", 1)[-1] != path.encode("utf-8") + b"\0":
+                      raise ValueError
+                  return True
+
+              try:
+                  for number, raw in enumerate(lines, 1):
+                      if time.monotonic() >= deadline:
+                          raise TimeoutError
+                      try:
+                          fingerprint = raw.decode("utf-8").strip()
+                      except UnicodeDecodeError:
+                          warning(f".gitleaksignore line {number} is not UTF-8; review it manually")
+                          continue
+                      parts = fingerprint.split(":", 1)
+                      if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parts[0]):
+                          continue
+                      commit, rest = parts
+                      fields = rest.rsplit(":", 2)
+                      if len(fields) != 3:
+                          continue
+                      path, rule, line = fields
+                      if not path.startswith("b/") or path.endswith("/") or not rule or not re.fullmatch(r"[1-9][0-9]*", line):
+                          continue
+                      if candidates == 50:
+                          clipped = True
+                          break
+                      candidates += 1
+                      result = query("cat-file", "-t", commit)
+                      if result.returncode or result.stdout.strip() != b"commit":
+                          warning(f".gitleaksignore line {number}: unreadable commit {commit}; fetch or investigate it before migration")
+                          continue
+                      try:
+                          if exists(commit, path):
+                              warning(f".gitleaksignore line {number}: existing b/ path for {fingerprint}; keep this fingerprint unchanged")
+                          elif exists(commit, path[2:]):
+                              result = query("rev-list", "--parents", "-n", "1", commit, "--")
+                              parents = result.stdout.split()
+                              if result.returncode or not parents or parents[0] != commit.encode("ascii"):
+                                  raise ValueError
+                              count = len(parents) - 1
+                              if count != 2:
+                                  kind = "one-parent commit" if count == 1 else f"commit with {count} parents"
+                                  warning(f".gitleaksignore line {number}: {kind} {commit}; no replacement inferred for {fingerprint}")
+                                  continue
+                              replacement = f"{commit}:{path[2:]}:{rule}:{line}"
+                              warning(f".gitleaksignore line {number}: legacy remerge fingerprint {fingerprint}; review and replace with {replacement}")
+                          else:
+                              warning(f".gitleaksignore line {number}: neither path exists for {fingerprint}; no replacement inferred")
+                      except ValueError:
+                          warning(f".gitleaksignore line {number}: cannot inspect commit or paths for {fingerprint}; no replacement inferred")
+              except (TimeoutError, subprocess.TimeoutExpired):
+                  clipped = True
+              if clipped:
+                  warning("legacy fingerprint diagnostics stopped at the review limit; review remaining entries manually")
+
+
           ignore = blob(".gitleaksignore")
           if ignore is not None:
               with open(os.path.join(trusted, "ignore"), "wb") as handle:
                   handle.write(ignore)
+              diagnose_fingerprints(ignore)
           named = os.environ.get("GITLEAKS_CONFIG", "")
           if named and os.path.isabs(named) and not in_checkout(named):
               if os.path.isfile(named):
@@ -1113,8 +1244,9 @@ jobs:
           PY
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
-          if [ "$scan" != HEAD ]; then
-            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan"); then
+          inline_allow=$(cat "$trusted/inline-allow")
+          if [ "$scan" != "$head" ]; then
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" --); then
               echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
             fi
             changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
@@ -1129,7 +1261,7 @@ jobs:
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan}" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan} --" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?
@@ -1148,7 +1280,9 @@ jobs:
           fi
           # The report holds no line text, so an inline gitleaks:allow is read
           # from the commit that holds the finding, and only a commit the
-          # trusted commit already holds counts.
+          # trusted commit already holds counts, when its policy permits it.
+          held='[]'
+          if [ "$inline_allow" = trusted ]; then
           held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
           import json
           import re
@@ -1163,7 +1297,7 @@ jobs:
               commit = finding.get("Commit") or ""
               if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
                   continue
-              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha],
+              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha, "--"],
                                         capture_output=True)
               if ancestor.returncode:
                   continue
@@ -1176,6 +1310,7 @@ jobs:
           print(json.dumps(held))
           PY
           )
+          fi
           if [ "$held" != "[]" ]; then
             echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
           fi

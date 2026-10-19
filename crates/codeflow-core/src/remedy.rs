@@ -181,6 +181,10 @@ catalog! {
     DISCARD_LOCAL_WORK = Step::Git("git stash push"),
         "inspect `git status` and save tracked changes with `git stash push` or a commit; preview untracked removal with `git clean -nd`, keep or export unique files, and retain a branch or worktree until another live ref preserves its commits; restore a named file only when that is intended";
 
+    /// A missing registered worktree requested by a relative spelling.
+    ABSENT_WORKTREE = Step::Git("git worktree prune"),
+        "run `git worktree prune` or `git worktree remove --force <absolute-path>` with the exact absolute registered path";
+
     // Records.
 
     /// A task whose written status disagrees with its branches.

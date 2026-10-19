@@ -1923,7 +1923,7 @@ pub(crate) fn interpreter_path_integrity(
     path: &Path,
     cwd: &Path,
     payload_cwd: &Path,
-    code_literal: bool,
+    code_literal: Option<&str>,
 ) -> Option<String> {
     path_integrity(path, cwd, payload_cwd)
         .map(str::to_string)
@@ -3218,6 +3218,9 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
 
 /// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
 fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
+    let cwd = crate::portable_path::without_verbatim(cwd.to_path_buf());
+    let home = home.map(|path| crate::portable_path::without_verbatim(path.to_path_buf()));
+    let home = home.as_deref();
     if token == "~" {
         if let Some(home) = home {
             return home.to_path_buf();
@@ -3225,7 +3228,7 @@ fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf
     }
     // `~+` is the directory the command runs in.
     if token == "~+" {
-        return cwd.to_path_buf();
+        return cwd.clone();
     }
     if let Some(relative) = token.strip_prefix("~+/") {
         return cwd.join(relative);
@@ -3250,7 +3253,7 @@ fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf
             }
         }
     }
-    cwd.join(token)
+    cwd.join(crate::portable_path::without_verbatim(PathBuf::from(token)))
 }
 
 // Only explicit dot-patterns at a repository root can reach these hidden
@@ -5152,7 +5155,8 @@ fn direct_write_violation(
 ) -> Option<Violation> {
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
-        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "mkdir"
+        | "touch" => Some(args),
         _ => None,
     };
     // Every writer the table lists goes through the one judge exec-guard
@@ -6245,6 +6249,18 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         }
         if in_double {
             cur.push(c);
+            // Keep shell escapes intact until shell_words removes quotes.
+            // An escaped quote cannot end this region or expose code
+            // parentheses as separate shell commands.
+            if c == '\\'
+                && chars
+                    .get(i + 1)
+                    .is_some_and(|next| matches!(next, '$' | '`' | '"' | '\\' | '\n'))
+            {
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
             if c == '"' {
                 in_double = false;
             }
@@ -7327,6 +7343,18 @@ fn check_git(
         return;
     };
     let head_moved_before = branches.head_may_move;
+    if sub == "worktree"
+        && rest.first().is_some_and(|arg| arg == "repair")
+        && !rest
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+        && policy.hook_integrity.is_active()
+    {
+        out.push(hook_integrity_violation(
+            policy.hook_integrity,
+            "`git worktree repair` rewrites checkout integrity pointers".to_string(),
+        ));
+    }
     branches.head_may_move |= !discard_readonly_git(sub, rest);
     let config_env = git::config_env_changes_decision(&args[..args.len() - rest.len() - 1]);
     let trigger = moved.transport_env.clone().or_else(|| {
@@ -7465,15 +7493,7 @@ fn check_git(
             out.extend(strictest);
         }
     }
-    check_discard(
-        args,
-        sub,
-        rest,
-        moved,
-        branches.discard_state_changed,
-        ctx,
-        out,
-    );
+    check_discard(args, sub, rest, moved, branches, ctx, out);
     track_branch_move(
         sub,
         rest,
@@ -11726,7 +11746,7 @@ mod tests {
     fn verbatim_glob_starts_at_its_literal_directory() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        let src = root.join("src");
+        let src = crate::portable_path::without_verbatim(root.clone()).join("src");
         std::fs::create_dir(&src).unwrap();
         let file = src.join("app.py");
         std::fs::write(&file, "").unwrap();
@@ -17924,6 +17944,9 @@ mod tests {
 pub struct DiscardQuery<'a> {
     pub target: Option<Retarget<'a>>,
     pub intent: &'a super::git_discard::Intent,
+    /// A literal reading outside ordinary argument expansion needs the
+    /// bounded absent-checkout proof, never a live-tree discard inspection.
+    pub requires_absence: bool,
 }
 /// An unreadable or absent state probe is uncertainty, never a clean result.
 pub type DiscardLookup<'a> =
@@ -18093,7 +18116,11 @@ fn discard_violation(level: PolicyLevel, sub: &str, why: &str) -> Violation {
         "git.discard_uncommitted",
         level,
         format!("`git {sub}` cannot safely discard local work: {why}"),
-        crate::remedy::DISCARD_LOCAL_WORK.remedy(),
+        if why == super::git_discard::ABSENT_WORKTREE_RECOVERY {
+            crate::remedy::ABSENT_WORKTREE.remedy()
+        } else {
+            crate::remedy::DISCARD_LOCAL_WORK.remedy()
+        },
     )
 }
 
@@ -18104,11 +18131,30 @@ fn check_discard(
     sub: &str,
     rest: &[String],
     moved: &Moves<'_>,
-    prior_mutation: bool,
+    branches: &BranchTracker,
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
 ) {
-    let intent = discard_intent(sub, rest, moved);
+    // The bounded literal spelling keeps quoted dollars and parentheses as
+    // path text. Other commands retain the ordinary expansion analysis.
+    let literal =
+        super::repo::literal_recovery_command(&branches.line).then(|| shell_tokens(&branches.line));
+    let parsed = discard_intent(sub, rest, moved);
+    let (intent, requires_absence) = match literal.as_deref() {
+        Some(words)
+            if words.len() == 5 && words[..4] == ["git", "worktree", "remove", "--force"] =>
+        {
+            let requires_absence = !matches!(&parsed,
+                Ok(Some(super::git_discard::Intent::ForceRemoveWorktree(path))) if path == &words[4]);
+            (
+                Ok(Some(super::git_discard::Intent::ForceRemoveWorktree(
+                    words[4].clone(),
+                ))),
+                requires_absence,
+            )
+        }
+        _ => (parsed, false),
+    };
     if matches!(intent, Ok(None)) {
         return;
     }
@@ -18144,7 +18190,7 @@ fn check_discard(
         }
         let result = if let Some(why) = unresolved {
             Err(why)
-        } else if prior_mutation {
+        } else if branches.discard_state_changed {
             Err("an earlier command may change the tree, stash or refs; run the inspection after that command finishes".into())
         } else if let Some(trigger) = &moved.transport_env {
             Err(format!("cannot verify Git configuration after {trigger}"))
@@ -18168,7 +18214,13 @@ fn check_discard(
                 Ok(Some(intent)) => ctx
                     .discard_lookup
                     .ok_or_else(|| "repository-state lookup is unavailable".to_string())
-                    .and_then(|probe| probe(&DiscardQuery { target, intent })),
+                    .and_then(|probe| {
+                        probe(&DiscardQuery {
+                            target,
+                            intent,
+                            requires_absence,
+                        })
+                    }),
                 Ok(None) => Ok(None),
             }
         };

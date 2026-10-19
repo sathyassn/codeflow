@@ -40,6 +40,47 @@ use serde_json::Value;
 mod git_isolation;
 use git_isolation::isolate_git;
 
+#[test]
+fn inline_allow_policy_is_opt_in_and_accepts_only_trusted_or_never() {
+    use codeflow_core::hooks::policy_schema::{
+        default_policy_value, spec_for, validate_policy_str, KeyKind,
+    };
+
+    let key = "git.secret_scan_inline_allow";
+    let spec = spec_for(key).expect("inline allow key is discoverable");
+    assert_eq!(spec.kind, KeyKind::Enum(&["trusted", "never"]));
+    assert_eq!(
+        default_policy_value()["git"]["secret_scan_inline_allow"],
+        "trusted"
+    );
+    let mut policy = serde_json::json!({"git": {}});
+    for value in ["trusted", "never"] {
+        policy["git"]["secret_scan_inline_allow"] = Value::from(value);
+        validate_policy_str(&policy.to_string()).expect("supported inline allow value");
+    }
+    for value in [
+        serde_json::json!("allow"),
+        serde_json::json!(null),
+        serde_json::json!(false),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        policy["git"]["secret_scan_inline_allow"] = value;
+        let errors = validate_policy_str(&policy.to_string()).expect_err("bad value refused");
+        assert!(errors.iter().any(|error| error.key == key));
+    }
+    for path in GUARDED_FILES {
+        let shipped: Value = serde_json::from_str(&read(&repo_root().join(path))).unwrap();
+        assert!(shipped["git"].get("secret_scan_inline_allow").is_none());
+    }
+    for duplicate in [
+        r#"{"git":{"secret_scan_inline_allow":"never","secret_scan_inline_allow":"trusted"}}"#,
+        r#"{"git":{"secret_scan_inline_allow":"never"},"git":{}}"#,
+    ] {
+        validate_policy_str(duplicate).expect_err("duplicate policy key refused");
+    }
+}
+
 /// The last released binary's schema: `key<TAB>kind` per line.
 const LAST_RELEASE_SCHEMA: &str = include_str!("fixtures/policy-schema-last-release.tsv");
 

@@ -102,7 +102,7 @@ name: scaffold-init
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
-epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020, EPC-023]
+epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
@@ -218,7 +218,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-core tests/managed_secret_scan.rs", "codeflow-core tests/policy_key_placement.rs", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -247,7 +247,7 @@ Other checks on these planes:
 | Pull request Summary shape (TSK-218) | `git.pr_summary`, block | The one Summary section, under its mapped heading: one prose paragraph, then a list or a table, then at most one closing paragraph, read from the visible blocks only, so an HTML comment never supplies the lead or the list. It judges shape, never a word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn while a kept PR template is diagnosed, and a trusted automation profile skips it |
 | Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form, a table line other than a plain entry, and any escaped table name or key or multi-line string in the state fail closed. With no table the install checks `sha256.sum` alone and warns |
 | Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
-| Managed CI secret scan range (TSK-225) | the gitleaks job of `codeflow-ci.yml` | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Exemptions come only from the trusted commit |
+| Managed CI secret scan range (TSK-225, TSK-292) | the gitleaks job of `codeflow-ci.yml`; `git.secret_scan_inline_allow`, trusted | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Resolved commit ids and a final `--` keep a path named `HEAD` unambiguous. Exemptions come only from the trusted commit; its inline-allow key can be `never` to ignore every inline allow while keeping other trusted exemptions. Bounded diagnostics offer reviewed replacements for legacy remerge fingerprints only for readable two-parent commits after checking both paths, distinguishing one-parent commits, real `b/` paths and unreadable commits without rewriting exemptions |
 | Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: warnings for a behaviour change with no pending entry and, with a PR draft, release-impact mismatches; a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host; `release.py check-local` gives the hosted verdict for an explicit range and body, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
 
 | Refusal record and report | Behaviour |
@@ -271,7 +271,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-023]
+epics: [EPC-001, EPC-002, EPC-003, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
@@ -329,7 +329,7 @@ name: test-gate
 area: engine
 status: shipped
 verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
-epics: [EPC-001, EPC-022]
+epics: [EPC-001, EPC-022, EPC-023]
 adrs: [ADR-0021, ADR-0031]
 ```
 
@@ -460,7 +460,7 @@ name: cross-vendor-delegation
 area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
-epics: [EPC-002, EPC-011, EPC-012, EPC-018, EPC-022]
+epics: [EPC-002, EPC-011, EPC-012, EPC-018, EPC-022, EPC-023]
 adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
 
@@ -482,7 +482,7 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::redaction", "codeflow-cli tests/ci_cli/acceptance_fix.rs", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog", "cargo test -p codeflow-cli --test models_design_authority", "codeflow-cli tests/acceptance_cli.rs", "codeflow-cli tests/acceptance_journey.rs", "codeflow-cli tests/release_line_cli.rs", "codeflow-cli tests/feedback_cli.rs", "cargo test feedback::tests"]
-epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069, ADR-0084]
 ```
 
@@ -530,7 +530,7 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "codeflow-cli tests/live_eval_pack.rs (with the live delivery holdout checked out)", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test -p codeflow-cli --test models_cli", "cargo test -p codeflow-core --test model_catalog_surfaces", "cargo test -p codeflow-cli --test models_managed_catalog"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-018, EPC-020, EPC-022, EPC-023]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
 
@@ -601,7 +601,7 @@ name: opt-in-documentation-portal
 area: scaffold
 status: shipped
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
-epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022]
+epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017, EPC-022, EPC-023]
 adrs: [ADR-0048, ADR-0058]
 ```
 
@@ -627,7 +627,7 @@ name: interactive-presentation-review
 area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005, EPC-014, EPC-016, EPC-020]
+epics: [EPC-005, EPC-014, EPC-016, EPC-020, EPC-022]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 

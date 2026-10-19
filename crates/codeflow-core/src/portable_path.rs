@@ -27,14 +27,21 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
 pub fn without_verbatim(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
-        use std::path::{Component, Prefix};
-        let mut components = path.components();
-        if let Some(Component::Prefix(prefix)) = components.next() {
-            if let Prefix::VerbatimDisk(drive) = prefix.kind() {
-                let mut plain = PathBuf::from(format!("{}:\\", char::from(drive)));
-                plain.extend(components.filter(|c| !matches!(c, Component::RootDir)));
-                return plain;
-            }
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+        // Strip before parsing components: a mixed-separator verbatim path
+        // treats `/` as part of a name, and pushing onto a verbatim path
+        // collapses `..` before a guard can resolve links or expand globs.
+        if units
+            .get(..4)
+            .is_some_and(|prefix| matches!(prefix, [47 | 92, 47 | 92, 63, 47 | 92]))
+            && units
+                .get(4)
+                .is_some_and(|c| matches!(c, 65..=90 | 97..=122))
+            && units.get(5) == Some(&58)
+            && units.get(6).is_some_and(|c| matches!(c, 47 | 92))
+        {
+            return PathBuf::from(std::ffi::OsString::from_wide(&units[4..]));
         }
         path
     }
@@ -258,10 +265,16 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_verbatim_drive_path_reads_as_the_plain_drive() {
-        assert_eq!(
-            without_verbatim(PathBuf::from(r"\\?\C:\Users\a\b.txt")),
-            PathBuf::from(r"C:\Users\a\b.txt")
-        );
+        for path in [
+            r"\\?\C:\Users\a\b.txt",
+            r"\\?\C:/Users/a/b.txt",
+            "//?/C:/Users/a/b.txt",
+        ] {
+            assert_eq!(
+                without_verbatim(PathBuf::from(path)),
+                PathBuf::from(r"C:\Users\a\b.txt")
+            );
+        }
         assert_eq!(
             without_verbatim(PathBuf::from(r"\\?\UNC\server\share\x")),
             PathBuf::from(r"\\?\UNC\server\share\x")

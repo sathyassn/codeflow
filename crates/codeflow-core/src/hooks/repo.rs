@@ -37,6 +37,12 @@ impl RepoInfo {
         let Some(repo) = open(start)? else {
             return Ok(None);
         };
+        // Hook context must validate every protected checkout before policy
+        // selection. `open` checks the current checkout's identity separately,
+        // so read-only inventory tools can still diagnose missing siblings.
+        for admin in registrations(&repo)? {
+            checked_registration(&admin)?;
+        }
         let root = repo
             .workdir()
             .ok_or("repository has no worktree")?
@@ -101,9 +107,46 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
 /// # Errors
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
-    match Repository::discover(start) {
+    match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
         Ok(repo) => {
-            check_discovery_boundaries(start, &repo)?;
+            // Derive repository claims from the physical metadata. On Windows,
+            // opening a directory symlink can otherwise report its alias as
+            // the workdir and hide a conflicting checkout at the destination.
+            let directory = canonical(repo.path(), "discovered git directory")?;
+            let repo = Repository::open(crate::portable_path::without_verbatim(directory))
+                .map_err(|error| format!("cannot open discovered git directory: {error}"))?;
+            let (discovered, repo) = check_discovery_boundaries(start, repo)?;
+            if repo.is_worktree() {
+                // Git discovers the checkout at its .git pointer, not at the
+                // location claimed by the administrative registration. Read
+                // that registration with native semantics only to cross-check
+                // discovery (libgit2 can report `./` for Windows backslashes).
+                let registered = checked_registration(repo.path())?
+                    .ok_or("discovered checkout has an absent registration target")?;
+                if registered != discovered {
+                    return Err(
+                        "worktree registration disagrees with the discovered checkout".into(),
+                    );
+                }
+            } else if !repo.is_bare()
+                && discovered != canonical(repo.path(), "git directory")?
+                && claims_work_directory(&repo)?
+                && repo
+                    .workdir()
+                    .map(|path| canonical(path, "work directory"))
+                    .transpose()?
+                    .as_ref()
+                    != Some(&discovered)
+            {
+                return Err(
+                    "repository work directory disagrees with the discovered checkout".into(),
+                );
+            }
+            if !repo.is_bare() && discovered != canonical(repo.path(), "git directory")? {
+                // `false` changes this handle only, never either pointer file.
+                repo.set_workdir(&discovered, false)
+                    .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
+            }
             Ok(Some(repo))
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
@@ -161,25 +204,212 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
     }
 }
 
+// libgit2 guesses the parent of a separate git directory when Git has not
+// stored core.worktree. That guess is not a conflicting checkout claim.
+fn claims_work_directory(repo: &Repository) -> Result<bool, String> {
+    match repo
+        .config()
+        .and_then(|config| config.get_entry("core.worktree").map(|_| ()))
+    {
+        Ok(()) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => repo
+            .workdir()
+            .map(|root| {
+                crate::absence::proven_absent(&root.join(".git"))
+                    .map(|absent| !absent)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+            .map(|present| present.unwrap_or(false)),
+        Err(error) => Err(format!("cannot inspect repository work directory: {error}")),
+    }
+}
+
+fn canonical(path: &Path, what: &str) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|error| format!("cannot resolve {what}: {error}"))
+}
+
+/// Administrative directories belong to the common git directory that
+/// physically contains `worktrees/<name>`, regardless of commondir's text.
+fn check_common_directory(repo: &Repository) -> Result<(), String> {
+    let admin = canonical(repo.path(), "worktree administrative directory")?;
+    let registrations = admin
+        .parent()
+        .ok_or("worktree has no registration directory")?;
+    let expected = registrations
+        .parent()
+        .ok_or("worktree registration has no common directory")?;
+    if canonical(
+        &expected.join("worktrees"),
+        "worktree registration directory",
+    )? != registrations
+        || canonical(repo.commondir(), "worktree common directory")? != expected
+    {
+        return Err("worktree common directory disagrees with its registration directory".into());
+    }
+    Ok(())
+}
+
+// Inventory the administrative names before interpreting their pointers. A
+// relative missing leaf is prunable too; the generic worktree reader requires
+// a checkout parent in the raw text before it can represent that checkout.
+pub(super) fn registrations(repo: &Repository) -> Result<Vec<PathBuf>, String> {
+    let names = repo.worktrees().map_err(|error| error.to_string())?;
+    crate::git::name::names_of(&names)
+        .into_iter()
+        .map(|name| {
+            name.os_path()
+                .map(|folder| repo.commondir().join("worktrees").join(folder))
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+/// The normalized marker named by a regular registration file.
+pub(super) fn registered_marker(admin: &Path) -> Result<PathBuf, String> {
+    let file = admin.join("gitdir");
+    let metadata = std::fs::symlink_metadata(&file)
+        .map_err(|error| format!("cannot inspect worktree registration: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("worktree registration must be a regular file".into());
+    }
+    let text = std::fs::read(&file)
+        .map_err(|error| format!("cannot read worktree registration: {error}"))?;
+    let text = text.trim_ascii_end();
+    let root = text
+        .strip_suffix(b"/.git")
+        .or_else(|| {
+            cfg!(windows)
+                .then(|| text.strip_suffix(b"\\.git"))
+                .flatten()
+        })
+        .filter(|root| !root.is_empty())
+        .ok_or("worktree registration must end with /.git")?;
+    let root = GitName::from_bytes(root)
+        .os_path()
+        .map_err(|error| error.to_string())?;
+    let root = crate::portable_path::without_verbatim(admin.to_path_buf())
+        .join(crate::portable_path::without_verbatim(root));
+    // All absence proofs use this same normalized reading. A missing
+    // component followed by .. must not certify an existing checkout absent.
+    let root = super::edit_guard::normalized(&root, true).map_err(|error| error.to_string())?;
+    Ok(root.join(".git"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static VALIDATION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Both pointers must agree: the registration names a checkout containing
+/// a .git marker that opens this administrative directory, with its original
+/// common directory. Resolving only the registration's parent would let a
+/// symlink to a marker in another directory hide the actual checkout.
+///
+/// Absent targets are Git's prunable state, not live checkout roots. An
+/// unreadable target or an existing target with conflicting identity refuses.
+pub(super) fn checked_registration(admin: &Path) -> Result<Option<PathBuf>, String> {
+    super::edit_guard::registration_at(admin).map(|registration| registration.checkout)
+}
+
+#[derive(Clone)]
+pub(super) struct CheckedRegistration {
+    pub marker: PathBuf,
+    pub checkout: Option<PathBuf>,
+}
+
+pub(super) fn read_registration(admin: &Path) -> Result<CheckedRegistration, String> {
+    #[cfg(test)]
+    VALIDATION_READS.with(|reads| reads.set(reads.get() + 1));
+    let registered = registered_marker(admin)?;
+    if crate::absence::proven_absent(&registered)
+        .map_err(|error| format!("cannot inspect registered target: {error}"))?
+    {
+        return Ok(CheckedRegistration {
+            marker: registered,
+            checkout: None,
+        });
+    }
+    let root = canonical(
+        registered
+            .parent()
+            .ok_or("worktree registration has no checkout parent")?,
+        "worktree registration",
+    )?;
+    let marker = root.join(".git");
+    let registered_marker = canonical(&registered, "registered checkout marker")?;
+    if registered_marker != canonical(&marker, "checkout marker")? {
+        return Err("worktree registration names a different checkout marker".into());
+    }
+    let metadata = std::fs::metadata(&marker)
+        .map_err(|error| format!("cannot inspect registered checkout marker: {error}"))?;
+    // An alias named .git must not move the directory containing a gitfile.
+    // Directory markers may legitimately link straight to the admin directory;
+    // their identity is checked by opening that directory below.
+    if metadata.is_file() && registered_marker.parent() != Some(root.as_path()) {
+        return Err("worktree registration disagrees with its marker's directory".into());
+    }
+    let checkout = open_checkout(&root)
+        .map_err(|error| format!("cannot open registered checkout: {error}"))?;
+    if !checkout.is_worktree()
+        || canonical(checkout.path(), "registered checkout git directory")?
+            != canonical(admin, "worktree administrative directory")?
+    {
+        return Err("worktree registration disagrees with its checkout marker".into());
+    }
+    check_common_directory(&checkout)?;
+    Ok(CheckedRegistration {
+        marker: registered,
+        checkout: Some(root),
+    })
+}
+
+// A directory marker can be a symlink to either ordinary or linked
+// metadata. Resolve it before asking libgit2 to open it, and use plain native
+// paths at that boundary: verbatim Windows spellings do not reliably follow
+// directory markers in libgit2. Gitfiles still resolve from their checkout.
+fn open_checkout(root: &Path) -> Result<Repository, String> {
+    let marker = root.join(".git");
+    let metadata = std::fs::metadata(&marker)
+        .map_err(|error| format!("cannot inspect checkout marker: {error}"))?;
+    let directory = if metadata.is_dir() {
+        canonical(&marker, "checkout metadata directory")?
+    } else {
+        root.to_path_buf()
+    };
+    Repository::open(crate::portable_path::without_verbatim(directory))
+        .map_err(|error| error.to_string())
+}
+
 /// libgit2 may ignore a broken inner marker and successfully discover an outer
-/// repository. Each marker below the reported boundary must either resolve to
-/// that repository (a gitfile can redirect outside this ancestry) or be empty.
-fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<(), String> {
+/// repository. Each marker below the reported boundary must resolve to that
+/// repository, identify a nearer linked checkout, or be empty. `open` then
+/// validates the selected checkout's registration and common directory.
+fn check_discovery_boundaries(
+    start: &Path,
+    repo: Repository,
+) -> Result<(PathBuf, Repository), String> {
     let start = start
         .canonicalize()
         .map_err(|error| format!("cannot resolve repository search directory: {error}"))?;
-    let boundary = repo
-        .workdir()
-        .unwrap_or_else(|| repo.path())
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve discovered repository directory: {error}"))?;
+    let boundary = (!repo.is_worktree())
+        .then(|| {
+            repo.workdir()
+                .unwrap_or_else(|| repo.path())
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve discovered repository directory: {error}"))
+        })
+        .transpose()?;
     let git_boundary = repo
         .path()
         .canonicalize()
         .map_err(|error| format!("cannot resolve discovered git directory: {error}"))?;
     for ancestor in start.ancestors() {
-        if ancestor == boundary || ancestor == git_boundary {
-            return Ok(());
+        if boundary.as_deref() == Some(ancestor)
+            || (!repo.is_worktree() && ancestor == git_boundary)
+        {
+            return Ok((ancestor.to_path_buf(), repo));
         }
         let marker = ancestor.join(".git");
         if crate::absence::proven_absent(&marker)
@@ -187,7 +417,7 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<(), Str
         {
             continue;
         }
-        let open_error = match Repository::open(ancestor) {
+        let open_error = match open_checkout(ancestor) {
             Ok(local) => {
                 let local_directory = local.path().canonicalize().map_err(|error| {
                     format!(
@@ -196,7 +426,13 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<(), Str
                     )
                 })?;
                 if local_directory == git_boundary {
-                    return Ok(());
+                    return Ok((ancestor.to_path_buf(), repo));
+                }
+                // Windows discovery can skip a directory symlink to linked
+                // metadata. Select that nearer checkout and let `open` check
+                // both pointers, rather than treating the outer result as final.
+                if local.is_worktree() {
+                    return Ok((ancestor.to_path_buf(), local));
                 }
                 return Err(format!(
                     "repository discovery skipped another repository at {}",
@@ -224,6 +460,105 @@ fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<(), Str
         }
     }
     Err("discovered repository is outside the searched ancestry".to_string())
+}
+
+// Recovery admits only literal words. Validate the small shell subset before
+// using the shared quote-removing tokenizer: operators and expansions outside
+// single quotes cannot acquire permission by decoding to a registered path.
+pub(super) fn literal_recovery_command(command: &str) -> bool {
+    let mut quote = None;
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (_, '\0')
+            | (
+                None,
+                ';' | '&' | '|' | '<' | '>' | '(' | ')' | '{' | '}' | '*' | '?' | '[' | ']' | '~'
+                | '#' | '^' | '!' | '\n' | '\r',
+            ) => return false,
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (_, '\\') => {
+                let Some(next) = chars.next() else {
+                    return false;
+                };
+                if next == '\0' || next == '\n' {
+                    return false;
+                }
+                // Quote removal belongs to shell_tokens. An escaped character
+                // cannot introduce an operator, expansion or closing quote.
+            }
+            (_, '$' | '`') => return false,
+            _ => {}
+        }
+    }
+    quote.is_none()
+}
+
+/// The bounded recovery available even when checkout identity cannot be read.
+/// Only one literal Git command qualifies; shell operators, substitutions,
+/// environment changes and Git global options never inherit this exception.
+#[must_use]
+pub fn worktree_recovery(command: &str, cwd: &Path) -> bool {
+    if !literal_recovery_command(command) {
+        return false;
+    }
+    let words = super::git_guard::shell_tokens(command);
+    let args: Vec<_> = words.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        ["git", "worktree", "prune" | "list"] => true,
+        ["git", "worktree", "remove", "--force", target] => {
+            open(cwd).ok().flatten().is_some_and(|repo| {
+                absent_registered_checkout(&repo, Path::new(target)).unwrap_or(false)
+            })
+        }
+        _ => false,
+    }
+}
+
+/// The precise absent path Git records, never its relative suffix lookup.
+/// Used by recovery and by the normal discard check after policy loading.
+pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Result<bool, String> {
+    let target = crate::portable_path::without_verbatim(target.to_path_buf());
+    if !target.is_absolute() {
+        return Ok(false);
+    }
+    let prefix = match target.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => prefix.as_os_str().as_encoded_bytes().len(),
+        _ => 0,
+    };
+    let bytes = &target.as_os_str().as_encoded_bytes()[prefix..];
+    let separator = |byte: &u8| *byte == b'/' || (cfg!(windows) && *byte == b'\\');
+    // A Windows UNC prefix can itself be an absolute filesystem root.
+    let Some(tail) = bytes.get(1..) else {
+        return Ok(false);
+    };
+    if tail
+        .split(separator)
+        .any(|part| part == b"." || part == b"..")
+        || bytes
+            .windows(2)
+            .any(|pair| separator(&pair[0]) && separator(&pair[1]))
+    {
+        return Ok(false);
+    }
+    let target = super::edit_guard::normalized(&target, true).map_err(|error| error.to_string())?;
+    if !crate::absence::proven_absent(&target).map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    for admin in registrations(repo)? {
+        let marker = registered_marker(&admin)?;
+        let root = marker
+            .parent()
+            .ok_or("registration has no checkout parent")?;
+        if root == target
+            && crate::absence::proven_absent(root).map_err(|error| error.to_string())?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -355,6 +690,57 @@ mod tests {
     }
 
     #[test]
+    fn registrations_are_validated_once_per_guard_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        for name in ["one", "two"] {
+            git(dir.path(), &["worktree", "add", "-b", name, name]);
+        }
+        for _ in 0..2 {
+            let _scope = crate::hooks::edit_guard::RepoFactsScope::enter();
+            super::VALIDATION_READS.with(|reads| reads.set(0));
+            for cwd in [dir.path().to_path_buf(), dir.path().join("one")] {
+                super::RepoInfo::discover(&cwd).unwrap().unwrap();
+                let repo = super::open(&cwd).unwrap().unwrap();
+                crate::hooks::edit_guard::checkout_roots(&repo).unwrap();
+                for target in ["build", "out"] {
+                    crate::hooks::edit_guard::repository_enforcement_target(
+                        &cwd.join(target),
+                        &cwd,
+                        true,
+                    )
+                    .unwrap();
+                    crate::hooks::edit_guard::holds_enforcement_files(&cwd.join(target), &cwd)
+                        .unwrap();
+                }
+            }
+            assert_eq!(super::VALIDATION_READS.with(std::cell::Cell::get), 2);
+        }
+    }
+
+    #[test]
+    fn discovery_keeps_the_nearest_registered_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let linked = dir.path().join("linked");
+        git(
+            dir.path(),
+            &["worktree", "add", "-b", "task/linked", "linked"],
+        );
+        // libgit2 can discover the outer repository when a Windows directory
+        // symlink names linked metadata. The boundary walk must retain the
+        // nearer checkout; registration validation still belongs to `open`.
+        let outer = Repository::open(dir.path()).unwrap();
+        let (root, repository) = super::check_discovery_boundaries(&linked, outer).unwrap();
+        assert_eq!(root, linked.canonicalize().unwrap());
+        assert!(repository.is_worktree());
+        assert_eq!(
+            super::checked_registration(repository.path()).unwrap(),
+            Some(root)
+        );
+    }
+
+    #[test]
     fn test_discover_none_outside_repo() {
         let dir = tempfile::tempdir().unwrap();
         assert!(RepoInfo::discover(dir.path()).unwrap().is_none());
@@ -466,6 +852,93 @@ mod tests {
                 .canonicalize()
                 .unwrap(),
         );
+        // A canonical native registration uses backslashes and a verbatim
+        // prefix on Windows. Discovery must preserve the checkout identity
+        // without rewriting either pointer file.
+        let native = wt.canonicalize().unwrap();
+        let admin = Repository::open(&wt).unwrap().path().to_path_buf();
+        let pointer = std::fs::read(native.join(".git")).unwrap();
+        std::fs::create_dir(native.join("src")).unwrap();
+        for registration in [
+            format!("{}\n", native.join(".git").display()),
+            "../../../../wt/.git\n".to_string(),
+        ] {
+            std::fs::write(admin.join("gitdir"), &registration).unwrap();
+            for start in [&native, &native.join("src")] {
+                let discovered = RepoInfo::discover(start).unwrap().unwrap();
+                assert_eq!(discovered.root.canonicalize().unwrap(), native);
+                assert!(discovered.is_worktree);
+                assert!(crate::hooks::git_discard::inspect(
+                    start,
+                    None,
+                    &crate::hooks::git_discard::Intent::HardReset,
+                )
+                .unwrap()
+                .is_none());
+                assert_eq!(
+                    crate::hooks::edit_guard::checkout_root_of(start)
+                        .unwrap()
+                        .canonicalize()
+                        .unwrap(),
+                    native
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(admin.join("gitdir")).unwrap(),
+                registration
+            );
+            assert_eq!(std::fs::read(native.join(".git")).unwrap(), pointer);
+        }
+        std::fs::write(admin.join("gitdir"), "\n").unwrap();
+        assert!(crate::git::gitdir_checkout(&admin).is_err());
+    }
+
+    #[test]
+    fn worktree_registration_cannot_move_the_discovered_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("repo");
+        std::fs::create_dir_all(&main).unwrap();
+        init_repo(&main);
+        let wt = dir.path().join("wt");
+        git(
+            &main,
+            &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/x"],
+        );
+        let admin = Repository::open(&wt).unwrap().path().to_path_buf();
+        let other = dir.path().join("other");
+        Repository::init(&other).unwrap();
+        for registration in [
+            format!("{}\n", other.join(".git").display()),
+            "../../../../other/.git\n".to_string(),
+        ] {
+            std::fs::write(admin.join("gitdir"), registration).unwrap();
+            assert!(
+                super::open(&wt).is_err(),
+                "registration selected another checkout"
+            );
+            assert!(crate::hooks::git_discard::inspect(
+                &wt,
+                None,
+                &crate::hooks::git_discard::Intent::HardReset,
+            )
+            .is_err());
+        }
+        // A claimed root inside the real checkout can contain the caller.
+        // A raw discovery then inspects the wrong tree instead of failing
+        // its outside-worktree check. Discard must use the same cross-check.
+        let nested = wt.join("src");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", nested.join(".git").display()),
+        )
+        .unwrap();
+        assert!(crate::hooks::git_discard::inspect(
+            &nested,
+            None,
+            &crate::hooks::git_discard::Intent::HardReset,
+        )
+        .is_err());
     }
 }
 
