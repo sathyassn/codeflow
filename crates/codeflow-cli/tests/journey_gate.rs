@@ -284,7 +284,7 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     ] {
         assert!(
             job(&workflow, id).contains(condition),
-            "{id} must run for ready integration PRs, main and master PRs, and line pushes"
+            "{id} must run for ready integration PRs, main and master PRs, line pushes, schedules and manual dispatch"
         );
     }
     for id in ["gates-verdict", "windows-verdict"] {
