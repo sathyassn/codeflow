@@ -32,7 +32,8 @@ never from a pull request's branch name or other text it controls:
    main saves the copy later pull requests restore; when it is missing (a
    new runner image), this push runs every job so the present part saves it;
 7. the newest codeflow-ci run with event pull_request, that head commit and
-   this workflow file concluded success, and every job of its latest attempt
+   this workflow file names the merged pull request with base main,
+   concluded success, and every job of its latest attempt
    concluded success, apart from the jobs that only run on a push (this
    decision), which must be skipped; the named verdicts must be among them.
 
@@ -149,6 +150,9 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     run = max(runs, key=lambda r: (r.get("run_number", 0), r.get("run_attempt", 0), r["id"]))
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise Skip(f"run {run['id']} for head {head} is {run.get('status')} with conclusion {run.get('conclusion')}")
+    if not any(pr.get("number") == pull["number"] and (pr.get("base") or {}).get("ref") == "main"
+               for pr in run.get("pull_requests") or []):
+        raise Skip(f"run {run['id']} is not associated with merged pull request #{pull['number']} into main")
     jobs = api.jobs(run["id"])
     if not jobs:
         raise Skip(f"run {run['id']} lists no jobs")

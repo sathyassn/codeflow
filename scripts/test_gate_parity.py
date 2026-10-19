@@ -55,6 +55,12 @@ def doctest_name() -> str:
                 if full_command(CONFIG, t["name"]) == parity.DOCTESTS)
 
 
+def gate_event_condition(workflow: str) -> str:
+    gate = parity.workflow_jobs(workflow)["gates"]
+    condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M).group(1)
+    return parity.GATES_IF.match(condition).group(1)
+
+
 class GateParityControls(unittest.TestCase):
     def assert_parity(self, cfg: dict) -> None:
         self.assertEqual(parity.local_rust_commands(cfg), CI)
@@ -466,8 +472,8 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), "
-                  "github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n")
+    VERDICT_IF = ("    if: always()\n"
+                  "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
     def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
@@ -488,7 +494,7 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                "    if: always() && (github.event_name", "    if: always() && false && (github.event_name"),
+                self.VERDICT_IF, self.VERDICT_IF.replace("if: always()", "if: always() && false")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
@@ -608,9 +614,9 @@ class GatePartControls(unittest.TestCase):
         self.assertEqual(self.problems(workflow), [])
 
 
-def verdict_script(workflow: str = WORKFLOW) -> str:
+def verdict_script(workflow: str = WORKFLOW, name: str = "gates-verdict") -> str:
     """The `codeflow gates` verdict's bash script, as the runner sees it."""
-    job = parity.workflow_jobs(workflow)["gates-verdict"]
+    job = parity.workflow_jobs(workflow)[name]
     lines = job.splitlines()
     start = lines.index("        run: |") + 1
     script = []
@@ -647,6 +653,17 @@ class VerdictOutcomeControls(unittest.TestCase):
                 with self.subTest(outcome=outcome, job=("parts", "shards", "report")[which]):
                     self.assertEqual(self.verdict(*results), 1)
 
+    def test_both_verdicts_fail_clearly_when_the_gates_did_not_run(self):
+        env = {"PATH": os.environ.get("PATH", ""), "REUSE": "skipped", "REUSED": ""}
+        env.update({key: "skipped" for key in (
+            "PARTS", "SHARDS", "REPORT", "CHECKS", "BUILD", "TESTS", "JOURNEYS", "RELEASE")})
+        for name in ("gates-verdict", "windows-verdict"):
+            with self.subTest(verdict=name):
+                result = subprocess.run(["bash", "-c", verdict_script(name=name)], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("gates did not run", result.stdout)
+
     def test_reuse_passes_only_when_every_job_was_skipped(self):
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", "123"), 0)
         for results in (("skipped", "success", "skipped"), ("skipped", "skipped", "failure"),
@@ -655,6 +672,57 @@ class VerdictOutcomeControls(unittest.TestCase):
                 self.assertEqual(self.verdict(*results, "success", "123"), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "success", ""), 1)
         self.assertEqual(self.verdict("skipped", "skipped", "skipped", "failure", "123"), 1)
+
+
+class HostedEventParityControls(unittest.TestCase):
+    """Ready integration pull requests must keep both verdict contracts intact."""
+
+    READY = ("github.event_name == 'pull_request' && "
+             "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/') && "
+             "!github.event.pull_request.draft) || github.event_name == 'push' || "
+             "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
+
+    def test_both_verdicts_run_for_every_event(self):
+        for name in ("gates-verdict", "windows-verdict"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            self.assertEqual(condition,
+                             "always()")
+
+    def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
+        trigger = WORKFLOW.split("permissions:", 1)[0]
+        self.assertIn("  schedule:\n", trigger)
+        self.assertIn("  workflow_dispatch:", trigger)
+        for name in ("secret-scan", "gitleaks-canary", "security-review"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            self.assertIsNone(re.search(r"^ {4}if:", job, re.M), name)
+            self.assertNotIn("    needs:", job, name)
+
+    def test_schedule_and_dispatch_select_every_expensive_job(self):
+        for name in ("gates", "gates-coverage", "gates-coverage-report", "windows-build",
+                     "windows-tests", "windows", "windows-release-journey", "windows-journeys"):
+            job = parity.workflow_jobs(WORKFLOW)[name]
+            condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
+            for event in ("schedule", "workflow_dispatch"):
+                self.assertIn(f"github.event_name == '{event}'", condition, name)
+
+    def ready_workflow(self):
+        return WORKFLOW.replace(gate_event_condition(WORKFLOW), self.READY)
+
+    def test_ready_integration_conditions_keep_both_verdict_contracts(self):
+        self.assertEqual(gate_event_condition(WORKFLOW), self.READY)
+        workflow = self.ready_workflow()
+        self.assertEqual(parity.gate_part_problems(CONFIG, workflow), [])
+        self.assertEqual(parity.windows_verdict_problems(workflow), [])
+
+    def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
+        workflow = self.ready_workflow()
+        job = parity.workflow_jobs(workflow)["windows-verdict"]
+        narrowed = job.replace("    if: always()", "    if: always() && github.event_name == 'push'")
+        self.assertNotEqual(job, narrowed)
+        problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
+        self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
 
 
 class CoverageShardControls(unittest.TestCase):
@@ -751,7 +819,7 @@ class CoverageShardControls(unittest.TestCase):
 
     def test_without_the_coverage_jobs_their_targets_go_unrun(self):
         start = WORKFLOW.index("  gates-coverage:\n")
-        end = WORKFLOW.index("  # The required check.")
+        end = WORKFLOW.index("  gates-verdict:\n")
         problems = parity.gate_part_problems(CONFIG, WORKFLOW[:start] + WORKFLOW[end:])
         self.assertTrue(any("`gates-coverage` job must be exactly" in p for p in problems), problems)
 
