@@ -23,8 +23,8 @@ use git2::{Oid, Repository};
 use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
 use super::record_text::{
-    acceptance_blocks, frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock,
-    Criterion,
+    acceptance_blocks, frontmatter_len, hidden_tag_message, outcome_word, scan_record,
+    section_span, AcceptanceBlock, Criterion, CriterionKey,
 };
 use super::work_start::RecordKind;
 
@@ -2186,6 +2186,7 @@ fn leaf_journey(task: &RecordView, graph: &Graph, block: &AcceptanceBlock) -> Op
 /// criterion and serves no epic journey criterion (R-53).
 #[must_use]
 pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
+    use std::fmt::Write as _;
     let task = graph
         .records
         .get(task_id)
@@ -2196,10 +2197,12 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
             .criteria
             .items
             .iter()
-            .filter(|criterion| criterion.has_inner_journey())
+            .filter(|criterion| {
+                criterion.has_inner_journey() && criterion.tag_hidden_by("(journey)").is_none()
+            })
             .map(|criterion| criterion.id.as_str())
             .collect();
-        let note = if inner.is_empty() {
+        let mut note = if inner.is_empty() {
             String::new()
         } else {
             format!(
@@ -2208,10 +2211,45 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
                 if inner.len() == 1 { "carries" } else { "carry" }
             )
         };
+        for (name, tag, hiding) in hidden_tags(task, graph) {
+            let _ = write!(note, "; {}", hidden_tag_message(&name, tag, hiding));
+        }
         format!(
             "{task_id} changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion{note}"
         )
     })
+}
+
+/// The tags a sub-bullet keeps from counting on the task's criteria (its
+/// `(journey)` and `(serves ...)`) and on the epic criteria it serves (their
+/// `(journey)`): each criterion's name (`AC-n`, or `EPC-NNN AC-n` for a
+/// served one), the tag and the hiding sub-bullet's first line.
+fn hidden_tags<'g>(task: &'g RecordView, graph: &'g Graph) -> Vec<(String, &'static str, &'g str)> {
+    let own = task.criteria.items.iter().flat_map(|criterion| {
+        [("(journey)", "(journey)"), ("(serves ", "(serves ...)")]
+            .into_iter()
+            .filter_map(|(tag, label)| {
+                criterion
+                    .tag_hidden_by(tag)
+                    .map(|hiding| (criterion.id.clone(), label, hiding))
+            })
+    });
+    let served = task.criteria.items.iter().filter_map(|item| {
+        let (epic_id, criterion_id) = item.serves()?;
+        let epic = graph
+            .records
+            .get(&epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)?;
+        let criterion = epic
+            .criteria
+            .items
+            .iter()
+            .find(|criterion| criterion.id == criterion_id)?;
+        criterion
+            .tag_hidden_by("(journey)")
+            .map(|hiding| (format!("{} {}", epic.id, criterion.id), "(journey)", hiding))
+    });
+    own.chain(served).collect()
 }
 
 /// Records of the range whose criteria differ from the criteria the judged
@@ -2704,7 +2742,17 @@ pub(super) fn criteria_delta(old: &[Criterion], new: &[Criterion]) -> Vec<String
                 "{} changed: {} -> {}",
                 item.id, item.text, next.text
             )),
-            _ => {}
+            Some(next) => {
+                let (before, after) = (CriterionKey::of(item), CriterionKey::of(next));
+                if before != after {
+                    delta.push(format!(
+                        "{} changed its tags with the same text: {} -> {}",
+                        item.id,
+                        before.tag_list(),
+                        after.tag_list()
+                    ));
+                }
+            }
         }
     }
     for item in new
@@ -4175,5 +4223,135 @@ mod tests {
             reviewed_part(before),
             reviewed_part(&before.replace("Outcome.\n", "Outcome.\r\r\n"))
         );
+    }
+
+    /// A graph of the given records, each `(kind, id, criteria section)`.
+    fn journey_graph(records: &[(RecordKind, &str, &str)]) -> Graph {
+        let mut graph = Graph::default();
+        for (kind, id, criteria) in records {
+            let (folder, epic) = match kind {
+                RecordKind::Epic => ("epics", ""),
+                _ => ("tasks", "epic_id: EPC-001\n"),
+            };
+            let path = format!("project-management/{folder}/{id}.md");
+            let content = format!(
+                "---\nid: {id}\nstatus: todo\n{epic}---\n\n# {id}\n\n## Acceptance Criteria\n\n{criteria}\n## Closeout\n"
+            );
+            let record = RecordView::parse(*kind, &path, &content).unwrap();
+            graph.records.insert((*id).to_string(), record);
+        }
+        graph
+    }
+
+    /// Issue #199 (TSK-382 AC-1): an amendment note under a task or epic
+    /// criterion is not criterion text, so a tag closing the head line
+    /// still counts.
+    #[test]
+    fn an_amendment_note_keeps_the_closing_tag_of_task_and_epic_criteria() {
+        let own = "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", own)]);
+        assert_eq!(journey_requirement(&graph, "TSK-001"), None);
+
+        let epic = "- AC-1 On a fresh project, the release shall install (journey).\n  - Amended 2026-10-12 (plan version 4): reworded.\n  - Moved 2026-10-13 from AC-4.\n";
+        for serving in [
+            "- AC-1 The command shall run (serves EPC-001 AC-1)\n",
+            "- AC-1 The command shall run (serves EPC-001 AC-1)\n  - Moved 2026-10-13 from AC-2.\n",
+        ] {
+            let graph = journey_graph(&[
+                (RecordKind::Epic, "EPC-001", epic),
+                (RecordKind::Task, "TSK-001", serving),
+            ]);
+            assert_eq!(journey_requirement(&graph, "TSK-001"), None, "{serving}");
+        }
+    }
+
+    /// TSK-382 AC-3: a note that still hides a tag is named in the
+    /// refusal, with the remedy.
+    #[test]
+    fn the_journey_refusal_names_the_note_that_hides_a_tag() {
+        let hidden = "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Note: reworded after review.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", hidden)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Note: reworded after review.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("inside its text"), "{message}");
+
+        let in_note = "- AC-1 On a fresh project, the command shall succeed.\n  - Amended 2026-10-14: now a journey (journey)\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", in_note)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Amended 2026-10-14: now a journey (journey)\" under AC-1 hides its `(journey)` tag"
+            ),
+            "{message}"
+        );
+
+        let epic = "- AC-1 On a fresh project, the release shall install (journey)\n  - Note: see the release plan.\n";
+        let graph = journey_graph(&[
+            (RecordKind::Epic, "EPC-001", epic),
+            (
+                RecordKind::Task,
+                "TSK-001",
+                "- AC-1 The command shall run (serves EPC-001 AC-1)\n",
+            ),
+        ]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Note: see the release plan.\" under EPC-001 AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+
+        // A tag inside the criterion's own text keeps the R-50 refusal.
+        let inner =
+            "- AC-1 When run, the (journey) path shall pass.\n  - Amended 2026-10-14: reworded.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", inner)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains("AC-1 carries `(journey)` inside its text"),
+            "{message}"
+        );
+        assert!(!message.contains("the note"), "{message}");
+
+        // Review round 1 (TSK-004 of the verdict): a `(serves ...)` only in
+        // a note is named with the same remedy.
+        let in_note =
+            "- AC-1 The command shall run.\n  - Amended 2026-10-14: now (serves EPC-001 AC-1).\n";
+        let graph = journey_graph(&[
+            (
+                RecordKind::Epic,
+                "EPC-001",
+                "- AC-1 (journey) On a fresh project, it shall install.\n",
+            ),
+            (RecordKind::Task, "TSK-001", in_note),
+        ]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Amended 2026-10-14: now (serves EPC-001 AC-1).\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+    }
+
+    /// Review round 1: a reflow that keeps the text but moves a tag is a
+    /// criteria delta, printed with the tags on each side.
+    #[test]
+    fn a_tag_change_with_the_same_text_is_a_criteria_delta() {
+        let one_line =
+            items("- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest.\n");
+        let split = items(
+            "- AC-1 Prove the metric now (after release)\n  - Amended 2026-10-14: the rest.\n",
+        );
+        assert_eq!(
+            criteria_delta(&one_line, &split),
+            vec!["AC-1 changed its tags with the same text: no tag -> (after release)".to_string()]
+        );
+        assert!(criteria_delta(&split, &split).is_empty());
     }
 }

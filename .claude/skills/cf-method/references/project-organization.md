@@ -346,6 +346,17 @@ branch, whose `Task:` line names the task or a follow-up of it: every
 criterion and tag stays, CI prints the delta, the reviewer confirms the
 meaning is unchanged, and the task stays complete (ADR-0080).
 
+An amendment may leave a note under the criterion it changes: an indented
+dash sub-bullet whose first word is exactly `Amended` or `Moved`, followed
+by a `YYYY-MM-DD` date, as in `- Amended 2026-10-14 (plan version 5): <what
+changed>`. Tags are read on the criterion without its notes and their
+wrapped lines, so a `(journey)`, `(serves EPC-NNN AC-n)` or `(after
+release)` tag closing the head line still counts. Wrapped lines and every
+other sub-bullet, before or after a note, stay criterion text; when one
+of them hides a tag, or a tag sits only in a note, the refusal names it.
+A reflow that keeps the words but changes which tags count is a criteria
+change.
+
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
 revision replaces it. `implemented` is derived when every consumer is
