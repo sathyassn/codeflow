@@ -1486,6 +1486,31 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Discovery has already failed. These optional reads only choose whether
+    // its refusal names worktree repair; failure retains the marker refusal.
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "discovery_error",
+        "obtain-absent:Repository::open",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "discovery_error",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
+    // A failed probe does not skip a directory: contains_git_directory keeps
+    // walking it, propagating metadata and read_dir errors rather than allowing.
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "same_checkout_root",
+        "obtain-absent:Repository::open",
+        1,
+        "unproven",
+    ),
     // Missing or non-Unicode HOME leaves the path unresolved and refused;
     // no empty value or alternate path is substituted after a decode error.
     (
@@ -6129,6 +6154,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "contains_git_directory", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated before their types select traversal; missing targets require cannot_exist proof."),
     ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated; only their already obtained types select traversal."),
     ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_file", 1, "Marker absence is proven first and metadata errors propagate; its obtained type selects gitfile parsing."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
