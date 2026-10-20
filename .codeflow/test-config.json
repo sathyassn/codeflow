@@ -41,6 +41,8 @@
       ".claude/settings.json",
       "scripts/proofs/**",
       "scripts/test_gate_contracts.py",
+      "scripts/contract-scans.py",
+      "scripts/test_contract_scans.py",
       "scripts/windows-partitions.py",
       "scripts/windows-test-times.json",
       "scripts/test_windows_partitions.py",
@@ -165,7 +167,7 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet"
+          "command": "python3 -B scripts/contract-scans.py"
         }
       },
       "requires": []
@@ -266,13 +268,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         },
         "essential": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         },
         "full": {
-          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py && python3 -B scripts/test_with_node.py && python3 -B scripts/test_gate_contracts.py && python3 -B scripts/test_windows_partitions.py && python3 -B scripts/test_coverage_merge.py && python3 -B scripts/test_ci_reuse.py && python3 -B scripts/test_contract_scans.py"
         }
       }
     },
