@@ -9560,3 +9560,155 @@ fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hoo
         );
     }
 }
+
+/// TSK-380 AC-1 and AC-2 (issue 242): with the built binary, neither guard
+/// refuses a search pattern that looks like an absolute or unresolved path,
+/// for each search tool and each way it takes a pattern, nor git-guard a
+/// pattern that spells an enforcement path in a command `xargs` or
+/// `find -exec` runs. Exec-guard still refuses a path operand after the
+/// pattern, a pattern file, a `--pre` program and a redirect into a
+/// startup file, and git-guard the same forms on an enforcement path.
+/// Review round 1: a pattern the shell can expand into more words or other
+/// text (an unquoted glob, brace or `$`) is judged as before, so is one
+/// GNU `parallel` runs without `-q` and one a ripgrep configuration the
+/// line sets may turn into a path; `rg --pre` judges every root it
+/// searches; a wrapped `git grep` reads its pattern as plain `git grep`.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture: allowed forms, then each refusal class.
+fn guards_read_a_search_pattern_as_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".zshrc"), "# fixture\n").unwrap();
+    std::fs::write(home.join(".bashrc"), "# fixture\n").unwrap();
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "a\n").unwrap();
+    let run = |hook: &str, command: &str| {
+        let payload = serde_json::json!({
+            "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+        });
+        run_with_stdin(
+            codeflow()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("SHELL", "/bin/zsh")
+                .env_remove("ZDOTDIR")
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("RIPGREP_CONFIG_PATH")
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(&root),
+            &payload.to_string(),
+        )
+    };
+    let mut allowed = vec![
+        "rg --files | rg '/CHANGELOG.md$'".to_string(),
+        "grep -rn '/etc/hosts' docs/".to_string(),
+        "rg --files | xargs rg '.claude/settings.json'".to_string(),
+        "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
+        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
+        // A wrapped `git grep` reads its pattern as plain `git grep` does.
+        "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
+        "rg --files | xargs git grep -e '/CHANGELOG.md$'".to_string(),
+        "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
+        // A preprocessor over a root that holds nothing protected.
+        "rg --pre pdftotext needle docs/".to_string(),
+    ];
+    for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
+        for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
+            allowed.push(format!("{tool} {form} docs"));
+            // `ag` has no `-e`, and `git grep` no `--regexp`.
+            if tool != "ag" {
+                allowed.push(format!("{tool} -e {form} docs"));
+            }
+            if !matches!(tool, "ag" | "git grep") {
+                allowed.push(format!("{tool} --regexp {form} docs"));
+            }
+            if tool != "git grep" {
+                allowed.push(format!("rg --files | xargs {tool} {form}"));
+            }
+        }
+    }
+    let mut wrong = Vec::new();
+    for command in &allowed {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = run(hook, command);
+            if out.status.code() != Some(0) {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            }
+        }
+    }
+    for command in [
+        "rg x > ~/.zshrc",
+        "grep x docs/a.md > ~/.zshrc",
+        "rg '/x$' ~/.zshrc",
+        "rg -e '/x$' ~/.zshrc",
+        "rg -f ~/.zshrc docs",
+        "rg --pre ~/.zshrc x docs",
+        "ag x ~/.zshrc",
+        "rg --files | xargs grep '/x$' ~/.zshrc",
+        // An unquoted glob or brace in the pattern position expands to
+        // several words: the first is the pattern, the rest are searched.
+        "rg --pre tee ~/.*rc",
+        "rg --pre=tee ~/.*rc",
+        "rg --pre tee $HOME/.*rc",
+        "rg --pre tee ~/.[bz]*",
+        "rg --pre tee ~/.?shrc",
+        "rg --pre tee ~/.z*",
+        "rg --pre tee ~/.{a,zsh}rc",
+        "rg --pre ./w ~/.*rc",
+        "rg --files | xargs rg --pre tee ~/.*rc",
+        "rg --files | xargs rg --pre tee ~/.{a,zsh}rc",
+        "find . -maxdepth 0 -exec rg --pre tee ~/.*rc {} +",
+        "find . -maxdepth 0 -exec rg --pre tee ~/.?shrc {} +",
+        "parallel rg --pre tee ~/.*rc ::: x",
+        // GNU parallel runs its command through a shell unless `-q`.
+        "parallel rg --pre tee '~/.*rc' ::: x",
+        "parallel rg '~/.*rc' ::: x",
+        // A ripgrep configuration the line sets may supply the pattern.
+        "read -r RIPGREP_CONFIG_PATH <<< cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        "printf -v RIPGREP_CONFIG_PATH cfg; export RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        "declare -x RIPGREP_CONFIG_PATH; rg \"$HOME/.$(printf zshrc)\"",
+        // `--pre` runs on every file under each root it searches.
+        "rg --hidden --pre tee x ~",
+        "cd ~ && rg -. --pre tee x",
+        "rg --files --hidden | xargs rg --pre tee x",
+        "rg --hidden --pre tee x $(printf %s ~)",
+        "d=$HOME; rg --hidden --pre tee x $d",
+        "rg --pre-glob '*rc' --pre tee x ~",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    for command in [
+        "rg --files > .claude/settings.json",
+        "rg --files | xargs rg x .claude/settings.json",
+        "rg --files | xargs rg -f .claude/settings.json",
+        "echo .claude/settings.json | xargs rg x",
+        "find docs -exec rg x .claude/settings.json \\;",
+        "grep -l x .claude/settings.json | xargs sed -i 's/a/b/'",
+        "sed -i 's/a/b/' .claude/settings.json",
+        "rg --files | xargs rg --pre tee .claude/*",
+        "rg --files | xargs rg --pre tee .claude/{settings.json,x}",
+        "find . -exec rg --pre tee .claude/* {} +",
+        "find . -exec rg --pre tee .claude/{settings.json,x} {} +",
+        "rg --files | xargs rg .claude/*",
+        "find docs -exec rg .claude/{settings.json,x} {} +",
+        "rg --pre tee x",
+        "rg --pre tee x .",
+        "rg --pre tee x .claude",
+    ] {
+        let out = run("git-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("git-guard should refuse: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

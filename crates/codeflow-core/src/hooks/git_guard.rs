@@ -1629,7 +1629,7 @@ fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             if matches!(file, "-" | "/dev/stdin") {
-                let elsewhere = line_without_reads(line, args, &reads);
+                let elsewhere = line_without_reads(line, "sed", args, &reads);
                 words.extend(words_of(std::iter::once(&elsewhere)));
             } else if !Path::new(file).is_absolute() {
                 return UnknownDirUse::Uncertain(format!(
@@ -1674,21 +1674,23 @@ fn sed_read_flags(args: &[String]) -> Vec<bool> {
 }
 
 /// The command line a `sed` script from its input can come from, without
-/// the files this `sed` only reads (TSK-216 round 8). The line is judged
-/// command by command: every other command, producers, heredoc bodies and
-/// here-strings included, is kept whole. In the one command whose argument
-/// list is this `sed`'s own, the words at the read operands' positions are
-/// dropped; nothing is searched for by text. When no command, or more than
-/// one, has that argument list, the position cannot be established and
-/// the whole line is kept.
-fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
+/// the files this `sed` only reads (TSK-216 round 8), or the line an
+/// `xargs` or a `find` is judged against, without the search
+/// patterns of the command it runs (TSK-380). The line is judged command
+/// by command: every other command, producers, heredoc bodies and
+/// here-strings included, is kept whole. In the one command that runs
+/// `program` with this argument list, the words at the dropped positions
+/// are left out; nothing is searched for by text. When no command, or
+/// more than one, has that argument list, the position cannot be
+/// established and the whole line is kept.
+fn line_without_reads(line: &str, program: &str, args: &[String], reads: &[bool]) -> String {
     let segments = expand_commands(line);
     let mut own = Vec::new();
     for (at, segment) in segments.iter().enumerate() {
         let mut tokens = shell_tokens(segment);
         strip_reserved_words(&mut tokens);
         let matches = strip_launchers(&tokens)
-            .is_some_and(|(program, rest)| basename(program) == "sed" && rest == args);
+            .is_some_and(|(name, rest)| basename(name) == program && rest == args);
         if matches {
             own.push((at, tokens));
         }
@@ -4448,7 +4450,7 @@ fn sed_text_violation(
         .zip(&scripts)
         .filter(|((_, read), script)| !**read && !**script)
         .map(|((arg, _), _)| arg);
-    let without_scripts = line_without_reads(line, args, &scripts);
+    let without_scripts = line_without_reads(line, "sed", args, &scripts);
     if let Some(p) = unresolved_names_enforcement(filled, &without_scripts, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
@@ -4462,7 +4464,7 @@ fn sed_text_violation(
         .zip(&scripts)
         .map(|(read, script)| *read || *script)
         .collect();
-    let elsewhere = line_without_reads(line, args, &quiet);
+    let elsewhere = line_without_reads(line, "sed", args, &quiet);
     let line = elsewhere.as_str();
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
@@ -4665,11 +4667,19 @@ fn find_action_violation(
         rest[..end].iter().map(String::as_str).collect()
     };
     if find_mutates(rest) {
-        if let Some(p) = rest
+        // A search pattern in a command it runs names nothing (TSK-380).
+        let (searched, patterns) = line_without_patterns("find", args, line);
+        let words: Vec<&String> = rest
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !patterns.contains(&(skip + at)))
+            .map(|(_, word)| word)
+            .collect();
+        if let Some(p) = words
             .iter()
             .find_map(|a| enforcement_text(a))
             .map(str::to_string)
-            .or_else(|| unresolved_names_enforcement(rest, line, cwd, payload_cwd))
+            .or_else(|| unresolved_names_enforcement(words, &searched, cwd, payload_cwd))
         {
             return Some(hook_integrity_violation(
                 level,
@@ -4895,6 +4905,116 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
+/// The command line an `xargs` or a `find` is judged against, without the
+/// search patterns of the command it runs, and the positions of those
+/// patterns in `args` (TSK-380): a pattern is text the search matches,
+/// never a path the command reads from its input or changes, so it names
+/// nothing on the line. GNU `parallel` is not read this way: the commands
+/// it builds are judged as segments of their own, which keep the pattern.
+fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec<usize>) {
+    let patterns = crate::security::search_pattern::pattern_words(
+        cmd,
+        args,
+        &own_literal(line, cmd, args),
+        crate::security::search_pattern::names_ripgrep_config(line),
+    );
+    if patterns.is_empty() {
+        return (line.to_string(), patterns);
+    }
+    let drop: Vec<bool> = (0..args.len()).map(|at| patterns.contains(&at)).collect();
+    (line_without_reads(line, cmd, args, &drop), patterns)
+}
+
+/// Whether the shell passes each word of `args` as one argument with the
+/// text written ([`command_argv_literal`]), read from the one command on
+/// `line` that runs `program` with that argument list. When no command, or
+/// more than one, has it, no word counts as written.
+fn own_literal(line: &str, program: &str, args: &[String]) -> Vec<bool> {
+    let mut found = Vec::new();
+    for segment in expand_commands(line) {
+        let words = shell_words(&segment);
+        let literal: Vec<bool> = words.iter().map(ShellWord::literal).collect();
+        let mut tokens: Vec<String> = words.into_iter().map(|word| word.text).collect();
+        strip_reserved_words(&mut tokens);
+        if let Some((name, rest)) = strip_launchers(&tokens) {
+            if basename(name) == program && rest == args {
+                found.push(literal[literal.len() - rest.len()..].to_vec());
+            }
+        }
+    }
+    match found.as_slice() {
+        [one] => one.clone(),
+        _ => vec![false; args.len()],
+    }
+}
+
+/// A ripgrep `--pre` or `--pre-glob` runs a program on every file below
+/// each root the call searches, so its roots are judged as a recursive
+/// writer's targets (TSK-380 review round 1, P-1): one that holds an
+/// enforcement file of a checkout sharing the repository refuses, as does
+/// a root the guard cannot resolve, the files an `xargs` or `parallel`
+/// takes from its input, and a call whose options it cannot read. With no
+/// root it searches the directory it runs in.
+fn preprocessor_write_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    use crate::security::search_pattern::{names_ripgrep_config, preprocessor, Preprocessor};
+    let refuse = |why: String| {
+        Some(hook_integrity_violation(
+            level,
+            format!("`rg --pre` runs a program on every file it searches, and {why}"),
+        ))
+    };
+    let literal = own_literal(line, cmd, args);
+    let roots = match preprocessor(cmd, args, &literal, names_ripgrep_config(line)) {
+        Preprocessor::None => return None,
+        Preprocessor::FromInput => {
+            return refuse(format!(
+                "`{cmd}` gives it the files its input names, which the guard cannot see"
+            ))
+        }
+        Preprocessor::Unread => {
+            return refuse("the guard cannot read the options that pick them".to_string())
+        }
+        Preprocessor::Roots(roots) => roots,
+    };
+    let targets: Vec<&str> = if roots.is_empty() {
+        vec!["."]
+    } else {
+        roots.iter().map(|at| args[*at].as_str()).collect()
+    };
+    for target in targets {
+        let paths = match resolve_targets(target, cwd, line) {
+            Ok(Some(paths)) => paths,
+            Ok(None) => {
+                return refuse(format!(
+                    "it searches `{target}`, which the guard cannot resolve"
+                ))
+            }
+            Err(error) => return refuse(format!("cannot read its roots: {error}")),
+        };
+        for path in &paths {
+            for root in [cwd, payload_cwd] {
+                match super::edit_guard::holds_enforcement_files(path, root) {
+                    Ok(true) => {
+                        return refuse(format!(
+                            "it searches `{target}`, which holds enforcement files"
+                        ))
+                    }
+                    Ok(false) => {}
+                    Err(error) => return refuse(format!("cannot read its roots: {error}")),
+                }
+            }
+        }
+    }
+    None
+}
+
 /// An `xargs` takes its paths from its input, which the guard cannot see.
 /// Its command is judged as written, and one that changes files is refused
 /// when the command line names an enforcement path or a worktree folder,
@@ -4911,6 +5031,8 @@ fn xargs_violation(
     if read_only_program(command) {
         return None;
     }
+    let (line, _) = line_without_patterns("xargs", args, line);
+    let line = line.as_str();
     if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
         return Some(v);
     }
@@ -4984,8 +5106,8 @@ fn parallel_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    let start = args.iter().position(|arg| !arg.starts_with('-'))?;
-    let command = &args[start..];
+    let start = parallel_template(args).0;
+    let command = args.get(start..).filter(|command| !command.is_empty())?;
     if read_only_program(command) {
         return None;
     }
@@ -5014,6 +5136,9 @@ fn wrapper_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
+    if let Some(v) = preprocessor_write_violation(cmd, args, level, cwd, payload_cwd, line) {
+        return Some(v);
+    }
     let deleted = match cmd {
         "rm" if rm_recursive(args) => Some("`rm -r`"),
         "trash" | "trash-put" => Some("`trash`"),
@@ -5964,58 +6089,81 @@ fn watch_command(args: &[String]) -> Option<String> {
 /// with no template,
 /// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
 /// same way. `::::` names input files, which the guard cannot read.
-fn parallel_commands(args: &[String]) -> Vec<String> {
-    const VALUED: &[&str] = &[
-        "-j",
-        "-P",
-        "-S",
-        "-a",
-        "-d",
-        "-E",
-        "-I",
-        "-N",
-        "-n",
-        "-L",
-        "-l",
-        "-s",
-        "-C",
-        "--jobs",
-        "--sshlogin",
-        "--arg-file",
-        "--delimiter",
-        "--colsep",
-        "--max-args",
-        "--max-lines",
-        "--max-chars",
-        "--tmpdir",
-        "--results",
-        "--joblog",
-        "--timeout",
-        "--delay",
-        "--retries",
-        "--tagstring",
-        "--workdir",
-        "--wd",
-        "--basefile",
-        "--return",
-        "--halt",
-        "--memfree",
-        "--load",
-        "--block",
-        "--sshloginfile",
-        "--env",
-    ];
-    let separator = |w: &str| matches!(w, ":::" | ":::+" | "::::" | "::::+" | "--");
+/// The options GNU `parallel` reads a value for, as a separate word.
+const PARALLEL_VALUED: &[&str] = &[
+    "-j",
+    "-P",
+    "-S",
+    "-a",
+    "-d",
+    "-E",
+    "-I",
+    "-N",
+    "-n",
+    "-L",
+    "-l",
+    "-s",
+    "-C",
+    "--jobs",
+    "--sshlogin",
+    "--arg-file",
+    "--delimiter",
+    "--colsep",
+    "--max-args",
+    "--max-lines",
+    "--max-chars",
+    "--tmpdir",
+    "--results",
+    "--joblog",
+    "--timeout",
+    "--delay",
+    "--retries",
+    "--tagstring",
+    "--workdir",
+    "--wd",
+    "--basefile",
+    "--return",
+    "--halt",
+    "--memfree",
+    "--load",
+    "--block",
+    "--sshloginfile",
+    "--env",
+];
+
+/// A GNU `parallel` input separator, or the `--` that ends its options.
+fn parallel_separator(word: &str) -> bool {
+    matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
+}
+
+/// Where GNU `parallel`'s command template starts in `args`, after its
+/// options, and whether `-q` or `--quote` is given, so the template's
+/// words reach the command as written rather than through a shell.
+pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
     let mut at = 0;
+    let mut quoted = false;
     while let Some(a) = args.get(at).map(String::as_str) {
-        if separator(a) || !a.starts_with('-') || a.len() < 2 {
+        if parallel_separator(a) || !a.starts_with('-') || a.len() < 2 {
             break;
         }
-        at += 1 + usize::from(VALUED.contains(&a));
+        quoted |= matches!(a, "-q" | "--quote");
+        at += 1 + usize::from(PARALLEL_VALUED.contains(&a));
     }
+    (at.min(args.len()), quoted)
+}
+
+fn parallel_commands(args: &[String]) -> Vec<String> {
+    let separator = parallel_separator;
+    let (at, quoted) = parallel_template(args);
     let rest = args.get(at..).unwrap_or_default();
     let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
-    let template = rest[..end].join(" ");
+    // With `-q` each word of the command reaches it as written; without,
+    // parallel joins them into a shell line.
+    let template = if quoted {
+        quote_words(&rest[..end])
+    } else {
+        rest[..end].join(" ")
+    };
     let mut inputs = Vec::new();
     let mut files = false;
     for word in &rest[end..] {
@@ -10833,6 +10981,18 @@ struct ShellWord {
     /// `$` or a backtick outside single quotes and not escaped. A `$` in
     /// single quotes is text, as in a `sed` script's `$p` or `[^/]*$`.
     expands: bool,
+    /// Whether such an expansion stands outside double quotes too, where
+    /// the shell may split its value into several words or glob it.
+    splits: bool,
+}
+
+impl ShellWord {
+    /// Whether the shell passes this word as one argument holding exactly
+    /// the text written ([`command_argv_literal`]).
+    fn literal(&self) -> bool {
+        let equals = self.unquoted_prefix > 0 && self.text.starts_with('=');
+        !(self.pattern || self.splits || equals)
+    }
 }
 
 /// Up to `max` digits of `radix` read from the front of `chars` without
@@ -10934,6 +11094,7 @@ fn pattern_character(c: char) -> bool {
     )
 }
 
+#[allow(clippy::too_many_lines)] // One pass of the shell's word and quote grammar.
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -10944,6 +11105,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut unquoted_prefix: usize = 0;
     let mut dollar_pending = false;
     let mut expands = false;
+    let mut unquoted_expansions: usize = 0;
     let mut pattern = false;
     let mut chars = segment.chars();
 
@@ -10954,6 +11116,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         match c {
             '\'' if dollar && !in_single && !in_double => {
                 cur.pop();
+                unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
                 }
@@ -10963,6 +11126,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             }
             '"' if dollar && !in_single && !in_double => {
                 cur.pop();
+                unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
                 }
@@ -11004,6 +11168,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 let array = capture_array_initializer(&mut chars);
                 cur.push_str(&array);
                 expands |= array.contains(['$', '`']);
+                unquoted_expansions += usize::from(array.contains(['$', '`']));
                 if prefix_open {
                     unquoted_prefix += 1;
                 }
@@ -11021,6 +11186,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         unquoted_prefix,
                         pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
+                        splits: std::mem::take(&mut unquoted_expansions) > 0,
                     });
                     started = false;
                 }
@@ -11036,6 +11202,8 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 }
                 dollar_pending = c == '$' && !in_single && !in_double;
                 expands |= matches!(c, '$' | '`') && !in_single;
+                unquoted_expansions +=
+                    usize::from(matches!(c, '$' | '`') && !in_single && !in_double);
             }
         }
     }
@@ -11045,6 +11213,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             unquoted_prefix,
             pattern,
             expands,
+            splits: unquoted_expansions > 0,
         });
     }
     words
@@ -11073,26 +11242,43 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
 /// The same argument vector with the parser's expansion provenance for
 /// each word. Keep these parallel vectors together when slicing launchers.
 pub(crate) fn command_argv_patterns(segment: &str) -> (Vec<String>, Vec<bool>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| (word.text, word.pattern))
+        .unzip()
+}
+
+/// The same argument vector with, for each word, whether the shell passes
+/// it as one argument holding exactly the text written (TSK-380 review
+/// round 1): no pattern or brace syntax outside quotes, no `$` or backtick
+/// expansion outside double quotes, and no leading zsh `=` expansion. A
+/// quoted expansion (`"$HOME/x"`) stays one word.
+pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| {
+            let literal = word.literal();
+            (word.text, literal)
+        })
+        .unzip()
+}
+
+/// The words of [`command_argv`] with their parse.
+fn argv_words(segment: &str) -> Vec<ShellWord> {
     let words = shell_words(segment);
     let mut argv = Vec::with_capacity(words.len());
-    let mut patterns = Vec::with_capacity(words.len());
-    let mut i = 0;
-    while i < words.len() {
-        let word = &words[i];
-        i += 1;
+    let mut words = words.into_iter();
+    while let Some(word) = words.next() {
         match redirect_operator_len(&word.text) {
             Some(len) if len <= word.unquoted_prefix => {
                 if len == word.text.len() {
-                    i += 1; // a bare operator: its target is the next word
+                    words.next(); // a bare operator: its target is the next word
                 }
             }
-            _ => {
-                argv.push(word.text.clone());
-                patterns.push(word.pattern);
-            }
+            _ => argv.push(word),
         }
     }
-    (argv, patterns)
+    argv
 }
 
 /// Byte length of the redirection operator a word starts with: an optional
@@ -14643,7 +14829,7 @@ mod tests {
                 .find(|tokens| tokens.first().is_some_and(|p| p == "sed"))
                 .expect("a sed command");
             let args = &sed[1..];
-            line_without_reads(line, args, &sed_read_flags(args))
+            line_without_reads(line, "sed", args, &sed_read_flags(args))
         };
         let escaped =
             judged("sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED");
