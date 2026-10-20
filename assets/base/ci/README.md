@@ -258,12 +258,18 @@ managed and the gate runs once, on the project's toolchain:
   that runs the gate, so write POSIX sh. Variables it exports and `PATH`
   changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
   or `GITHUB_ENV`. A `cd` in it does not move the gate.
-- A failing command fails the job before the gate runs, and so does an
-  `exit` in it, even `exit 0`, since the gate never ran.
+- A failing command fails the job before the gate runs. An `exit` in it,
+  even `exit 0`, fails the job too, since the gate never ran, but only
+  while the hook leaves the script's `EXIT` trap in place; a hook that
+  replaces that trap and then exits can end the job green, because it
+  shares the gate's shell (below).
 - It cannot skip the gate by accident: the gate runs the `codeflow` binary
   found before the hook, from the folder the hook started in, and `set -eu`
   holds again once the hook returns, so a `codeflow` function, a `PATH`
-  entry or `set +e` in it leaves the gate running.
+  entry or `set +e` in it leaves the gate running. In the GitLab,
+  Bitbucket and generic scripts the exit trap is set again once the hook
+  returns too, so an `EXIT` trap the hook sets does not run; remove the
+  hook's own temporary files before it returns.
 - It is not a security boundary. It shares the gate's shell and runs with
   the gate's authority, as the CI file does, which a change can also edit,
   so a hook written to defeat the gate can. Review it as you would the CI

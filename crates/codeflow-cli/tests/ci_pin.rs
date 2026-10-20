@@ -174,6 +174,10 @@ struct Runner<'a> {
     interrupt: Option<&'a str>,
     /// The runner's own temp directory.
     temp: Option<&'a Path>,
+    /// The `curl` on `path` locks a folder inside the step's download
+    /// folder, so the step's cleanup cannot remove it; the run then leaves
+    /// exactly that download folder, which is unlocked afterwards.
+    locks_its_folder: bool,
 }
 
 /// A directory the runner already had in a step's temporary directory. No
@@ -251,6 +255,22 @@ fn run_install_with(
         command.env("RUNNER_TEMP", runner_temp);
     }
     let out = command.output().expect("bash runs");
+    if runner.locks_its_folder {
+        let left: Vec<PathBuf> = std::fs::read_dir(&temp)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| !path.ends_with(KEPT))
+            .collect();
+        for folder in &left {
+            Command::new("chmod")
+                .args(["-R", "u+w"])
+                .arg(folder)
+                .status()
+                .unwrap();
+            std::fs::remove_dir_all(folder).unwrap();
+        }
+        assert_eq!(left.len(), 1, "the locked download folder stays");
+    }
     assert_temp_as_found(&temp, &out);
     Install {
         out,
@@ -378,7 +398,7 @@ fn an_interrupted_install_removes_its_download_directory() {
             let runner = Runner {
                 path: Some(&path),
                 interrupt: Some(signal),
-                temp: None,
+                ..Runner::default()
             };
             let stopped = run_install_with(step, &work, "HEAD", &releases, &runner);
             assert!(
@@ -403,6 +423,7 @@ fn an_interrupted_install_removes_its_download_directory() {
             path: Some(&path),
             interrupt: Some("TERM"),
             temp: Some(&runner_temp),
+            ..Runner::default()
         };
         let stopped = run_install_with(step, &work, "HEAD", &releases, &runner);
         assert!(!stopped.out.status.success(), "{}", stopped.stderr());
@@ -412,6 +433,64 @@ fn an_interrupted_install_removes_its_download_directory() {
             asked.contains(&format!("{}/", runner_temp.display())),
             "{asked}"
         );
+    }
+}
+
+/// TSK-386 review F-1: a download folder the step's cleanup cannot remove
+/// does not change the step's status: an install that verifies stays 0 and
+/// one that fails stays a failure.
+#[test]
+fn a_folder_the_install_cannot_remove_keeps_the_step_status() {
+    let curl = Command::new("sh")
+        .args(["-c", "command -v curl"])
+        .output()
+        .unwrap();
+    let curl = String::from_utf8(curl.stdout).unwrap().trim().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let release = publish(&releases, "1.2.3");
+    // A `curl` that locks a folder beside the file it writes, then
+    // downloads.
+    let locking = dir.path().join("locking-bin");
+    std::fs::create_dir_all(&locking).unwrap();
+    std::fs::write(
+        locking.join("curl"),
+        format!(
+            "#!/bin/sh\nfor arg; do [ \"$previous\" = -o ] && out=$arg; previous=$arg; done\nlocked=\"$(dirname \"$out\")/locked\"\nif [ ! -d \"$locked\" ]; then mkdir \"$locked\"; : > \"$locked/file\"; chmod a-w \"$locked\"; fi\nexec '{curl}' \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(locking.join("curl"))
+        .status()
+        .unwrap();
+    let path = locking.display().to_string();
+    let runner = Runner {
+        path: Some(&path),
+        locks_its_folder: true,
+        ..Runner::default()
+    };
+    let mut steps = run_blocks(CI, "Install codeflow");
+    steps.extend(run_blocks(CI, "Install candidate codeflow"));
+    steps.extend(run_blocks(POLICY, "Install codeflow"));
+    let archive = release.join(format!("{ASSET}.tar.xz"));
+    let original = std::fs::read(&archive).unwrap();
+    for step in &steps {
+        let ok = run_install_with(step, &work, "HEAD", &releases, &runner);
+        assert_eq!(ok.out.status.code(), Some(0), "{}", ok.stderr());
+        std::fs::write(&archive, b"tampered").unwrap();
+        let bad = run_install_with(step, &work, "HEAD", &releases, &runner);
+        assert_eq!(bad.out.status.code(), Some(1), "{}", bad.stderr());
+        assert!(
+            bad.stderr().contains("checksum mismatch"),
+            "{}",
+            bad.stderr()
+        );
+        std::fs::write(&archive, &original).unwrap();
     }
 }
 

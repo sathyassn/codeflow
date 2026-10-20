@@ -220,7 +220,7 @@ pipelines:
               codeflow_tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeflow.XXXXXX")
               case $codeflow_tmp in /*) ;; *) codeflow_tmp="$(pwd)/${codeflow_tmp}" ;; esac
               readonly codeflow_tmp
-              trap 'rm -rf "$codeflow_tmp"' EXIT
+              trap 'rm -rf "$codeflow_tmp" || true' EXIT
               trap 'exit 129' HUP
               trap 'exit 130' INT
               trap 'exit 143' TERM
@@ -244,7 +244,7 @@ pipelines:
               # target's policy applies and the head is read only as git data.
               judge="${codeflow_tmp}/judge"
               git worktree add -q --detach "${judge}/target" "$target"
-              trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp"' EXIT
+              trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true' EXIT
               branch=$(git symbolic-ref --short -q HEAD || true)
               (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
               # Refuse a lowered pin before the project's own code runs, so nothing the
@@ -258,19 +258,23 @@ pipelines:
               # update` never writes it.
               # The hook runs with the gate's authority, like this file, so it is
               # reviewed as this file is. These lines keep it from skipping the gate
-              # by accident: the shell variables naming the binary and folder are
-              # read-only (the binary itself is not), set -eu holds again once it
-              # returns, and a run it ends (an `exit`) fails.
+              # by accident: the shell variables naming the binary, the folder and the
+              # exit action are read-only (the binary itself is not), set -eu and the
+              # exit trap hold again once it returns, and a run it ends (an `exit`)
+              # fails while it leaves the exit trap in place. The cleanup never changes
+              # the run's status.
               codeflow_bin=$(command -v codeflow)
               codeflow_root=$(pwd)
-              readonly codeflow_bin codeflow_root
+              codeflow_exit='codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"'
+              readonly codeflow_bin codeflow_root codeflow_exit
               codeflow_gated=
-              trap 'codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp"; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"' EXIT
+              trap "$codeflow_exit" EXIT
               if [ -f .codeflow/ci-setup.sh ]; then
                 echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
                 . ./.codeflow/ci-setup.sh
                 set -eu
                 cd "$codeflow_root"
+                trap "$codeflow_exit" EXIT
               fi
               codeflow_gated=1
               "$codeflow_bin" test --strict

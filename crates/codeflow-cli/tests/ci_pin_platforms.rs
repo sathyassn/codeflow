@@ -124,6 +124,9 @@ enum Binary {
     Real,
     /// A newer binary the fixture cannot build: it logs and succeeds.
     Stub,
+    /// This build of codeflow, except that `codeflow test` exits with this
+    /// status, so a run's own status can be told from the gate's.
+    GateExits(u8),
 }
 
 struct Fixture {
@@ -182,6 +185,10 @@ impl Fixture {
         let run = match binary {
             Binary::Real => format!("exec '{}' \"$@\"", env!("CARGO_BIN_EXE_codeflow")),
             Binary::Stub => "exit 0".to_string(),
+            Binary::GateExits(status) => format!(
+                "if [ \"$1\" = test ]; then exit {status}; fi\nexec '{}' \"$@\"",
+                env!("CARGO_BIN_EXE_codeflow")
+            ),
         };
         let bin = stage.join("codeflow");
         std::fs::write(
@@ -1062,6 +1069,87 @@ fn an_interrupted_run_removes_its_temporary_directories() {
                 1,
                 "{platform:?} {signal}: {listed}"
             );
+        }
+    }
+}
+
+/// TSK-386 review F-2: a project setup hook that sets its own exit trap and
+/// returns no longer replaces the run's cleanup, and the run still ends
+/// with the gate's own status. The hook's trap does not run; its folder,
+/// outside the run's `TMPDIR` here, is the hook's to remove.
+#[test]
+fn a_setup_hook_with_its_own_exit_trap_leaves_the_cleanup_in_place() {
+    for platform in PLATFORMS {
+        for (binary, status) in [(Binary::Real, 0), (Binary::GateExits(7), 7)] {
+            let fx = Fixture::new();
+            fx.project("1.2.3");
+            fx.publish("1.2.3", &binary);
+            let hook_temp = fx.dir.path().join("hook-temp");
+            std::fs::create_dir_all(&hook_temp).unwrap();
+            std::fs::write(
+                fx.repo().join(".codeflow/ci-setup.sh"),
+                format!(
+                    "mytmp=$(mktemp -d '{}/hook.XXXXXX')\ntrap 'rm -rf \"$mytmp\"' EXIT\n",
+                    hook_temp.display()
+                ),
+            )
+            .unwrap();
+            let head = fx.commit("ci: a setup hook with its own exit trap");
+            // `run` checks that the run's `TMPDIR` is left as found.
+            let out = fx.run(platform, Some(&head), &head);
+            assert_eq!(
+                out.status.code(),
+                Some(status),
+                "{platform:?}: {}",
+                text(&out)
+            );
+            let listed = git(&fx.repo(), &["worktree", "list", "--porcelain"]);
+            assert_eq!(listed.matches("worktree ").count(), 1, "{listed}");
+        }
+    }
+}
+
+/// TSK-386 review F-1: a folder the cleanup cannot remove does not change
+/// the run's status: a passing gate stays 0 and a gate that exits 7 stays 7.
+#[test]
+fn a_folder_the_cleanup_cannot_remove_keeps_the_gate_status() {
+    for platform in PLATFORMS {
+        for (binary, status) in [(Binary::Real, 0), (Binary::GateExits(7), 7)] {
+            let fx = Fixture::new();
+            fx.project("1.2.3");
+            fx.publish("1.2.3", &binary);
+            // The hook locks a folder inside the run's own temporary folder,
+            // which holds the installed binary's folder.
+            std::fs::write(
+                fx.repo().join(".codeflow/ci-setup.sh"),
+                "locked=\"$(dirname \"$(dirname \"$(command -v codeflow)\")\")/locked\"\nmkdir \"$locked\"\n: > \"$locked/file\"\nchmod a-w \"$locked\"\n",
+            )
+            .unwrap();
+            let head = fx.commit("ci: a setup hook that locks a folder");
+            let out = fx
+                .run_command(platform, Some(&head), &head)
+                .output()
+                .expect("sh runs");
+            // Unlock what is left, so the fixture can remove it.
+            let left: Vec<PathBuf> = std::fs::read_dir(fx.scratch())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| !path.ends_with(KEPT))
+                .collect();
+            for folder in &left {
+                Command::new("chmod")
+                    .args(["-R", "u+w"])
+                    .arg(folder)
+                    .status()
+                    .unwrap();
+            }
+            assert_eq!(
+                out.status.code(),
+                Some(status),
+                "{platform:?}: {}",
+                text(&out)
+            );
+            assert_eq!(left.len(), 1, "{platform:?}: the locked run folder stays");
         }
     }
 }
