@@ -512,6 +512,108 @@ fn a_journey_tag_reads_with_sentence_punctuation_on_a_fresh_project() {
     );
 }
 
+/// Journey (TSK-382 AC-4, issue #199): on a fresh `codeflow init --full`
+/// project whose epic journey criterion carries amendment notes, a task
+/// serving it passes `codeflow ci` on an adopter-facing range, and so does
+/// a task whose own journey criterion carries one; a note that is no
+/// amendment still hides the tag, and the refusal names it.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the three tasks in the order a project meets them.
+fn an_amended_journey_criterion_still_counts_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    git(&root, &["switch", "-q", "-c", LINE]);
+    git(&root, &["switch", "-q", "-c", "plan/amended"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    for title in ["serving", "own", "hidden"] {
+        let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
+        ok(&codeflow(&root, &args), "task new");
+    }
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the release shall install (journey)\n  - Amended 2026-10-12 (plan version 4): reworded for the installer.\n  - Moved 2026-10-13 from AC-4.\n",
+    );
+    edit(
+        &root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 The installer shall run (serves EPC-001 AC-1)\n",
+    );
+    edit(
+        &root,
+        SECOND,
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-003.md",
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Note: reworded after review.\n",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the amended journey");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/amended",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+
+    // A task serving the amended epic journey criterion, and a task whose
+    // own journey criterion carries an amendment note.
+    for (task, branch, file) in [
+        ("TSK-001", "task/TSK-001-serving", "src/first.rs"),
+        ("TSK-002", "task/TSK-002-own", "src/second.rs"),
+    ] {
+        git(&root, &["switch", "-q", "-c", branch, LINE]);
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(file), "pub fn added() {}\n").unwrap();
+        commit(&root, "feat: add a function");
+        let passed = ok(&ci(&root, branch, task), "ci with an amended journey");
+        assert!(!passed.contains("work.journey_criterion"), "{passed}");
+    }
+
+    // A note that is no amendment still hides the closing tag.
+    let branch = "task/TSK-003-hidden";
+    git(&root, &["switch", "-q", "-c", branch, LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-003"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/third.rs"), "pub fn third() {}\n").unwrap();
+    commit(&root, "feat: add the third function");
+    let hidden = ci(&root, branch, "TSK-003");
+    fails(
+        &hidden,
+        "a closing tag hidden by a note",
+        "the note \"- Note: reworded after review.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
+    );
+}
+
 /// An acceptance block for a one-criterion record (`AC-1` only).
 fn single_acceptance(dir: &Path, name: &str, reviewed: &str) -> String {
     let body = format!(

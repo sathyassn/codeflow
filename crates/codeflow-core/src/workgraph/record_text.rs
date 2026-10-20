@@ -25,9 +25,66 @@ pub struct Criterion {
     pub text: String,
     /// `Some(ticked)` for a legacy checkbox line, `None` for a listed line.
     pub checkbox: Option<bool>,
+    /// The indented sub-bullets under the criterion, in order.
+    pub sub_items: Vec<SubItem>,
+}
+
+/// An indented sub-bullet under a criterion (`  - ...`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubItem {
+    /// Where the sub-bullet starts in the criterion's `text`, in bytes.
+    pub at: usize,
+    /// Its first line, whitespace-collapsed, marker included.
+    pub line: String,
+    /// An amendment note: its first word is `Amended` or `Moved`, in any
+    /// case. The criterion's own text ends where the first one begins.
+    pub amendment: bool,
+}
+
+impl SubItem {
+    /// Read one indented line as a sub-bullet, `at` its offset in the
+    /// criterion text; `None` for a wrapped line of text.
+    fn read(at: usize, line: &str) -> Option<Self> {
+        let rest = line
+            .strip_prefix(['-', '*', '+'])
+            .filter(|rest| rest.starts_with([' ', '\t']))?;
+        let first = rest
+            .split([' ', '\t'])
+            .find(|word| !word.is_empty())
+            .unwrap_or_default()
+            .trim_matches(['*', '_', ':', ',', ';', '.']);
+        Some(Self {
+            at,
+            line: line.to_string(),
+            amendment: ["amended", "moved"]
+                .iter()
+                .any(|word| first.eq_ignore_ascii_case(word)),
+        })
+    }
+}
+
+/// Whether `tag` opens or closes `text` (R-50). Sentence punctuation after
+/// a closing tag (`... (journey).`) does not hide it.
+fn opens_or_closes(text: &str, tag: &str) -> bool {
+    let text = text.trim_matches([' ', '\t']);
+    let closing = text.trim_end_matches(['.', ',', ';', ':']);
+    text.starts_with(tag) || closing.ends_with(tag)
 }
 
 impl Criterion {
+    /// The criterion's own text: `text` up to its first amendment note, so
+    /// a note recording a change is never read as the criterion (R-50,
+    /// issue #199). Every tag is read here.
+    #[must_use]
+    pub fn own_text(&self) -> &str {
+        let end = self
+            .sub_items
+            .iter()
+            .find(|item| item.amendment)
+            .map_or(self.text.len(), |item| item.at);
+        self.text[..end].trim_end_matches([' ', '\t'])
+    }
+
     /// A journey criterion ends with `(journey)` (R-50); a record may also
     /// open the criterion with it (`AC-7 (journey) On a fresh ...`).
     #[must_use]
@@ -35,12 +92,36 @@ impl Criterion {
         self.has_tag("(journey)")
     }
 
-    /// Whether `(journey)` sits inside the text without opening or closing
-    /// it, so it is not a tag (R-50); the journey refusal names such a
-    /// criterion.
+    /// Whether `(journey)` sits inside the own text without opening or
+    /// closing it, so it is not a tag (R-50); the journey refusal names
+    /// such a criterion.
     #[must_use]
     pub fn has_inner_journey(&self) -> bool {
-        !self.is_journey() && self.text.contains("(journey)")
+        !self.is_journey() && self.own_text().contains("(journey)")
+    }
+
+    /// The first line of the sub-bullet that keeps `(journey)` from
+    /// counting, when one does: a sub-bullet the tag closes the text
+    /// before, or an amendment note that carries the tag. The journey
+    /// refusal names it with its remedy.
+    #[must_use]
+    pub fn journey_hidden_by(&self) -> Option<&str> {
+        const TAG: &str = "(journey)";
+        if self.is_journey() {
+            return None;
+        }
+        self.sub_items
+            .iter()
+            .enumerate()
+            .find(|(index, item)| {
+                let end = self
+                    .sub_items
+                    .get(index + 1)
+                    .map_or(self.text.len(), |next| next.at);
+                opens_or_closes(&self.text[..item.at], TAG)
+                    || (item.amendment && self.text[item.at..end].contains(TAG))
+            })
+            .map(|(_, item)| item.line.as_str())
     }
 
     /// A criterion observable only after release carries `(after release)`
@@ -51,13 +132,12 @@ impl Criterion {
         self.has_tag("(after release)")
     }
 
-    /// A tag opens or closes the criterion (R-50). Sentence punctuation
-    /// after a closing tag (`... (journey).`) does not hide it; a tag
-    /// inside the text is not a tag.
+    /// A tag opens or closes the criterion's own text (R-50). Sentence
+    /// punctuation after a closing tag (`... (journey).`) does not hide
+    /// it; a tag inside the text, or only in an amendment note, is not a
+    /// tag.
     fn has_tag(&self, tag: &str) -> bool {
-        let text = self.text.trim_matches([' ', '\t']);
-        let closing = text.trim_end_matches(['.', ',', ';', ':']);
-        text.starts_with(tag) || closing.ends_with(tag)
+        opens_or_closes(self.own_text(), tag)
     }
 
     /// What a text correction of a completed criterion keeps (ADR-0080):
@@ -72,11 +152,13 @@ impl Criterion {
         }
     }
 
-    /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
+    /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)` in
+    /// its own text.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
-        let start = self.text.find("(serves ")?;
-        let rest = &self.text[start + "(serves ".len()..];
+        let text = self.own_text();
+        let start = text.find("(serves ")?;
+        let rest = &text[start + "(serves ".len()..];
         let end = rest.find(')')?;
         let mut parts = rest[..end]
             .split([' ', '\t'])
@@ -680,7 +762,13 @@ pub fn parse_criteria(body: &str) -> CriteriaList {
             }
         } else if line.starts_with([' ', '\t']) {
             if let Some(criterion) = current.as_mut() {
-                criterion.text = collapse(&format!("{} {}", criterion.text, line));
+                let addition = collapse(&line);
+                if !criterion.text.is_empty() {
+                    criterion.text.push(' ');
+                }
+                let at = criterion.text.len();
+                criterion.text.push_str(&addition);
+                criterion.sub_items.extend(SubItem::read(at, &addition));
             }
         } else if let Some(done) = current.take() {
             // Prose after a list ends the item; it is not criterion text.
@@ -718,6 +806,7 @@ fn parse_criterion_item(item: &str, position: usize) -> Result<Option<Criterion>
             id: first.to_string(),
             text: collapse(tail),
             checkbox,
+            sub_items: Vec::new(),
         }));
     }
     match checkbox {
@@ -725,11 +814,13 @@ fn parse_criterion_item(item: &str, position: usize) -> Result<Option<Criterion>
             id: format!("AC-{position}"),
             text: String::new(),
             checkbox: Some(ticked),
+            sub_items: Vec::new(),
         })),
         Some(ticked) => Ok(Some(Criterion {
             id: format!("AC-{position}"),
             text: collapse(rest),
             checkbox: Some(ticked),
+            sub_items: Vec::new(),
         })),
         None => Err(format!(
             "list item \"- {}\" is not a criterion; write \"- AC-n <criterion>\"",
@@ -1509,6 +1600,7 @@ mod tests {
             id: "AC-1".into(),
             text: text.into(),
             checkbox: None,
+            sub_items: Vec::new(),
         }
     }
 
@@ -1549,6 +1641,79 @@ their sources, or the `init_e2e` case that renders them (journey).";
             criterion("When served, the system shall serve (serves EPC-001 AC-2).").serves(),
             Some(("EPC-001".to_string(), "AC-2".to_string()))
         );
+    }
+
+    fn listed(section: &str) -> Vec<Criterion> {
+        let list = parse_criteria(&format!("## Acceptance Criteria\n\n{section}"));
+        assert!(list.errors.is_empty(), "{:?}", list.errors);
+        list.items
+    }
+
+    /// Issue #199 (TSK-382 AC-1): an indented `- Amended ...` or
+    /// `- Moved ...` note under a criterion is not criterion text, so each
+    /// tag closing the head line still counts.
+    #[test]
+    fn an_amendment_note_keeps_each_closing_tag() {
+        let items = listed(
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  \
+             - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n\
+             - AC-2 The command shall run (serves EPC-001 AC-3)\n  \
+             - Moved 2026-10-13 from TSK-009 AC-2.\n\
+             - AC-3 Adopters shall report fewer failed installs (after release).\n  \
+             - Amended 2026-10-14: the window is a month.\n    \
+             It starts at publication.\n  \
+             - Moved 2026-10-15 from AC-9.\n\
+             - [ ] AC-4 On a fresh project, init shall pass (journey).\n  \
+             - amended 2026-10-16: lower case still reads as a note.\n",
+        );
+        assert!(items[0].is_journey(), "{:?}", items[0]);
+        assert_eq!(
+            items[1].serves(),
+            Some(("EPC-001".to_string(), "AC-3".to_string()))
+        );
+        assert!(items[2].is_after_release(), "{:?}", items[2]);
+        assert!(items[3].is_journey(), "{:?}", items[3]);
+        // The note stays part of the recorded text, so adding or changing
+        // it is still a criteria change.
+        assert!(
+            items[0].text.ends_with("narrowed to Linux."),
+            "{:?}",
+            items[0]
+        );
+        // A tag only inside a note is not the criterion's tag.
+        let noted = listed(
+            "- AC-1 The command shall run.\n  - Moved 2026-10-13 from (serves EPC-001 AC-2) to none.\n",
+        );
+        assert_eq!(noted[0].serves(), None);
+    }
+
+    /// TSK-382 AC-2: wrapped lines and substantive sub-bullets stay criterion
+    /// text, and a tag inside the text still does not count.
+    #[test]
+    fn a_wrapped_criterion_keeps_its_whole_text() {
+        let items = listed(
+            "- AC-1 When a fresh repository is scaffolded,\n  the command shall pass\n  \
+             and print its plan (journey).\n\
+             - AC-2 When run, the (journey) path\n  shall pass on Linux.\n\
+             - AC-3 The command shall:\n  - print its plan;\n  - pass (journey).\n\
+             - AC-4 When run, the system shall work (journey)\n  and then stop.\n",
+        );
+        assert_eq!(
+            items[0].text,
+            "When a fresh repository is scaffolded, the command shall pass and print its plan (journey)."
+        );
+        assert!(items[0].is_journey());
+        assert_eq!(
+            items[1].text,
+            "When run, the (journey) path shall pass on Linux."
+        );
+        assert!(!items[1].is_journey() && items[1].has_inner_journey());
+        assert_eq!(
+            items[2].text,
+            "The command shall: - print its plan; - pass (journey)."
+        );
+        assert!(items[2].is_journey());
+        assert!(!items[3].is_journey() && items[3].has_inner_journey());
     }
 
     #[test]

@@ -2184,6 +2184,7 @@ fn leaf_journey(task: &RecordView, graph: &Graph, block: &AcceptanceBlock) -> Op
 /// criterion and serves no epic journey criterion (R-53).
 #[must_use]
 pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
+    use std::fmt::Write as _;
     let task = graph
         .records
         .get(task_id)
@@ -2194,10 +2195,12 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
             .criteria
             .items
             .iter()
-            .filter(|criterion| criterion.has_inner_journey())
+            .filter(|criterion| {
+                criterion.has_inner_journey() && criterion.journey_hidden_by().is_none()
+            })
             .map(|criterion| criterion.id.as_str())
             .collect();
-        let note = if inner.is_empty() {
+        let mut note = if inner.is_empty() {
             String::new()
         } else {
             format!(
@@ -2206,10 +2209,56 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
                 if inner.len() == 1 { "carries" } else { "carry" }
             )
         };
+        for (name, hiding) in hidden_journeys(task, graph) {
+            let _ = write!(
+                note,
+                "; the note \"{}\" under {name} hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
+                truncate_note(hiding)
+            );
+        }
         format!(
             "{task_id} changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion{note}"
         )
     })
+}
+
+/// The task's criteria, and the epic criteria it serves, whose `(journey)`
+/// a sub-bullet keeps from counting: each criterion's name (`AC-n`, or
+/// `EPC-NNN AC-n` for a served one) with the hiding sub-bullet's first
+/// line.
+fn hidden_journeys<'g>(task: &'g RecordView, graph: &'g Graph) -> Vec<(String, &'g str)> {
+    let own = task.criteria.items.iter().filter_map(|criterion| {
+        criterion
+            .journey_hidden_by()
+            .map(|hiding| (criterion.id.clone(), hiding))
+    });
+    let served = task.criteria.items.iter().filter_map(|item| {
+        let (epic_id, criterion_id) = item.serves()?;
+        let epic = graph
+            .records
+            .get(&epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)?;
+        let criterion = epic
+            .criteria
+            .items
+            .iter()
+            .find(|criterion| criterion.id == criterion_id)?;
+        criterion
+            .journey_hidden_by()
+            .map(|hiding| (format!("{} {}", epic.id, criterion.id), hiding))
+    });
+    own.chain(served).collect()
+}
+
+/// A sub-bullet's first line as a refusal quotes it: at most 60
+/// characters, then an ellipsis.
+fn truncate_note(line: &str) -> String {
+    const LIMIT: usize = 60;
+    let mut out: String = line.chars().take(LIMIT).collect();
+    if line.chars().count() > LIMIT {
+        out.push_str("...");
+    }
+    out
 }
 
 /// Records of the range whose criteria differ from the criteria the judged
@@ -4173,5 +4222,99 @@ mod tests {
             reviewed_part(before),
             reviewed_part(&before.replace("Outcome.\n", "Outcome.\r\r\n"))
         );
+    }
+
+    /// A graph of the given records, each `(kind, id, criteria section)`.
+    fn journey_graph(records: &[(RecordKind, &str, &str)]) -> Graph {
+        let mut graph = Graph::default();
+        for (kind, id, criteria) in records {
+            let (folder, epic) = match kind {
+                RecordKind::Epic => ("epics", ""),
+                _ => ("tasks", "epic_id: EPC-001\n"),
+            };
+            let path = format!("project-management/{folder}/{id}.md");
+            let content = format!(
+                "---\nid: {id}\nstatus: todo\n{epic}---\n\n# {id}\n\n## Acceptance Criteria\n\n{criteria}\n## Closeout\n"
+            );
+            let record = RecordView::parse(*kind, &path, &content).unwrap();
+            graph.records.insert((*id).to_string(), record);
+        }
+        graph
+    }
+
+    /// Issue #199 (TSK-382 AC-1): an amendment note under a task or epic
+    /// criterion is not criterion text, so a tag closing the head line
+    /// still counts.
+    #[test]
+    fn an_amendment_note_keeps_the_closing_tag_of_task_and_epic_criteria() {
+        let own = "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", own)]);
+        assert_eq!(journey_requirement(&graph, "TSK-001"), None);
+
+        let epic = "- AC-1 On a fresh project, the release shall install (journey).\n  - Amended 2026-10-12 (plan version 4): reworded.\n  - Moved 2026-10-13 from AC-4.\n";
+        for serving in [
+            "- AC-1 The command shall run (serves EPC-001 AC-1)\n",
+            "- AC-1 The command shall run (serves EPC-001 AC-1)\n  - Moved 2026-10-13 from AC-2.\n",
+        ] {
+            let graph = journey_graph(&[
+                (RecordKind::Epic, "EPC-001", epic),
+                (RecordKind::Task, "TSK-001", serving),
+            ]);
+            assert_eq!(journey_requirement(&graph, "TSK-001"), None, "{serving}");
+        }
+    }
+
+    /// TSK-382 AC-3: a note that still hides a tag is named in the
+    /// refusal, with the remedy.
+    #[test]
+    fn the_journey_refusal_names_the_note_that_hides_a_tag() {
+        let hidden = "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Note: reworded after review.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", hidden)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Note: reworded after review.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("inside its text"), "{message}");
+
+        let in_note = "- AC-1 On a fresh project, the command shall succeed.\n  - Amended 2026-10-14: now a journey (journey)\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", in_note)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Amended 2026-10-14: now a journey (journey)\" under AC-1 hides its `(journey)` tag"
+            ),
+            "{message}"
+        );
+
+        let epic = "- AC-1 On a fresh project, the release shall install (journey)\n  - Note: see the release plan.\n";
+        let graph = journey_graph(&[
+            (RecordKind::Epic, "EPC-001", epic),
+            (
+                RecordKind::Task,
+                "TSK-001",
+                "- AC-1 The command shall run (serves EPC-001 AC-1)\n",
+            ),
+        ]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Note: see the release plan.\" under EPC-001 AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+
+        // A tag inside the criterion's own text keeps the R-50 refusal.
+        let inner =
+            "- AC-1 When run, the (journey) path shall pass.\n  - Amended 2026-10-14: reworded.\n";
+        let graph = journey_graph(&[(RecordKind::Task, "TSK-001", inner)]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains("AC-1 carries `(journey)` inside its text"),
+            "{message}"
+        );
+        assert!(!message.contains("the note"), "{message}");
     }
 }
