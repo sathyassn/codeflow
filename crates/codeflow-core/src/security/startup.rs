@@ -34,9 +34,9 @@ use std::path::{Component, Path, PathBuf};
 use super::actions;
 use super::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::hooks::git_guard::{
-    basename, command_argv, expand_commands_read, has_glob, is_shell, launcher_effects,
-    redirect_writes, run_dirs_from_home, shell_tokens, startup_glob_paths, strip_launchers,
-    strip_reserved_words, unresolved_word, word_readings,
+    basename, command_argv, command_argv_literal, expand_commands_read, has_glob, is_shell,
+    launcher_effects, redirect_writes, run_dirs_from_home, shell_tokens, startup_glob_paths,
+    strip_launchers, strip_reserved_words, unresolved_word, word_readings,
 };
 use crate::hooks::policy::PolicyLevel;
 use crate::hooks::Violation;
@@ -441,6 +441,72 @@ impl Class {
         })
     }
 
+    /// Whether a program run on every file below `root` could reach a class
+    /// file that [`Class::target`] and [`Class::placement`] do not name: a
+    /// file name protected in every directory, a symbolic link leaving
+    /// `root`, or a tree the guard cannot read whole (more than
+    /// [`ROOT_READ_LIMIT`] directories, or an unreadable one). A root that
+    /// does not exist reaches nothing.
+    fn reaches_below(&self, root: &Path) -> bool {
+        let protected: Vec<&str> = self
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Name(name) => Some(name.as_str()),
+                Entry::At { .. } => None,
+            })
+            .collect();
+        let named = |name: &std::ffi::OsStr| {
+            name.to_str()
+                .is_none_or(|name| protected.contains(&name.to_lowercase().as_str()))
+        };
+        // Only a root proven absent reaches nothing; any other error to
+        // read it counts as reaching a class file.
+        let metadata = match crate::absence::metadata_optional(root) {
+            Ok(None) => return false,
+            Ok(Some(metadata)) => metadata,
+            Err(_) => return true,
+        };
+        let Ok(base) = crate::portable_path::canonicalize(root) else {
+            return true;
+        };
+        if !metadata.is_dir() {
+            return base.file_name().is_some_and(named);
+        }
+        let mut pending = vec![base.clone()];
+        let mut read = 0;
+        while let Some(dir) = pending.pop() {
+            read += 1;
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                return true;
+            };
+            if read > ROOT_READ_LIMIT {
+                return true;
+            }
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    return true;
+                };
+                if named(&entry.file_name()) {
+                    return true;
+                }
+                let Ok(kind) = entry.file_type() else {
+                    return true;
+                };
+                if kind.is_symlink() {
+                    let inside = crate::portable_path::canonicalize(&entry.path())
+                        .is_ok_and(|real| real.starts_with(&base));
+                    if !inside {
+                        return true;
+                    }
+                } else if kind.is_dir() {
+                    pending.push(entry.path());
+                }
+            }
+        }
+        false
+    }
+
     /// Whether `name` is the last component of a class entry: a class file
     /// name anywhere, or a class directory such as `fish`.
     pub(crate) fn knows_name(&self, name: &str) -> bool {
@@ -471,6 +537,10 @@ impl Class {
             .cloned()
     }
 }
+
+/// How many directories [`Class::reaches_below`] reads below one root
+/// before it stops and counts the root as reaching a class file.
+const ROOT_READ_LIMIT: usize = 4096;
 
 /// Needles that name the file only where the path ends there: `git/config`
 /// is git's configuration below a configuration directory, while
@@ -2333,13 +2403,19 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // A writer the table lists is judged by the one reader both guards use:
     // what it copies, the files its options and operands write, an option
     // the table does not list, and where it places files (review round 23).
+    // A search pattern is text the tool matches, never a file it writes
+    // (TSK-380), so it is not judged; every other word is.
     let entry = super::unresolved::has_writer_entry(name);
+    let judged = match search_words(segment, name, args, line, &dirs) {
+        Ok(words) => words,
+        Err(v) => return Some(v),
+    };
     if entry {
         if let Some(v) = ExecWriter::judge(name, args, line, &dirs) {
             return Some(v);
         }
     } else {
-        for word in args {
+        for word in &judged {
             if let Some(v) = word_violation(name, word, line, &dirs) {
                 return Some(v);
             }
@@ -2349,7 +2425,7 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // a class file, refuses as an unresolved redirect does. A word that
     // reads as a path was judged above.
     if line.names(line.text).is_some() && line.expands_unread(segment) {
-        if let Some(code) = args.iter().find(|word| {
+        if let Some(code) = judged.iter().find(|word| {
             !path_like(value_of(word))
                 && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
         }) {
@@ -2362,6 +2438,90 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
         return None;
     }
     placing_violation(name, args, line, &dirs)
+}
+
+/// The words of a call the guard judges as paths it may write: every word
+/// but a search pattern the shell passes as written (TSK-380). A ripgrep
+/// preprocessor the call runs refuses first when a root it searches could
+/// hold a class file ([`preprocessor_violation`]).
+fn search_words<'a>(
+    segment: &str,
+    name: &str,
+    args: &'a [String],
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Result<Vec<&'a String>, Violation> {
+    let literal = command_argv_literal(segment).1;
+    let literal = literal
+        .get(literal.len().saturating_sub(args.len())..)
+        .filter(|tail| tail.len() == args.len())
+        .map_or_else(|| vec![false; args.len()], <[bool]>::to_vec);
+    let configured = super::search_pattern::names_ripgrep_config(line.text);
+    if let Some(v) = preprocessor_violation(name, args, &literal, configured, line, dirs) {
+        return Err(v);
+    }
+    Ok(super::search_pattern::other_words(
+        name, args, &literal, configured,
+    ))
+}
+
+/// A ripgrep `--pre` or `--pre-glob` runs a program on every file below
+/// each root the call searches, so it is judged as a recursive writer of
+/// those roots (TSK-380 review round 1, P-1): a root that is a class
+/// file, a directory a placing program could fill with one (the home,
+/// `/etc`, a directory above a class entry), a root the guard cannot
+/// resolve, or one below which a file name protected anywhere, a link
+/// leaving the root or an unreadable tree lies refuses. With no root it
+/// searches the directory it runs in. Files an `xargs` or `parallel` takes
+/// from its input, and a call whose options the guard cannot read, refuse.
+fn preprocessor_violation(
+    name: &str,
+    args: &[String],
+    literal: &[bool],
+    configured: bool,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Option<Violation> {
+    use super::search_pattern::Preprocessor;
+    let noun = line.noun();
+    let roots = match super::search_pattern::preprocessor(name, args, literal, configured) {
+        Preprocessor::None => return None,
+        Preprocessor::FromInput => {
+            return Some(line.finding(format!(
+                "`{name}` runs `rg --pre` on the files its input names, which the guard cannot see, and that program can write any of them"
+            )))
+        }
+        Preprocessor::Unread => {
+            return Some(line.finding(
+                "`rg --pre` runs a program on every file it searches, and the guard cannot read the options that pick them".to_string(),
+            ))
+        }
+        Preprocessor::Roots(roots) => roots,
+    };
+    let words: Vec<&str> = if roots.is_empty() {
+        vec!["."]
+    } else {
+        roots.iter().map(|at| args[*at].as_str()).collect()
+    };
+    words.into_iter().find_map(|word| {
+        let why = match line.judge(word, dirs) {
+            Judged::Class(label) => Some(format!("the {noun} `{label}`")),
+            Judged::Placement(label) => Some(format!("`{label}`, which can hold a {noun}")),
+            Judged::Unresolved(word) => Some(format!("`{word}`, which the guard cannot resolve")),
+            Judged::Ordinary => dirs.iter().find_map(|dir| {
+                let root = line
+                    .pattern(word, dir)
+                    .map(|pattern| pattern.base)
+                    .or_else(|| line.expand(word, dir))?;
+                line.class
+                    .reaches_below(&root)
+                    .then(|| format!("`{word}`, below which the guard cannot rule out a {noun}"))
+            }),
+        }?;
+        Some(line.finding(format!(
+            "`rg --pre` runs a program on every file it searches, and it searches {why}"
+        )))
+    })
 }
 
 /// Whether a `sed` call only prints. Its options must be ones that change
@@ -2637,7 +2797,7 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
 }
 
 /// A git subcommand after git's global options, with its arguments.
-fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
+pub(crate) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if GLOBAL_VALUE_OPTIONS.contains(&arg.as_str()) {

@@ -259,16 +259,17 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
         self.assertEqual(replay.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
-        # TSK-261: the push set runs the cross-cutting source scans: the one that
-        # judges every git spawn and the one that checks every instruction
-        # artifact reference. A branch that holds a refused spawn or a stale
-        # reference fails before push, not in hosted CI after a merge. Quick mode
-        # only, no producer, like the replay.
+        # TSK-385: preserve one light target while discovering core repository
+        # contracts and checking the remedy catalogue and derived lookups.
+        # Its runner controls use real Cargo and run in gate-parity too.
         scans = targets['contract-scans']
-        self.assertEqual(scans['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet'}})
+        self.assertEqual(scans['modes'], {'quick': {'command': 'python3 -B scripts/contract-scans.py'}})
         self.assertEqual(scans.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/git_spawn_contract.rs').is_file())
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/artifact_budget_contract.rs').is_file())
+        for mode in ['quick', 'essential', 'full']:
+            self.assertIn('python3 -B scripts/test_contract_scans.py',
+                          targets['gate-parity']['modes'][mode]['command'])
         for name in ['present-browser', 'read-benchmark', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])
