@@ -2439,12 +2439,17 @@ fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
         .or_else(|| env("BITBUCKET_PR_DESTINATION_BRANCH").and_then(branch))
 }
 
-/// Normalize a branch name or branch ref (`origin/main` names `main`);
-/// a commit id or revision expression names no branch.
+/// Normalize a branch name or branch ref (`origin/main` and
+/// `refs/heads/origin/main` name `main`); a commit id, a revision expression
+/// or a value with a space or control character names no branch.
 fn named_branch(base: &str) -> Option<String> {
     let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
+    if base.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
+        return None;
+    }
     let name = base
         .strip_prefix("refs/heads/")
+        .map(|rest| rest.strip_prefix("origin/").unwrap_or(rest))
         .or_else(|| {
             base.strip_prefix("refs/remotes/")
                 .and_then(|rest| rest.split_once('/').map(|(_, branch)| branch))
@@ -4570,14 +4575,29 @@ mod tests {
         // TSK-398 review N3: `main~1` or `main@{0}` would walk the base away
         // from the branch tip; the next base source is used instead.
         for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
-            for value in ["main~1", "main@{0}"] {
+            for value in ["main~1", "main@{0}", "main ", " main", "main\t"] {
                 let r = detect_range(env_from(&[(key, value)]), &protected());
                 assert!(
                     matches!(r.source, RangeSource::ProtectedBranches),
-                    "{key}={value}: {}",
+                    "{key}={value:?}: {}",
                     r.source
                 );
                 assert_eq!(r.base_candidates[0], "refs/remotes/origin/main");
+            }
+            // Round 2 minor: a full spelling of a local branch named
+            // `origin/main` names `main`, never the shadow branch.
+            for value in ["refs/heads/origin/main", "origin/main", "refs/heads/main"] {
+                let r = detect_range(env_from(&[(key, value)]), &protected());
+                assert!(
+                    !matches!(r.source, RangeSource::ProtectedBranches),
+                    "{key}={value}: {}",
+                    r.source
+                );
+                assert_eq!(
+                    r.base_candidates,
+                    vec!["refs/remotes/origin/main", "refs/heads/main"],
+                    "{key}={value}"
+                );
             }
         }
         assert_eq!(
