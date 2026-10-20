@@ -18,7 +18,7 @@ test-group = "serial"
 # Keep its overrides equal to profile.codeflow; doctests run after nextest.
 [profile.essential]
 fail-fast = false
-# Eight workers: existing essential default on the 10-core reference host; not re-measured (AC-4 amendment).
+# Eight workers were chosen by this task (dbc79ec7b) on the 10-core reference host; not measured because timing trials stopped.
 test-threads = 8
 
 [profile.essential.junit]
