@@ -65,7 +65,10 @@ pub(super) fn resolve(
                 explicit_target.is_some(),
             )? {
                 base_candidates = vec![tip];
-                range_source = format!("{source} '{target}' for branch '{branch}'");
+                range_source = format!(
+                    "{source} '{}' for branch '{branch}'",
+                    codeflow_core::git::display_text(target)
+                );
             }
         }
     }
@@ -113,11 +116,7 @@ pub(super) fn resolve(
         (inferred, "branches at the resolved base commit")
     };
     let target = super::line_target(root, into.as_deref())?;
-    if into.is_some() {
-        println!("codeflow ci: acceptance target '{target}' ({source})");
-    } else {
-        println!("codeflow ci: target '{target}' (repository default)");
-    }
+    print_target(&target, into.is_some().then_some(source));
     Ok(Context {
         head,
         base,
@@ -128,6 +127,18 @@ pub(super) fn resolve(
         into,
         target,
     })
+}
+
+/// Print the acceptance target and where it came from (`None`: the
+/// repository default). The pre-push hook hands over the destination's
+/// default branch as `--into`, and the destination names that branch, so
+/// the target is shown escaped (TSK-388).
+fn print_target(target: &str, source: Option<&str>) {
+    let shown = codeflow_core::git::display_text(target);
+    match source {
+        Some(source) => println!("codeflow ci: acceptance target '{shown}' ({source})"),
+        None => println!("codeflow ci: target '{shown}' (repository default)"),
+    }
 }
 
 fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {

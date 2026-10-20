@@ -169,6 +169,43 @@ fn assert_blocks(result: &(i32, String), what: &str, needle: &str) {
     );
 }
 
+/// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
+/// branch as `--into`, and a remote can put control characters in that
+/// name: an OSC title sequence, or the C1 control CSI that git accepts.
+/// `codeflow ci` names the acceptance target escaped, and an ordinary name
+/// unchanged.
+#[test]
+fn an_acceptance_target_holding_control_characters_is_named_escaped() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    for (into, shown) in [
+        ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
+        ("ev\u{9b}31mil", "ev\\x9b31mil"),
+        ("release/next", "release/next"),
+    ] {
+        let (_, printed) = ci_into(
+            root,
+            "main",
+            "feat/tracked",
+            &body("Task: TSK-001"),
+            Some(into),
+        );
+        assert!(
+            printed.contains(&format!("acceptance target '{shown}' (--into)")),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains(['\u{1b}', '\u{7}', '\u{9b}']),
+            "{printed:?}"
+        );
+    }
+}
+
 /// AC-1: one fixture per class, and the unclassified and planning-only
 /// negative controls.
 #[test]

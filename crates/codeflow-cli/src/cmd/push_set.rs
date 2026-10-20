@@ -45,7 +45,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
-use codeflow_core::git::remote_query;
+use codeflow_core::git::{display_text, remote_query};
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
@@ -392,6 +392,8 @@ fn run_ci_ranges(
                 tip,
                 policy,
             } => {
+                // The destination names its default branch: shown escaped.
+                let target = display_text(target);
                 if !policy.test_gate_on_push.is_active() {
                     report.status.push(format!(
                         "`codeflow ci` did not run for '{branch}': the policy at {target} {}, the destination's default branch and the candidate authority, turns the push check off; the hosted job on the pull request's target is the enforcement",
@@ -411,7 +413,8 @@ fn run_ci_ranges(
                 report.violations.push(Violation::always_blocking(
                     "git.policy_authority",
                     format!(
-                        "the policy at {target} {}, the destination's default branch, {why}, so '{branch}' is refused",
+                        "the policy at {} {}, the destination's default branch, {why}, so '{branch}' is refused",
+                        display_text(target),
                         short(tip)
                     ),
                     "if a newer codeflow wrote that policy, upgrade this codeflow and push again; if the policy itself is malformed, repair it on the destination's default branch through a reviewed pull request",
@@ -512,7 +515,8 @@ fn ci_target(
     if let Some(target) = &target {
         if !codeflow_core::workgraph::is_stable_work_target(target) {
             return Err(format!(
-                "target '{target}' must name a stable non-task branch"
+                "target '{}' must name a stable non-task branch",
+                display_text(target)
             ));
         }
         codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
@@ -596,6 +600,8 @@ fn commits_from(
     report: &mut StageReport,
 ) -> Result<String, String> {
     codeflow_core::workgraph::history::check_command(root)?;
+    // The destination names its default branch: shown escaped.
+    let target = display_text(target);
     let keep = tip.to_string();
     if base == tip {
         return Ok(keep);
@@ -782,7 +788,11 @@ fn run_check_with(
             **arg != "--advertisement-stdin"
                 && run_level.is_none_or(|level| *at != level && *at != level + 1)
         })
-        .map(|(_, arg)| remote_query::display_url(arg))
+        .map(|(_, arg)| match arg.strip_prefix("--into=") {
+            // The destination's default branch, which it names itself.
+            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
+            None => remote_query::display_url(arg),
+        })
         .collect();
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
     let shown = format!("codeflow {}", rerun.join(" "));
@@ -817,20 +827,14 @@ fn run_check_with(
                 String::from_utf8_lossy(&out.stderr)
             );
             report.relayed.extend(
-                relayed_findings(&remote_query::display_urls(&printed))
+                relayed_findings(&relayed_text(&printed))
                     .into_iter()
                     .map(|finding| format!("`{shown}`: {finding}")),
             );
         }
         Ok(out) => {
-            eprint!(
-                "{}",
-                remote_query::display_urls(&String::from_utf8_lossy(&out.stdout))
-            );
-            eprint!(
-                "{}",
-                remote_query::display_urls(&String::from_utf8_lossy(&out.stderr))
-            );
+            eprint!("{}", relayed_text(&String::from_utf8_lossy(&out.stdout)));
+            eprint!("{}", relayed_text(&String::from_utf8_lossy(&out.stderr)));
             if let Some(rules) = &rules_out {
                 report.refused_by.extend(rules.read());
             }
@@ -864,6 +868,23 @@ fn run_check_with(
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
+}
+
+/// A check's printed output as the hook shows it: URL credentials hidden,
+/// and each control character other than a line break or tab escaped. The
+/// check can quote a name the destination supplied, such as its default
+/// branch, which the hook hands it as `--into`; escaped, that name cannot
+/// write a terminal escape sequence into the push's output (TSK-388).
+fn relayed_text(printed: &str) -> String {
+    let mut shown = String::with_capacity(printed.len());
+    for character in remote_query::display_urls(printed).chars() {
+        if character.is_control() && !matches!(character, '\n' | '\t') {
+            let _ = write!(shown, "\\x{:02x}", u32::from(character));
+        } else {
+            shown.push(character);
+        }
+    }
+    shown
 }
 
 /// The warnings, notes and notices a passing check printed, each with the
@@ -1094,7 +1115,8 @@ fn judged_by(
             why: why.clone(),
         },
         TargetPolicy::Missing => Judged::Unverified(format!(
-            "the destination's default branch {target} has no policy yet"
+            "the destination's default branch {} has no policy yet",
+            display_text(&target)
         )),
     })
 }
@@ -1326,7 +1348,8 @@ fn release_base(
                 let tip = tip.to_string();
                 // A result, not a finding: nothing to clear.
                 report.status.push(format!(
-                    "'{branch}' is a release branch: `codeflow ci` judges everything it adds to {name} at {}, as its pull request is",
+                    "'{branch}' is a release branch: `codeflow ci` judges everything it adds to {} at {}, as its pull request is",
+                    display_text(name),
                     short(&tip)
                 ));
                 Scoped::Release(tip)
@@ -1543,7 +1566,8 @@ fn target_base(
                     ));
                 };
                 notices.push(format!(
-                    "declared target '{target}' cannot bound the range; using the destination's default target '{name}'"
+                    "declared target '{target}' cannot bound the range; using the destination's default target '{}'",
+                    display_text(name)
                 ));
                 name.clone()
             }
@@ -1554,8 +1578,9 @@ fn target_base(
         };
         if tips.commits.binary_search(tip).is_err() {
             notices.push(format!(
-                "declared target '{target}' advertised at {tip} is not fetched here; \
-                     falling back to advertised-history range selection for '{branch}'"
+                "declared target '{}' advertised at {tip} is not fetched here; \
+                     falling back to advertised-history range selection for '{branch}'",
+                display_text(target)
             ));
             return Ok(None);
         }
@@ -1568,7 +1593,8 @@ fn target_base(
         )
     };
     notices.push(format!(
-        "range of '{branch}' uses advertised target '{target}': `codeflow ci --base {base} --head {}`",
+        "range of '{branch}' uses advertised target '{}': `codeflow ci --base {base} --head {}`",
+        display_text(&target),
         r.local_sha
     ));
     let mut note = None;

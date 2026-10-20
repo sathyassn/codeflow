@@ -64,7 +64,7 @@ pub(super) fn dispatch(
                     "frozen"
                 },
                 branch,
-                range.target
+                codeflow_core::git::display_text(range.target)
             );
             pull_request_findings_judged(
                 root,
@@ -136,7 +136,7 @@ fn judge(
         names.branch,
         names
             .into
-            .map(|into| format!(" into '{into}'"))
+            .map(|into| format!(" into '{}'", codeflow_core::git::display_text(into)))
             .unwrap_or_default(),
         scope.pattern,
         scope.source

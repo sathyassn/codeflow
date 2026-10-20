@@ -888,3 +888,207 @@ fn round_two_unavailable_destination_refuses_before_ci() {
     assert!(error.contains("destination unavailable"), "{error}");
     assert!(!h.local.path().join("arguments.txt").exists());
 }
+
+/// Default branch names a destination can advertise and how the hook
+/// shows them (TSK-388): an OSC title sequence, which only a server that is
+/// not git sends, the C1 control CSI (U+009B), which git accepts in a
+/// branch name, and an ordinary name, shown unchanged.
+const DEFAULTS: [(&str, &str); 3] = [
+    ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
+    ("ev\u{9b}31mil", "ev\\x9b31mil"),
+    ("trunk", "trunk"),
+];
+
+/// Whether `text` holds a control character other than a line break.
+fn controls(text: &str) -> bool {
+    text.chars().any(|c| c.is_control() && c != '\n')
+}
+
+#[test]
+fn a_declared_target_falls_back_to_the_default_branch_named_escaped() {
+    for (name, shown) in &DEFAULTS[1..] {
+        let h = History::new();
+        let base = h.git(&["rev-parse", "main"]);
+        h.advertise("main", name);
+        command(
+            h.remote.path(),
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")],
+        );
+        h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
+        h.task("master");
+        let hidden = h.commit("earlier", "earlier", "fix: earlier work");
+        h.advertise(&hidden, "master");
+        let head = h.commit("later", "later", "fix: later work");
+        let range = h.range("task/TSK-001-change", &head, NEW);
+        assert_eq!(range.base, base);
+        for expected in [
+            format!("using the destination's default target '{shown}'"),
+            format!("uses advertised target '{shown}'"),
+        ] {
+            assert!(
+                range.notices.iter().any(|text| text.contains(&expected)),
+                "{expected}: {:?}",
+                range.notices
+            );
+        }
+        assert!(
+            !range.notices.iter().any(|text| controls(text)),
+            "{:?}",
+            range.notices
+        );
+    }
+}
+
+/// What the hook prints when it judges `pushed` against a destination
+/// whose default branch is `name` at `tip`: its status lines, violation
+/// messages, step names (the commands it shows) and any error. A fixture
+/// stands in for `codeflow ci` and writes its arguments to
+/// `arguments.txt`.
+#[cfg(unix)]
+fn judged_against(h: &History, name: &str, tip: &str, pushed: &[PushRef]) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let oid = git2::Oid::from_str(tip).unwrap();
+    let listing = OnceCell::from(Ok(format!(
+        "ref: refs/heads/{name}\tHEAD\n{tip}\tHEAD\n{tip}\trefs/heads/{name}\n"
+    )));
+    let answer = OnceCell::from(Ok(release_line::Destination {
+        url: h.remote.path().to_str().map(str::to_string),
+        default: Some((name.to_string(), oid)),
+        heads: vec![(name.to_string(), oid)],
+    }));
+    let advertised = OnceCell::new();
+    let anchor = OnceCell::new();
+    let fetch_failed = OnceCell::new();
+    let destination = Destination {
+        listing: &listing,
+        answer: &answer,
+        anchor: &anchor,
+        fetch_failed: &fetch_failed,
+        fork: None,
+        url: h.remote.path().to_str(),
+        advertised: &advertised,
+        namespace: None,
+        policy: &GitPolicy::default(),
+    };
+    let exe = h.local.path().join("ci-fixture");
+    std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > arguments.txt\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut report = StageReport::default();
+    let mut steps = Vec::new();
+    let pushed: Vec<&PushRef> = pushed.iter().collect();
+    let error = run_ci_ranges(
+        &exe,
+        h.local.path(),
+        &pushed,
+        &destination,
+        &mut report,
+        &mut steps,
+    )
+    .err();
+    report
+        .status
+        .into_iter()
+        .chain(report.violations.into_iter().map(|v| v.message))
+        .chain(steps.into_iter().map(|step| step.name))
+        .chain(error)
+        .collect()
+}
+
+/// The hook names the destination's default branch escaped in its own
+/// messages and in the `codeflow ci` command it shows, and hands the name
+/// to `codeflow ci` unchanged.
+#[cfg(unix)]
+#[test]
+fn the_destination_default_branch_is_named_escaped() {
+    let valid = "{\"schema_version\": 1, \"git\": {}}\n";
+    for (name, shown) in DEFAULTS {
+        for (policy, expected) in [
+            (
+                Some(valid),
+                vec![
+                    format!("with the policy at {shown} "),
+                    format!("everything it adds to {shown} at "),
+                ],
+            ),
+            (Some("{\n"), vec![format!("the policy at {shown} ")]),
+            (
+                None,
+                vec![format!(
+                    "the destination's default branch {shown} has no policy yet"
+                )],
+            ),
+        ] {
+            let h = History::new();
+            if let Some(policy) = policy {
+                h.commit(".codeflow/policy.json", policy, "chore: add the policy");
+            }
+            let tip = h.git(&["rev-parse", "HEAD"]);
+            let mut pushed = Vec::new();
+            for branch in ["integration/release-1", "feat/work"] {
+                h.git(&["checkout", "-q", "-b", branch, &tip]);
+                pushed.push(PushRef {
+                    local_ref: format!("refs/heads/{branch}"),
+                    local_sha: h.commit(branch, "work", "feat: work"),
+                    remote_ref: format!("refs/heads/{branch}"),
+                    remote_sha: NEW.to_string(),
+                });
+            }
+            let printed = judged_against(&h, name, &tip, &pushed);
+            for expected in &expected {
+                assert!(
+                    printed.iter().any(|text| text.contains(expected.as_str())),
+                    "{expected}: {printed:#?}"
+                );
+            }
+            assert!(!printed.iter().any(|text| controls(text)), "{printed:#?}");
+            // A name with ESC is no branch name, so no check runs for it.
+            if policy == Some(valid) && !name.contains('\u{1b}') {
+                assert!(
+                    printed
+                        .iter()
+                        .any(|text| text.contains(&format!("--into={shown}"))),
+                    "{printed:#?}"
+                );
+                let handed = std::fs::read_to_string(h.local.path().join("arguments.txt")).unwrap();
+                assert!(
+                    handed.lines().any(|line| line == format!("--into={name}")),
+                    "{handed}"
+                );
+            }
+        }
+    }
+}
+
+/// A check the hook runs can quote a name the destination supplied; the
+/// hook relays its output with each control character escaped, and keeps
+/// the rest, line breaks and tabs included, unchanged.
+#[cfg(unix)]
+#[test]
+fn a_relayed_check_output_shows_control_characters_escaped() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("check-fixture");
+    std::fs::write(
+        &exe,
+        "#!/bin/sh\nprintf \"codeflow ci: warning \\342\\200\\224 target 'ev\\033]0;owned\\007il'\\n  sanctioned:\\tfix it\\n\" >&2\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut report = StageReport::default();
+    run_check_with(
+        &exe,
+        dir.path(),
+        &["ci"],
+        None,
+        &GitPolicy::default(),
+        &mut report,
+        &mut Vec::new(),
+    );
+    assert_eq!(
+        report.relayed,
+        [
+            "`codeflow ci`: codeflow ci: warning \u{2014} target 'ev\\x1b]0;owned\\x07il'\n  sanctioned:\tfix it"
+        ],
+        "{report:?}"
+    );
+}
