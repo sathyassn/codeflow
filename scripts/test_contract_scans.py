@@ -34,8 +34,9 @@ class ContractScanJourneys(unittest.TestCase):
 
     def run_scans(self):
         env = os.environ.copy()
-        # Keep build output inside this worktree, including when run directly.
-        env["CARGO_TARGET_DIR"] = str(ROOT / "target/contract-scan-controls")
+        # Respect the selected Cargo build directory; default to this worktree.
+        control_target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "contract-scan-controls"
+        env["CARGO_TARGET_DIR"] = str(control_target)
         return subprocess.run([sys.executable, "-B", "scripts/contract-scans.py"],
                               cwd=self.root, env=env, capture_output=True, text=True,
                               encoding="utf-8", timeout=120)
