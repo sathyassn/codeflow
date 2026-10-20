@@ -42,7 +42,7 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
         .context("cannot resolve ~/.codeflow (HOME unset; set CODEFLOW_HOME)")?;
 
     let user_config = registry::UserConfig::load(&home).unwrap_or_else(|e| {
-        eprintln!("warning: {e}; using defaults");
+        eprintln!("warning: {e}; using defaults", e = crate::cmd::shown(&e));
         registry::UserConfig::default()
     });
     let limit = args.limit.or(user_config.recall.limit).unwrap_or(20);

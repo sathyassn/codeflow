@@ -34,7 +34,7 @@ pub fn run(args: &ValidateArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -121,7 +121,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
                 eprintln!("{}", warning.line("validate --since", "warning"));
             }
             for error in &verdict.errors {
-                eprintln!("validate --since: error: {error}");
+                eprintln!(
+                    "validate --since: error: {error}",
+                    error = crate::cmd::shown(&error)
+                );
             }
             if verdict.is_clean() {
                 println!("validate --since {since}: record transitions clean");
@@ -129,7 +132,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
             verdict.is_clean()
         }
         Err(error) => {
-            eprintln!("validate --since: error: {error}");
+            eprintln!(
+                "validate --since: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             false
         }
     }
@@ -152,7 +158,7 @@ fn validate_policy(root: &Path) -> bool {
         }
         Err(errors) => {
             for e in &errors {
-                eprintln!("validate: error: policy: {e}");
+                eprintln!("validate: error: policy: {e}", e = crate::cmd::shown(&e));
             }
             eprintln!(
                 "validate: .codeflow/policy.json is invalid — see `codeflow policy explain` for every key's valid values"
@@ -188,7 +194,11 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
             return true;
         }
         Err(error) => {
-            eprintln!("validate: cannot read {}: {error}", base.display());
+            eprintln!(
+                "validate: cannot read {}: {error}",
+                base.display(),
+                error = crate::cmd::shown(&error)
+            );
             return false;
         }
     };
@@ -211,7 +221,8 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
             Err(error) => {
                 eprintln!(
                     "validate: cannot read records under {}: {error}",
-                    base.display()
+                    base.display(),
+                    error = crate::cmd::shown(&error)
                 );
                 return false;
             }
@@ -243,7 +254,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         match result {
             Ok((errors, warnings)) => {
                 for e in &errors {
-                    eprintln!("{}: error: {e}", file.display());
+                    eprintln!("{}: error: {e}", file.display(), e = crate::cmd::shown(&e));
                 }
                 for w in &warnings {
                     eprintln!(
@@ -257,7 +268,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 }
             }
             Err(e) => {
-                eprintln!("{}: error: {e}", file.display());
+                eprintln!("{}: error: {e}", file.display(), e = crate::cmd::shown(&e));
                 clean = false;
             }
         }

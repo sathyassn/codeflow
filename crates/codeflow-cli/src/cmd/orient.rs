@@ -12,7 +12,10 @@ pub fn run() -> i32 {
         orient::generate(&match super::project_root(&cwd) {
             Ok(root) => root,
             Err(error) => {
-                eprintln!("codeflow: cannot read project root: {error}");
+                eprintln!(
+                    "codeflow: cannot read project root: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 2;
             }
         })

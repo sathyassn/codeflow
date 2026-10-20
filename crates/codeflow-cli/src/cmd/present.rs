@@ -184,7 +184,10 @@ const EXIT_CLOSED: i32 = 7;
 /// A failure is reported but does not fail the scaffold operation.
 pub fn provision_state_root_or_warn() {
     if let Err(error) = codeflow_present::state::provision_state_root() {
-        eprintln!("warning: could not create the cf-present state directory: {error}");
+        eprintln!(
+            "warning: could not create the cf-present state directory: {error}",
+            error = crate::cmd::shown(&error)
+        );
     }
 }
 
@@ -199,7 +202,7 @@ pub fn run(args: &PresentArgs) -> i32 {
             8
         }
         Err(error) => {
-            eprintln!("present: {error}");
+            eprintln!("present: {error}", error = crate::cmd::shown(&error));
             exit_code(&error)
         }
     }
@@ -306,7 +309,10 @@ fn check(
     };
     let lines = codeflow_present::document::check_document(&bytes);
     for line in &lines {
-        println!("{}", serde_json::to_string(line)?);
+        println!(
+            "{}",
+            codeflow_core::git::display_json(&serde_json::to_string(line)?)
+        );
     }
     // `faults` and `valid` keep their meaning; warnings never fail the check.
     let faults = lines.iter().filter(|line| line.is_fault()).count();
@@ -323,7 +329,10 @@ fn check(
 fn print_review_warnings(bytes: &[u8]) -> codeflow_present::Result<()> {
     for line in codeflow_present::document::check_document(bytes) {
         if !line.is_fault() {
-            eprintln!("{}", serde_json::to_string(&line)?);
+            eprintln!(
+                "{}",
+                codeflow_core::git::display_json(&serde_json::to_string(&line)?)
+            );
         }
     }
     Ok(())
@@ -361,12 +370,19 @@ fn run_command(
         } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
+                codeflow_core::git::display_json(&serde_json::to_string_pretty(&store.diff(
+                    parse_id(session_id)?,
+                    *from,
+                    *to
+                )?)?)
             );
             Ok(())
         }
         PresentCommand::List => {
-            println!("{}", serde_json::to_string_pretty(&store.list()?)?);
+            println!(
+                "{}",
+                codeflow_core::git::display_json(&serde_json::to_string_pretty(&store.list()?)?)
+            );
             Ok(())
         }
         PresentCommand::Show {
@@ -392,7 +408,9 @@ fn run_command(
         PresentCommand::History { session_id } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&store.history(parse_id(session_id)?)?)?
+                codeflow_core::git::display_json(&serde_json::to_string_pretty(
+                    &store.history(parse_id(session_id)?)?
+                )?)
             );
             Ok(())
         }
@@ -555,7 +573,10 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
 fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Result<()> {
     let session = store.load(id)?;
     if session.status != SessionStatus::Active {
-        println!("{}", serde_json::to_string_pretty(&session)?);
+        println!(
+            "{}",
+            codeflow_core::git::display_json(&serde_json::to_string_pretty(&session)?)
+        );
         return Ok(());
     }
     let healthy = match (session.service_port, session.service_instance) {

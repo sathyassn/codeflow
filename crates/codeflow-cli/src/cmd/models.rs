@@ -65,15 +65,18 @@ pub fn run(args: &ModelsArgs) -> i32 {
     let result = match resolve(args) {
         Ok(result) => result,
         Err(reason) => {
-            eprintln!("models resolve: {reason}");
+            eprintln!(
+                "models resolve: {reason}",
+                reason = crate::cmd::shown(&reason)
+            );
             return 2;
         }
     };
     if args.json {
         match serde_json::to_string_pretty(&result) {
-            Ok(json) => println!("{json}"),
+            Ok(json) => println!("{}", codeflow_core::git::display_json(&json)),
             Err(error) => {
-                eprintln!("models resolve: {error}");
+                eprintln!("models resolve: {error}", error = crate::cmd::shown(&error));
                 return 2;
             }
         }

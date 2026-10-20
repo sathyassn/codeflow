@@ -59,10 +59,13 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         (Ok(plan), Ok(())) => plan,
         (read, schema) => {
             if let Err(error) = read {
-                eprintln!("remote protect: {error}");
+                eprintln!("remote protect: {error}", error = crate::cmd::shown(&error));
             }
             for error in schema.err().unwrap_or_default() {
-                eprintln!("remote protect: policy error: {error}");
+                eprintln!(
+                    "remote protect: policy error: {error}",
+                    error = crate::cmd::shown(&error)
+                );
             }
             anyhow::bail!(
                 "{} is invalid or cannot be read, so no rules were planned or applied (see `codeflow policy explain`)",
@@ -108,7 +111,10 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
                 .data_profile
                 .insert(codeflow_core::ids::AUTHORITY.to_string(), today);
         }) {
-            eprintln!("warning: could not record the applied data profile: {error}");
+            eprintln!(
+                "warning: could not record the applied data profile: {error}",
+                error = crate::cmd::shown(&error)
+            );
         }
     }
     Ok(())

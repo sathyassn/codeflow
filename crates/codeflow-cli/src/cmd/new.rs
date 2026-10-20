@@ -219,7 +219,7 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -227,7 +227,7 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
     let template = match load_template("base/pm/epic.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -266,7 +266,10 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("error: integration branch: {error}");
+            eprintln!(
+                "error: integration branch: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
@@ -294,7 +297,7 @@ pub fn run_task(args: &TaskArgs) -> i32 {
                     0
                 }
                 Err(error) => {
-                    eprintln!("error: {id}: {error}");
+                    eprintln!("error: {id}: {error}", error = crate::cmd::shown(&error));
                     1
                 }
             };
@@ -373,7 +376,7 @@ fn new_task(
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -384,7 +387,10 @@ fn new_task(
     {
         Ok(value) => value.unwrap_or(true),
         Err(error) => {
-            eprintln!("error: cannot read epic: {error}");
+            eprintln!(
+                "error: cannot read epic: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -399,7 +405,7 @@ fn new_task(
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -447,14 +453,14 @@ fn resume_task(id: &str) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let unwritten = match issue::resume(&root, &parsed) {
         Ok(unwritten) => unwritten,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -468,7 +474,7 @@ fn resume_task(id: &str) -> i32 {
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -498,12 +504,12 @@ fn resume_task(id: &str) -> i32 {
     match result {
         Ok(record) => {
             if let Err(error) = issue::written(&root, &parsed) {
-                eprintln!("warning: {error}");
+                eprintln!("warning: {error}", error = crate::cmd::shown(&error));
             }
             report(&record)
         }
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             1
         }
     }
@@ -518,14 +524,14 @@ fn run_follow_up(source: &str, title: &str) -> i32 {
     let template = match load_template("base/pm/task.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -577,7 +583,7 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -591,7 +597,7 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
     let template = match template {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -666,7 +672,7 @@ impl<'a> Issuer<'a> {
             (Ok(record), reserved) => {
                 if let Some((id, standing, note)) = reserved {
                     if let Err(error) = issue::written(self.root, &id) {
-                        eprintln!("warning: {error}");
+                        eprintln!("warning: {error}", error = crate::cmd::shown(&error));
                     }
                     eprintln!("registry: {id} {}", standing.describe());
                     if let Some(note) = note {
@@ -676,14 +682,14 @@ impl<'a> Issuer<'a> {
                 Some(record)
             }
             (Err(error), Some((id, _, _))) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = crate::cmd::shown(&error));
                 eprintln!(
                     "{id} is reserved but its record was not written; fix the cause and run `codeflow task new --resume {id}` (tasks), or leave the number as a gap"
                 );
                 None
             }
             (Err(error), None) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = crate::cmd::shown(&error));
                 None
             }
         }
@@ -716,7 +722,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -725,7 +731,10 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
         let exists = match allocate::work_item_exists(&pm, work_item) {
             Ok(exists) => exists,
             Err(error) => {
-                eprintln!("error: cannot read work item: {error}");
+                eprintln!(
+                    "error: cannot read work item: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         };
@@ -740,7 +749,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     let template = match load_template("base/pm/spec.md.tmpl") {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = crate::cmd::shown(&error));
             return 1;
         }
     };
@@ -778,7 +787,11 @@ fn run_status(
                 Some(text)
             }
             Err(error) => {
-                eprintln!("error: cannot read {}: {error}", path.display());
+                eprintln!(
+                    "error: cannot read {}: {error}",
+                    path.display(),
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         },
@@ -796,7 +809,7 @@ fn run_status(
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -814,7 +827,7 @@ fn run_status(
             0
         }
         Err(error) => {
-            eprintln!("error: {id}: {error}");
+            eprintln!("error: {id}: {error}", error = crate::cmd::shown(&error));
             1
         }
     }
@@ -895,7 +908,7 @@ fn load_template(asset: &str) -> Result<String, String> {
     };
     let (text, source) = record_template::load(&super::repo_root()?, kind, &embedded)?;
     if let TemplateSource::Fallback(reason) = source {
-        eprintln!("warning: {reason}");
+        eprintln!("warning: {reason}", reason = crate::cmd::shown(&reason));
     }
     Ok(text)
 }

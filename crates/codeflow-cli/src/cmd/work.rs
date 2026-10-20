@@ -72,14 +72,17 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let mut backlog = match readiness::backlog(&root) {
         Ok(backlog) => backlog,
         Err(error) => {
-            eprintln!("work next: error: {error}");
+            eprintln!(
+                "work next: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -129,7 +132,12 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         }
     }
     if as_json {
-        println!("{}", next_json(&backlog));
+        // JSON keeps each value exact; its bytes hold no hidden character
+        // (`display_json`, TSK-388).
+        println!(
+            "{}",
+            codeflow_core::git::display_json(&next_json(&backlog).to_string())
+        );
         return 0;
     }
     println!("{}", backlog.snapshot_line());
@@ -153,28 +161,25 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
 }
 
 fn entry_line(entry: &Entry) -> String {
+    use codeflow_core::git::{display_message, display_text};
     let scope = entry.epic_id.as_deref().unwrap_or("standalone");
+    // A title is record text and a target a branch name: shown escaped,
+    // with a further line of either indented (TSK-388).
     let mut line = format!(
         "{:<8} {} {} ({scope} -> {})",
         entry.state.as_str(),
         entry.task_id,
-        entry.title,
-        entry.target
+        display_message(&entry.title),
+        display_text(&entry.target)
     );
     if !entry.reason.is_empty() {
         line.push_str("\n         ");
-        line.push_str(&entry.reason);
+        line.push_str(&display_message(&entry.reason));
     }
     if !entry.branches.is_empty() {
         line.push_str("\n         branch: ");
-        // A claim branch can be a remote's, whose name can hold any
-        // character git accepts (TSK-388).
-        let shown: Vec<String> = entry
-            .branches
-            .iter()
-            .map(|branch| codeflow_core::git::display_text(branch))
-            .collect();
-        line.push_str(&shown.join(", "));
+        // The backlog holds claim branches in display form already.
+        line.push_str(&entry.branches.join(", "));
     }
     for branch in &entry.informational_branches {
         line.push_str("\n         ");
@@ -210,20 +215,26 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     if !on.is_empty() {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
-            eprintln!("work claim: error: {error}");
+            eprintln!(
+                "work claim: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     }
     let pins = match resolve_pins(&root, on) {
         Ok(pins) => pins,
         Err(error) => {
-            eprintln!("work claim: error: {error}");
+            eprintln!(
+                "work claim: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -248,7 +259,10 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("work claim: error: {error}");
+            eprintln!(
+                "work claim: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
@@ -262,7 +276,7 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -281,7 +295,10 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
+            eprintln!(
+                "codeflow: cannot read policy: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
@@ -352,7 +369,10 @@ fn plan_check(
             "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
             others.join(", ")
         ),
-        Err(error) => println!("  note: other branches were not checked: {error}"),
+        Err(error) => println!(
+            "  note: other branches were not checked: {error}",
+            error = crate::cmd::shown(&error)
+        ),
     }
     Ok(())
 }

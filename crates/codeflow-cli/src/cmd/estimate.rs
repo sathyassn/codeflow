@@ -109,14 +109,17 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(error) => {
-            eprintln!("estimate outcomes: cannot read the current directory: {error}");
+            eprintln!(
+                "estimate outcomes: cannot read the current directory: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 2;
         }
     };
@@ -137,7 +140,7 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };

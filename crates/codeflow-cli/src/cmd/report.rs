@@ -43,21 +43,27 @@ pub fn run(args: &ReportArgs) -> i32 {
     let window = match window {
         Ok(window) => window,
         Err(error) => {
-            eprintln!("codeflow report ceremony: {error}");
+            eprintln!(
+                "codeflow report ceremony: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 2;
         }
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let prefixes = match Policy::load(&root) {
         Ok(policy) => policy.git.branch_prefixes,
         Err(error) => {
-            eprintln!("codeflow report: cannot read policy: {error}");
+            eprintln!(
+                "codeflow report: cannot read policy: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 1;
         }
     };
@@ -67,7 +73,10 @@ pub fn run(args: &ReportArgs) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("codeflow report ceremony: {error}");
+            eprintln!(
+                "codeflow report ceremony: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }

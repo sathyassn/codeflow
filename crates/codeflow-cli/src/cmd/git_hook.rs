@@ -69,7 +69,10 @@ pub fn run(args: &GitHookArgs) -> i32 {
             if matches!(args.stage, StageName::ReferenceTransaction) {
                 return refuse_reference_transaction(&error);
             }
-            eprintln!("codeflow: cannot read project root: {error}");
+            eprintln!(
+                "codeflow: cannot read project root: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 2;
         }
     };
@@ -101,7 +104,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
     if matches!(args.stage, StageName::CommitMsg) {
         if let Err(errors) = policy_schema::validate_policy(&root) {
             for e in &errors {
-                eprintln!("codeflow commit-msg: policy error: {e}");
+                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
             }
             eprintln!(
                 "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
@@ -115,10 +118,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
 
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
-            return 2;
-        }
+        Err(error) => return policy_unreadable(&error),
     };
     let token = super::integrate_token_present();
 
@@ -276,10 +276,7 @@ fn run_reference_transaction_with_reader(
             // so Git must cancel it instead of silently moving a protected ref.
             let (policy, _armed) = match Policy::load_effective(root) {
                 Ok(value) => value,
-                Err(error) => {
-                    eprintln!("codeflow: cannot read policy: {error}");
-                    return 2;
-                }
+                Err(error) => return policy_unreadable(&error),
             };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
@@ -287,7 +284,7 @@ fn run_reference_transaction_with_reader(
                 return 0;
             }
             eprintln!(
-                "codeflow reference-transaction: could not read reference-transaction input ({error}) — operation blocked while ref protection is active"
+                "codeflow reference-transaction: could not read reference-transaction input ({error}) — operation blocked while ref protection is active", error = crate::cmd::shown(&error)
             );
             return 1;
         }
@@ -303,10 +300,7 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = match Policy::load_effective(root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
-            return 2;
-        }
+        Err(error) => return policy_unreadable(&error),
     };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
@@ -318,7 +312,7 @@ fn run_reference_transaction_with_reader(
 
 fn refuse_reference_transaction(error: impl std::fmt::Display) -> i32 {
     eprintln!(
-        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked"
+        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked", error = crate::cmd::shown(&error)
     );
     1
 }
@@ -479,6 +473,13 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
         .filter(|path| !path.is_empty())
         .map(|path| codeflow_core::git::GitName::from_bytes(path).storage_key())
         .collect())
+}
+
+/// A local policy that cannot be read stops the hook. The error can quote a
+/// policy value from the checkout, so it is shown escaped (TSK-388).
+fn policy_unreadable(error: &str) -> i32 {
+    eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+    2
 }
 
 #[cfg(test)]

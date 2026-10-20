@@ -3,6 +3,7 @@
 //! shared registry (issue 75). The rules live in
 //! `codeflow_core::feedback`; this module parses arguments and prints.
 
+use super::shown;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -140,7 +141,7 @@ pub fn run(args: &FeedbackArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -178,7 +179,7 @@ pub fn run(args: &FeedbackArgs) -> i32 {
                     0
                 }
                 Err(error) => {
-                    eprintln!("error: {error}");
+                    eprintln!("error: {error}", error = shown(&error));
                     1
                 }
             }
@@ -237,14 +238,18 @@ fn template(root: &Path) -> Result<String, String> {
             Err(reason) => {
                 eprintln!(
                     "warning: {} is not usable ({reason}); the shipped template is used",
-                    feedback::PROJECT_TEMPLATE
+                    feedback::PROJECT_TEMPLATE,
+                    reason = shown(&reason)
                 );
                 Ok(embedded)
             }
         },
         Ok(None) => Ok(embedded),
         Err(reason) => {
-            eprintln!("warning: {reason}; the shipped template is used");
+            eprintln!(
+                "warning: {reason}; the shipped template is used",
+                reason = shown(&reason)
+            );
             Ok(embedded)
         }
     }
@@ -258,7 +263,7 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let topics = match feedback::topics(root) {
         Ok(topics) => topics,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     };
@@ -269,7 +274,10 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let template = match template(root) {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: feedback template unavailable: {error}");
+            eprintln!(
+                "error: feedback template unavailable: {error}",
+                error = shown(&error)
+            );
             return 1;
         }
     };
@@ -279,7 +287,7 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
         ),
         Ok((_, false)) => {}
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     }
@@ -314,7 +322,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     let topics = match feedback::topics(root) {
         Ok(topics) => topics,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     };
@@ -322,12 +330,14 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     let tracked = match feedback::tracked(root) {
         Ok(tracked) => tracked,
         Err(error) => {
+            let error = shown(&error);
             eprintln!("error: {} cannot be read: {error}", feedback::FEEDBACK_DIR);
             return 1;
         }
     };
     let loaded = feedback::load(root);
     for (path, reason) in &loaded.unreadable {
+        let reason = shown(&reason);
         eprintln!("warning: {path} cannot be read: {reason}");
     }
     // An item or a directory that cannot be read is an error, never a
@@ -368,7 +378,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
                 0
             }
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = shown(&error));
                 1
             }
         };
@@ -386,9 +396,9 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             .map(|(topic, members)| serde_json::json!({ "topic": topic, "items": members }))
             .collect();
         match serde_json::to_string_pretty(&value) {
-            Ok(text) => println!("{text}"),
+            Ok(text) => println!("{}", codeflow_core::git::display_json(&text)),
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = shown(&error));
                 return 1;
             }
         }

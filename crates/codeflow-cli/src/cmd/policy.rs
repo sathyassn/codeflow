@@ -38,7 +38,7 @@ pub fn run(args: &PolicyArgs) -> i32 {
         PolicyCommand::Show => match super::repo_root() {
             Ok(root) => show(&root),
             Err(error) => {
-                eprintln!("codeflow: {error}");
+                eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
                 2
             }
         },
@@ -119,7 +119,10 @@ fn show(root: &Path) -> i32 {
             println!("codeflow policy: .codeflow/policy.json is in effect");
         }
         PolicySource::UnreadableFile(error) => {
-            eprintln!("codeflow policy: {error}");
+            eprintln!(
+                "codeflow policy: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
         PolicySource::MalformedFile => {
@@ -127,7 +130,7 @@ fn show(root: &Path) -> i32 {
         }
     }
     for e in &errors {
-        eprintln!("codeflow policy: error: {e}");
+        eprintln!("codeflow policy: error: {e}", e = crate::cmd::shown(&e));
     }
 
     let defaults = default_policy_value();

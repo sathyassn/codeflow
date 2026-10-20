@@ -93,7 +93,7 @@ pub fn run(args: &TestArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -120,7 +120,10 @@ pub fn run(args: &TestArgs) -> i32 {
             // `--strict` exits non-zero so a scripted/unattended caller cannot
             // mistake "ran nothing" for "passed".
             eprintln!("==============================================================");
-            eprintln!("WARNING: codeflow test had nothing to run — {reason}.");
+            eprintln!(
+                "WARNING: codeflow test had nothing to run — {reason}.",
+                reason = crate::cmd::shown(&reason)
+            );
             eprintln!("         No tests were executed. This is NOT a green test run.");
             eprintln!("         Configure .codeflow/test-config.json or add a");
             eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
@@ -148,7 +151,7 @@ pub fn run(args: &TestArgs) -> i32 {
                 );
                 if !r.passed() {
                     if let Some(err) = &r.error {
-                        eprintln!("  error: {err}");
+                        eprintln!("  error: {err}", err = crate::cmd::shown(&err));
                     }
                     // Parsed failure summary FIRST — failing test IDs + file:line
                     // + counts — so the signal sits above the raw scrollback.
@@ -177,7 +180,7 @@ pub fn run(args: &TestArgs) -> i32 {
             }
         }
         Err(e) => {
-            eprintln!("codeflow test: {e}");
+            eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
             1
         }
     }
@@ -241,7 +244,7 @@ fn run_setup(args: &SetupArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -254,7 +257,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
                     return 1;
                 }
                 Err(error) => {
-                    eprintln!("codeflow test setup: {error}");
+                    eprintln!(
+                        "codeflow test setup: {error}",
+                        error = crate::cmd::shown(&error)
+                    );
                     return 1;
                 }
             };
@@ -268,7 +274,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
         let loaded = match crate::embedded::read_test_template(name) {
             Ok(loaded) => loaded,
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         };
@@ -292,7 +301,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
                 1
             }
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 1
             }
         };
@@ -302,7 +314,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
         return match setup::run_add_target(&root, &TerminalPromptProvider) {
             Ok(SetupResult::Written | SetupResult::WrittenNoTargets | SetupResult::Aborted) => 0,
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 1
             }
         };
@@ -326,7 +341,7 @@ fn run_setup(args: &SetupArgs) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("codeflow test setup: {e}");
+            eprintln!("codeflow test setup: {e}", e = crate::cmd::shown(&e));
             1
         }
     }

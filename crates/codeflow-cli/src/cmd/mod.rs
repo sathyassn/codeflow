@@ -130,7 +130,12 @@ fn render_findings(
     block_code: i32,
 ) -> i32 {
     for finding in relayed {
-        let _ = writeln!(err, "codeflow {plane}: {finding}");
+        // Relayed output, escaped where it was read; escaping is idempotent.
+        let _ = writeln!(
+            err,
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_output(finding)
+        );
     }
     for note in notes {
         let _ = writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
@@ -178,7 +183,10 @@ fn record_refusal(
         Ok(Some(info)) => info,
         Ok(None) => return,
         Err(error) => {
-            eprintln!("codeflow: cannot record refusal: {error}");
+            eprintln!(
+                "codeflow: cannot record refusal: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return;
         }
     };
@@ -274,6 +282,14 @@ fn repo_root_from(cwd: &std::path::Path) -> Result<PathBuf, String> {
             .ok_or_else(|| "repository has no worktree; run from a working checkout".to_string()),
         None => Ok(cwd.to_path_buf()),
     }
+}
+
+/// `text` as a printed field shows it ([`codeflow_core::git::display_message`]):
+/// escaped, with each further line indented, so an error, reason or title
+/// that quotes remote or checkout content cannot start a line of its own
+/// (TSK-388).
+pub(crate) fn shown(text: &dyn std::fmt::Display) -> String {
+    codeflow_core::git::display_message(&text.to_string())
 }
 
 #[cfg(test)]

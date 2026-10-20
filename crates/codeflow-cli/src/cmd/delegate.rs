@@ -118,7 +118,8 @@ pub fn run(args: &DelegateArgs) -> i32 {
                 Err(error) => {
                     eprintln!(
                         "codeflow delegate arm: cannot read {}: {error}",
-                        prompt_file.display()
+                        prompt_file.display(),
+                        error = crate::cmd::shown(&error)
                     );
                     return 1;
                 }
@@ -151,7 +152,7 @@ pub fn run(args: &DelegateArgs) -> i32 {
                 || INTERRUPTED.load(Ordering::SeqCst),
             ) {
                 Ok(result) => {
-                    print!("{}", result.json);
+                    print!("{}", codeflow_core::git::display_json(&result.json));
                     if result.failed {
                         10
                     } else {
@@ -182,7 +183,10 @@ fn read_prompt(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 fn fail(operation: &str, error: &delegate::DelegateError, code: i32) -> i32 {
-    eprintln!("codeflow delegate {operation}: {error}");
+    eprintln!(
+        "codeflow delegate {operation}: {error}",
+        error = crate::cmd::shown(&error)
+    );
     code
 }
 

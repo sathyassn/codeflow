@@ -64,7 +64,7 @@ pub fn run(args: &IdsArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -138,7 +138,10 @@ pub fn run(args: &IdsArgs) -> i32 {
             let mut report = match check::check(&git, registry.as_deref()) {
                 Ok(report) => report,
                 Err(error) => {
-                    eprintln!("codeflow ids check: could not run: {error}");
+                    eprintln!(
+                        "codeflow ids check: could not run: {error}",
+                        error = crate::cmd::shown(&error)
+                    );
                     return 2;
                 }
             };
@@ -146,7 +149,10 @@ pub fn run(args: &IdsArgs) -> i32 {
                 match check::merge_rule(&git, base, head) {
                     Ok(range) => merge(&mut report, range),
                     Err(error) => {
-                        eprintln!("codeflow ids check: could not run the merge rule: {error}");
+                        eprintln!(
+                            "codeflow ids check: could not run the merge rule: {error}",
+                            error = crate::cmd::shown(&error)
+                        );
                         return 2;
                     }
                 }
@@ -177,7 +183,11 @@ fn run_seed(root: &std::path::Path, map: Option<&PathBuf>) -> i32 {
                 Err(error) => return fail(&error),
             },
             Err(error) => {
-                eprintln!("error: cannot read {}: {error}", path.display());
+                eprintln!(
+                    "error: cannot read {}: {error}",
+                    path.display(),
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         },
@@ -216,7 +226,10 @@ fn run_admit(root: &std::path::Path, record: &str) -> i32 {
         _ => match std::fs::read_to_string(root.join(record)) {
             Ok(text) => (text, record.to_string()),
             Err(error) => {
-                eprintln!("error: cannot read {record}: {error}");
+                eprintln!(
+                    "error: cannot read {record}: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         },
@@ -317,6 +330,6 @@ fn list(ids: &[RegId]) -> String {
 }
 
 fn fail(error: &codeflow_core::ids::IdsError) -> i32 {
-    eprintln!("error: {error}");
+    eprintln!("error: {error}", error = crate::cmd::shown(&error));
     1
 }

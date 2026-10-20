@@ -1,5 +1,42 @@
 //! codeflow — the AI-development discipline layer CLI.
 
+// The output sink (TSK-388). These shadow the standard printing macros for
+// this whole crate: every line the CLI prints goes through
+// `codeflow_core::git::display_output`, which escapes each control, format
+// and separator character other than a line break or tab. CodeFlow quotes
+// branch names a remote chose, record titles and policy values from a
+// checkout, and errors that carry them; none of them reaches the terminal
+// raw. A field that can hold a line break is also shown through
+// `cmd::shown`, so it cannot start a line of its own. JSON is printed
+// through `codeflow_core::git::display_json` first, which leaves this sink
+// nothing to change.
+macro_rules! println {
+    () => {
+        ::std::println!()
+    };
+    ($($arg:tt)*) => {
+        ::std::println!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! print {
+    ($($arg:tt)*) => {
+        ::std::print!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprintln {
+    () => {
+        ::std::eprintln!()
+    };
+    ($($arg:tt)*) => {
+        ::std::eprintln!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprint {
+    ($($arg:tt)*) => {
+        ::std::eprint!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+    };
+}
+
 mod cmd;
 #[cfg(test)]
 mod command_reference;
