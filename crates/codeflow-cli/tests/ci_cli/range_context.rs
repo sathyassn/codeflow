@@ -27,6 +27,8 @@ fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
             "CI_MERGE_REQUEST_DIFF_BASE_SHA" => {
                 command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", value)
             }
+            "GITHUB_BASE_REF" => command.env("GITHUB_BASE_REF", value),
+            "CODEFLOW_DEFAULT_BRANCH" => command.env("CODEFLOW_DEFAULT_BRANCH", value),
             _ => panic!("unsupported fixture CI variable: {key}"),
         };
     }
@@ -1054,5 +1056,50 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
         let main = f.git(&["rev-parse", "origin/main"]);
         let fallback_range = format!("range {}..", &main[..8]);
         assert!(text.contains(&fallback_range), "{case}: {text}");
+    }
+}
+
+/// TSK-398: a local branch named `origin/main` (`refs/heads/origin/main`)
+/// at an author commit never stands in for the remote-tracking
+/// `refs/remotes/origin/main`, whichever source names the base branch. The
+/// shadowed run gets the clean run's verdict: the same range base, and a
+/// local-only line still never binds.
+#[test]
+fn local_origin_main_branch_never_replaces_the_remote_tracking_base() {
+    for source in [
+        None,
+        Some(("GITHUB_BASE_REF", "main")),
+        Some(("CODEFLOW_DEFAULT_BRANCH", "main")),
+    ] {
+        let (f, tip) = Line::standalone_on_remote_line();
+        f.git(&["push", "-q", "origin", &format!(":{LINE}")]);
+        let main = f.git(&["rev-parse", "refs/remotes/origin/main"]);
+        let range = format!("range {}..", &main[..8]);
+        let clean = ci(&f, &[], source);
+        f.git(&["branch", "origin/main", &tip]);
+        assert_eq!(f.git(&["rev-parse", "refs/heads/origin/main"]), tip);
+        let shadowed = ci(&f, &[], source);
+        let (clean_text, text) = (output(&clean), output(&shadowed));
+        assert!(clean_text.contains(&range), "{source:?}: {clean_text}");
+        assert!(text.contains(&range), "{source:?}: {text}");
+        assert!(
+            !text.contains(&format!("range {}..", &tip[..8])),
+            "{source:?}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("acceptance target '{LINE}'")),
+            "{source:?}: {text}"
+        );
+        if source.is_none() {
+            assert!(
+                text.contains("local-only line never counts"),
+                "{source:?}: {text}"
+            );
+        }
+        assert_eq!(
+            shadowed.status.code(),
+            clean.status.code(),
+            "{source:?}: clean {clean_text}\nshadowed {text}"
+        );
     }
 }

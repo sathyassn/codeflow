@@ -9566,3 +9566,30 @@ fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hoo
         );
     }
 }
+
+/// TSK-398: a local branch named `origin/main` at the line's record tip
+/// cannot bind a local-only line through the installed hook. The push gets
+/// the clean clone's verdict, and the anchor stays `refs/remotes/origin/main`.
+#[cfg(unix)]
+#[test]
+fn local_origin_main_branch_cannot_bind_a_line_through_installed_hook() {
+    use line_adoption_fixture::{output, Line, LINE};
+    let (f, tip) = Line::standalone_on_remote_line();
+    f.git(&["push", "origin", &format!(":{LINE}")]);
+    let clean = installed_standalone_push(&f);
+    f.git(&["branch", "origin/main", &tip]);
+    let shadowed = installed_standalone_push(&f);
+    let (clean_text, text) = (output(&clean), output(&shadowed));
+    for (out, text) in [(&clean, &clean_text), (&shadowed, &text)] {
+        assert!(!out.status.success(), "{text}");
+        assert!(text.contains("is not a bound epic line"), "{text}");
+        assert!(text.contains("uses advertised target 'main'"), "{text}");
+        assert!(text.contains("work.criteria_frozen"), "{text}");
+    }
+    assert!(!text.contains(&format!("--into={LINE}")), "{text}");
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
+            .is_empty(),
+        "refused push transferred the branch"
+    );
+}
