@@ -202,6 +202,25 @@ itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
 
+## Temporary folders
+
+Every template keeps what it downloads and checks out in temporary folders it
+makes itself, and removes them when the step or script ends: after a pass, a
+failure, or a hangup, interrupt or terminate signal from the runner. It never
+removes a folder it did not make. A self-hosted runner therefore keeps
+nothing from these jobs; a job killed outright (`SIGKILL`) removes nothing.
+
+| Template | Where its folders go |
+|---|---|
+| The install steps of `codeflow-ci.yml` and `codeflow-policy.yml` | `$RUNNER_TEMP`, else `$TMPDIR`, else `/tmp` |
+| The `gitleaks` and dependency audit steps of `codeflow-ci.yml` | `$RUNNER_TEMP`; the gitleaks report and log stay there for the runner to empty |
+| `.gitlab-ci.yml`, `bitbucket-pipelines.yml` and `ci-generic.sh` | One folder under `$TMPDIR`, else `/tmp`, holding the release download, the binaries and the target checkout |
+
+The shared run names `$TMPDIR` itself because macOS's `mktemp -d` ignores it.
+A signal that arrives before the target checkout exists ends the run with
+status 129, 130 or 143; one that arrives during the project setup hook ends
+it through the "ended before codeflow test ran" check.
+
 ## Timeouts and superseded runs
 
 A job with no `timeout-minutes` runs for up to GitHub's default six hours

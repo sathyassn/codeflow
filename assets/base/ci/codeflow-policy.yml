@@ -146,7 +146,10 @@ jobs:
             echo "::warning::no release digest is pinned in .codeflow/project.toml at ${PIN_REF}, so codeflow ${version} is checked only against its release's own sha256.sum; run \`codeflow update --pin ${version}\` and land it to pin the reviewed digest"
           fi
           base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
-          work=$(mktemp -d)
+          # The download folder sits in the runner's temp directory, and the
+          # exit trap removes it whether the step passes, fails or is stopped.
+          work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/codeflow-install.XXXXXX")
+          trap 'rm -rf "$work"' EXIT
           if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
             echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
           fi
