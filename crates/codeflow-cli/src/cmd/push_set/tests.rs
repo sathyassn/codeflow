@@ -893,15 +893,19 @@ fn round_two_unavailable_destination_refuses_before_ci() {
 /// shows them (TSK-388): an OSC title sequence, which only a server that is
 /// not git sends, the C1 control CSI (U+009B), which git accepts in a
 /// branch name, and an ordinary name, shown unchanged.
-const DEFAULTS: [(&str, &str); 3] = [
+const DEFAULTS: [(&str, &str); 5] = [
     ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
     ("ev\u{9b}31mil", "ev\\x9b31mil"),
+    ("ev\u{2028}il", "ev\\u{2028}il"),
+    ("ev\u{202e}lim", "ev\\u{202e}lim"),
     ("trunk", "trunk"),
 ];
 
-/// Whether `text` holds a control character other than a line break.
+/// Whether `text` holds a control character other than a line break, or
+/// a line separator or right-to-left override.
 fn controls(text: &str) -> bool {
-    text.chars().any(|c| c.is_control() && c != '\n')
+    text.chars()
+        .any(|c| (c.is_control() && c != '\n') || matches!(c, '\u{2028}' | '\u{202e}'))
 }
 
 #[test]
@@ -1070,7 +1074,7 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
     let exe = dir.path().join("check-fixture");
     std::fs::write(
         &exe,
-        "#!/bin/sh\nprintf \"codeflow ci: warning \\342\\200\\224 target 'ev\\033]0;owned\\007il'\\n  sanctioned:\\tfix it\\n\" >&2\n",
+        "#!/bin/sh\nprintf \"codeflow ci: warning \\342\\200\\224 target 'ev\\033]0;owned\\007il\\342\\200\\256'\\n  sanctioned:\\tfix it\\n\" >&2\n",
     )
     .unwrap();
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1087,7 +1091,7 @@ fn a_relayed_check_output_shows_control_characters_escaped() {
     assert_eq!(
         report.relayed,
         [
-            "`codeflow ci`: codeflow ci: warning \u{2014} target 'ev\\x1b]0;owned\\x07il'\n  sanctioned:\tfix it"
+            "`codeflow ci`: codeflow ci: warning \u{2014} target 'ev\\x1b]0;owned\\x07il\\u{202e}'\n  sanctioned:\tfix it"
         ],
         "{report:?}"
     );

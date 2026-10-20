@@ -100,7 +100,11 @@ pub fn render_stage(
     block_code: i32,
 ) -> i32 {
     for status in &report.status {
-        eprintln!("codeflow {plane}: {status}");
+        // A status line can quote a name a remote supplied (TSK-388).
+        eprintln!(
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_message(status)
+        );
     }
     render_findings(
         &mut std::io::stderr(),
