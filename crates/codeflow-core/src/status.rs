@@ -735,7 +735,7 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
             "  active: {} {} ({})",
             entry.task_id,
             entry.title,
-            entry.branches.join(", ")
+            shown_branches(&entry.branches)
         );
     }
     for entry in backlog.in_state(State::Ready) {
@@ -753,7 +753,7 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
                 state.as_str(),
                 entry.task_id,
                 entry.reason,
-                entry.branches.join(", ")
+                shown_branches(&entry.branches)
             );
         }
     }
@@ -761,11 +761,11 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
         let _ = writeln!(
             out,
             "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
-            branches.join(", ")
+            shown_branches(branches)
         );
     }
     for branch in &backlog.landed {
-        let _ = writeln!(out, "  landed: {branch}");
+        let _ = writeln!(out, "  landed: {}", crate::git::display_text(branch));
     }
     for (epic, progress) in &backlog.epics {
         let _ = writeln!(
@@ -774,6 +774,16 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
             progress.complete, progress.total, progress.cancelled
         );
     }
+}
+
+/// Branch names as status shows them, comma separated. A claim branch can
+/// be a remote's, whose name can hold any character git accepts (TSK-388).
+fn shown_branches(branches: &[String]) -> String {
+    branches
+        .iter()
+        .map(|branch| crate::git::display_text(branch))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_cleanup(out: &mut String, view: &StatusView) {
@@ -798,7 +808,8 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                     "  {} {} {}{} ({})",
                     item.disposition.label(),
                     item.kind,
-                    item.name,
+                    // A branch name can hold any character git accepts.
+                    crate::git::display_text(&item.name),
                     path,
                     item.proof
                 );
@@ -816,7 +827,8 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                     "  {} {} {} ({})",
                     item.disposition.label(),
                     item.kind,
-                    item.name,
+                    // A branch name can hold any character git accepts.
+                    crate::git::display_text(&item.name),
                     item.proof
                 );
             }
@@ -962,6 +974,34 @@ mod tests {
                 format!("landed by ancestry in origin/{shown}")
             );
         }
+    }
+
+    /// TSK-388 round 1 (Grok F-1, F-2): a local branch can carry a name a
+    /// remote chose, holding a character git accepts that a terminal acts
+    /// on. Status names each cleanup candidate and the checked-out branch
+    /// escaped.
+    #[test]
+    fn status_names_cleanup_candidates_and_the_branch_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let names = [
+            ("ev\u{9b}2Jil", "ev\\x9b2Jil"),
+            ("ev\u{2028}il", "ev\\u{2028}il"),
+            ("ev\u{202e}lim", "ev\\u{202e}lim"),
+        ];
+        for (name, _) in names {
+            git(dir.path(), &["branch", name]);
+        }
+        git(dir.path(), &["switch", "-q", "-c", "ev\u{202e}head"]);
+        let printed = render_status(&collect_status(dir.path()), false);
+        for (_, shown) in names {
+            assert!(printed.contains(&format!("branch {shown} ")), "{printed}");
+        }
+        assert!(printed.contains("branch: ev\\u{202e}head"), "{printed}");
+        assert!(
+            !printed.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+            "{printed:?}"
+        );
     }
 
     fn init_repo(dir: &Path) {

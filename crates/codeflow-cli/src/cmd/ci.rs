@@ -568,7 +568,10 @@ pub fn run(args: &CiArgs) -> i32 {
         println!("{}", finding.line("codeflow ci", "note"));
         skipped.push("branch-naming");
     } else {
-        println!("codeflow ci: branch '{branch}'");
+        println!(
+            "codeflow ci: branch '{}'",
+            codeflow_core::git::display_text(&branch)
+        );
         if let Some(v) = evaluate_branch(git, &branch) {
             tagged.push(v);
         }

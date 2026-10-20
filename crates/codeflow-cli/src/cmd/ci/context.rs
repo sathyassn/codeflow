@@ -189,8 +189,10 @@ pub(in crate::cmd) fn judged_declared_target(
         return Ok(Some(Declared::Eligible(target)));
     }
     if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
-        let reason =
-            format!("is not a protected branch or a valid epic line distinct from '{branch}'");
+        let reason = format!(
+            "is not a protected branch or a valid epic line distinct from '{}'",
+            codeflow_core::git::display_text(branch)
+        );
         return Ok(Some(Declared::Rejected { target, reason }));
     }
     let bind = |anchor: &str, place: &str| {
@@ -312,7 +314,13 @@ fn head_context(
         detected.head_source
     };
     let (branch, branch_source) = branch(root, args, environment)?;
-    println!("codeflow ci: head {head} ({head_source}: {head_ref}); branch context '{}' ({branch_source})", if branch.is_empty() { "none" } else { &branch });
+    // A branch name can hold any character git accepts (TSK-388).
+    let shown = if branch.is_empty() {
+        "none".to_string()
+    } else {
+        codeflow_core::git::display_text(&branch)
+    };
+    println!("codeflow ci: head {head} ({head_source}: {head_ref}); branch context '{shown}' ({branch_source})");
     if args.head.is_some() && args.branch.is_none() {
         println!("codeflow ci: context: pass --branch <name> if this head belongs to another line; branch context selects frozen or amendable acceptance binding");
     }
@@ -393,7 +401,7 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
     match names.len() {
         0 => Ok(None),
         1 => Ok(names.into_iter().next()),
-        _ => Err(format!("planning branch '{branch}' has several epic lines: {}; pass --into <target> and --base <ref>", names.into_iter().collect::<Vec<_>>().join(", "))),
+        _ => Err(format!("planning branch '{}' has several epic lines: {}; pass --into <target> and --base <ref>", codeflow_core::git::display_text(branch), names.into_iter().collect::<Vec<_>>().join(", "))),
     }
 }
 

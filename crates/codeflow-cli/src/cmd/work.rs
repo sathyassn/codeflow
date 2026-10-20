@@ -167,11 +167,18 @@ fn entry_line(entry: &Entry) -> String {
     }
     if !entry.branches.is_empty() {
         line.push_str("\n         branch: ");
-        line.push_str(&entry.branches.join(", "));
+        // A claim branch can be a remote's, whose name can hold any
+        // character git accepts (TSK-388).
+        let shown: Vec<String> = entry
+            .branches
+            .iter()
+            .map(|branch| codeflow_core::git::display_text(branch))
+            .collect();
+        line.push_str(&shown.join(", "));
     }
     for branch in &entry.informational_branches {
         line.push_str("\n         ");
-        line.push_str(branch);
+        line.push_str(&codeflow_core::git::display_output(branch));
     }
     line
 }
@@ -227,7 +234,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
                 claim.branch, claim.from
             );
             for information in &claim.informational_branches {
-                println!("  {information}");
+                println!("  {}", codeflow_core::git::display_output(information));
             }
             if claim.pushed {
                 println!("  pushed to origin; the branch is the visible mark of the claim");
