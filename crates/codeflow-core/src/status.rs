@@ -294,7 +294,8 @@ fn collect_cleanup(
             }
         };
         for linked in linked {
-            let name = linked.name.display().to_string();
+            // Stored exact, escaped once where status prints it (TSK-388).
+            let name = exact_text(&linked.name);
             let name = name.as_str();
             let path = linked.path.as_path();
             let Ok(worktree_repo) = git2::Repository::open(path) else {
@@ -325,8 +326,7 @@ fn collect_cleanup(
             );
             out.push(CleanupInfo {
                 kind: "worktree".to_string(),
-                name: branch
-                    .map_or_else(|| format!("{name} (detached)"), |b| b.display().to_string()),
+                name: branch.map_or_else(|| format!("{name} (detached)"), |b| exact_text(&b)),
                 path: Some(path.display().to_string()),
                 disposition,
                 proof,
@@ -446,6 +446,13 @@ fn classify_cleanup(
         CleanupDisposition::RetainUnproven,
         format!("not proven landed in {shown}"),
     )
+}
+
+/// `name` as status stores it: the exact text, or the display form for a
+/// name that is not valid UTF-8. Status escapes it once where it prints it.
+fn exact_text(name: &crate::git::GitName) -> String {
+    name.rule_text()
+        .map_or_else(|_| name.display().to_string(), str::to_owned)
 }
 
 fn repository_dirty(path: &Path) -> Option<bool> {
@@ -651,25 +658,7 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
 
     render_cleanup(&mut out, view);
 
-    match &view.work {
-        Some(work) => {
-            let _ = writeln!(
-                out,
-                "work: epics {} · tasks {}",
-                format_counts(&work.epics_by_status),
-                format_counts(&work.tasks_by_status)
-            );
-            for epic in &work.active_epics {
-                let _ = writeln!(out, "  in flight (epic): {epic}");
-            }
-            for task in &work.active_tasks {
-                let _ = writeln!(out, "  in flight (task): {task}");
-            }
-        }
-        None => {
-            let _ = writeln!(out, "work: (no project-management tier)");
-        }
-    }
+    render_work(&mut out, view);
     if let Some(backlog) = &view.derived {
         render_derived(&mut out, backlog);
     }
@@ -710,7 +699,7 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
                         entry.id,
                         entry.status,
                         entry.area,
-                        entry.name,
+                        crate::git::display_message(&entry.name),
                         entry.verified_by.join(", ")
                     );
                 }
@@ -730,6 +719,37 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     out
+}
+
+/// The work summary, with each record title shown escaped (TSK-388).
+fn render_work(out: &mut String, view: &StatusView) {
+    match &view.work {
+        Some(work) => {
+            let _ = writeln!(
+                out,
+                "work: epics {} · tasks {}",
+                format_counts(&work.epics_by_status),
+                format_counts(&work.tasks_by_status)
+            );
+            for epic in &work.active_epics {
+                let _ = writeln!(
+                    out,
+                    "  in flight (epic): {}",
+                    crate::git::display_message(epic)
+                );
+            }
+            for task in &work.active_tasks {
+                let _ = writeln!(
+                    out,
+                    "  in flight (task): {}",
+                    crate::git::display_message(task)
+                );
+            }
+        }
+        None => {
+            let _ = writeln!(out, "work: (no project-management tier)");
+        }
+    }
 }
 
 fn render_derived(out: &mut String, backlog: &Backlog) {
@@ -863,7 +883,13 @@ fn render_delivery_text(view: &StatusView) -> String {
         Some(caps) if !caps.is_empty() => {
             let _ = writeln!(out, "capability delivery:");
             for cap in caps {
-                let _ = writeln!(out, "  {}  {:<10}  {}", cap.id, cap.status, cap.name);
+                let _ = writeln!(
+                    out,
+                    "  {}  {:<10}  {}",
+                    cap.id,
+                    cap.status,
+                    crate::git::display_message(&cap.name)
+                );
                 if cap.epics.is_empty() && cap.missing_epics.is_empty() {
                     let _ = writeln!(out, "    (no epics linked)");
                 }
@@ -871,10 +897,14 @@ fn render_delivery_text(view: &StatusView) -> String {
                     let _ = writeln!(
                         out,
                         "    {} {}  [{}]  tasks {}/{} open",
-                        epic.format_id, epic.title, epic.status, epic.open_tasks, epic.total_tasks
+                        epic.format_id,
+                        crate::git::display_message(&epic.title),
+                        epic.status,
+                        epic.open_tasks,
+                        epic.total_tasks
                     );
                     for task in &epic.next_tasks {
-                        let _ = writeln!(out, "      next: {task}");
+                        let _ = writeln!(out, "      next: {}", crate::git::display_message(task));
                     }
                 }
                 for missing in &cap.missing_epics {

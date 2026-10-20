@@ -420,7 +420,8 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             } else {
                 format!("  in {}", item.placed_in.join(", "))
             };
-            println!("  {}  {:<10}  {}{placed}", item.id, item.status, item.title);
+            let title = shown(&item.title);
+            println!("  {}  {:<10}  {title}{placed}", item.id, item.status);
         }
     }
     0

@@ -240,7 +240,14 @@ fn tasks_line(root: &Path) -> Option<String> {
     let next = backlog
         .in_state(crate::workgraph::readiness::State::Ready)
         .next()
-        .map(|entry| format!("; next: {} {}", entry.task_id, truncate(&entry.title, 60)))
+        // A record title: a line break in it is indented (TSK-388).
+        .map(|entry| {
+            format!(
+                "; next: {} {}",
+                entry.task_id,
+                crate::git::display_message(&truncate(&entry.title, 60))
+            )
+        })
         .unwrap_or_default();
     Some(format!(
         "tasks: {}{next} (`codeflow work next`)",
