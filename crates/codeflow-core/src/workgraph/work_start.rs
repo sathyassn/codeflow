@@ -2664,32 +2664,43 @@ fn tracking_reference(
             Ok(None)
         };
     };
-    let landing = configured_upstream(repo, branch, &remotes)
+    let landing = configured_upstream(repo, branch, &remotes)?
         .unwrap_or_else(|| format!("refs/remotes/{}/{branch}", crate::ids::AUTHORITY));
     read(&landing)
 }
 
 /// The upstream configured for local branch `branch`, when it is a
 /// `refs/remotes/<remote>/...` ref of a configured remote other than `.`.
-/// Any other upstream, or one that cannot be read, is not honoured, and the
-/// caller reads the authority remote's tracking ref instead.
+/// Any other upstream, including one git cannot map, is not honoured, and the
+/// caller reads the authority remote's tracking ref instead. A configured
+/// name that is not valid UTF-8 is an error, never an absent upstream (issue
+/// 79).
 fn configured_upstream(
     repo: &Repository,
     branch: &str,
     remotes: &git2::string_array::StringArray,
-) -> Option<String> {
+) -> Result<Option<String>, WorkStartError> {
     let local = format!("refs/heads/{branch}");
-    let remote = repo.branch_upstream_remote(&local).ok()?;
-    let remote = remote.as_str().ok()?;
+    let not_utf8 = |what: &str| {
+        WorkStartError::Repository(format!(
+            "the configured upstream {what} of '{branch}' is not valid UTF-8"
+        ))
+    };
+    let Ok(remote) = repo.branch_upstream_remote(&local) else {
+        return Ok(None);
+    };
+    let remote = remote.as_str().map_err(|_| not_utf8("remote"))?;
     if remote == "." || !remotes.iter_bytes().any(|name| name == remote.as_bytes()) {
-        return None;
+        return Ok(None);
     }
-    let upstream = repo.branch_upstream_name(&local).ok()?;
-    let upstream = upstream.as_str().ok()?;
-    upstream
+    let Ok(upstream) = repo.branch_upstream_name(&local) else {
+        return Ok(None);
+    };
+    let upstream = upstream.as_str().map_err(|_| not_utf8("ref"))?;
+    Ok(upstream
         .strip_prefix(&format!("refs/remotes/{remote}/"))
         .is_some_and(|rest| !rest.is_empty())
-        .then(|| upstream.to_owned())
+        .then(|| upstream.to_owned()))
 }
 
 /// Why a pin is on no verified target: the refs read, then the targets that
