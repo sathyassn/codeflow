@@ -328,9 +328,9 @@ id: CAP-004
 name: test-gate
 area: engine
 status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
+verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs", "codeflow-cli tests/test_gate_cli.rs", "cargo test testing::delivery", "cargo test testing::evidence"]
 epics: [EPC-001, EPC-022, EPC-023]
-adrs: [ADR-0021, ADR-0031]
+adrs: [ADR-0021, ADR-0031, ADR-0085]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
@@ -341,6 +341,9 @@ or a detected stack.
   into a non-zero exit for unattended callers.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
   the verdict (ADR-0021).
+- The task's declared line supplies the default comparison base. Only content
+  targets with matching candidate evidence can be skipped; missing evidence runs
+  the target. The [test-gate reference](test-gate.md) defines the fields.
 - `codeflow test setup` fills absent configs and never auto-replaces populated
   ones.
 

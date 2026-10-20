@@ -71,6 +71,8 @@ pub struct TargetRunResult {
     pub duration_ms: u64,
     pub report_path: Option<PathBuf>,
     pub coverage_path: Option<PathBuf>,
+    /// Per-target comparison evidence; absent for an execution outside the gate.
+    pub evidence: Option<serde_json::Value>,
 }
 
 /// Run a single target's command for the specified mode.
@@ -105,6 +107,14 @@ pub fn run_target(
         &target.name,
         target.shell,
         timeout,
+        target
+            .evidence
+            .as_ref()
+            .is_none_or(|e| e.environment.is_empty())
+            && target
+                .env
+                .keys()
+                .all(|name| super::evidence::generated_environment(name)),
     )?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -129,6 +139,7 @@ pub fn run_target(
     };
 
     Ok(TargetRunResult {
+        evidence: None,
         target_name: target.name.clone(),
         exit_code,
         stdout: outcome.stdout,
@@ -344,14 +355,13 @@ pub fn run_dependency_targets(
     targets: &[TargetConfig],
     mode: &str,
     project_dir: &Path,
-    parallel: bool,
-    max_parallel: Option<usize>,
-    fail_fast: bool,
+    execution: &super::config::ExecutionConfig,
     run_dir: &Path,
+    declarations: &[TargetConfig],
 ) -> Vec<Result<TargetRunResult, TestingError>> {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc::channel;
-    let bound = parallel_bound(parallel, max_parallel);
+    let bound = parallel_bound(execution.parallel, execution.max_parallel);
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
         Err(error) => return vec![Err(error)],
@@ -369,7 +379,7 @@ pub fn run_dependency_targets(
                 .requires
                 .iter()
                 .any(|r| completed.get(r) == Some(&false));
-            if prerequisite_failed || (fail_fast && completed.values().any(|ok| !ok)) {
+            if prerequisite_failed || (execution.fail_fast && completed.values().any(|ok| !ok)) {
                 let reason = if prerequisite_failed {
                     "not run: prerequisite failed"
                 } else {
@@ -398,6 +408,7 @@ pub fn run_dependency_targets(
             running.insert(index);
             exclusive_running = target.exclusive;
             let target = target.clone();
+            let declarations = declarations.to_vec();
             let mode = mode.to_string();
             let root = project_dir.to_path_buf();
             let baseline = baseline.clone();
@@ -406,7 +417,7 @@ pub fn run_dependency_targets(
             std::thread::spawn(move || {
                 announce_start(&target, &mode);
                 let result = std::panic::catch_unwind(|| {
-                    run_owed_target(&target, &mode, &root, &baseline, &run_dir)
+                    run_owed_target(&target, &mode, &root, &baseline, &run_dir, &declarations)
                 })
                 .unwrap_or_else(|_| {
                     Err(TestingError::ParallelExecutionError {
@@ -460,6 +471,7 @@ fn parallel_bound(parallel: bool, configured: Option<usize>) -> usize {
 
 fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     TargetRunResult {
+        evidence: None,
         target_name: target.name.clone(),
         exit_code: -1,
         stdout: String::new(),
@@ -478,6 +490,7 @@ fn run_owed_target(
     root: &Path,
     baseline: &std::collections::BTreeMap<String, String>,
     run_dir: &Path,
+    declarations: &[TargetConfig],
 ) -> Result<TargetRunResult, TestingError> {
     if let Some(report) = &target.report {
         let path = root
@@ -487,7 +500,26 @@ fn run_owed_target(
             std::fs::remove_file(path)?;
         }
     }
-    let mut result = run_target(target, mode, root)?;
+    let declared = declarations
+        .iter()
+        .find(|t| t.name == target.name)
+        .ok_or_else(|| super::delivery::invalid(root, "unknown target declaration"))?;
+    let home = crate::registry::codeflow_home();
+    let before = super::evidence::observe(root, declared, declarations, home.as_deref());
+    let git_tree = super::evidence::git_tree(root);
+    let mut result = run_target(target, mode, root).map_err(|error| {
+        super::delivery::invalid(root, super::evidence::redact(declared, &error.to_string()))
+    })?;
+    let after = super::evidence::observe(root, declared, declarations, home.as_deref());
+    result.evidence = Some(serde_json::to_value(super::evidence::Execution {
+        name: target.name.clone(),
+        mode: mode.into(),
+        command: super::evidence::redact(declared, &target.modes[mode].command),
+        git_tree,
+        before,
+        after,
+    })?);
+
     if !target.outputs.is_empty() && result.exit_code == 0 {
         let after = super::delivery::tracked(root)?;
         let changed: Vec<_> = after
@@ -530,18 +562,40 @@ fn run_owed_target(
     if let Some(path) = &result.report_path {
         if path.exists() {
             let saved = destination.join("junit.xml");
-            std::fs::copy(path, &saved)?;
+            save_redacted_report(path, &saved, declared)?;
             result.report_path = Some(saved);
         }
     }
     if let Some(path) = &result.coverage_path {
         if path.exists() {
-            std::fs::copy(path, destination.join("coverage"))?;
+            save_redacted_report(path, &destination.join("coverage"), declared)?;
         }
     }
+    result.stdout = super::evidence::redact(declared, &result.stdout);
+    result.stderr = super::evidence::redact(declared, &result.stderr);
     std::fs::write(destination.join("stdout.log"), &result.stdout)?;
     std::fs::write(destination.join("stderr.log"), &result.stderr)?;
     Ok(result)
+}
+
+fn save_redacted_report(
+    source: &Path,
+    destination: &Path,
+    target: &TargetConfig,
+) -> Result<(), TestingError> {
+    let bytes = std::fs::read(source)?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        super::delivery::invalid(
+            source,
+            "report is not UTF-8; cannot redact environment inputs safely",
+        )
+    })?;
+    let redacted = super::evidence::redact(target, &text);
+    if redacted != text {
+        std::fs::write(source, &redacted)?;
+    }
+    std::fs::write(destination, redacted)?;
+    Ok(())
 }
 
 /// Returns `true` when the process is running inside a CI environment.
@@ -599,6 +653,7 @@ fn spawn_command(
     target_name: &str,
     shell: CommandShell,
     timeout: Duration,
+    emit_progress: bool,
 ) -> Result<CommandOutcome, TestingError> {
     let mut cmd = build_command(command, cwd, env, target_name, shell)?;
 
@@ -646,14 +701,12 @@ fn spawn_command(
         let _ = child.wait();
     })?;
 
-    let stdout_reader = child
-        .stdout
-        .take()
-        .map(|pipe| spawn_progress_reader(pipe, target_name.to_string()));
-    let stderr_reader = child
-        .stderr
-        .take()
-        .map(|pipe| spawn_progress_reader(pipe, target_name.to_string()));
+    let stdout_reader = child.stdout.take().map(|pipe| {
+        spawn_reader_with_progress(pipe, emit_progress.then(|| target_name.to_string()))
+    });
+    let stderr_reader = child.stderr.take().map(|pipe| {
+        spawn_reader_with_progress(pipe, emit_progress.then(|| target_name.to_string()))
+    });
 
     let start = Instant::now();
     let mut timed_out = false;
@@ -788,13 +841,6 @@ struct CapturedOutput {
 /// Spawn a thread that drains a child pipe to EOF while retaining a bounded
 /// tail. Draining continues after the cap so the child cannot block on a full
 /// pipe.
-fn spawn_progress_reader<R: Read + Send + 'static>(
-    pipe: R,
-    name: String,
-) -> std::thread::JoinHandle<CapturedOutput> {
-    spawn_reader_with_progress(pipe, Some(name))
-}
-
 fn spawn_reader_with_progress<R: Read + Send + 'static>(
     mut pipe: R,
     name: Option<String>,
@@ -945,6 +991,8 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(

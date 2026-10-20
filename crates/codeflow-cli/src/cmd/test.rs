@@ -32,6 +32,7 @@ pub struct TestArgs {
     pub strict: bool,
 
     /// Compare the entire candidate delta with a recorded green base.
+    /// Default: the merge base of HEAD and the task's declared integration target.
     /// An unproven base conservatively runs every target.
     #[arg(long, conflicts_with = "all")]
     pub since: Option<String>,

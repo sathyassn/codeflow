@@ -15,6 +15,7 @@ pub mod coverage;
 mod delivery;
 pub mod doctor;
 pub mod error;
+mod evidence;
 pub mod gate;
 pub mod gate_guard;
 pub mod report;

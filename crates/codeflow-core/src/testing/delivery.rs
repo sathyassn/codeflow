@@ -25,6 +25,7 @@ pub struct Selection {
     pub selected: BTreeSet<String>,
     pub skipped: BTreeSet<String>,
     pub reason: String,
+    pub reasons: BTreeMap<String, String>,
 }
 
 pub fn invalid(root: &Path, message: impl Into<String>) -> TestingError {
@@ -229,37 +230,101 @@ fn green_base(
     home: Option<&Path>,
     base: &str,
     config_digest: &str,
-) -> Result<bool, String> {
-    let Some(home) = home else {
-        return Ok(false);
-    };
+) -> Result<Vec<serde_json::Value>, String> {
+    let home = home.ok_or("no qualifying run: CodeFlow home unavailable")?;
+    let tree = git_output(
+        root,
+        &["rev-parse", "--verify", &format!("{base}^{{tree}}")],
+    )?;
     let directory = durable_root(root, home);
-    if !directory
-        .try_exists()
-        .map_err(|error| format!("cannot inspect green-base evidence: {error}"))?
-    {
-        return Ok(false);
+    let entries =
+        std::fs::read_dir(directory).map_err(|_| "no qualifying run: evidence unavailable")?;
+    let mut records = Vec::new();
+    let mut reason = "no qualifying run for the base tree";
+    for entry in entries {
+        let Some(record) = entry
+            .ok()
+            .and_then(|entry| std::fs::read(entry.path().join("run.json")).ok())
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        else {
+            reason = "corrupt or unreadable qualifying record";
+            continue;
+        };
+        if record["git_tree"].as_str().is_none() {
+            reason = "legacy record: missing git_tree evidence";
+            continue;
+        }
+        if record["git_tree"] != tree.trim() {
+            continue;
+        }
+        if record["config_digest"] != config_digest {
+            reason = "config digest changed";
+            continue;
+        }
+        if record["passed"] != true {
+            reason = "failed qualifying run";
+            continue;
+        }
+        if record["complete"] != true || record["mode"] != "full" {
+            reason = "partial qualifying run";
+            continue;
+        }
+        if record["clean"] != true {
+            reason = "dirty qualifying run";
+            continue;
+        }
+        if record["generation_unchanged"] != true {
+            reason = "inputs changed during qualifying run";
+            continue;
+        }
+        records.push(record);
     }
-    let mut green = false;
-    for entry in std::fs::read_dir(directory)
-        .map_err(|error| format!("cannot read green-base evidence: {error}"))?
-    {
-        let entry = entry.map_err(|error| format!("cannot read green-base entry: {error}"))?;
-        let bytes = std::fs::read(entry.path().join("run.json"))
-            .map_err(|error| format!("cannot read green-base run: {error}"))?;
-        let a: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("cannot parse green-base run: {error}"))?;
-        green |= a["passed"] == true
-            && a["complete"] == true
-            && a["clean"] == true
-            && a["revision"] == base
-            && a["config_digest"] == config_digest;
+    if records.is_empty() {
+        Err(reason.into())
+    } else {
+        Ok(records)
     }
-    Ok(green)
 }
 
-/// Select conservatively from the whole delta, then include producer closure.
-/// Unknown evidence, rename, deletion, untracked or unmatched input means all.
+fn comparison_base(root: &Path, options: &GateOptions) -> Result<(String, String), String> {
+    if let Some(base) = &options.since {
+        let sha = git_output(
+            root,
+            &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+        )?;
+        return Ok((sha.trim().into(), format!("explicit --since {base}")));
+    }
+    let repo = git2::Repository::discover(root)
+        .map_err(|_| "no comparison base: repository unavailable")?;
+    let head = repo
+        .head()
+        .map_err(|_| "no comparison base: HEAD unavailable")?;
+    if repo.head_detached().unwrap_or(true) {
+        return Err("no comparison base: detached HEAD has no task".into());
+    }
+    let branch = head
+        .shorthand()
+        .map_err(|_| "no comparison base: branch is not UTF-8")?;
+    let task = crate::workgraph::work_start::task_id_from_branch(root, branch)
+        .map_err(|error| format!("cannot resolve task: {error}"))?
+        .ok_or("no comparison base: branch has no task")?;
+    let target = crate::workgraph::declared_work_target(root, &task)
+        .map_err(|error| format!("cannot resolve task line: {error}"))?
+        .ok_or("no comparison base: task has no declared integration target")?;
+    let resolved = crate::workgraph::work_start::resolve_work_target_checked(root, Some(&target))
+        .map_err(|error| format!("cannot resolve task line: {error}"))?
+        .ok_or("no comparison base: task line unavailable")?;
+    let base = git_output(root, &["merge-base", "HEAD", &resolved.target])?;
+    Ok((
+        base.trim().into(),
+        format!(
+            "merge base of HEAD with {task} integration target {target} ({})",
+            resolved.target
+        ),
+    ))
+}
+
+/// Only exact, declared content evidence can remove an eligible check.
 pub fn select(
     root: &Path,
     targets: &[TargetConfig],
@@ -278,6 +343,7 @@ pub fn select(
         selected: eligible.clone(),
         skipped: BTreeSet::new(),
         reason: reason.into(),
+        reasons: BTreeMap::new(),
     };
     if !options.only.is_empty() {
         let selected = with_prerequisites(targets, options.only.iter().cloned().collect());
@@ -285,49 +351,63 @@ pub fn select(
             skipped: eligible.difference(&selected).cloned().collect(),
             selected,
             reason: "--only: the named targets and their prerequisites".into(),
+            reasons: BTreeMap::new(),
         };
     }
     if options.all {
         return all("--all: every target");
     }
-    let Some(base) = &options.since else {
-        return all("no proven comparison base");
+    let (base, found) = match comparison_base(root, options) {
+        Ok(base) => base,
+        Err(reason) => return all(&reason),
     };
-    let base_sha = match git_output(
-        root,
-        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    ) {
-        Ok(value) => value,
-        Err(error) => return all(&error),
+    let context = format!("comparison base {base}: {found}");
+    let mut selection = select_base(root, targets, execution, mode, home, config_digest, &base);
+    selection.reason = format!("{context}; {}", selection.reason);
+    selection
+}
+
+fn select_base(
+    root: &Path,
+    targets: &[TargetConfig],
+    execution: &ExecutionConfig,
+    mode: &str,
+    home: Option<&Path>,
+    config_digest: &str,
+    base: &str,
+) -> Selection {
+    let eligible: BTreeSet<String> = targets
+        .iter()
+        .filter(|t| t.enabled && t.modes.contains_key(mode))
+        .map(|t| t.name.clone())
+        .collect();
+    let all = |reason: &str| Selection {
+        selected: eligible.clone(),
+        skipped: BTreeSet::new(),
+        reason: reason.into(),
+        reasons: BTreeMap::new(),
     };
-    let base_sha = base_sha.strip_suffix('\n').unwrap_or(&base_sha);
-    match green_base(root, home, base_sha, config_digest) {
-        Ok(true) => {}
-        Ok(false) => return all("base has no green run with the same config digest"),
-        Err(error) => return all(&error),
+    if git_output(root, &["merge-base", "--is-ancestor", base, "HEAD"]).is_err() {
+        return all("unproven ancestry");
     }
-    if let Err(error) = git_output(root, &["merge-base", "--is-ancestor", base_sha, "HEAD"]) {
-        return all(&error);
-    }
-    // Include staged and unstaged edits as well as the committed range.
+    let records = match green_base(root, home, base, config_digest) {
+        Ok(records) => records,
+        Err(reason) => return all(&reason),
+    };
     let delta = match git_output(
         root,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "--find-renames",
-            base_sha,
-            "--",
-        ],
+        &["diff", "--name-status", "-z", "--find-renames", base, "--"],
     ) {
-        Ok(value) => value,
-        Err(error) => return all(&error),
+        Ok(delta) => delta,
+        Err(reason) => return all(&reason),
     };
     let untracked = match git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"]) {
-        Ok(value) => value,
-        Err(error) => return all(&error),
+        Ok(paths) => paths,
+        Err(reason) => return all(&reason),
     };
+    if !untracked.is_empty() {
+        return all("untracked input: every target");
+    }
     let mut paths = Vec::new();
     let mut fields = delta.split('\0').filter(|f| !f.is_empty());
     while let Some(status) = fields.next() {
@@ -339,32 +419,174 @@ pub fn select(
         };
         paths.push(path);
     }
-    paths.extend(untracked.split('\0').filter(|p| !p.is_empty()));
-    if paths.iter().any(|p| matches(&execution.run_everything, p)) {
+    if paths
+        .iter()
+        .any(|path| matches(&execution.run_everything, path))
+    {
         return all("shared infrastructure changed");
     }
     if paths
         .iter()
-        .any(|p| !targets.iter().any(|t| matches(&t.narrow, p)))
+        .any(|path| !targets.iter().any(|t| matches(&t.narrow, path)))
     {
         return all("unmatched input: every target");
     }
-    let selected = with_prerequisites(
-        targets,
-        targets
-            .iter()
-            .filter(|t| {
-                eligible.contains(&t.name)
-                    && (t.narrow.is_empty() || paths.iter().any(|p| matches(&t.narrow, p)))
-            })
-            .map(|t| t.name.clone())
-            .collect(),
-    );
+    let mut selected = BTreeSet::new();
+    let mut reasons = BTreeMap::new();
+    for target in targets.iter().filter(|t| eligible.contains(&t.name)) {
+        if target.input_class != Some(super::config::InputClass::Content) {
+            selected.insert(target.name.clone());
+            reasons.insert(
+                target.name.clone(),
+                format!("input class {:?} requires execution", target.input_class),
+            );
+            continue;
+        }
+        let now = super::evidence::observe(root, target, targets, home);
+        let mut reason = now
+            .unavailable
+            .clone()
+            .unwrap_or_else(|| "missing target evidence".into());
+        let mut proven = false;
+        if let Some(now) = now.identity {
+            for record in &records {
+                match target_covered(record, target, targets, mode, &now) {
+                    Ok(()) => {
+                        proven = true;
+                        break;
+                    }
+                    Err(missing) => reason = missing,
+                }
+            }
+        }
+        if proven {
+            reason = "unchanged declared check covered by full candidate evidence".into();
+        } else {
+            selected.insert(target.name.clone());
+        }
+        reasons.insert(target.name.clone(), reason);
+    }
+    include_affected_graph(targets, &eligible, &mut selected, &mut reasons);
     Selection {
         skipped: eligible.difference(&selected).cloned().collect(),
         selected,
-        reason: format!("unchanged declared inputs against green base {base_sha}"),
+        reason: "per-target evidence against the base tree".into(),
+        reasons,
     }
+}
+
+fn include_affected_graph(
+    targets: &[TargetConfig],
+    eligible: &BTreeSet<String>,
+    selected: &mut BTreeSet<String>,
+    reasons: &mut BTreeMap<String, String>,
+) {
+    // A producer that will run may change its outputs. Its consumers cannot
+    // take credit from the outputs that happen to exist before that execution.
+    loop {
+        let previous = selected.clone();
+        for target in targets.iter().filter(|t| eligible.contains(&t.name)) {
+            if target.requires.iter().any(|name| selected.contains(name))
+                && selected.insert(target.name.clone())
+            {
+                reasons.insert(target.name.clone(), "producer requires execution".into());
+            }
+        }
+        *selected = with_prerequisites(targets, selected.clone());
+        if *selected == previous {
+            break;
+        }
+    }
+    for name in selected.iter() {
+        if reasons
+            .get(name)
+            .is_some_and(|reason| reason.starts_with("unchanged"))
+        {
+            reasons.insert(name.clone(), "required prerequisite".into());
+        }
+    }
+}
+
+fn target_covered(
+    record: &serde_json::Value,
+    target: &TargetConfig,
+    targets: &[TargetConfig],
+    mode: &str,
+    now: &super::evidence::Identity,
+) -> Result<(), String> {
+    for skipped in [&record["selection"]["skipped"], &record["ci_skipped"]] {
+        if !skipped.as_array().is_some_and(Vec::is_empty) {
+            return Err("partial qualifying run: skipped evidence".into());
+        }
+    }
+    let full: BTreeSet<_> = targets
+        .iter()
+        .filter(|t| t.enabled && t.modes.contains_key("full"))
+        .map(|t| t.name.as_str())
+        .collect();
+    let results = record["results"]
+        .as_array()
+        .ok_or("missing execution results")?;
+    let executed: BTreeSet<_> = results.iter().filter_map(|r| r["name"].as_str()).collect();
+    if full != executed || results.len() != full.len() {
+        return Err("partial qualifying run: execution membership differs".into());
+    }
+    let executions = record["target_evidence"]
+        .as_array()
+        .ok_or("missing target evidence")?;
+    if executions
+        .iter()
+        .any(|e| !targets.iter().any(|t| e["name"] == t.name))
+    {
+        return Err("unknown declared target in evidence".into());
+    }
+    let value = executions
+        .iter()
+        .find(|e| e["name"] == target.name)
+        .ok_or("missing target evidence")?;
+    let evidence: super::evidence::Execution =
+        serde_json::from_value(value.clone()).map_err(|_| "missing or corrupt target evidence")?;
+    if evidence.git_tree.as_deref() != record["git_tree"].as_str() {
+        return Err("target Git tree evidence differs".into());
+    }
+    if !record["results"].as_array().is_some_and(|results| {
+        results
+            .iter()
+            .any(|r| r["name"] == target.name && r["exit_code"] == 0 && r["error"].is_null())
+    }) {
+        return Err("missing passed target execution".into());
+    }
+    if evidence.command != target.modes[mode].command {
+        return Err("mode-specific command differs".into());
+    }
+    if evidence.mode != mode
+        && !(evidence.mode == "full"
+            && target
+                .evidence
+                .as_ref()
+                .is_some_and(|e| e.covers_modes.iter().any(|m| m == mode)))
+    {
+        return Err("mode is not covered by the qualifying execution".into());
+    }
+    let before = evidence.before.identity.ok_or_else(|| {
+        evidence
+            .before
+            .unavailable
+            .unwrap_or_else(|| "missing before evidence".into())
+    })?;
+    let after = evidence.after.identity.ok_or_else(|| {
+        evidence
+            .after
+            .unavailable
+            .unwrap_or_else(|| "missing after evidence".into())
+    })?;
+    if before != after {
+        return Err("inputs or dependencies changed during qualifying run".into());
+    }
+    if let Some(reason) = super::evidence::mismatch(&before, now) {
+        return Err(reason.into());
+    }
+    Ok(())
 }
 
 /// Add every target the selection requires, transitively.
@@ -426,7 +648,7 @@ pub fn check_only(
 /// caller select every target, so a path that is not valid UTF-8 widens the
 /// run and never narrows it. A lossy path could match a `narrow` pattern the
 /// real bytes do not and drop a check the change owes.
-fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = crate::git::command()
         .args(args)
         .current_dir(root)
@@ -570,6 +792,115 @@ fn observation(output: &std::process::Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn green_base_uses_git_tree_identity_across_commits_and_rejects_legacy_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path()).unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let candidate = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "candidate",
+                &tree,
+                &[],
+            )
+            .unwrap();
+        let merged = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "merge",
+                &tree,
+                &[&repo.find_commit(candidate).unwrap()],
+            )
+            .unwrap();
+        assert_ne!(candidate, merged);
+        let directory = durable_root(root.path(), home.path()).join("candidate");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut record = serde_json::json!({"git_tree":tree.id().to_string(),"revision":candidate.to_string(),
+            "passed":true,"complete":true,"clean":true,"mode":"full","generation_unchanged":true,"config_digest":"config"});
+        std::fs::write(
+            directory.join("run.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            green_base(
+                root.path(),
+                Some(home.path()),
+                &merged.to_string(),
+                "config"
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        record.as_object_mut().unwrap().remove("git_tree");
+        std::fs::write(
+            directory.join("run.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        assert!(green_base(
+            root.path(),
+            Some(home.path()),
+            &merged.to_string(),
+            "config"
+        )
+        .unwrap_err()
+        .contains("legacy"));
+    }
+
+    #[test]
+    fn selection_finds_the_declared_task_line_without_evidence_and_explains_the_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path()).unwrap();
+        std::fs::create_dir_all(root.path().join("project-management/tasks")).unwrap();
+        std::fs::write(
+            root.path().join("project-management/tasks/TSK-001.md"),
+            "---\nid: TSK-001\nintegration_target: integration/checks\n---\n",
+        )
+        .unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["."], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let id = repo
+            .commit(Some("HEAD"), &signature, &signature, "base", &tree, &[])
+            .unwrap();
+        let commit = repo.find_commit(id).unwrap();
+        repo.branch("integration/checks", &commit, false).unwrap();
+        repo.branch("task/TSK-001-selection", &commit, false)
+            .unwrap();
+        repo.set_head("refs/heads/task/TSK-001-selection").unwrap();
+        let target: TargetConfig = serde_json::from_value(serde_json::json!({"name":"check","runner":"custom","modes":{"quick":{"command":"echo check"}}})).unwrap();
+        let selected = select(
+            root.path(),
+            &[target],
+            &ExecutionConfig::default(),
+            "quick",
+            &GateOptions::default(),
+            None,
+            "config",
+        );
+        assert_eq!(selected.selected, BTreeSet::from(["check".into()]));
+        assert!(selected
+            .reason
+            .contains("TSK-001 integration target integration/checks"));
+        assert!(selected.reason.contains(&id.to_string()));
+        assert!(selected.reason.contains("no qualifying run"));
+    }
 
     /// A repository whose index and first commit hold `caf\xe9.txt`, a name
     /// that is not valid UTF-8, beside `plain.txt`. The file is never written

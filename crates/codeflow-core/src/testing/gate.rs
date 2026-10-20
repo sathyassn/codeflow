@@ -225,18 +225,34 @@ fn run_gate_resolved(
             eprintln!(
                 "[codeflow test] selected {}: {}; requires [{}]",
                 target.name,
-                selection.reason,
+                format_args!(
+                    "{}; {}",
+                    selection.reason,
+                    selection
+                        .reasons
+                        .get(&target.name)
+                        .map_or("", String::as_str)
+                ),
                 target.requires.join(", ")
             );
         } else if selection.skipped.contains(&target.name) {
             eprintln!(
                 "[codeflow test] skipped {}: {}",
-                target.name, selection.reason
+                target.name,
+                format_args!(
+                    "{}; {}",
+                    selection.reason,
+                    selection
+                        .reasons
+                        .get(&target.name)
+                        .map_or("", String::as_str)
+                )
             );
         }
     }
+    let declarations = targets.clone();
     targets.retain(|t| selection.selected.contains(&t.name));
-    if targets.is_empty() {
+    if targets.is_empty() && selection.skipped.is_empty() {
         return Ok(GateOutcome::NoTargets {
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
@@ -266,7 +282,18 @@ fn run_gate_resolved(
         .map(|t| t.name.clone())
         .collect();
     targets.retain(|t| !ci_skipped.contains(&t.name));
-    let tools = delivery::preflight(project_dir, &targets, &effective_mode)?;
+    let mut tools =
+        delivery::preflight(project_dir, &targets, &effective_mode).map_err(|error| {
+            let message = declarations.iter().fold(error.to_string(), |text, target| {
+                super::evidence::redact(target, &text)
+            });
+            delivery::invalid(project_dir, message)
+        })?;
+    for value in tools.values_mut() {
+        for target in &declarations {
+            *value = super::evidence::redact(target, value);
+        }
+    }
     let run_id = uuid::Uuid::new_v4().to_string();
     let target_dir = delivery::target_dir(project_dir);
     std::fs::create_dir_all(&target_dir)?;
@@ -285,10 +312,9 @@ fn run_gate_resolved(
         &targets,
         &effective_mode,
         project_dir,
-        execution.parallel,
-        execution.max_parallel,
-        execution.fail_fast,
+        &execution,
         &run_dir,
+        &declarations,
     );
     let after = delivery::tracked(project_dir)?;
     // Producers are complete now. This is the named candidate; a writer that
@@ -297,7 +323,7 @@ fn run_gate_resolved(
     let generation_unchanged = before == after;
     let revision = delivery::revision(project_dir).unwrap_or_default();
 
-    if raw.is_empty() {
+    if raw.is_empty() && selection.skipped.is_empty() {
         return Ok(GateOutcome::NoTargets {
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
@@ -316,6 +342,10 @@ fn run_gate_resolved(
         Vec::new()
     };
 
+    let target_evidence: Vec<_> = raw
+        .iter()
+        .filter_map(|r| r.as_ref().ok()?.evidence.clone())
+        .collect();
     let results: Vec<GateTargetResult> = raw
         .into_iter()
         .map(|r| match r {
@@ -390,13 +420,14 @@ fn run_gate_resolved(
         );
     }
     let artifact = serde_json::json!({
-        "schema_version": 1, "run_id": run_id, "revision": revision,
+        "schema_version": 2, "run_id": run_id, "revision": revision,
+        "git_tree": super::evidence::git_tree(project_dir), "target_evidence": target_evidence,
         "tree": tree, "config_digest": config_digest, "mode": effective_mode,
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
         "ci_skipped": ci_skipped,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
         "results": results, "coverage": coverage,
-        "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":t.modes[&effective_mode].command,"requires":t.requires,"env":t.env})).collect::<Vec<_>>(),
+        "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":super::evidence::redact(declarations.iter().find(|d| d.name == t.name).unwrap_or(t), &t.modes[&effective_mode].command),"requires":t.requires})).collect::<Vec<_>>(),
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
         "tools": tools
     });

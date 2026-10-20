@@ -12,6 +12,8 @@ use std::time::Instant;
 
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
+#[path = "test_gate_cli/evidence.rs"]
+mod evidence;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 use drain_pipe::{drain_lines, drain_pipe};
@@ -63,6 +65,59 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> Output {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+#[test]
+fn default_comparison_names_the_task_line_and_explicit_controls_override_it() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[{"name":"check","runner":"custom","modes":{"quick":{"command":"echo checked"}}}]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        dir.path().join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nintegration_target: integration/test-line\n---\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: declare task line"]);
+    git(dir.path(), &["branch", "integration/test-line"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-selection"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains(base.trim()), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("TSK-001 integration target integration/test-line"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--since", "HEAD"],
+    );
+    assert!(
+        stderr(&output).contains("explicit --since HEAD"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--all"],
+    );
+    assert!(
+        stderr(&output).contains("--all: every target"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 /// What a spawned gate has written to stdout, read to the end on its own
@@ -630,6 +685,21 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
       {"name":"present","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo present >> runs"}}},
       {"name":"release","runner":"custom","narrow":["scripts/**"],"modes":{"full":{"command":"echo release >> runs"}}}] }"#,
     );
+    let path = dir.path().join(".codeflow/test-config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for target in config["targets"].as_array_mut().unwrap() {
+        target["input_class"] = serde_json::json!("content");
+        target["evidence"] = serde_json::json!({"tools":{},"environment":{},"environment_complete":true,"membership":[]});
+    }
+    config["targets"][0]["outputs"] = serde_json::json!(["target/producer"]);
+    config["targets"][0]["modes"]["full"]["command"] =
+        serde_json::json!("echo producer >> runs; echo produced > target/producer");
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    for folder in ["crates", "scripts"] {
+        std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+        std::fs::write(dir.path().join(folder).join("input"), "base").unwrap();
+    }
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/guide.md"), "base\n").unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\nruns\n").unwrap();

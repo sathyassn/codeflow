@@ -205,7 +205,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
 | | `--mode <MODE>` | Test mode: full (default), quick, or essential. `quick` is an alias for `essential`, the lighter mode shipped test-configs define. One of `full`, `quick`, `essential`. Default `full`. |
 | | `--strict` | Treat "nothing to run" as a failure (exit non-zero) instead of a loud no-op. For scripted/unattended callers, CI, the pipeline verify gate, where a run that executed zero tests must NOT read as green. The default (no `--strict`) keeps the loud-no-op-exit-0 behavior so the bootstrap/early-setup path of a brand-new repo without tests is not broken. |
-| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. An unproven base conservatively runs every target. |
+| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. Default: the merge base of HEAD and the task's declared integration target. An unproven base conservatively runs every target. |
 | | `--all` | Run every target, including the binary determinism check at epic close. With `--only`, the named targets keep that full-strength check. |
 | | `--only <TARGET>...` | Run only these targets and their prerequisites, comma separated or repeated, to split one gate across parallel CI jobs. A limited run is never recorded as complete evidence, and an unknown name is refused before any target starts. |
 | `codeflow test setup` | | Configure `.codeflow/test-config.json` using root detection, an embedded template, or an appended target. Safe auto-detection is the default |

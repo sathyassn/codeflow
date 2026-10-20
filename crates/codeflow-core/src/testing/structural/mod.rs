@@ -502,6 +502,8 @@ mod tests {
             requires: Vec::new(),
             outputs: Vec::new(),
             narrow: Vec::new(),
+            input_class: None,
+            evidence: None,
             exclusive: false,
             runner: RunnerType::Custom,
             modes,
