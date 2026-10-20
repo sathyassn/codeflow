@@ -147,7 +147,7 @@ impl std::fmt::Display for IntegrateOutcome {
             TestGateSummary::SkippedNoTargets { reason } => {
                 writeln!(
                     f,
-                    "  test gate: executed 0; skipped 0; not complete: {reason}"
+                    "  test gate: SKIPPED (executed 0; skipped 0; not complete): {reason}"
                 )?;
                 writeln!(
                     f,
@@ -562,12 +562,7 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
             ..GateOptions::default()
         },
     ) {
-        Ok(GateOutcome::NoTargets { reason }) => {
-            let _ = restore_checkout(repo_root, original);
-            Err(IntegrateError::TestGateFailed {
-                summary: format!("executed 0; skipped 0; not complete: {reason}"),
-            })
-        }
+        Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
         Ok(GateOutcome::Completed {
             results,
             passed,
@@ -1191,14 +1186,17 @@ mod tests {
     }
 
     #[test]
-    fn repair_without_test_targets_refuses_landing() {
+    fn happy_path_without_test_targets_warns_loudly() {
         let dir = repo_with_feature_branch();
-        let before = branch_oid(dir.path(), "main");
-        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("executed 0; skipped 0; not complete"));
-        assert_eq!(branch_oid(dir.path(), "main"), before);
+
+        let outcome = integrate(dir.path(), "feat/x", "main").expect("integrate succeeds");
+        assert!(matches!(
+            outcome.test_gate,
+            TestGateSummary::SkippedNoTargets { .. }
+        ));
+        let report = outcome.to_string();
+        assert!(report.contains("SKIPPED"));
+        assert!(report.contains("NOT test-verified"));
     }
 
     #[test]

@@ -15,10 +15,22 @@ pub(super) fn run(dir: &Path, home: &Path, args: &[&str]) -> std::process::Outpu
     command(dir, home, args).output().unwrap()
 }
 
+static EVIDENCE_FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Fixture {
+    _account_store: std::sync::MutexGuard<'static, ()>,
     root: tempfile::TempDir,
-    home: tempfile::TempDir,
+    home: PathBuf,
+    isolated_home: tempfile::TempDir,
     record: PathBuf,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // This directory is keyed by this fixture's unique repository path.
+        let directory = self.record.parent().unwrap().parent().unwrap();
+        std::fs::remove_dir_all(directory).expect("remove this fixture's durable evidence");
+    }
 }
 
 impl Fixture {
@@ -27,8 +39,15 @@ impl Fixture {
     }
 
     fn with_environment(change: impl FnOnce(&mut Value), marker: Option<&str>) -> Self {
+        let account_store = EVIDENCE_FIXTURES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let root = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
+        let home = PathBuf::from(
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .expect("test account home"),
+        );
         let dir = root.path();
         git(dir, &["init", "-q", "-b", "integration/checks"]);
         for path in [".codeflow", "src", "project-management/tasks"] {
@@ -84,7 +103,14 @@ impl Fixture {
         std::fs::write(dir.join("membership"), "checks_input\n").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-qm", "test: candidate"]);
-        let mut command = command(dir, home.path(), &["test", "--all"]);
+        // Seed real full evidence through integration's gate engine. A parent
+        // full coverage gate may already hold the CLI's account-wide lock.
+        git(dir, &["branch", "fixture-base"]);
+        let mut command = command(
+            dir,
+            home.as_path(),
+            &["integrate", "integration/checks", "--into", "fixture-base"],
+        );
         if let Some(marker) = marker {
             command.env("SELECTION_MARKER", marker);
         }
@@ -113,13 +139,42 @@ impl Fixture {
             &["commit", "--allow-empty", "-qm", "test: merge candidate"],
         );
         git(dir, &["switch", "-c", "task/TSK-001-selection"]);
-        Self { root, home, record }
+        Self {
+            _account_store: account_store,
+            root,
+            home,
+            isolated_home: tempfile::tempdir().unwrap(),
+            record,
+        }
+    }
+
+    fn full(&self, args: &[&str]) -> std::process::Output {
+        // These CLI runs test execution and output, not account selection credit.
+        run(self.root.path(), self.isolated_home.path(), args)
+    }
+
+    fn integration_root(&self, merge: bool) -> PathBuf {
+        if !merge {
+            return self.root.path().to_owned();
+        }
+        let linked = self.root.path().join(".worktrees/selection");
+        git(self.root.path(), &["switch", "integration/checks"]);
+        git(
+            self.root.path(),
+            &[
+                "worktree",
+                "add",
+                linked.to_str().unwrap(),
+                "task/TSK-001-selection",
+            ],
+        );
+        linked
     }
 
     fn quick(&self) -> (String, Value) {
         let output = run(
             self.root.path(),
-            self.home.path(),
+            self.home.as_path(),
             &["test", "--mode", "quick"],
         );
         assert!(output.status.success(), "{}", stderr(&output));
@@ -142,8 +197,7 @@ impl Fixture {
         let (text, record) = self.quick();
         assert!(text.contains("selected rust-check"), "{text}");
         assert!(
-            text.contains(reason)
-                || (!cfg!(unix) && text.contains("no qualifying run for the base tree")),
+            text.contains(reason) || (!cfg!(unix) && text.contains("account home unavailable")),
             "{text}"
         );
         assert!(record["results"]
@@ -167,14 +221,11 @@ fn equal_tree_candidate_covers_declared_quick_command_and_all_still_executes() {
             json!(["record-check", "rust-check"])
         );
     } else {
-        assert!(
-            text.contains("no qualifying run for the base tree"),
-            "{text}"
-        );
+        assert!(text.contains("account home unavailable"), "{text}");
         assert_eq!(record["results"].as_array().unwrap().len(), 2);
         assert_eq!(record["selection"]["skipped"], json!([]));
     }
-    let output = run(fixture.root.path(), fixture.home.path(), &["test", "--all"]);
+    let output = fixture.full(&["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("starting target 'rust-check'"));
     assert!(stderr(&output).contains("starting target 'record-check'"));
@@ -196,7 +247,7 @@ fn completion_record_changes_tree_and_runs_its_reader() {
     );
     git(fixture.root.path(), &["commit", "-qm", "test: completion"]);
     let (text, record) = fixture.quick();
-    let base: Value = serde_json::from_slice(&std::fs::read(fixture.record).unwrap()).unwrap();
+    let base: Value = serde_json::from_slice(&std::fs::read(&fixture.record).unwrap()).unwrap();
     assert_ne!(record["git_tree"], base["git_tree"]);
     assert!(text.contains("selected record-check"), "{text}");
     assert!(
@@ -440,7 +491,7 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
     for marker in [first, second] {
         let output = command(
             fixture.root.path(),
-            fixture.home.path(),
+            fixture.home.as_path(),
             &["test", "--mode", "quick"],
         )
         .env("SELECTION_MARKER", marker)
@@ -476,7 +527,7 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
         &mut artifacts,
     );
     files_below(
-        &fixture.home.path().join(".codeflow/gate-runs"),
+        fixture.record.parent().unwrap().parent().unwrap(),
         &mut artifacts,
     );
     for path in artifacts {
@@ -512,12 +563,9 @@ fn unavailable_fingerprint_runs_with_a_named_reason() {
     let fixture = Fixture::new(|c| {
         c["targets"][0]["evidence"]["environment"]["SELECTION_MARKER"] = json!("sensitive");
     });
-    let key = fixture.home.path().join(".codeflow/gate-environment.key");
-    if key.exists() {
-        std::fs::remove_file(&key).unwrap();
-    }
-    std::fs::create_dir(&key).unwrap();
-    fixture.selected("no safe fingerprint");
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join("gate-environment.key")).unwrap();
+    assert_unavailable_fingerprint(&fixture, home.path());
 }
 
 #[test]
@@ -560,7 +608,7 @@ fn unproven_ancestry_runs_every_target() {
     git(fixture.root.path(), &["switch", "task/TSK-001-selection"]);
     let output = run(
         fixture.root.path(),
-        fixture.home.path(),
+        fixture.home.as_path(),
         &["test", "--mode", "quick", "--since", "unrelated"],
     );
     assert!(output.status.success(), "{}", stderr(&output));
@@ -665,7 +713,7 @@ fn pre_push_summary(records_only: bool) {
     let head = String::from_utf8(head.stdout).unwrap();
     let mut child = command(
         root,
-        fixture.home.path(),
+        fixture.home.as_path(),
         &[
             "git-hook",
             "pre-push",
@@ -734,14 +782,24 @@ fn files_below(path: &Path, files: &mut Vec<PathBuf>) {
 
 #[test]
 fn repair_full_gate_executes_every_target_with_a_proven_base() {
+    use codeflow_core::testing::gate::{run_gate, GateOutcome};
     let fixture = Fixture::new(|_| {});
-    let output = run(fixture.root.path(), fixture.home.path(), &["test"]);
+    let outcome = run_gate(fixture.root.path(), "full").unwrap();
+    let GateOutcome::Completed {
+        results,
+        passed,
+        skipped,
+        complete,
+        ..
+    } = outcome
+    else {
+        panic!("configured full gate must run")
+    };
+    assert!(passed && complete);
+    assert_eq!(results.len(), 2);
+    assert!(skipped.is_empty());
+    let output = fixture.full(&["test"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("starting target 'rust-check'"),
-        "{}",
-        stderr(&output)
-    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
 }
 
@@ -754,7 +812,7 @@ fn repair_strict_refuses_zero_and_partial_execution() {
         }
         let output = run(
             fixture.root.path(),
-            fixture.home.path(),
+            fixture.home.as_path(),
             &["test", "--mode", "quick", "--strict"],
         );
         if !cfg!(unix) {
@@ -782,10 +840,10 @@ fn repair_overridden_home_denies_selection_credit() {
     let fixture = Fixture::new(|_| {});
     let output = command(
         fixture.root.path(),
-        fixture.home.path(),
+        fixture.home.as_path(),
         &["test", "--mode", "quick"],
     )
-    .env("CODEFLOW_HOME", fixture.home.path().join(".codeflow"))
+    .env("CODEFLOW_HOME", fixture.home.as_path().join(".codeflow"))
     .output()
     .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
@@ -820,7 +878,7 @@ fn repair_no_matching_tree_reason_ignores_unrelated_records() {
 #[test]
 fn repair_selection_reason_has_no_doubled_separator() {
     let fixture = Fixture::new(|_| {});
-    let output = run(fixture.root.path(), fixture.home.path(), &["test", "--all"]);
+    let output = fixture.full(&["test", "--all"]);
     assert!(!stderr(&output).contains("; ;"), "{}", stderr(&output));
 }
 
@@ -859,7 +917,7 @@ fn repair_integrate_executes_every_target_with_a_proven_base() {
         }
         let output = run(
             if merge { &linked } else { root },
-            fixture.home.path(),
+            fixture.home.as_path(),
             &args,
         );
         assert!(output.status.success(), "{}", stderr(&output));
@@ -873,6 +931,77 @@ fn repair_integrate_executes_every_target_with_a_proven_base() {
             "{}",
             String::from_utf8_lossy(&output.stdout)
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repair_integrate_forged_records_still_refuse_failing_target() {
+    for merge in [false, true] {
+        let fixture = Fixture::new(|c| {
+            for mode in ["full", "quick"] {
+                let command = c["targets"][0]["modes"][mode]["command"].as_str().unwrap();
+                c["targets"][0]["modes"][mode]["command"] =
+                    json!(format!("{command} && test ! -f target/fail-check"));
+            }
+        });
+        let root = fixture.root.path();
+        std::fs::write(root.join("target/fail-check"), "failure").unwrap();
+        // A same-user writer can forge successful evidence for an undeclared
+        // input. Local selection may credit it; landing must execute anyway.
+        let failed = fixture.full(&["test", "--all"]);
+        assert!(!failed.status.success());
+        let text = stderr(&failed);
+        let failed_path = text
+            .lines()
+            .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+            .unwrap();
+        let mut forged: Value =
+            serde_json::from_slice(&std::fs::read(failed_path).unwrap()).unwrap();
+        forged["passed"] = json!(true);
+        forged["complete"] = json!(true);
+        for result in forged["results"].as_array_mut().unwrap() {
+            result["exit_code"] = json!(0);
+            result["error"] = Value::Null;
+        }
+        std::fs::write(&fixture.record, serde_json::to_vec(&forged).unwrap()).unwrap();
+        let (text, _) = fixture.quick();
+        assert!(text.contains("skipped rust-check"), "{text}");
+        git(root, &["commit", "--allow-empty", "-qm", "test: candidate"]);
+        let tip = || {
+            std::process::Command::new("git")
+                .args(["rev-parse", "integration/checks"])
+                .current_dir(root)
+                .output()
+                .unwrap()
+                .stdout
+        };
+        let before = tip();
+        let mut args = vec![
+            "integrate",
+            "task/TSK-001-selection",
+            "--into",
+            "integration/checks",
+        ];
+        if merge {
+            args.push("--merge");
+        }
+        let landing = fixture.integration_root(merge);
+        std::fs::create_dir_all(landing.join("target")).unwrap();
+        std::fs::write(landing.join("target/fail-check"), "failure").unwrap();
+        let output = run(&landing, fixture.home.as_path(), &args);
+        assert!(!output.status.success(), "forged record allowed landing");
+        assert!(
+            stderr(&output).contains("rust-check: exit 1"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("executed 2; skipped 0"),
+            "{}",
+            stderr(&output)
+        );
+        assert_eq!(tip(), before);
     }
 }
 
@@ -898,7 +1027,7 @@ fn repair_non_secret_values_leave_reports_and_output_intact() {
         let coverage = "SF:src/input\nDA:1,1\nend_of_record\n";
         std::fs::write(root.join("target/junit.xml"), junit).unwrap();
         std::fs::write(root.join("target/cov.lcov"), coverage).unwrap();
-        let output = run(root, fixture.home.path(), &["test", "--all"]);
+        let output = fixture.full(&["test", "--all"]);
         assert!(output.status.success(), "{}", stderr(&output));
         let text = stderr(&output);
         let run = PathBuf::from(
@@ -937,13 +1066,37 @@ fn repair_non_secret_values_leave_reports_and_output_intact() {
 
 #[test]
 fn repair_sensitive_encoded_values_are_redacted_without_rewriting_source() {
-    let marker = "selection-marker&<\"9Zq";
+    let marker = "selection-marker&<>\"' é/+ÿÿÿ9Zq";
     let fixture = Fixture::new(|c| {
         c["targets"][0]["env"]["ENCODED_MARKER"] = json!(marker);
         c["targets"][0]["evidence"]["environment"]["ENCODED_MARKER"] = json!("sensitive");
     });
     let root = fixture.root.path();
-    let script = "import os,json,urllib.parse,html,pathlib\nv=os.environ['ENCODED_MARKER']\nforms=[v,json.dumps(v)[1:-1],html.escape(v),html.escape(v,quote=False),urllib.parse.quote(v,safe=''),urllib.parse.quote_plus(v)]\nprint('Summary '+ '|'.join(forms))\npathlib.Path('target/encoded.xml').write_text('<testsuites><testsuite><testcase name=\"'+html.escape(v)+'\"/></testsuite></testsuites>')\n";
+    let script = r#"import os,json,urllib.parse,html,pathlib,base64
+v=os.environ['ENCODED_MARKER']
+forms=[v,json.dumps(v,ensure_ascii=False)[1:-1],json.dumps(v,ensure_ascii=True)[1:-1],html.escape(v),html.escape(v,quote=False),html.escape(v,quote=False).replace('"','&quot;')]
+for ascii in [False,True]:
+ for escaped in ['', '&<>', "&<>'"]:
+  j=json.dumps(v,ensure_ascii=ascii)[1:-1]
+  j=''.join('\\u%04x'%ord(c) if c in escaped else c for c in j)
+  forms.extend([j,j.replace(r'\"',r'\u0022')])
+forms.append(''.join('\\u%04x'%ord(c) for c in v))
+for escaped in ['&<>','&<>"','&<>"\'','all']:
+ for non_ascii in [False,True]:
+  for fmt in ['&#{};','&#x{:x};','&#x{:X};']:
+   forms.append(''.join(fmt.format(ord(c)) if escaped == 'all' or c in escaped or (non_ascii and not c.isascii()) else c for c in v))
+for safe in ['', '/']:
+ for quote in [urllib.parse.quote,urllib.parse.quote_plus]:
+  u=quote(v,safe=safe)
+  forms.extend([u,quote(u,safe=safe)])
+standard=base64.b64encode(v.encode()).decode()
+urlsafe=base64.urlsafe_b64encode(v.encode()).decode()
+assert standard != urlsafe
+forms.extend([standard,urlsafe])
+print('Summary '+ '|'.join(forms))
+pathlib.Path('target/encoded-forms.json').write_text(json.dumps(forms))
+pathlib.Path('target/encoded.xml').write_text('<testsuites><testsuite><testcase name="'+html.escape(v)+'"/></testsuite></testsuites>')
+"#;
     std::fs::write(root.join("encoded.py"), script).unwrap();
     let path = root.join(".codeflow/test-config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -954,21 +1107,21 @@ fn repair_sensitive_encoded_values_are_redacted_without_rewriting_source() {
     config["targets"][0]["modes"]["full"]["command"] = json!(command);
     config["targets"][0]["report"] = json!({"format":"junit","path":"target/encoded.xml"});
     std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let output = run(root, fixture.home.path(), &["test", "--all"]);
+    let output = fixture.full(&["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let forms = [
-        marker.to_owned(),
-        marker.replace('&', "&amp;").replace('<', "&lt;"),
-        marker
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('"', "&quot;"),
-        marker.replace('"', "\\\""),
-        "selection-marker%26%3C%229Zq".into(),
-    ];
+    let forms: Vec<String> =
+        serde_json::from_slice(&std::fs::read(root.join("target/encoded-forms.json")).unwrap())
+            .unwrap();
     let mut files = Vec::new();
     files_below(&root.join("target/codeflow-gate"), &mut files);
-    files_below(&fixture.home.path().join(".codeflow/gate-runs"), &mut files);
+    files_below(
+        fixture.record.parent().unwrap().parent().unwrap(),
+        &mut files,
+    );
+    files_below(
+        &fixture.isolated_home.path().join(".codeflow/gate-runs"),
+        &mut files,
+    );
     let mut texts = vec![
         stderr(&output),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -982,7 +1135,7 @@ fn repair_sensitive_encoded_values_are_redacted_without_rewriting_source() {
     assert!(
         std::fs::read_to_string(root.join("target/encoded.xml"))
             .unwrap()
-            .contains("&amp;&lt;&quot;"),
+            .contains("&amp;&lt;&gt;&quot;"),
         "tool-owned source was rewritten"
     );
 }
@@ -1000,7 +1153,7 @@ fn repair_integrate_refuses_ci_skips_and_leaves_target_unchanged() {
         .stdout;
     let output = command(
         root,
-        fixture.home.path(),
+        fixture.home.as_path(),
         &[
             "integrate",
             "task/TSK-001-selection",
@@ -1035,7 +1188,7 @@ fn repair_strict_ci_skip_counts_zero_executions() {
     });
     let output = command(
         fixture.root.path(),
-        fixture.home.path(),
+        fixture.isolated_home.path(),
         &["test", "--strict"],
     )
     .env("CI", "true")
@@ -1055,50 +1208,189 @@ fn repair_fingerprint_reason_names_repository_home() {
     let fixture = Fixture::new(|c| {
         c["targets"][0]["evidence"]["environment"]["SELECTION_MARKER"] = json!("sensitive");
     });
-    git(fixture.home.path(), &["init", "-q"]);
-    fixture.selected("CodeFlow home must be outside every Git repository");
+    let home = tempfile::tempdir().unwrap();
+    git(home.path(), &["init", "-q"]);
+    assert_unavailable_fingerprint(&fixture, home.path());
+}
+
+fn assert_unavailable_fingerprint(fixture: &Fixture, home: &Path) {
+    let output = command(
+        fixture.root.path(),
+        fixture.home.as_path(),
+        &["test", "--all"],
+    )
+    .env("CODEFLOW_HOME", home)
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stderr(&output);
+    let path = text
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] artifact: "))
+        .unwrap();
+    let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let reason = record["target_evidence"][0]["before"]["unavailable"]
+        .as_str()
+        .unwrap();
+    assert!(
+        reason.contains(
+            "CodeFlow home must be outside every Git repository and the key must be owner-only"
+        ),
+        "{reason}"
+    );
 }
 
 #[test]
-fn repair_integrate_refuses_an_empty_gate() {
-    let fixture = Fixture::new(|_| {});
-    let path = fixture.root.path().join(".codeflow/test-config.json");
-    std::fs::write(path, r#"{"schema_version":"1.0","targets":[]}"#).unwrap();
-    git(fixture.root.path(), &["add", "."]);
-    git(fixture.root.path(), &["commit", "-qm", "test: empty gate"]);
-    let output = run(
-        fixture.root.path(),
-        fixture.home.path(),
-        &[
+fn repair_integrate_empty_gate_lands_with_warning() {
+    for merge in [false, true] {
+        let fixture = Fixture::new(|_| {});
+        let root = fixture.root.path();
+        std::fs::write(
+            root.join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[]}"#,
+        )
+        .unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "test: empty gate"]);
+        let mut args = vec![
             "integrate",
             "task/TSK-001-selection",
             "--into",
             "integration/checks",
-        ],
-    );
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("executed 0; skipped 0; not complete"),
-        "{}",
-        stderr(&output)
-    );
+        ];
+        if merge {
+            args.push("--merge");
+        }
+        let landing = fixture.integration_root(merge);
+        let output = run(&landing, fixture.home.as_path(), &args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("executed 0; skipped 0; not complete"),
+            "{text}"
+        );
+        assert!(
+            text.contains("WARNING: no tests ran; this merge is NOT test-verified"),
+            "{text}"
+        );
+        assert!(root.join(".codeflow/test-config.json").exists());
+        let landed = std::process::Command::new("git")
+            .args(["show", "integration/checks:.codeflow/test-config.json"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(landed.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&landed.stdout).unwrap()["targets"],
+            json!([])
+        );
+    }
 }
 
 #[test]
-fn repair_explicit_full_comparison_remains_local_incomplete_evidence() {
-    let fixture = Fixture::new(|_| {});
+fn repair_requested_modes_report_passed_without_incomplete_suffix() {
+    let fixture = Fixture::new(|c| {
+        for target in c["targets"].as_array_mut().unwrap() {
+            target["modes"]["essential"] = target["modes"]["full"].clone();
+        }
+    });
+    for mode in ["quick", "essential"] {
+        let output = run(
+            fixture.root.path(),
+            fixture.home.as_path(),
+            &["test", "--mode", mode, "--all", "--strict"],
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains("passed (executed 2; skipped 0; not full-gate evidence)"),
+            "{text}"
+        );
+        assert!(!text.contains("not complete"), "{text}");
+    }
+}
+
+#[test]
+fn essential_default_comparison_uses_the_declared_line() {
+    let fixture = Fixture::new(|c| {
+        for target in c["targets"].as_array_mut().unwrap() {
+            target["modes"]["essential"] = target["modes"]["full"].clone();
+            target["evidence"]["covers_modes"] = json!(["quick", "essential"]);
+        }
+    });
     let output = run(
         fixture.root.path(),
-        fixture.home.path(),
-        &["test", "--since", "integration/checks", "--strict"],
+        fixture.home.as_path(),
+        &["test", "--mode", "essential"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("integration/checks"),
+        "{}",
+        stderr(&output)
     );
     if cfg!(unix) {
-        assert_eq!(output.status.code(), Some(2));
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("executed 0; skipped 2; not complete")
         );
     } else {
-        assert!(output.status.success());
-        assert!(stderr(&output).contains("no qualifying run for the base tree"));
+        assert!(stderr(&output).contains("account home unavailable"));
+    }
+}
+
+#[test]
+fn repair_redirected_home_forgery_grants_no_credit() {
+    let fixture = Fixture::new(|_| {});
+    let redirected = tempfile::tempdir().unwrap();
+    let original = fixture.home.join(".codeflow");
+    let relative = fixture.record.strip_prefix(&original).unwrap();
+    let forged = redirected.path().join(".codeflow").join(relative);
+    std::fs::create_dir_all(forged.parent().unwrap()).unwrap();
+    std::fs::copy(&fixture.record, &forged).unwrap();
+    let output = run(
+        fixture.root.path(),
+        redirected.path(),
+        &["test", "--mode", "quick"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("HOME differs from the effective user's account home"),
+        "{text}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+}
+
+#[test]
+fn repair_explicit_full_comparison_remains_local_incomplete_evidence() {
+    use codeflow_core::testing::gate::{run_gate_with_options, GateOptions, GateOutcome};
+    let fixture = Fixture::new(|_| {});
+    let outcome = run_gate_with_options(
+        fixture.root.path(),
+        "full",
+        &GateOptions {
+            since: Some("integration/checks".into()),
+            ..GateOptions::default()
+        },
+    )
+    .unwrap();
+    let GateOutcome::Completed {
+        results,
+        passed,
+        skipped,
+        complete,
+        ..
+    } = outcome
+    else {
+        panic!("configured full gate must return execution evidence")
+    };
+    assert!(passed);
+    if cfg!(unix) {
+        assert!(!complete);
+        assert!(results.is_empty());
+        assert_eq!(skipped.len(), 2);
+    } else {
+        assert_eq!(results.len(), 2);
+        assert!(skipped.is_empty());
     }
 }

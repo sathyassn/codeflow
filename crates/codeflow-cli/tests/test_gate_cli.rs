@@ -677,7 +677,27 @@ fn unavailable_gate_lock_refuses_before_start() {
 }
 
 #[cfg(unix)]
-fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
+struct SelectionHome {
+    path: std::path::PathBuf,
+    evidence: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl SelectionHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SelectionHome {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.evidence).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
       {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
@@ -714,8 +734,13 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
         .output()
         .unwrap();
     let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
-    let home = tempfile::tempdir().unwrap();
-    let output = evidence::run(dir.path(), home.path(), &["test", "--all"]);
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    git(dir.path(), &["branch", "fixture-base"]);
+    let output = evidence::run(
+        dir.path(),
+        &home,
+        &["integrate", "main", "--into", "fixture-base"],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     let artifact = err
@@ -726,7 +751,20 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     assert_eq!(raw["clean"], true, "{raw}");
     assert_eq!(raw["complete"], true, "{raw}");
     std::fs::remove_file(dir.path().join("runs")).unwrap();
-    (dir, home, base)
+    let evidence = Path::new(artifact)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    (
+        dir,
+        SelectionHome {
+            path: home,
+            evidence,
+        },
+        base,
+    )
 }
 
 #[cfg(unix)]
@@ -743,7 +781,8 @@ fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
     assert!(stderr(&output).contains("skipped present"));
-    let output = evidence::run(dir.path(), home.path(), &["test", "--all"]);
+    let isolated = tempfile::tempdir().unwrap();
+    let output = evidence::run(dir.path(), isolated.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("selected present"));
 }
@@ -997,7 +1036,8 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
     );
     let err = stderr(&output);
     assert!(output.status.success(), "{err}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 3; skipped 0; not complete"));
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("executed 3; skipped 0; not full-gate evidence"));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     let mut ran: Vec<&str> = runs.lines().collect();
     ran.sort_unstable();

@@ -264,21 +264,76 @@ fn read_owned_record(_path: &Path) -> std::io::Result<Vec<u8>> {
     ))
 }
 
-fn green_base(
-    root: &Path,
-    home: Option<&Path>,
-    base: &str,
-    config_digest: &str,
-) -> Result<Vec<serde_json::Value>, String> {
+/// Resolve the effective account independently of process-controlled HOME.
+#[cfg(unix)]
+fn account_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    let mut storage = vec![0_u8; 16_384];
+    loop {
+        let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        // SAFETY: the entry and buffer are writable for their stated sizes.
+        // getpwuid_r stores its strings in this buffer, unlike getpwuid's shared storage.
+        let status = unsafe {
+            libc::getpwuid_r(
+                libc::geteuid(),
+                entry.as_mut_ptr(),
+                storage.as_mut_ptr().cast(),
+                storage.len(),
+                &raw mut result,
+            )
+        };
+        if status == libc::ERANGE {
+            storage.resize(storage.len().checked_mul(2)?, 0);
+            continue;
+        }
+        if status != 0 || result.is_null() {
+            return None;
+        }
+        // SAFETY: a successful lookup initialized entry; pw_dir is a terminated
+        // string in storage, which remains alive until it has been copied.
+        let directory = unsafe {
+            let entry = entry.assume_init();
+            if entry.pw_dir.is_null() {
+                return None;
+            }
+            CStr::from_ptr(entry.pw_dir)
+        };
+        let path = PathBuf::from(OsStr::from_bytes(directory.to_bytes()));
+        return path.is_absolute().then_some(path);
+    }
+}
+
+#[cfg(not(unix))]
+fn account_home() -> Option<PathBuf> {
+    None
+}
+
+fn credit_home() -> Result<PathBuf, String> {
     if std::env::var_os("CODEFLOW_HOME").is_some() {
         return Err("selection credit denied: CODEFLOW_HOME is overridden".into());
     }
-    let home = home.ok_or("no qualifying run: CodeFlow home unavailable")?;
+    let account = account_home().ok_or("selection credit denied: account home unavailable")?;
+    if std::env::var_os("HOME").as_deref() != Some(account.as_os_str()) {
+        return Err(
+            "selection credit denied: HOME differs from the effective user's account home".into(),
+        );
+    }
+    Ok(account.join(".codeflow"))
+}
+
+fn green_base(
+    root: &Path,
+    base: &str,
+    config_digest: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let home = credit_home()?;
     let tree = git_output(
         root,
         &["rev-parse", "--verify", &format!("{base}^{{tree}}")],
     )?;
-    let directory = durable_root(root, home);
+    let directory = durable_root(root, &home);
     let entries =
         std::fs::read_dir(directory).map_err(|_| "no qualifying run: evidence unavailable")?;
     let mut records = Vec::new();
@@ -437,7 +492,7 @@ fn select_base(
     if git_output(root, &["merge-base", "--is-ancestor", base, "HEAD"]).is_err() {
         return all("unproven ancestry");
     }
-    let records = match green_base(root, home, base, config_digest) {
+    let records = match green_base(root, base, config_digest) {
         Ok(records) => records,
         Err(reason) => return all(&reason),
     };
@@ -841,10 +896,11 @@ fn observation(output: &std::process::Output) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn green_base_uses_git_tree_identity_across_commits_and_rejects_legacy_evidence() {
         let root = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
+        let home = account_home().expect("account home").join(".codeflow");
         let repo = git2::Repository::init(root.path()).unwrap();
         let tree = repo
             .find_tree(repo.index().unwrap().write_tree().unwrap())
@@ -871,7 +927,7 @@ mod tests {
             )
             .unwrap();
         assert_ne!(candidate, merged);
-        let directory = durable_root(root.path(), home.path()).join("candidate");
+        let directory = durable_root(root.path(), home.as_path()).join("candidate");
         std::fs::create_dir_all(&directory).unwrap();
         let mut record = serde_json::json!({"git_tree":tree.id().to_string(),"revision":candidate.to_string(),
             "passed":true,"complete":true,"clean":true,"mode":"full","generation_unchanged":true,"config_digest":"config"});
@@ -881,13 +937,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            green_base(
-                root.path(),
-                Some(home.path()),
-                &merged.to_string(),
-                "config"
-            )
-            .map_or(0, |records| records.len()),
+            green_base(root.path(), &merged.to_string(), "config")
+                .map_or(0, |records| records.len()),
             usize::from(cfg!(unix))
         );
         record.as_object_mut().unwrap().remove("git_tree");
@@ -896,14 +947,10 @@ mod tests {
             serde_json::to_vec(&record).unwrap(),
         )
         .unwrap();
-        assert!(green_base(
-            root.path(),
-            Some(home.path()),
-            &merged.to_string(),
-            "config"
-        )
-        .unwrap_err()
-        .contains("no qualifying run for the base tree"));
+        assert!(green_base(root.path(), &merged.to_string(), "config")
+            .unwrap_err()
+            .contains("no qualifying run for the base tree"));
+        std::fs::remove_dir_all(directory.parent().unwrap()).unwrap();
     }
 
     #[test]

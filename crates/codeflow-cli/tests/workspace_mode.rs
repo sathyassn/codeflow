@@ -712,7 +712,6 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
         1,
     );
     std::fs::write(&record, &text).unwrap();
-    configure_landing_gate(&root);
     git(&root, &["add", "-A"]);
     let adopted = git_as(&root, None, &["commit", "-m", "chore: adopt codeflow"]);
     assert!(adopted.status.success(), "{}", both(&adopted));
@@ -794,14 +793,6 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
 /// verified epic line nor the root branch.
 const UNVERIFIED_LINE: &str = "not a verified epic line or the workspace root branch";
 
-fn configure_landing_gate(root: &Path) {
-    std::fs::write(
-        root.join(".codeflow/test-config.json"),
-        r#"{"schema_version":"1.0","targets":[{"name":"workspace-instructions","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch AGENTS.md"}}}]}"#,
-    )
-    .unwrap();
-}
-
 /// TSK-190 AC-3 (journey): at the minimal tier, where durable tracking is
 /// off and every other pull request names its unit, a range on the root
 /// branch passes `codeflow ci` with no `Task:` line; another `integration/`
@@ -812,7 +803,6 @@ fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
     let root = umbrella(dir.path());
     let init = codeflow(&root, &["init", "--yes", "--minimal", "--workspace"]);
     assert!(init.status.success(), "{}", both(&init));
-    configure_landing_gate(&root);
     git(&root, &["add", "-A"]);
     let adopted = git_as(&root, None, &["commit", "-m", "chore: adopt codeflow"]);
     assert!(adopted.status.success(), "{}", both(&adopted));

@@ -393,8 +393,36 @@ pub(super) fn redacted_values(target: &TargetConfig) -> Vec<String> {
     })
 }
 
-/// Redact literal, XML, JSON and URL representations before writing gate artifacts.
+/// Encode a URL component, optionally preserving path separators.
+fn percent_encode(value: &str, slash_safe: bool, lower: bool) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric()
+                || b"-_.~".contains(&byte)
+                || (slash_safe && byte == b'/')
+            {
+                char::from(byte).to_string()
+            } else if lower {
+                format!("%{byte:02x}")
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+fn json_unicode(value: impl IntoIterator<Item = u16>) -> String {
+    use std::fmt::Write;
+    value.into_iter().fold(String::new(), |mut text, unit| {
+        let _ = write!(text, "\\u{unit:04x}");
+        text
+    })
+}
+
+/// Redact the documented representations before writing gate-owned artifacts.
 pub(super) fn redact(target: &TargetConfig, text: &str) -> String {
+    use base64::Engine;
     let mut values = Vec::new();
     for value in redacted_values(target) {
         let xml_text = value
@@ -402,37 +430,67 @@ pub(super) fn redact(target: &TargetConfig, text: &str) -> String {
             .replace('<', "&lt;")
             .replace('>', "&gt;");
         values.push(xml_text.clone());
-        let xml = xml_text.replace('"', "&quot;").replace('\'', "&apos;");
-        values.push(xml.replace("&apos;", "&#x27;"));
-        values.push(xml.replace("&apos;", "&#39;"));
-        values.push(xml);
+        let attribute = xml_text.replace('"', "&quot;");
+        values.push(attribute.clone());
+        for apostrophe in ["&apos;", "&#x27;", "&#39;"] {
+            values.push(attribute.replace('\'', apostrophe));
+        }
+        // Numeric references can encode text, attributes, or every character.
+        for escaped in ["&<>", "&<>\"", "&<>\"'", "all"] {
+            for non_ascii in [false, true] {
+                for hex_case in [None, Some(false), Some(true)] {
+                    values.push(
+                        value
+                            .chars()
+                            .map(|c| {
+                                if escaped == "all"
+                                    || escaped.contains(c)
+                                    || (non_ascii && !c.is_ascii())
+                                {
+                                    match hex_case {
+                                        None => format!("&#{};", u32::from(c)),
+                                        Some(false) => format!("&#x{:x};", u32::from(c)),
+                                        Some(true) => format!("&#x{:X};", u32::from(c)),
+                                    }
+                                } else {
+                                    c.to_string()
+                                }
+                            })
+                            .collect(),
+                    );
+                }
+            }
+        }
         let json = serde_json::to_string(&value).expect("strings serialize");
-        values.push(json[1..json.len() - 1].to_owned());
-        let url: String = value
-            .bytes()
-            .map(|byte| {
-                if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
-                    char::from(byte).to_string()
-                } else {
-                    format!("%{byte:02X}")
+        let json = &json[1..json.len() - 1];
+        for ascii in [false, true] {
+            for html_escaped in ["", "&<>", "&<>'"] {
+                let escaped: String = json
+                    .chars()
+                    .map(|c| {
+                        if (ascii && !c.is_ascii()) || html_escaped.contains(c) {
+                            json_unicode(c.encode_utf16(&mut [0; 2]).iter().copied())
+                        } else {
+                            c.to_string()
+                        }
+                    })
+                    .collect();
+                values.push(escaped.replace("\\\"", "\\u0022"));
+                values.push(escaped);
+            }
+        }
+        values.push(json_unicode(value.encode_utf16()));
+        for slash_safe in [false, true] {
+            for lower in [false, true] {
+                let url = percent_encode(&value, slash_safe, lower);
+                for form in [url.clone(), url.replace("%20", "+")] {
+                    values.push(percent_encode(&form, slash_safe, lower));
+                    values.push(form);
                 }
-            })
-            .collect();
-        values.push(url.replace("%20", "+"));
-        values.push(url.clone());
-        // Percent escapes are case insensitive; preserve ordinary text casing.
-        let lower_url: String = value
-            .bytes()
-            .map(|byte| {
-                if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
-                    char::from(byte).to_string()
-                } else {
-                    format!("%{byte:02x}")
-                }
-            })
-            .collect();
-        values.push(lower_url.replace("%20", "+"));
-        values.push(lower_url);
+            }
+        }
+        values.push(base64::engine::general_purpose::STANDARD.encode(value.as_bytes()));
+        values.push(base64::engine::general_purpose::URL_SAFE.encode(value.as_bytes()));
         values.push(value);
     }
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));

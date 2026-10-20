@@ -37,17 +37,24 @@ Skip credit is a local convenience, never landing evidence. Run records remain
 mutable by their owner. Records must be owned by the effective user and must
 not be group- or world-writable. Where those protections cannot be checked,
 selection grants no credit. Setting `CODEFLOW_HOME` also disables selection
-credit. A MAC under a sandbox `denyRead` key was considered and deferred;
+credit. On Unix the credit store is resolved from the effective user's account
+database entry (`getpwuid_r(geteuid())`, the reentrant account lookup), and a
+`HOME` different from that account home also disables credit with a printed
+reason. A MAC under a sandbox `denyRead` key was considered and deferred;
 these checks do not authenticate the record's contents.
 
 The default full gate and both `codeflow integrate` modes execute every target.
 An explicit `--since` can select a local full run; any skip leaves that run
 incomplete and unusable as landing evidence.
-Integration refuses an incomplete or empty gate. For an explicit landing
+Integration refuses failures, skips and incomplete runs. Its existing exception
+is a repository with no gate targets: both modes land with the loud warning
+`WARNING: no tests ran; this merge is NOT test-verified`. An empty gate has no
+target whose execution could be skipped using a forged record. For an explicit landing
 command, use `codeflow test --mode full --all` and require a complete run.
 `--only` remains a partial run for split CI jobs and cannot be landing evidence
 on its own. Summaries show executed and skipped counts and say "not complete"
-when any target was skipped. `--strict` exits non-zero if no target executed or
+when any target was skipped or nothing executed. Successful quick and essential
+runs with no skips say "not full-gate evidence". `--strict` exits non-zero if no target executed or
 candidate evidence skipped any requested target. Explicit caller exclusions through `--only` or mode
 membership are not skips and do not fail strict mode. In particular,
 `--strict --all --only X` passes when its requested checks run successfully;
@@ -94,9 +101,23 @@ Only non-empty values classified as `fingerprint` or `sensitive` suppress
 raw child progress and are redacted from captured output and gate-owned report
 copies. This includes configured `env` entries with those classifications.
 Audited non-secret and unclassified values are left unchanged. Redaction covers
-literal, XML-, JSON- and URL-escaped forms. The gate never rewrites the tool's
-source report; the producing tool owns protection of that report and any other
-transformations. Gate start and completion messages remain visible.
+the following exact forms:
+
+- Literal values and JSON string contents, including ASCII-only `\uXXXX`,
+  HTML-safe `\uXXXX` for `&<>` with an optional escaped apostrophe, Unicode-escaped
+  quotes, and every character encoded as `\uXXXX`.
+- XML text entities, quoted attribute entities with a raw apostrophe or
+  `&apos;`, `&#39;` or `&#x27;`, and decimal or hexadecimal numeric references
+  for every character, XML text (`&<>`), XML attributes (`&<>"`) or HTML
+  attributes (`&<>"'`), optionally including non-ASCII characters.
+  Hexadecimal digits may be upper- or lower-case.
+- URL percent encoding with `/` escaped or safe, upper- or lower-case hex
+  digits, spaces as `%20` or `+`, and those forms percent-encoded a second time.
+- Standard and URL-safe base64, with padding.
+
+The gate never rewrites the tool's source report. Protection of that report and
+other transformations are the producing tool's duty. Gate start and completion
+messages remain visible.
 
 Selection compares the same mode and command unless the identical-command
 mode relation is declared. It also compares tools, OS, architecture,

@@ -19,8 +19,9 @@ outputs. Quick and full commands can also differ for one target.
 
 ## Decision
 
-The default comparison is the merge base of HEAD and the current task's declared
-integration target. Only a content target with complete matching dependency
+Quick and essential runs default to the merge base of HEAD and the current
+task's declared integration target. Full runs compare only with an explicit
+`--since`; without it they execute every target for non-selective landing evidence. Only a content target with complete matching dependency
 evidence can be skipped. A qualifying record is a passed, clean, complete full
 run with the base's Git tree ID and the current config digest. Its credited
 execution must have the same command and mode, or an explicitly declared mode
@@ -34,12 +35,18 @@ Skip credit is a local convenience, never landing evidence. Run records are
 mutable by their owner; ownership checks do not authenticate a successful run.
 Selection refuses records not owned by the effective user or writable by a
 group or everyone, and grants no credit when `CODEFLOW_HOME` is overridden.
+On Unix the credit home comes from the effective account's database entry
+(`getpwuid_r(geteuid())`, the reentrant lookup). A `HOME` different from that
+account home receives no credit, and the selection reason names the mismatch.
 Where ownership protection is unavailable, records receive no selection credit.
 A record MAC under a sandbox `denyRead` key was considered and is deferred in
 this repair. It would require a separate protected writer and key boundary.
 The backstop is a non-selective landing gate: default full runs execute every
 target, and both integration modes request all targets and refuse incomplete
-runs, including runs with no targets.
+runs. The existing no-target exception remains: both integration modes land
+with a loud warning that no tests ran and the merge is not test-verified. An
+empty gate has nothing to skip, so forged selection evidence cannot conceal a
+failing target there. This preserves the 3.1 workspace landing behavior.
 
 ## Consequences
 
@@ -56,7 +63,8 @@ runs, including runs with no targets.
   requested target. Caller exclusions through `--only` or mode membership are
   not skips. `--strict --all --only X` can pass while remaining incomplete
   full-gate evidence. Summaries show executed and skipped counts and identify
-  incomplete runs.
+  skips and empty execution as "not complete"; successful requested-mode runs
+  with no skips say "not full-gate evidence".
 - Skipped targets are recorded separately from executed results. Any skip makes
   a run incomplete. Landing candidates use `--all` and execute every target.
 - Pre-push uses the same selector. Its ref, authority, range, release and

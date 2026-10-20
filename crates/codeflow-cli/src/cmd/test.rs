@@ -182,7 +182,7 @@ pub fn run(args: &TestArgs) -> i32 {
                 "test gate: {verdict} (executed {}; skipped {}{})",
                 results.len(),
                 skipped.len(),
-                if complete { "" } else { "; not complete" }
+                evidence_suffix(results.len(), skipped.len(), complete)
             );
             if passed && args.strict && (results.is_empty() || evidence_skipped > 0) {
                 2
@@ -194,6 +194,16 @@ pub fn run(args: &TestArgs) -> i32 {
             eprintln!("codeflow test: {e}");
             1
         }
+    }
+}
+
+fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static str {
+    if executed == 0 || skipped != 0 {
+        "; not complete"
+    } else if complete {
+        ""
+    } else {
+        "; not full-gate evidence"
     }
 }
 
