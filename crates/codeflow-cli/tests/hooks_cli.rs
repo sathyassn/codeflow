@@ -9773,3 +9773,74 @@ fn guards_read_a_search_pattern_as_text() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// TSK-398 Codex review F1: when the destination advertises no tips, the
+/// pre-push range falls back to the protected tracking refs. A local branch
+/// or tag whose full name is the absent `refs/remotes/origin/main` never
+/// answers for it, so the malformed commit is still refused.
+#[test]
+fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
+    const ZERO: &str = "0000000000000000000000000000000000000000";
+    let read = |dir: &Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    for shadow in ["branch", "tag"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let seed = tmp.path().join("seed");
+        std::fs::create_dir(&seed).unwrap();
+        init_repo(&seed, "master");
+        let origin = tmp.path().join("origin.git");
+        let clone = tmp.path().join("work");
+        codeflow_fixture::clone(tmp.path(), &seed, &origin)
+            .bare()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
+        codeflow_fixture::clone(tmp.path(), &origin, &clone)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
+        git(&clone, &["config", "user.email", "t@example.com"]);
+        git(&clone, &["config", "user.name", "t"]);
+        git(&clone, &["switch", "-q", "-c", "fix/review"]);
+        std::fs::write(clone.join("review.txt"), "review\n").unwrap();
+        git(&clone, &["add", "."]);
+        git(&clone, &["commit", "-q", "-m", "invalid message"]);
+        let malformed = read(&clone, &["rev-parse", "HEAD"]);
+        // The destination no longer advertises a tip; the clone keeps its
+        // genuine refs/remotes/origin/master and has no tracking main.
+        git(&origin, &["update-ref", "-d", "refs/heads/master"]);
+        let push = || {
+            run_with_stdin(
+                codeflow()
+                    .args(["git-hook", "pre-push", "origin"])
+                    .arg(&origin)
+                    .current_dir(&clone),
+                &format!("refs/heads/fix/review {malformed} refs/heads/fix/review {ZERO}\n"),
+            )
+        };
+        let clean = push();
+        let text = String::from_utf8_lossy(&clean.stderr).to_string()
+            + &String::from_utf8_lossy(&clean.stdout);
+        assert_eq!(clean.status.code(), Some(1), "{shadow} clean: {text}");
+        assert!(text.contains("git.commit_format"), "{shadow} clean: {text}");
+        if shadow == "branch" {
+            git(&clone, &["branch", "refs/remotes/origin/main", &malformed]);
+        } else {
+            git(&clone, &["tag", "refs/remotes/origin/main", &malformed]);
+        }
+        let shadowed = push();
+        let text = String::from_utf8_lossy(&shadowed.stderr).to_string()
+            + &String::from_utf8_lossy(&shadowed.stdout);
+        assert_eq!(shadowed.status.code(), Some(1), "{shadow}: {text}");
+        assert!(text.contains("git.commit_format"), "{shadow}: {text}");
+    }
+}

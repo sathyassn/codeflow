@@ -51,10 +51,11 @@ use crate::embedded::EmbeddedAssets;
 pub struct CiArgs {
     /// Base ref of the range (exclusive). When omitted: CI base metadata,
     /// `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy
-    /// protected branches; each branch those sources name resolves only as the exact ref
-    /// `refs/remotes/origin/<name>`, then `refs/heads/<name>`. A given --base is the revision it
-    /// names. An unresolved or unsuitable declared target warns; pass --base to select the
-    /// intended range.
+    /// protected branches. Each is read by exact ref: a `refs/` name as written, `origin/<name>`
+    /// as `refs/remotes/origin/<name>`, another name as `refs/remotes/origin/<name>` then
+    /// `refs/heads/<name>`, except that a declared target reads only its remote-tracking ref.
+    /// A given --base is the revision it names. An unresolved or unsuitable declared target
+    /// warns; pass --base to select the intended range.
     #[arg(long, value_name = "REF")]
     pub base: Option<String>,
 
@@ -2324,27 +2325,27 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
             source: RangeSource::Platform("Bitbucket BITBUCKET_PR_DESTINATION_COMMIT"),
         };
     }
-    // GitHub Actions pull_request: base is a branch NAME — prefer the
-    // remote-tracking ref (present with fetch-depth: 0), fall back to the
-    // local branch. Head stays HEAD (the checked-out PR head).
+    // GitHub Actions pull_request: base is a branch NAME, read by exact ref
+    // (see `base_refs`; the remote-tracking ref is present with
+    // fetch-depth: 0). Head stays HEAD (the checked-out PR head).
     if let Some(base_ref) =
         env("GITHUB_BASE_REF").and_then(|value| env_branch("GITHUB_BASE_REF", &value))
     {
         return DetectedRange {
-            base_candidates: branch_anchors(&base_ref),
+            base_candidates: base_refs(&base_ref),
             head: "HEAD".to_string(),
             head_source: "checkout HEAD",
             source: RangeSource::Platform("GitHub GITHUB_BASE_REF"),
         };
     }
     // Explicit escape hatch for hosts with none of the variables above:
-    // CODEFLOW_DEFAULT_BRANCH names the base branch. Its remote-tracking ref
-    // first (the usual CI checkout), then the local branch.
+    // CODEFLOW_DEFAULT_BRANCH names the base branch, read by exact ref (see
+    // `base_refs`).
     if let Some(base) = env("CODEFLOW_DEFAULT_BRANCH")
         .and_then(|value| env_branch("CODEFLOW_DEFAULT_BRANCH", &value))
     {
         return DetectedRange {
-            base_candidates: branch_anchors(&base),
+            base_candidates: base_refs(&base),
             head: "HEAD".to_string(),
             head_source: "checkout HEAD",
             source: RangeSource::DefaultBranch(base),
@@ -2373,19 +2374,55 @@ fn detect_range<F: Fn(&str) -> Option<String>>(env: F, protected: &[String]) -> 
 }
 
 /// The branch an environment variable names, or `None`, with a warning,
-/// when its value is a revision expression or commit id rather than a branch
-/// name (`main~1`, `main@{0}`): such a value would walk the base away from
-/// the branch tip, so the next base source is used instead.
+/// when its value breaks Git's branch-name rules (`main~1`, `main@{0}`,
+/// `main `). Such a value is ignored and the next base source is used. The
+/// value is the author's or the CI host's input: it is read by exact ref and
+/// never rewritten.
 fn env_branch(key: &str, value: &str) -> Option<String> {
-    let name = named_branch(value);
-    if name.is_none() {
-        let warning = codeflow_core::remedy::Finding::new(
-            format!("{key} '{value}' is not a branch name, so it is ignored and the next base source is used"),
-            codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
-        );
-        println!("{}", warning.line("codeflow ci", "warning"));
+    if is_branch_name(value) {
+        return Some(value.to_string());
     }
-    name
+    let warning = codeflow_core::remedy::Finding::new(
+        format!("{key} '{value}' is not a valid branch name, so it is ignored and the next base source is used"),
+        codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+    );
+    println!("{}", warning.line("codeflow ci", "warning"));
+    None
+}
+
+/// Git's branch-name rules, as `git check-ref-format --branch` applies them:
+/// no control character, space, `~`, `^`, `:`, `?`, `*`, `[` or `\`; no `..`,
+/// `@{` or `//`; not `@`; no leading `-` or `/`, no trailing `/` or `.`; and
+/// no path component that starts with `.` or ends with `.lock`. A literal
+/// `@` (`release@2026`) and a hexadecimal name (`deadbeef`) are valid.
+fn is_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "@"
+        && !name.starts_with(['-', '/'])
+        && !name.ends_with(['/', '.'])
+        && !name.contains("..")
+        && !name.contains("@{")
+        && !name.contains("//")
+        && !name
+            .bytes()
+            .any(|byte| byte <= b' ' || byte == 0x7f || b"~^:?*[\\".contains(&byte))
+        && name
+            .split('/')
+            .all(|part| !part.starts_with('.') && !part.as_bytes().ends_with(b".lock"))
+}
+
+/// The exact refs a base branch named by CI metadata, `CODEFLOW_DEFAULT_BRANCH`
+/// or `--into` is read from: a full ref (`refs/...`) as written, so
+/// `refs/remotes/upstream/main` reads upstream; `origin/<b>` as
+/// `refs/remotes/origin/<b>`; and any other name as [`branch_anchors`].
+pub(super) fn base_refs(name: &str) -> Vec<String> {
+    if name.starts_with("refs/") {
+        vec![name.to_string()]
+    } else if let Some(branch) = name.strip_prefix("origin/") {
+        vec![format!("refs/remotes/origin/{branch}")]
+    } else {
+        branch_anchors(name)
+    }
 }
 
 /// The refs that may anchor a base branch `name`, in order: its
@@ -2430,41 +2467,28 @@ pub(super) struct Names<'a> {
 /// names: GitHub `GITHUB_BASE_REF`; GitLab
 /// `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`; Bitbucket
 /// `BITBUCKET_PR_DESTINATION_BRANCH`.
-/// A value that is not a branch name (`main~1`) names no target.
+/// A value that breaks Git's branch-name rules (`main~1`) names no target.
 fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
-    let branch = |value: String| named_branch(&value).is_some().then_some(value);
+    let branch = |value: String| is_branch_name(&value).then_some(value);
     env("GITHUB_BASE_REF")
         .and_then(branch)
         .or_else(|| env("CI_MERGE_REQUEST_TARGET_BRANCH_NAME").and_then(branch))
         .or_else(|| env("BITBUCKET_PR_DESTINATION_BRANCH").and_then(branch))
 }
 
-/// Normalize a branch name or branch ref (`origin/main` and
-/// `refs/heads/origin/main` name `main`); a commit id, a revision expression
-/// or a value with a space or control character names no branch. One prefix
-/// is stripped; a remainder that still starts with `origin/` in any case, or
-/// still contains `refs/`, names no branch, because it would select a local
-/// branch such as `refs/heads/origin/main` instead of the remote-tracking ref.
+/// Normalize a branch name or branch ref (`origin/main` names `main`);
+/// a commit id or revision expression names no branch.
 fn named_branch(base: &str) -> Option<String> {
     let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
-    if base.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
-        return None;
-    }
     let name = base
         .strip_prefix("refs/heads/")
-        .map(|rest| rest.strip_prefix("origin/").unwrap_or(rest))
         .or_else(|| {
             base.strip_prefix("refs/remotes/")
                 .and_then(|rest| rest.split_once('/').map(|(_, branch)| branch))
         })
         .or_else(|| base.strip_prefix("origin/"))
         .unwrap_or(base);
-    let remote_shaped = name
-        .get(.."origin/".len())
-        .is_some_and(|head| head.eq_ignore_ascii_case("origin/"))
-        || name.contains("refs/");
-    (!hex && !remote_shaped && !name.is_empty() && !name.contains(['~', '^', ':', '@']))
-        .then(|| name.to_string())
+    (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
 }
 
 /// `origin`'s fetch URL: `Ok(None)` when the repository has no such remote
@@ -2625,14 +2649,14 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
 }
 
 /// Whether `rev` is a full ref name rather than a revision expression.
-fn is_full_ref(rev: &str) -> bool {
+pub(super) fn is_full_ref(rev: &str) -> bool {
     rev.starts_with("refs/")
         && !rev.contains(['~', '^', ':', '?', '*', '[', '\\', ' '])
         && !rev.contains("@{")
 }
 
 /// `git show-ref --verify --quiet <name>`: whether exactly that ref exists.
-fn exact_ref_exists(root: &Path, name: &str) -> Result<bool, String> {
+pub(super) fn exact_ref_exists(root: &Path, name: &str) -> Result<bool, String> {
     let out = codeflow_core::workgraph::history::command()
         .arg("-C")
         .arg(root)
@@ -4579,9 +4603,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_range_ignores_revision_syntax_in_branch_variables() {
-        // TSK-398 review N3: `main~1` or `main@{0}` would walk the base away
-        // from the branch tip; the next base source is used instead.
+    fn detect_range_reads_branch_variables_by_git_branch_name_rules() {
+        // TSK-398, Codex review F2 and F3: the variables are author or host
+        // input, so a value that breaks Git's branch-name rules is ignored,
+        // and a valid one is read by exact ref as written, never rewritten.
         for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
             for value in [
                 "main~1",
@@ -4589,12 +4614,18 @@ mod tests {
                 "main ",
                 " main",
                 "main\t",
-                // Round 3 minor: no remainder may still name a remote or a ref.
-                "refs/heads/origin/origin/main",
-                "refs/remotes/origin/origin/main",
-                "Origin/main",
-                "refs/heads/Origin/main",
-                "refs/heads/refs/heads/origin/main",
+                "-main",
+                "main.lock",
+                "main/",
+                "a..b",
+                "ma:in",
+                "ma?in",
+                "ma*in",
+                "ma[in",
+                "ma\\in",
+                "@",
+                ".main",
+                "a//b",
             ] {
                 let r = detect_range(env_from(&[(key, value)]), &protected());
                 assert!(
@@ -4604,30 +4635,55 @@ mod tests {
                 );
                 assert_eq!(r.base_candidates[0], "refs/remotes/origin/main");
             }
-            // Round 2 minor: a full spelling of a local branch named
-            // `origin/main` names `main`, never the shadow branch.
-            for value in ["refs/heads/origin/main", "origin/main", "refs/heads/main"] {
+            let both = |name: &str| {
+                vec![
+                    format!("refs/remotes/origin/{name}"),
+                    format!("refs/heads/{name}"),
+                ]
+            };
+            let exact = |name: &str| vec![name.to_string()];
+            for (value, expected) in [
+                ("main", both("main")),
+                ("release@2026", both("release@2026")),
+                ("deadbeef", both("deadbeef")),
+                ("Origin/main", both("Origin/main")),
+                ("origin/main", exact("refs/remotes/origin/main")),
+                ("refs/heads/main", exact("refs/heads/main")),
+                ("refs/heads/origin/main", exact("refs/heads/origin/main")),
+                (
+                    "refs/remotes/upstream/main",
+                    exact("refs/remotes/upstream/main"),
+                ),
+                (
+                    "refs/remotes/origin/origin/main",
+                    exact("refs/remotes/origin/origin/main"),
+                ),
+                (
+                    "refs/heads/refs/heads/origin/main",
+                    exact("refs/heads/refs/heads/origin/main"),
+                ),
+            ] {
                 let r = detect_range(env_from(&[(key, value)]), &protected());
                 assert!(
                     !matches!(r.source, RangeSource::ProtectedBranches),
                     "{key}={value}: {}",
                     r.source
                 );
-                assert_eq!(
-                    r.base_candidates,
-                    vec!["refs/remotes/origin/main", "refs/heads/main"],
-                    "{key}={value}"
-                );
+                assert_eq!(r.base_candidates, expected, "{key}={value}");
             }
         }
-        assert_eq!(
-            detect_target(env_from(&[("GITHUB_BASE_REF", "main~1")])),
-            None
-        );
-        assert_eq!(
-            detect_target(env_from(&[("GITHUB_BASE_REF", "main")])).as_deref(),
-            Some("main")
-        );
+        for (value, expected) in [
+            ("main~1", None),
+            ("main", Some("main")),
+            ("release@2026", Some("release@2026")),
+            ("deadbeef", Some("deadbeef")),
+        ] {
+            assert_eq!(
+                detect_target(env_from(&[("GITHUB_BASE_REF", value)])).as_deref(),
+                expected,
+                "{value}"
+            );
+        }
     }
 
     #[test]

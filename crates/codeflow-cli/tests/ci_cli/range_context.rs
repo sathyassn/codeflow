@@ -1162,7 +1162,7 @@ fn base_variables_with_revision_syntax_are_ignored() {
             let (f, main) = feature_on_pushed_main();
             let text = output(&ci(&f, &[], Some((key, value))));
             assert!(
-                text.contains(&format!("{key} '{value}' is not a branch name")),
+                text.contains(&format!("{key} '{value}' is not a valid branch name")),
                 "{key}={value}: {text}"
             );
             assert!(
@@ -1175,4 +1175,81 @@ fn base_variables_with_revision_syntax_are_ignored() {
             );
         }
     }
+}
+
+/// Codex review F2 and F3 fixture: target tip A on its own line, a malformed
+/// commit B on `origin/main`, and the change C on B. Returns (f, A, B).
+fn malformed_main_beside_a_target() -> (Line, String, String) {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.git(&["switch", "-qc", "release-line"]);
+    f.write("release.md", "Release work.\n");
+    let target = f.commit("docs: add release work");
+    f.git(&["switch", "-q", "main"]);
+    f.write("main.md", "Main work.\n");
+    let malformed = f.commit("invalid message");
+    f.git(&["update-ref", "refs/remotes/origin/main", &malformed]);
+    f.git(&["switch", "-qc", "fix/review"]);
+    f.write("src/lib.rs", "pub fn review() {}\n");
+    f.commit("fix: add the review change");
+    (f, target, malformed)
+}
+
+/// Codex review F2: `release@2026` and `deadbeef` are valid branch names, so
+/// CI metadata naming them selects that target's tip and acceptance target,
+/// and the malformed commit between the target and `main` is judged.
+#[test]
+fn valid_branch_names_with_at_or_hex_select_their_own_target() {
+    for name in ["release@2026", "deadbeef"] {
+        for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
+            let (f, target, malformed) = malformed_main_beside_a_target();
+            f.git(&[
+                "update-ref",
+                &format!("refs/remotes/origin/{name}"),
+                &target,
+            ]);
+            let out = ci(&f, &[], Some((key, name)));
+            let text = output(&out);
+            assert!(
+                text.contains(&format!("range {}..", &target[..8])),
+                "{key}={name}: {text}"
+            );
+            assert!(
+                text.contains(&format!("commit {}", &malformed[..8]))
+                    && text.contains("git.commit_format"),
+                "{key}={name}: {text}"
+            );
+            assert!(!text.contains("is not a valid branch name"), "{text}");
+            if key == "GITHUB_BASE_REF" {
+                assert!(
+                    text.contains(&format!("acceptance target '{name}' (CI target metadata)")),
+                    "{key}={name}: {text}"
+                );
+            }
+            assert_eq!(out.status.code(), Some(1), "{key}={name}: {text}");
+        }
+    }
+}
+
+/// Codex review F3: a full `refs/remotes/upstream/main` is read exactly as
+/// written, never rewritten to origin, so the fork's own tip bounds the range.
+#[test]
+fn a_full_upstream_ref_is_read_exactly_as_written() {
+    let (f, upstream, malformed) = malformed_main_beside_a_target();
+    f.git(&["update-ref", "refs/remotes/upstream/main", &upstream]);
+    let out = ci(
+        &f,
+        &[],
+        Some(("CODEFLOW_DEFAULT_BRANCH", "refs/remotes/upstream/main")),
+    );
+    let text = output(&out);
+    assert!(
+        text.contains(&format!("range {}..", &upstream[..8])),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("commit {}", &malformed[..8])) && text.contains("git.commit_format"),
+        "{text}"
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
 }

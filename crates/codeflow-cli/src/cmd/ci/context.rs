@@ -6,7 +6,7 @@ use codeflow_core::hooks::repo;
 use codeflow_core::workgraph::{declared_work_target_at_revision, default_work_target, history};
 
 use super::{
-    branch_anchors, detect_range, detect_target, named_branch, resolve_base, rev_parse, CiArgs,
+    base_refs, detect_range, detect_target, named_branch, resolve_base, rev_parse, CiArgs,
 };
 
 pub(super) struct Context {
@@ -351,7 +351,7 @@ fn normalize(name: &str) -> String {
 }
 
 fn target_candidates(target: &str) -> Vec<String> {
-    branch_anchors(&normalize(target))
+    base_refs(target)
 }
 
 fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<String>, String> {

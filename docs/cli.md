@@ -185,7 +185,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<STAGE>` | Hook stage (receives git's standard hook arguments). One of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push`, `capabilities`. |
 | | `[ARGS]...` | Arguments passed through by git (e.g. the commit-msg file path, the pre-push remote name and URL). |
 | `codeflow ci` | | Verify a commit range + branch name against policy, the portable, binary-sourced CI check (auto-detects the CI platform's range) |
-| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches; each branch those sources name resolves only as the exact ref `refs/remotes/origin/<name>`, then `refs/heads/<name>`. A given --base is the revision it names. An unresolved or unsuitable declared target warns; pass --base to select the intended range. |
+| | `--base <REF>` | Base ref of the range (exclusive). When omitted: CI base metadata, `CODEFLOW_DEFAULT_BRANCH`, then --into or the branch's declared target, then policy protected branches. Each is read by exact ref: a `refs/` name as written, `origin/<name>` as `refs/remotes/origin/<name>`, another name as `refs/remotes/origin/<name>` then `refs/heads/<name>`, except that a declared target reads only its remote-tracking ref. A given --base is the revision it names. An unresolved or unsuitable declared target warns; pass --base to select the intended range. |
 | | `--head <REF>` | Head ref of the range (inclusive). Auto-detected from CI env when omitted. |
 | | `--branch <NAME>` | Branch context for naming policy and acceptance binding (frozen or amendable). Defaults to CI metadata, then the checkout. Without --into, its declared target selects the base when no --base or CI base exists: a task's `integration_target`, a plan/EPC-NNN branch's epic line, or the default branch for integration/*. Only protected branches and bound epic lines may supply a declared target: records on a protected branch or at the line's `origin/<line>` ref must bind the line to its epic, and the branch's task must belong to that epic or be a standalone task that declares the line. Declared bases use only `origin/<name>`; local branches, including protected names, never supply them. Missing remote refs warn and keep the protected fallback. Pre-push uses a second protected name only when its advertised tip equals the destination default's tip. Host protection cannot be verified offline: protect integration/* and every name in `protected_branches` on the host. A bare run reads the local remote-tracking ref; git-guard refuses update-ref of refs/remotes/*. Pass --branch when an explicit --head belongs to another line. |
 | | `--pr-body <TEXT>` | PR/MR body text to scan for AI attribution, emoji, policy characters (ADR-0067), and the required section structure. |
@@ -397,10 +397,12 @@ Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 no branch. Detached candidates need `--branch`.
 
 Without `--base`: CI metadata, `CODEFLOW_DEFAULT_BRANCH`,
-`--into` or the declared target, then protected branches. Each branch those
-sources name resolves as its exact remote-tracking ref, then its local branch,
-so a local branch named `origin/main` never stands in for it; a value with
-revision syntax, such as `main~1`, is ignored. A given `--base` is the
+`--into` or the declared target, then protected branches. Each is read by
+exact ref: a `refs/` name as written, `origin/<name>` as its remote-tracking
+ref, and another name as its remote-tracking ref, then its local branch, so a
+local branch named `origin/main` never stands in for the fetched one. A
+declared target reads only its remote-tracking ref. A CI variable that breaks
+Git's branch-name rules, such as `main~1`, is ignored. A given `--base` is the
 revision it names. Declared targets count
 only when protected or bound as the `--branch` row says; others and unresolved
 targets warn. Targets containing the head require `--base`.
