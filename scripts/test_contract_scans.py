@@ -25,6 +25,7 @@ class ContractScanJourneys(unittest.TestCase):
         self.write("crates/codeflow-cli/Cargo.toml", '[package]\nname="codeflow-cli"\nversion="0.0.0"\nedition="2021"\n[[bin]]\nname="codeflow"\npath="src/main.rs"\n')
         self.write("crates/codeflow-cli/src/main.rs", "fn main() {}\n#[test] fn derived_lookup_fixture() {}\n")
         self.write("crates/codeflow-cli/tests/remedy_clearing.rs", "#[test] fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {}\n")
+        self.write("crates/codeflow-cli/tests/test_gate_cli.rs", "#[test] fn every_tracked_path_is_classified_by_the_conservative_partition() {}\n")
         self.write("scripts/contract-scans.py", (ROOT / "scripts/contract-scans.py").read_text(encoding="utf-8"))
 
     def write(self, name, text):
@@ -72,6 +73,12 @@ class ContractScanJourneys(unittest.TestCase):
         self.write("crates/codeflow-cli/src/main.rs",
                    'fn main() {}\n#[test] fn derived_lookup_fixture() { panic!("stale lookup"); }\n')
         self.assert_failure("stale lookup")
+
+    def test_an_unclassified_path_fails_the_runner(self):
+        self.assert_control()
+        self.write("crates/codeflow-cli/tests/test_gate_cli.rs",
+                   '#[test] fn every_tracked_path_is_classified_by_the_conservative_partition() { panic!("unclassified path"); }\n')
+        self.assert_failure("unclassified path")
 
     def test_an_empty_scan_inventory_fails_instead_of_passing_no_tests(self):
         self.assert_control()

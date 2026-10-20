@@ -49,6 +49,8 @@ def commands(root: Path) -> list[list[str]]:
         core + ["--quiet"],
         ["cargo", "test", "-p", "codeflow-cli", "--test", "remedy_clearing",
          "every_catalogued_row_is_proven_or_excluded_at_a_boundary", "--", "--exact"],
+        ["cargo", "test", "-p", "codeflow-cli", "--test", "test_gate_cli",
+         "every_tracked_path_is_classified_by_the_conservative_partition", "--", "--exact"],
         ["cargo", "test", "-p", "codeflow-cli", "--bin", "codeflow", "derived_lookup"],
     ]
 
