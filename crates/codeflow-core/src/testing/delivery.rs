@@ -12,7 +12,7 @@ use super::error::TestingError;
 
 /// Public selection controls. `since` and `all` never remove an owed check;
 /// `only` limits a run to named targets, and such a run is never complete.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GateOptions {
     pub since: Option<String>,
     pub all: bool,
@@ -24,6 +24,8 @@ pub struct GateOptions {
 pub struct Selection {
     pub selected: BTreeSet<String>,
     pub skipped: BTreeSet<String>,
+    /// Targets outside an explicit caller selection, never evidence skips.
+    pub excluded: BTreeSet<String>,
     pub reason: String,
     pub reasons: BTreeMap<String, String>,
 }
@@ -225,12 +227,52 @@ pub fn matches(patterns: &[String], path: &str) -> bool {
     })
 }
 
+// Open once and inspect that descriptor before consuming local selection evidence.
+#[cfg(unix)]
+fn read_owned_record(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    // SAFETY: geteuid has no preconditions and does not access memory.
+    if !record_permissions_safe(metadata.uid(), metadata.mode(), unsafe { libc::geteuid() })
+        || !metadata.is_file()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "run record must be owned by the effective user and not group- or world-writable",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn record_permissions_safe(owner: u32, mode: u32, effective_user: u32) -> bool {
+    owner == effective_user && mode & 0o022 == 0
+}
+
+#[cfg(not(unix))]
+fn read_owned_record(_path: &Path) -> std::io::Result<Vec<u8>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "run record ownership protection unavailable",
+    ))
+}
+
 fn green_base(
     root: &Path,
     home: Option<&Path>,
     base: &str,
     config_digest: &str,
 ) -> Result<Vec<serde_json::Value>, String> {
+    if std::env::var_os("CODEFLOW_HOME").is_some() {
+        return Err("selection credit denied: CODEFLOW_HOME is overridden".into());
+    }
     let home = home.ok_or("no qualifying run: CodeFlow home unavailable")?;
     let tree = git_output(
         root,
@@ -244,14 +286,12 @@ fn green_base(
     for entry in entries {
         let Some(record) = entry
             .ok()
-            .and_then(|entry| std::fs::read(entry.path().join("run.json")).ok())
+            .and_then(|entry| read_owned_record(&entry.path().join("run.json")).ok())
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         else {
-            reason = "corrupt or unreadable qualifying record";
             continue;
         };
         if record["git_tree"].as_str().is_none() {
-            reason = "legacy record: missing git_tree evidence";
             continue;
         }
         if record["git_tree"] != tree.strip_suffix('\n').unwrap_or(&tree) {
@@ -346,13 +386,15 @@ pub fn select(
     let all = |reason: &str| Selection {
         selected: eligible.clone(),
         skipped: BTreeSet::new(),
+        excluded: BTreeSet::new(),
         reason: reason.into(),
         reasons: BTreeMap::new(),
     };
     if !options.only.is_empty() {
         let selected = with_prerequisites(targets, options.only.iter().cloned().collect());
         return Selection {
-            skipped: eligible.difference(&selected).cloned().collect(),
+            excluded: eligible.difference(&selected).cloned().collect(),
+            skipped: BTreeSet::new(),
             selected,
             reason: "--only: the named targets and their prerequisites".into(),
             reasons: BTreeMap::new(),
@@ -388,6 +430,7 @@ fn select_base(
     let all = |reason: &str| Selection {
         selected: eligible.clone(),
         skipped: BTreeSet::new(),
+        excluded: BTreeSet::new(),
         reason: reason.into(),
         reasons: BTreeMap::new(),
     };
@@ -472,6 +515,7 @@ fn select_base(
     }
     include_affected_graph(targets, &eligible, &mut selected, &mut reasons);
     Selection {
+        excluded: BTreeSet::new(),
         skipped: eligible.difference(&selected).cloned().collect(),
         selected,
         reason: "per-target evidence against the base tree".into(),
@@ -843,9 +887,8 @@ mod tests {
                 &merged.to_string(),
                 "config"
             )
-            .unwrap()
-            .len(),
-            1
+            .map_or(0, |records| records.len()),
+            usize::from(cfg!(unix))
         );
         record.as_object_mut().unwrap().remove("git_tree");
         std::fs::write(
@@ -860,7 +903,7 @@ mod tests {
             "config"
         )
         .unwrap_err()
-        .contains("legacy"));
+        .contains("no qualifying run for the base tree"));
     }
 
     #[test]
@@ -1100,5 +1143,17 @@ mod r22_regressions {
         std::fs::remove_dir(dir.path().join("sub")).unwrap();
         std::os::unix::fs::symlink("sub", dir.path().join("sub")).unwrap();
         assert!(tracked(dir.path()).is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod record_protection_tests {
+    #[test]
+    fn repair_record_owner_and_write_permissions_are_required() {
+        assert!(super::record_permissions_safe(1000, 0o600, 1000));
+        assert!(super::record_permissions_safe(1000, 0o644, 1000));
+        assert!(!super::record_permissions_safe(1001, 0o600, 1000));
+        assert!(!super::record_permissions_safe(1000, 0o620, 1000));
+        assert!(!super::record_permissions_safe(1000, 0o602, 1000));
     }
 }

@@ -3808,14 +3808,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/testing/delivery.rs",
         "green_base",
-        "obtain-absent:read",
-        1,
-        "unproven",
-    ),
-    // Unreadable or malformed run records earn no credit; selection runs targets unless another complete passed record proves their exact evidence.
-    (
-        "crates/codeflow-core/src/testing/delivery.rs",
-        "green_base",
         "obtain-absent:from_slice",
         1,
         "unproven",
@@ -3871,7 +3863,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Configured values are redacted separately; inherited UTF-8 values are removed from decoded text. A non-UTF8 value cannot occur verbatim in UTF-8 artifacts.
     (
         "crates/codeflow-core/src/testing/evidence.rs",
-        "redact",
+        "redacted_values",
         "obtain-absent:var",
         1,
         "display",
@@ -6308,6 +6300,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/security/prose.rs", "plain_target", "is_file", 1, "FileType is obtained from successful metadata after proven absence handling; unreadable targets do not certify prose."),
     ("crates/codeflow-core/src/status.rs", "collect_delivery", "is_dir", 1, "Feeds only the status delivery rollup; codeflow status prints the view and always exits 0."),
     ("crates/codeflow-core/src/status.rs", "collect_work", "is_dir", 1, "Feeds only a status note and summary counts; codeflow status prints the view and always exits 0."),
+    ("crates/codeflow-core/src/testing/delivery.rs", "read_owned_record", "is_file", 1, "Type check on metadata from an opened no-follow descriptor; read errors propagate and non-regular files deny selection credit."),
     ("crates/codeflow-core/src/testing/evidence.rs", "fingerprint_key", "is_file", 1, "Type check on metadata from an opened no-follow descriptor; failure to obtain metadata or a non-regular file denies fingerprint evidence and runs the target."),
     ("crates/codeflow-core/src/testing/evidence.rs", "regular_bytes", "is_file", 1, "Type check on symlink_metadata with errors propagated; links and non-regular outputs deny equality evidence and run the target."),
     ("crates/codeflow-core/src/testing/doctor/mod.rs", "run_all_checks", "exists", 1, "False returns a Fail config-exists check, so an unreadable path is never passed; a present config is then loaded by load_test_config, which refuses a dangling leaf."),

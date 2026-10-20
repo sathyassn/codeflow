@@ -111,6 +111,7 @@ fn merge_adds_a_merge_commit_even_when_fast_forward_is_possible() {
     git(root, &["branch", "land", "feat/reviewed^1"]);
     let line = git(root, &["rev-parse", "land"]);
     let source = git(root, &["rev-parse", "feat/reviewed"]);
+    gate(root, "git ls-files --error-unmatch base.txt feature.txt");
     integrate_with_mode(root, "feat/reviewed", "land", IntegrateMode::Merge).unwrap();
     assert_eq!(git(root, &["rev-parse", "land^1"]), line);
     assert_eq!(git(root, &["rev-parse", "land^2"]), source);
@@ -123,6 +124,7 @@ fn merge_of_an_already_contained_head_keeps_the_target_tip() {
     let root = dir.path();
     git(root, &["branch", "feat/contained", "main^1"]);
     let line = git(root, &["rev-parse", "main"]);
+    gate(root, "git ls-files --error-unmatch base.txt");
     let outcome =
         integrate_with_mode(root, "feat/contained", "main", IntegrateMode::Merge).unwrap();
     assert_eq!(git(root, &["rev-parse", "main"]), line);
@@ -230,6 +232,7 @@ fn merge_lands_from_linked_worktree_and_refreshes_target_checkout() {
         &["worktree", "add", linked.to_str().unwrap(), "feat/reviewed"],
     );
     let source = git(dir.dir.path(), &["rev-parse", "feat/reviewed"]);
+    gate(&linked, "git ls-files --error-unmatch base.txt feature.txt");
     let result =
         integrate_with_mode(&linked, "feat/reviewed", "main", IntegrateMode::Merge).unwrap();
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);

@@ -23,7 +23,7 @@ use crate::file_lock::{lock_path_exclusive, PathLock};
 use crate::git::conflict::{attempt_rebase, RebaseResult};
 use crate::hooks::policy::Policy;
 use crate::testing::error::TestingError;
-use crate::testing::gate::{run_gate, GateOutcome};
+use crate::testing::gate::{run_gate_with_options, GateOptions, GateOutcome};
 
 /// Environment variable carrying the gate-context token during the
 /// integrate merge. The git hooks and git-guard (workstream f-hooks) check
@@ -145,14 +145,22 @@ impl std::fmt::Display for IntegrateOutcome {
         )?;
         match &self.test_gate {
             TestGateSummary::SkippedNoTargets { reason } => {
-                writeln!(f, "  test gate: SKIPPED — {reason}")?;
+                writeln!(
+                    f,
+                    "  test gate: executed 0; skipped 0; not complete: {reason}"
+                )?;
                 writeln!(
                     f,
                     "             WARNING: no tests ran; this merge is NOT test-verified"
                 )?;
             }
             TestGateSummary::Passed { targets } => {
-                writeln!(f, "  test gate: passed ({})", targets.join(", "))?;
+                writeln!(
+                    f,
+                    "  test gate: passed (executed {}; skipped 0; {})",
+                    targets.len(),
+                    targets.join(", ")
+                )?;
             }
         }
         writeln!(f, "  checkout:  {}", self.final_checkout)?;
@@ -546,12 +554,28 @@ fn run_release_structure(
 }
 
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
-    match run_gate(repo_root, "full") {
-        Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
+    match run_gate_with_options(
+        repo_root,
+        "full",
+        &GateOptions {
+            all: true,
+            ..GateOptions::default()
+        },
+    ) {
+        Ok(GateOutcome::NoTargets { reason }) => {
+            let _ = restore_checkout(repo_root, original);
+            Err(IntegrateError::TestGateFailed {
+                summary: format!("executed 0; skipped 0; not complete: {reason}"),
+            })
+        }
         Ok(GateOutcome::Completed {
-            results, passed, ..
+            results,
+            passed,
+            skipped,
+            complete,
+            ..
         }) => {
-            if passed {
+            if passed && complete && skipped.is_empty() && !results.is_empty() {
                 return Ok(TestGateSummary::Passed {
                     targets: results.into_iter().map(|r| r.name).collect(),
                 });
@@ -572,6 +596,12 @@ fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, I
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let summary = format!(
+                "executed {}; skipped {}{}\n{summary}",
+                results.len(),
+                skipped.len(),
+                if complete { "" } else { "; not complete" }
+            );
             Err(IntegrateError::TestGateFailed { summary })
         }
         Err(e) => {
@@ -1059,6 +1089,7 @@ mod tests {
             &["worktree", "add", wt_path.to_str().unwrap(), "feat/x"],
         );
 
+        write_test_config(&wt_path, "exit 0");
         let before = branch_oid(dir.path(), "main");
         let outcome =
             integrate(&wt_path, "feat/x", "main").expect("integrate from a linked worktree lands");
@@ -1160,17 +1191,14 @@ mod tests {
     }
 
     #[test]
-    fn happy_path_without_test_targets_warns_loudly() {
+    fn repair_without_test_targets_refuses_landing() {
         let dir = repo_with_feature_branch();
-
-        let outcome = integrate(dir.path(), "feat/x", "main").expect("integrate succeeds");
-        assert!(matches!(
-            outcome.test_gate,
-            TestGateSummary::SkippedNoTargets { .. }
-        ));
-        let report = outcome.to_string();
-        assert!(report.contains("SKIPPED"));
-        assert!(report.contains("NOT test-verified"));
+        let before = branch_oid(dir.path(), "main");
+        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("executed 0; skipped 0; not complete"));
+        assert_eq!(branch_oid(dir.path(), "main"), before);
     }
 
     #[test]
@@ -1330,6 +1358,7 @@ mod tests {
     fn unprotected_target_is_reported_not_blocked() {
         let dir = repo_with_feature_branch();
         git(dir.path(), &["branch", "develop", "main"]);
+        write_test_config(dir.path(), "exit 0");
 
         let outcome = integrate(dir.path(), "feat/x", "develop").expect("integrate succeeds");
         assert!(!outcome.target_protected);

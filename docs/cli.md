@@ -204,8 +204,8 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 |---|---|---|
 | `codeflow test` | | Run the test gate (configured targets or runtime stack detection) |
 | | `--mode <MODE>` | Test mode: full (default), quick, or essential. `quick` is an alias for `essential`, the lighter mode shipped test-configs define. One of `full`, `quick`, `essential`. Default `full`. |
-| | `--strict` | Treat "nothing to run" as a failure (exit non-zero) instead of a loud no-op. For scripted/unattended callers, CI, the pipeline verify gate, where a run that executed zero tests must NOT read as green. The default (no `--strict`) keeps the loud-no-op-exit-0 behavior so the bootstrap/early-setup path of a brand-new repo without tests is not broken. |
-| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. Default: the merge base of HEAD and the task's declared integration target. An unproven base conservatively runs every target. |
+| | `--strict` | Exit non-zero when no targets executed or candidate evidence skipped a target. Explicit --only and mode exclusions are not skips. Use for scripted callers that require execution evidence. |
+| | `--since <SINCE>` | Compare the entire candidate delta with a recorded green base. Without --since, full mode executes every target. Default: the merge base of HEAD and the task's declared integration target. An unproven base conservatively runs every target. |
 | | `--all` | Run every target, including the binary determinism check at epic close. With `--only`, the named targets keep that full-strength check. |
 | | `--only <TARGET>...` | Run only these targets and their prerequisites, comma separated or repeated, to split one gate across parallel CI jobs. A limited run is never recorded as complete evidence, and an unknown name is refused before any target starts. |
 | `codeflow test setup` | | Configure `.codeflow/test-config.json` using root detection, an embedded template, or an appended target. Safe auto-detection is the default |
@@ -443,6 +443,7 @@ and CI runs it again.
 | Test case | Behavior |
 |---|---|
 | No stack detected | Loud no-op, exit 0; `--strict` makes it non-zero for scripted callers |
+| Skipped targets | Summaries name executed and skipped counts and say "not complete"; `--strict` fails if no target executed or candidate evidence skipped a requested target; caller exclusions through `--only` or mode membership are not skips |
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
@@ -469,7 +470,7 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
   checkout.
 
 `codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target by default, runs the full test gate, then
+rebases the branch onto the target by default, runs every full-gate target, then
 fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
 commit whose first parent is the old target tip and whose second parent is
 the unchanged source head, and gates that merge result. This keeps a task's
@@ -479,8 +480,8 @@ already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
 Both modes advance the local target only after the gate and the adopted
-release structure check pass. They refuse if the source or target moved
-while testing. A conflict or failed gate leaves the target unchanged and
+release structure check pass. They refuse incomplete or empty gates and refuse
+if the source or target moved while testing. A conflict or failed gate leaves the target unchanged and
 restores the original checkout. The command does not push; the operator or
 primary handles the remote landing through the project's PR flow.
 

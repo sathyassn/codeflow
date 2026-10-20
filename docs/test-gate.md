@@ -2,14 +2,15 @@
 
 ## Concept
 
-The gate skips a check only when a full candidate run proves the check that
+Local test runs skip a check only when a full candidate run proves the check that
 would execute now. Unclassified checks continue to run. Selection does not
 reuse a previous result as a new execution.
 
 ## Architecture
 
-On a task branch, the default comparison is the merge base of HEAD and the
-task record's `integration_target`. The output names the commit and its source.
+For quick and essential runs on a task branch, the default comparison is the
+merge base of HEAD and the task record's `integration_target`. The output names
+the commit and its source.
 Detached HEAD, an unknown task or an unresolved line selects every eligible
 target. The selector never substitutes `main` or the previous commit.
 
@@ -18,7 +19,7 @@ target. The selector never substitutes `main` or the previous commit.
 | `--since <rev>` | Resolves this explicit comparison to a commit and requires it to be an ancestor of HEAD |
 | `--all` | Executes every eligible target; landing candidates use this control |
 | `--only <targets>` | Executes named targets and their prerequisites; never creates complete gate evidence |
-| No selection flags | Resolves the task's declared line and uses per-target evidence |
+| No selection flags | Full executes every target; quick and essential resolve the task's declared line and use per-target evidence |
 
 A qualifying record has a matching config digest and the comparison base's
 Git tree ID. It must be passed, clean, complete and full. The Git tree ID is
@@ -31,6 +32,26 @@ range, release-preflight and checked-out-tree checks still run. Targets that
 are skipped have their names and reasons in `selection`, and no executed
 result. Any skipped target makes `complete` false, including a run that skips
 every target.
+
+Skip credit is a local convenience, never landing evidence. Run records remain
+mutable by their owner. Records must be owned by the effective user and must
+not be group- or world-writable. Where those protections cannot be checked,
+selection grants no credit. Setting `CODEFLOW_HOME` also disables selection
+credit. A MAC under a sandbox `denyRead` key was considered and deferred;
+these checks do not authenticate the record's contents.
+
+The default full gate and both `codeflow integrate` modes execute every target.
+An explicit `--since` can select a local full run; any skip leaves that run
+incomplete and unusable as landing evidence.
+Integration refuses an incomplete or empty gate. For an explicit landing
+command, use `codeflow test --mode full --all` and require a complete run.
+`--only` remains a partial run for split CI jobs and cannot be landing evidence
+on its own. Summaries show executed and skipped counts and say "not complete"
+when any target was skipped. `--strict` exits non-zero if no target executed or
+candidate evidence skipped any requested target. Explicit caller exclusions through `--only` or mode
+membership are not skips and do not fail strict mode. In particular,
+`--strict --all --only X` passes when its requested checks run successfully;
+that split run remains incomplete as evidence for a full landing gate.
 
 ## Technical
 
@@ -62,17 +83,20 @@ transitively by the check.
 | `fingerprint` or `sensitive` | HMAC-SHA256 under an owner-only key in the CodeFlow home, outside every repository and run record |
 | `unclassified` | No equality credit; the target runs and names the missing classification |
 
-No declared environment value is recorded verbatim. A missing safe key makes
+Environment equality evidence never stores raw values. A missing safe key makes
 the target run. Key creation currently requires Unix ownership and permission
 checks; native Windows runs targets with sensitive dependencies. The key is
 never copied into gate evidence. A variable supplied through target `env`
 also needs a classification. Gate-generated environment inputs, such as the
 run ID and start time, always require execution when declared relevant.
 
-Targets with environment inputs retain gate start and completion messages,
-but their raw child progress is not relayed. Captured stdout, stderr and
-reports are redacted before display or retention. This protects declared
-values; transformed or encoded secrets remain the producing command's duty.
+Only non-empty values classified as `fingerprint` or `sensitive` suppress
+raw child progress and are redacted from captured output and gate-owned report
+copies. This includes configured `env` entries with those classifications.
+Audited non-secret and unclassified values are left unchanged. Redaction covers
+literal, XML-, JSON- and URL-escaped forms. The gate never rewrites the tool's
+source report; the producing tool owns protection of that report and any other
+transformations. Gate start and completion messages remain visible.
 
 Selection compares the same mode and command unless the identical-command
 mode relation is declared. It also compares tools, OS, architecture,

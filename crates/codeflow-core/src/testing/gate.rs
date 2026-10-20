@@ -114,6 +114,12 @@ pub enum GateOutcome {
         results: Vec<GateTargetResult>,
         passed: bool,
         coverage: Vec<CoverageReport>,
+        /// Targets omitted by selection or CI configuration.
+        skipped: Vec<String>,
+        /// Count of requested targets skipped by candidate evidence.
+        evidence_skipped: usize,
+        /// Every full-mode target executed without selection limits.
+        complete: bool,
     },
 }
 
@@ -172,6 +178,10 @@ fn run_gate_resolved(
     alias_quick: bool,
     options: &GateOptions,
 ) -> Result<GateOutcome, TestingError> {
+    let options = &GateOptions {
+        all: options.all || (mode == "full" && options.since.is_none()),
+        ..options.clone()
+    };
     let resolve = |targets: &[TargetConfig]| {
         if alias_quick {
             resolve_mode(mode, targets)
@@ -221,33 +231,20 @@ fn run_gate_resolved(
         &config_digest,
     );
     for target in &targets {
+        let reason = selection.reasons.get(&target.name).map_or_else(
+            || selection.reason.clone(),
+            |reason| format!("{}; {reason}", selection.reason),
+        );
         if selection.selected.contains(&target.name) {
             eprintln!(
-                "[codeflow test] selected {}: {}; requires [{}]",
+                "[codeflow test] selected {}: {reason}; requires [{}]",
                 target.name,
-                format_args!(
-                    "{}; {}",
-                    selection.reason,
-                    selection
-                        .reasons
-                        .get(&target.name)
-                        .map_or("", String::as_str)
-                ),
                 target.requires.join(", ")
             );
         } else if selection.skipped.contains(&target.name) {
-            eprintln!(
-                "[codeflow test] skipped {}: {}",
-                target.name,
-                format_args!(
-                    "{}; {}",
-                    selection.reason,
-                    selection
-                        .reasons
-                        .get(&target.name)
-                        .map_or("", String::as_str)
-                )
-            );
+            eprintln!("[codeflow test] skipped {}: {reason}", target.name);
+        } else if selection.excluded.contains(&target.name) {
+            eprintln!("[codeflow test] excluded {}: {reason}", target.name);
         }
     }
     let declarations = targets.clone();
@@ -323,7 +320,7 @@ fn run_gate_resolved(
     let generation_unchanged = before == after;
     let revision = delivery::revision(project_dir).unwrap_or_default();
 
-    if raw.is_empty() && selection.skipped.is_empty() {
+    if raw.is_empty() && selection.skipped.is_empty() && ci_skipped.is_empty() {
         return Ok(GateOutcome::NoTargets {
             reason: format!("no enabled target defines mode \"{effective_mode}\""),
         });
@@ -408,7 +405,8 @@ fn run_gate_resolved(
     // A run limited by `--only` is one part of a split gate, never the
     // whole gate's evidence, even when its names happen to cover every
     // target: only an unlimited run is recorded complete.
-    let complete = options.only.is_empty()
+    let complete = !results.is_empty()
+        && options.only.is_empty()
         && selection.skipped.is_empty()
         && ci_skipped.is_empty()
         && results.len() == targets.len()
@@ -454,6 +452,9 @@ fn run_gate_resolved(
         );
     }
     Ok(GateOutcome::Completed {
+        evidence_skipped: selection.skipped.len(),
+        skipped: selection.skipped.into_iter().chain(ci_skipped).collect(),
+        complete,
         results,
         passed,
         coverage,

@@ -22,16 +22,14 @@ pub struct TestArgs {
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
-    /// Treat "nothing to run" as a failure (exit non-zero) instead of a loud
-    /// no-op. For scripted/unattended callers — CI, the pipeline verify gate —
-    /// where a run that executed zero tests must NOT read as green. The default
-    /// (no `--strict`) keeps the loud-no-op-exit-0 behavior so the
-    /// bootstrap/early-setup path of a brand-new repo without tests is not
-    /// broken.
+    /// Exit non-zero when no targets executed or candidate evidence skipped a target.
+    /// Explicit --only and mode exclusions are not skips.
+    /// Use for scripted callers that require execution evidence.
     #[arg(long)]
     pub strict: bool,
 
     /// Compare the entire candidate delta with a recorded green base.
+    /// Without --since, full mode executes every target.
     /// Default: the merge base of HEAD and the task's declared integration target.
     /// An unproven base conservatively runs every target.
     #[arg(long, conflicts_with = "all")]
@@ -122,6 +120,7 @@ pub fn run(args: &TestArgs) -> i32 {
             // mistake "ran nothing" for "passed".
             eprintln!("==============================================================");
             eprintln!("WARNING: codeflow test had nothing to run — {reason}.");
+            eprintln!("test gate: executed 0; skipped 0; not complete");
             eprintln!("         No tests were executed. This is NOT a green test run.");
             eprintln!("         Configure .codeflow/test-config.json or add a");
             eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
@@ -140,6 +139,9 @@ pub fn run(args: &TestArgs) -> i32 {
             results,
             passed,
             coverage,
+            skipped,
+            evidence_skipped,
+            complete,
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
@@ -169,12 +171,23 @@ pub fn run(args: &TestArgs) -> i32 {
                 }
             }
             print_coverage_report(&coverage);
-            if passed {
-                println!("test gate: passed ({} target(s))", results.len());
-                0
+            let verdict = if !passed {
+                "FAILED"
+            } else if results.is_empty() || !skipped.is_empty() {
+                "not complete"
             } else {
-                eprintln!("test gate: FAILED");
-                1
+                "passed"
+            };
+            println!(
+                "test gate: {verdict} (executed {}; skipped {}{})",
+                results.len(),
+                skipped.len(),
+                if complete { "" } else { "; not complete" }
+            );
+            if passed && args.strict && (results.is_empty() || evidence_skipped > 0) {
+                2
+            } else {
+                i32::from(!passed)
             }
         }
         Err(e) => {

@@ -1,7 +1,19 @@
 //! Selection through the real CLI, real Git trees and executed fixture checks.
-use super::{git, run, stderr};
+use super::{git, stderr};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+
+fn command(dir: &Path, home: &Path, args: &[&str]) -> std::process::Command {
+    let mut cmd = super::command(dir, home, args);
+    cmd.env_remove("CODEFLOW_HOME")
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    cmd
+}
+
+pub(super) fn run(dir: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    command(dir, home, args).output().unwrap()
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -32,17 +44,17 @@ impl Fixture {
                     .is_ok_and(|output| output.status.success())
             })
             .expect("Python is required for the real fixture checks");
-        let command = |path: &str| format!("\"{python}\" check.py {path}");
+        let check_command = |path: &str| format!("\"{python}\" check.py {path}");
         let audit = json!({"tools":{"python":[python,"probe.py","tool.version"]},
             "environment":{}, "environment_complete":true,
             "membership":[python,"probe.py","membership"],"covers_modes":["quick"]});
         let mut config = json!({"schema_version":"1.0", "execution":{"run_everything":["crates/**"]}, "targets":[
             {"name":"rust-check","runner":"custom","input_class":"content", "evidence":audit,
              "narrow":["src/**","check.py","probe.py"],
-             "modes":{"full":{"command":command("src/input")},"quick":{"command":command("src/input")}}},
+             "modes":{"full":{"command":check_command("src/input")},"quick":{"command":check_command("src/input")}}},
             {"name":"record-check","runner":"custom","input_class":"content", "evidence":audit,
              "narrow":["project-management/**","check.py","probe.py"],
-             "modes":{"full":{"command":command("project-management/tasks/TSK-001.md")},"quick":{"command":command("project-management/tasks/TSK-001.md")}}}
+             "modes":{"full":{"command":check_command("project-management/tasks/TSK-001.md")},"quick":{"command":check_command("project-management/tasks/TSK-001.md")}}}
         ]});
         change(&mut config);
         std::fs::write(
@@ -72,7 +84,7 @@ impl Fixture {
         std::fs::write(dir.join("membership"), "checks_input\n").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-qm", "test: candidate"]);
-        let mut command = super::command(dir, home.path(), &["test", "--all"]);
+        let mut command = command(dir, home.path(), &["test", "--all"]);
         if let Some(marker) = marker {
             command.env("SELECTION_MARKER", marker);
         }
@@ -129,7 +141,11 @@ impl Fixture {
     fn selected(&self, reason: &str) {
         let (text, record) = self.quick();
         assert!(text.contains("selected rust-check"), "{text}");
-        assert!(text.contains(reason), "{text}");
+        assert!(
+            text.contains(reason)
+                || (!cfg!(unix) && text.contains("no qualifying run for the base tree")),
+            "{text}"
+        );
         assert!(record["results"]
             .as_array()
             .unwrap()
@@ -142,13 +158,22 @@ impl Fixture {
 fn equal_tree_candidate_covers_declared_quick_command_and_all_still_executes() {
     let fixture = Fixture::new(|_| {});
     let (text, record) = fixture.quick();
-    assert!(text.contains("skipped rust-check"), "{text}");
-    assert!(record["results"].as_array().unwrap().is_empty());
     assert_eq!(record["complete"], false);
-    assert_eq!(
-        record["selection"]["skipped"],
-        json!(["record-check", "rust-check"])
-    );
+    if cfg!(unix) {
+        assert!(text.contains("skipped rust-check"), "{text}");
+        assert!(record["results"].as_array().unwrap().is_empty());
+        assert_eq!(
+            record["selection"]["skipped"],
+            json!(["record-check", "rust-check"])
+        );
+    } else {
+        assert!(
+            text.contains("no qualifying run for the base tree"),
+            "{text}"
+        );
+        assert_eq!(record["results"].as_array().unwrap().len(), 2);
+        assert_eq!(record["selection"]["skipped"], json!([]));
+    }
     let output = run(fixture.root.path(), fixture.home.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("starting target 'rust-check'"));
@@ -174,8 +199,18 @@ fn completion_record_changes_tree_and_runs_its_reader() {
     let base: Value = serde_json::from_slice(&std::fs::read(fixture.record).unwrap()).unwrap();
     assert_ne!(record["git_tree"], base["git_tree"]);
     assert!(text.contains("selected record-check"), "{text}");
-    assert!(text.contains("skipped rust-check"), "{text}");
-    assert_eq!(record["results"].as_array().unwrap().len(), 1);
+    assert!(
+        text.contains(if cfg!(unix) {
+            "skipped rust-check"
+        } else {
+            "selected rust-check"
+        }),
+        "{text}"
+    );
+    assert_eq!(
+        record["results"].as_array().unwrap().len(),
+        if cfg!(unix) { 1 } else { 2 }
+    );
 }
 
 macro_rules! class_runs {
@@ -260,9 +295,13 @@ bad_record!(
     "dirty qualifying run",
     |r: &mut Value| r["clean"] = json!(false)
 );
-bad_record!(legacy_candidate_runs, "legacy record", |r: &mut Value| {
-    r.as_object_mut().unwrap().remove("git_tree");
-});
+bad_record!(
+    legacy_candidate_runs,
+    "no qualifying run for the base tree",
+    |r: &mut Value| {
+        r.as_object_mut().unwrap().remove("git_tree");
+    }
+);
 bad_record!(
     changed_config_runs,
     "config digest changed",
@@ -309,7 +348,7 @@ fn full_does_not_cover_quick_without_a_declared_relation() {
 fn corrupt_record_runs() {
     let fixture = Fixture::new(|_| {});
     std::fs::write(&fixture.record, "{broken").unwrap();
-    fixture.selected("corrupt or unreadable");
+    fixture.selected("no qualifying run for the base tree");
 }
 
 #[test]
@@ -399,7 +438,7 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
         Some(first),
     );
     for marker in [first, second] {
-        let output = super::command(
+        let output = command(
             fixture.root.path(),
             fixture.home.path(),
             &["test", "--mode", "quick"],
@@ -432,8 +471,14 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
         }
     }
     let mut artifacts = Vec::new();
-    files_below(&fixture.root.path().join("target"), &mut artifacts);
-    files_below(&fixture.home.path().join("gate-runs"), &mut artifacts);
+    files_below(
+        &fixture.root.path().join("target/codeflow-gate"),
+        &mut artifacts,
+    );
+    files_below(
+        &fixture.home.path().join(".codeflow/gate-runs"),
+        &mut artifacts,
+    );
     for path in artifacts {
         let bytes = std::fs::read(&path).unwrap();
         for marker in [first, second] {
@@ -467,7 +512,7 @@ fn unavailable_fingerprint_runs_with_a_named_reason() {
     let fixture = Fixture::new(|c| {
         c["targets"][0]["evidence"]["environment"]["SELECTION_MARKER"] = json!("sensitive");
     });
-    let key = fixture.home.path().join("gate-environment.key");
+    let key = fixture.home.path().join(".codeflow/gate-environment.key");
     if key.exists() {
         std::fs::remove_file(&key).unwrap();
     }
@@ -482,7 +527,14 @@ fn changed_producer_output_selects_consumer_and_prerequisite() {
         c["targets"][1]["requires"] = json!(["rust-check"]);
     });
     let (text, _) = fixture.quick();
-    assert!(text.contains("skipped record-check"), "{text}");
+    assert!(
+        text.contains(if cfg!(unix) {
+            "skipped record-check"
+        } else {
+            "selected record-check"
+        }),
+        "{text}"
+    );
     std::fs::write(fixture.root.path().join("target/check-output"), "changed").unwrap();
     fixture.selected("producer output changed");
 }
@@ -551,16 +603,15 @@ fn submodule_input_runs() {
 
 #[test]
 fn pre_push_records_only_change_runs_only_its_quick_reader() {
-    use std::io::Write;
-    use std::process::Stdio;
-    let fixture = Fixture::new(|_| {});
-    let root = fixture.root.path();
-    let record = root.join("project-management/tasks/TSK-001.md");
-    let mut bytes = std::fs::read_to_string(&record).unwrap();
-    bytes.push_str("\nRecorded execution.\n");
-    std::fs::write(record, bytes).unwrap();
-    git(root, &["add", "project-management/tasks/TSK-001.md"]);
-    git(root, &["commit", "-qm", "test: record execution"]);
+    pre_push_summary(true);
+}
+
+#[test]
+fn repair_pre_push_zero_execution_is_not_complete() {
+    pre_push_summary(false);
+}
+
+fn push_destination(root: &Path) -> PathBuf {
     let destination = root.join(".git/destination.git");
     git(
         root,
@@ -586,13 +637,33 @@ fn pre_push_records_only_change_runs_only_its_quick_reader() {
             "integration/checks:refs/heads/integration/checks",
         ],
     );
+    destination
+}
+
+fn pre_push_summary(records_only: bool) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let fixture = Fixture::new(|_| {});
+    let root = fixture.root.path();
+    let record = root.join("project-management/tasks/TSK-001.md");
+    let mut bytes = std::fs::read_to_string(&record).unwrap();
+    if records_only {
+        bytes.push_str("\nRecorded execution.\n");
+    }
+    std::fs::write(record, bytes).unwrap();
+    git(root, &["add", "project-management/tasks/TSK-001.md"]);
+    git(
+        root,
+        &["commit", "--allow-empty", "-qm", "test: record execution"],
+    );
+    let destination = push_destination(root);
     let head = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
         .output()
         .unwrap();
     let head = String::from_utf8(head.stdout).unwrap();
-    let mut child = super::command(
+    let mut child = command(
         root,
         fixture.home.path(),
         &[
@@ -610,8 +681,38 @@ fn pre_push_records_only_change_runs_only_its_quick_reader() {
     writeln!(child.stdin.take().unwrap(), "refs/heads/task/TSK-001-selection {} refs/heads/task/TSK-001-selection 0000000000000000000000000000000000000000", head.trim()).unwrap();
     let output = child.wait_with_output().unwrap();
     let text = stderr(&output);
-    assert!(text.contains("selected record-check"), "{text}");
-    assert!(text.contains("skipped rust-check"), "{text}");
+    assert!(
+        text.contains(if records_only || !cfg!(unix) {
+            "selected record-check"
+        } else {
+            "skipped record-check"
+        }),
+        "{text}"
+    );
+    assert!(
+        text.contains(if cfg!(unix) {
+            "skipped rust-check"
+        } else {
+            "selected rust-check"
+        }),
+        "{text}"
+    );
+    assert!(
+        text.contains(if cfg!(unix) {
+            if records_only {
+                "executed 1; skipped 1; not complete"
+            } else {
+                "executed 0; skipped 2; not complete"
+            }
+        } else {
+            "executed 2; skipped 0"
+        }),
+        "{text}"
+    );
+    if cfg!(unix) {
+        assert!(text.contains("quick targets not complete"), "{text}");
+        assert!(!text.contains("quick targets passed"), "{text}");
+    }
     assert!(text.contains("codeflow ci --base"), "{text}");
     assert!(
         text.contains("range") || text.contains("authority"),
@@ -628,5 +729,376 @@ fn files_below(path: &Path, files: &mut Vec<PathBuf>) {
         } else {
             files.push(path);
         }
+    }
+}
+
+#[test]
+fn repair_full_gate_executes_every_target_with_a_proven_base() {
+    let fixture = Fixture::new(|_| {});
+    let output = run(fixture.root.path(), fixture.home.path(), &["test"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("starting target 'rust-check'"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+}
+
+#[test]
+fn repair_strict_refuses_zero_and_partial_execution() {
+    let fixture = Fixture::new(|_| {});
+    for partial in [false, true] {
+        if partial {
+            std::fs::write(fixture.root.path().join("src/input"), "changed").unwrap();
+        }
+        let output = run(
+            fixture.root.path(),
+            fixture.home.path(),
+            &["test", "--mode", "quick", "--strict"],
+        );
+        if !cfg!(unix) {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
+            continue;
+        }
+        assert!(
+            !output.status.success(),
+            "strict accepted skips: {}",
+            stderr(&output)
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        let counts = if partial {
+            "executed 1; skipped 1; not complete"
+        } else {
+            "executed 0; skipped 2; not complete"
+        };
+        assert!(text.contains(counts), "{text}");
+    }
+}
+
+#[test]
+fn repair_overridden_home_denies_selection_credit() {
+    let fixture = Fixture::new(|_| {});
+    let output = command(
+        fixture.root.path(),
+        fixture.home.path(),
+        &["test", "--mode", "quick"],
+    )
+    .env("CODEFLOW_HOME", fixture.home.path().join(".codeflow"))
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("CODEFLOW_HOME is overridden"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stderr(&output).contains("selected rust-check"));
+}
+
+#[cfg(unix)]
+#[test]
+fn repair_writable_records_deny_selection_credit() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(|_| {});
+    for mode in [0o620, 0o602] {
+        std::fs::set_permissions(&fixture.record, std::fs::Permissions::from_mode(mode)).unwrap();
+        fixture.selected("no qualifying run for the base tree");
+    }
+}
+
+#[test]
+fn repair_no_matching_tree_reason_ignores_unrelated_records() {
+    let fixture = Fixture::new(|_| {});
+    fixture.alter_record(|r| {
+        r.as_object_mut().unwrap().remove("git_tree");
+    });
+    fixture.selected("no qualifying run for the base tree");
+}
+
+#[test]
+fn repair_selection_reason_has_no_doubled_separator() {
+    let fixture = Fixture::new(|_| {});
+    let output = run(fixture.root.path(), fixture.home.path(), &["test", "--all"]);
+    assert!(!stderr(&output).contains("; ;"), "{}", stderr(&output));
+}
+
+#[test]
+fn repair_integrate_executes_every_target_with_a_proven_base() {
+    for merge in [false, true] {
+        let fixture = Fixture::new(|_| {});
+        let root = fixture.root.path();
+        let path = root.join("project-management/tasks/TSK-001.md");
+        let mut record = std::fs::read_to_string(&path).unwrap();
+        record.push_str("\nRecorded execution.\n");
+        std::fs::write(path, record).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "test: record execution"]);
+        let mut args = vec![
+            "integrate",
+            "task/TSK-001-selection",
+            "--into",
+            "integration/checks",
+        ];
+        if merge {
+            args.push("--merge");
+        }
+        let linked = root.join(".worktrees/selection");
+        if merge {
+            git(root, &["switch", "integration/checks"]);
+            git(
+                root,
+                &[
+                    "worktree",
+                    "add",
+                    linked.to_str().unwrap(),
+                    "task/TSK-001-selection",
+                ],
+            );
+        }
+        let output = run(
+            if merge { &linked } else { root },
+            fixture.home.path(),
+            &args,
+        );
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("starting target 'rust-check'"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+#[test]
+fn repair_non_secret_values_leave_reports_and_output_intact() {
+    for class in [None, Some("audited_non_secret"), Some("unclassified")] {
+        let fixture = Fixture::new(|c| {
+            c["targets"][0]["env"]["CI_FLAG"] = json!("1");
+            if let Some(class) = class {
+                c["targets"][0]["evidence"]["environment"]["CI_FLAG"] = json!(class);
+            }
+        });
+        let root = fixture.root.path();
+        let config_path = root.join(".codeflow/test-config.json");
+        let mut config: Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        let t = &mut config["targets"][0];
+        t["modes"]["full"]["command"] = json!("echo Summary 11");
+        t["report"] = json!({"format":"junit","path":"target/junit.xml"});
+        t["coverage"] = json!({"format":"lcov","path":"target/cov.lcov","rules":[{"scope":"per_file","minimum":90}]});
+        std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let junit = "<testsuites><testsuite tests=\"1\"><testcase name=\"test1\"/></testsuite></testsuites>";
+        let coverage = "SF:src/input\nDA:1,1\nend_of_record\n";
+        std::fs::write(root.join("target/junit.xml"), junit).unwrap();
+        std::fs::write(root.join("target/cov.lcov"), coverage).unwrap();
+        let output = run(root, fixture.home.path(), &["test", "--all"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let text = stderr(&output);
+        let run = PathBuf::from(
+            text.lines()
+                .find_map(|l| l.strip_prefix("[codeflow test] artifact: "))
+                .unwrap(),
+        );
+        let artifact: Value = serde_json::from_slice(&std::fs::read(&run).unwrap()).unwrap();
+        assert_eq!(artifact["coverage"][0]["overall_percent"], 100.0);
+        let dir = run.parent().unwrap().join("rust-check");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("junit.xml")).unwrap(),
+            junit
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("coverage")).unwrap(),
+            coverage
+        );
+        assert!(std::fs::read_to_string(dir.join("stdout.log"))
+            .unwrap()
+            .contains("Summary 11"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("target/junit.xml")).unwrap(),
+            junit
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("target/cov.lcov")).unwrap(),
+            coverage
+        );
+        assert!(
+            text.contains("Summary 11"),
+            "non-secret progress suppressed: {text}"
+        );
+    }
+}
+
+#[test]
+fn repair_sensitive_encoded_values_are_redacted_without_rewriting_source() {
+    let marker = "selection-marker&<\"9Zq";
+    let fixture = Fixture::new(|c| {
+        c["targets"][0]["env"]["ENCODED_MARKER"] = json!(marker);
+        c["targets"][0]["evidence"]["environment"]["ENCODED_MARKER"] = json!("sensitive");
+    });
+    let root = fixture.root.path();
+    let script = "import os,json,urllib.parse,html,pathlib\nv=os.environ['ENCODED_MARKER']\nforms=[v,json.dumps(v)[1:-1],html.escape(v),html.escape(v,quote=False),urllib.parse.quote(v,safe=''),urllib.parse.quote_plus(v)]\nprint('Summary '+ '|'.join(forms))\npathlib.Path('target/encoded.xml').write_text('<testsuites><testsuite><testcase name=\"'+html.escape(v)+'\"/></testsuite></testsuites>')\n";
+    std::fs::write(root.join("encoded.py"), script).unwrap();
+    let path = root.join(".codeflow/test-config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let command = config["targets"][0]["modes"]["full"]["command"]
+        .as_str()
+        .unwrap()
+        .replace("check.py src/input", "encoded.py");
+    config["targets"][0]["modes"]["full"]["command"] = json!(command);
+    config["targets"][0]["report"] = json!({"format":"junit","path":"target/encoded.xml"});
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let output = run(root, fixture.home.path(), &["test", "--all"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let forms = [
+        marker.to_owned(),
+        marker.replace('&', "&amp;").replace('<', "&lt;"),
+        marker
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;"),
+        marker.replace('"', "\\\""),
+        "selection-marker%26%3C%229Zq".into(),
+    ];
+    let mut files = Vec::new();
+    files_below(&root.join("target/codeflow-gate"), &mut files);
+    files_below(&fixture.home.path().join(".codeflow/gate-runs"), &mut files);
+    let mut texts = vec![
+        stderr(&output),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    ];
+    texts.extend(files.iter().map(|p| std::fs::read_to_string(p).unwrap()));
+    for text in texts {
+        for form in &forms {
+            assert!(!text.contains(form), "encoded secret retained: {text}");
+        }
+    }
+    assert!(
+        std::fs::read_to_string(root.join("target/encoded.xml"))
+            .unwrap()
+            .contains("&amp;&lt;&quot;"),
+        "tool-owned source was rewritten"
+    );
+}
+
+#[test]
+fn repair_integrate_refuses_ci_skips_and_leaves_target_unchanged() {
+    let fixture = Fixture::new(|c| c["targets"][0]["ci_skip"] = json!(true));
+    let root = fixture.root.path();
+    git(root, &["commit", "--allow-empty", "-qm", "test: candidate"]);
+    let before = std::process::Command::new("git")
+        .args(["rev-parse", "integration/checks"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+    let output = command(
+        root,
+        fixture.home.path(),
+        &[
+            "integrate",
+            "task/TSK-001-selection",
+            "--into",
+            "integration/checks",
+        ],
+    )
+    .env("CI", "true")
+    .output()
+    .unwrap();
+    assert!(!output.status.success(), "integration accepted CI skip");
+    assert!(
+        stderr(&output).contains("executed 1; skipped 1; not complete"),
+        "{}",
+        stderr(&output)
+    );
+    let after = std::process::Command::new("git")
+        .args(["rev-parse", "integration/checks"])
+        .current_dir(root)
+        .output()
+        .unwrap()
+        .stdout;
+    assert_eq!(before, after);
+}
+
+#[test]
+fn repair_strict_ci_skip_counts_zero_executions() {
+    let fixture = Fixture::new(|c| {
+        for t in c["targets"].as_array_mut().unwrap() {
+            t["ci_skip"] = json!(true);
+        }
+    });
+    let output = command(
+        fixture.root.path(),
+        fixture.home.path(),
+        &["test", "--strict"],
+    )
+    .env("CI", "true")
+    .output()
+    .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("executed 0; skipped 2; not complete"),
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr(&output)
+    );
+}
+
+#[test]
+fn repair_fingerprint_reason_names_repository_home() {
+    let fixture = Fixture::new(|c| {
+        c["targets"][0]["evidence"]["environment"]["SELECTION_MARKER"] = json!("sensitive");
+    });
+    git(fixture.home.path(), &["init", "-q"]);
+    fixture.selected("CodeFlow home must be outside every Git repository");
+}
+
+#[test]
+fn repair_integrate_refuses_an_empty_gate() {
+    let fixture = Fixture::new(|_| {});
+    let path = fixture.root.path().join(".codeflow/test-config.json");
+    std::fs::write(path, r#"{"schema_version":"1.0","targets":[]}"#).unwrap();
+    git(fixture.root.path(), &["add", "."]);
+    git(fixture.root.path(), &["commit", "-qm", "test: empty gate"]);
+    let output = run(
+        fixture.root.path(),
+        fixture.home.path(),
+        &[
+            "integrate",
+            "task/TSK-001-selection",
+            "--into",
+            "integration/checks",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("executed 0; skipped 0; not complete"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn repair_explicit_full_comparison_remains_local_incomplete_evidence() {
+    let fixture = Fixture::new(|_| {});
+    let output = run(
+        fixture.root.path(),
+        fixture.home.path(),
+        &["test", "--since", "integration/checks", "--strict"],
+    );
+    if cfg!(unix) {
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("executed 0; skipped 2; not complete")
+        );
+    } else {
+        assert!(output.status.success());
+        assert!(stderr(&output).contains("no qualifying run for the base tree"));
     }
 }

@@ -107,14 +107,7 @@ pub fn run_target(
         &target.name,
         target.shell,
         timeout,
-        target
-            .evidence
-            .as_ref()
-            .is_none_or(|e| e.environment.is_empty())
-            && target
-                .env
-                .keys()
-                .all(|name| super::evidence::generated_environment(name)),
+        super::evidence::redacted_values(target).is_empty(),
     )?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -568,7 +561,9 @@ fn run_owed_target(
     }
     if let Some(path) = &result.coverage_path {
         if path.exists() {
-            save_redacted_report(path, &destination.join("coverage"), declared)?;
+            let saved = destination.join("coverage");
+            save_redacted_report(path, &saved, declared)?;
+            result.coverage_path = Some(saved);
         }
     }
     result.stdout = super::evidence::redact(declared, &result.stdout);
@@ -591,9 +586,6 @@ fn save_redacted_report(
         )
     })?;
     let redacted = super::evidence::redact(target, &text);
-    if redacted != text {
-        std::fs::write(source, &redacted)?;
-    }
     std::fs::write(destination, redacted)?;
     Ok(())
 }

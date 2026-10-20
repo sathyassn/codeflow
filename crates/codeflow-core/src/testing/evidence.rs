@@ -114,7 +114,7 @@ fn identity(
             EnvironmentClass::AuditedNonSecret => delivery::digest(&bytes),
             EnvironmentClass::Fingerprint | EnvironmentClass::Sensitive => {
                 let key = fingerprint_key(root, home).ok_or_else(|| {
-                    format!("no safe fingerprint available for environment dependency {name}")
+                    format!("no safe fingerprint available for environment dependency {name}: CodeFlow home must be outside every Git repository and the key must be owner-only")
                 })?;
                 keyed_digest(&key, &[name.as_bytes(), b"\0", &bytes].concat())
             }
@@ -369,18 +369,72 @@ fn keyed_digest(key: &[u8], bytes: &[u8]) -> String {
     delivery::digest(&[outer.as_slice(), inner.as_slice()].concat())
 }
 
-/// Redact configured and declared environment values before writing any artifact.
+/// Only declared secret classes suppress live output and redact stored artifacts.
+pub(super) fn redacted_values(target: &TargetConfig) -> Vec<String> {
+    target.evidence.as_ref().map_or_else(Vec::new, |config| {
+        config
+            .environment
+            .iter()
+            .filter(|(_, class)| {
+                matches!(
+                    class,
+                    EnvironmentClass::Fingerprint | EnvironmentClass::Sensitive
+                )
+            })
+            .filter_map(|(name, _)| {
+                target
+                    .env
+                    .get(name)
+                    .cloned()
+                    .or_else(|| std::env::var(name).ok())
+            })
+            .filter(|value| !value.is_empty())
+            .collect()
+    })
+}
+
+/// Redact literal, XML, JSON and URL representations before writing gate artifacts.
 pub(super) fn redact(target: &TargetConfig, text: &str) -> String {
-    let mut values: Vec<String> = target.env.values().cloned().collect();
-    if let Some(config) = &target.evidence {
-        values.extend(
-            config
-                .environment
-                .keys()
-                .filter_map(|name| std::env::var(name).ok()),
-        );
+    let mut values = Vec::new();
+    for value in redacted_values(target) {
+        let xml_text = value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        values.push(xml_text.clone());
+        let xml = xml_text.replace('"', "&quot;").replace('\'', "&apos;");
+        values.push(xml.replace("&apos;", "&#x27;"));
+        values.push(xml.replace("&apos;", "&#39;"));
+        values.push(xml);
+        let json = serde_json::to_string(&value).expect("strings serialize");
+        values.push(json[1..json.len() - 1].to_owned());
+        let url: String = value
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                    char::from(byte).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
+            .collect();
+        values.push(url.replace("%20", "+"));
+        values.push(url.clone());
+        // Percent escapes are case insensitive; preserve ordinary text casing.
+        let lower_url: String = value
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+                    char::from(byte).to_string()
+                } else {
+                    format!("%{byte:02x}")
+                }
+            })
+            .collect();
+        values.push(lower_url.replace("%20", "+"));
+        values.push(lower_url);
+        values.push(value);
     }
-    values.retain(|value| !value.is_empty());
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));
     values.dedup();
     let mut text = text.to_owned();
