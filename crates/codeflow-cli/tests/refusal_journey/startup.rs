@@ -495,7 +495,6 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "bash -c 'git status'",
     "CMD='git status'; sh -c \"$CMD\"",
     "sh -c \"$UNSET\"",
-    "xargs git status",
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
     "gtimeout 5 git status",
@@ -935,6 +934,12 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             {
                 wrong.push(format!("{harness}: named a startup file for {command}"));
             }
+        }
+        // TSK-379's repair decision requires complete Git argv on the
+        // command line; stdin-fed Git commands are no longer controls.
+        let outputs = project.replay(harness, "Bash", json!({"command": "xargs git status"}));
+        if !refused_with(&outputs, GIT) {
+            wrong.push(format!("{harness}: allowed Git operands from xargs"));
         }
         for command in ROUND_15_CONTROLS
             .iter()

@@ -107,104 +107,163 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
 /// # Errors
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
-    (|| {
-        match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
-            Ok(repo) => {
-                // Derive repository claims from the physical metadata. On Windows,
-                // opening a directory symlink can otherwise report its alias as
-                // the workdir and hide a conflicting checkout at the destination.
-                let directory = canonical(repo.path(), "discovered git directory")?;
-                let repo = Repository::open(crate::portable_path::without_verbatim(directory))
-                    .map_err(|error| format!("cannot open discovered git directory: {error}"))?;
-                let (discovered, repo) = check_discovery_boundaries(start, repo)?;
-                if repo.is_worktree() {
-                    // Git discovers the checkout at its .git pointer, not at the
-                    // location claimed by the administrative registration. Read
-                    // that registration with native semantics only to cross-check
-                    // discovery (libgit2 can report `./` for Windows backslashes).
-                    let registered = checked_registration(repo.path())?
-                        .ok_or("discovered checkout has an absent registration target")?;
-                    if registered != discovered {
-                        return Err(
-                            "worktree registration disagrees with the discovered checkout".into(),
-                        );
-                    }
-                } else if !repo.is_bare()
-                    && discovered != canonical(repo.path(), "git directory")?
-                    && claims_work_directory(&repo)?
-                    && repo
-                        .workdir()
-                        .map(|path| canonical(path, "work directory"))
-                        .transpose()?
-                        .as_ref()
-                        != Some(&discovered)
-                {
-                    return Err(
-                        "repository work directory disagrees with the discovered checkout".into(),
-                    );
-                }
-                if !repo.is_bare() && discovered != canonical(repo.path(), "git directory")? {
-                    // `false` changes this handle only, never either pointer file.
-                    repo.set_workdir(&discovered, false)
-                        .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
-                }
-                Ok(Some(repo))
+    match Repository::discover(crate::portable_path::without_verbatim(start.to_path_buf())) {
+        Ok(repo) => {
+            // Derive repository claims from the physical metadata. On Windows,
+            // opening a directory symlink can otherwise report its alias as
+            // the workdir and hide a conflicting checkout at the destination.
+            let directory = canonical(repo.path(), "discovered git directory")?;
+            let repo = Repository::open(crate::portable_path::without_verbatim(directory))
+                .map_err(|error| format!("cannot open discovered git directory: {error}"))?;
+            let (discovered, repo) = check_discovery_boundaries(start, repo)?;
+            if repo.is_bare()
+                && repo
+                    .commondir()
+                    .file_name()
+                    .is_some_and(|name| name == ".git")
+            {
+                return Err(format!("repository at {} reports no work tree; its checkout enforcement cannot be verified", repo.commondir().display()));
             }
-            Err(error) if error.code() == git2::ErrorCode::NotFound => {
-                // libgit2 also reports NotFound for an existing .git with an invalid
-                // HEAD. Only an empty directory is proven to contain no repository;
-                // gitfiles, partial metadata and unreadable directories must refuse.
-                for ancestor in start.ancestors() {
-                    let marker = ancestor.join(".git");
-                    if !crate::absence::proven_absent(&marker)
-                        .map_err(|failure| format!("cannot inspect repository marker: {failure}"))?
-                    {
-                        match std::fs::symlink_metadata(&marker) {
-                            Ok(meta) if meta.is_dir() => {
-                                let mut entries = std::fs::read_dir(ancestor.join(".git"))
-                                    .map_err(|failure| {
-                                        format!("cannot inspect repository directory: {failure}")
-                                    })?;
-                                if entries
-                                    .next()
-                                    .transpose()
-                                    .map_err(|failure| {
-                                        format!("cannot inspect repository entry: {failure}")
-                                    })?
-                                    .is_some()
-                                {
-                                    return Err(format!(
-                                        "cannot discover existing repository: {error}"
-                                    ));
-                                }
-                            }
-                            Ok(_) => {
-                                return Err(format!("cannot discover existing repository: {error}"))
-                            }
-                            Err(failure) => {
-                                return Err(format!("cannot inspect repository marker: {failure}"))
+            if repo.is_worktree() {
+                // Git discovers the checkout at its .git pointer, not at the
+                // location claimed by the administrative registration. Read
+                // that registration with native semantics only to cross-check
+                // discovery (libgit2 can report `./` for Windows backslashes).
+                let registered = checked_registration(repo.path())?.ok_or_else(|| {
+                    registration_error("discovered checkout has an absent registration target")
+                })?;
+                if registered != discovered {
+                    return Err(registration_error(
+                        "worktree registration disagrees with the discovered checkout",
+                    ));
+                }
+            } else if !repo.is_bare()
+                && discovered != canonical(repo.path(), "git directory")?
+                && claims_work_directory(&repo)?
+                && repo
+                    .workdir()
+                    .map(|path| canonical(path, "work directory"))
+                    .transpose()?
+                    .as_ref()
+                    != Some(&discovered)
+            {
+                return Err(
+                    "repository work directory disagrees with the discovered checkout".into(),
+                );
+            }
+            if !repo.is_bare() && discovered != canonical(repo.path(), "git directory")? {
+                // `false` changes this handle only, never either pointer file.
+                repo.set_workdir(&discovered, false)
+                    .map_err(|error| format!("cannot resolve worktree directory: {error}"))?;
+            }
+            Ok(Some(repo))
+        }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            // libgit2 also reports NotFound for an existing .git with an invalid
+            // HEAD. Only an empty directory is proven to contain no repository;
+            // gitfiles, partial metadata and unreadable directories must refuse.
+            for ancestor in start.ancestors() {
+                let marker = ancestor.join(".git");
+                if !crate::absence::proven_absent(&marker)
+                    .map_err(|failure| format!("cannot inspect repository marker: {failure}"))?
+                {
+                    match std::fs::symlink_metadata(&marker) {
+                        Ok(meta) if meta.is_dir() => {
+                            let mut entries =
+                                std::fs::read_dir(ancestor.join(".git")).map_err(|failure| {
+                                    format!("cannot inspect repository directory: {failure}")
+                                })?;
+                            if entries
+                                .next()
+                                .transpose()
+                                .map_err(|failure| {
+                                    format!("cannot inspect repository entry: {failure}")
+                                })?
+                                .is_some()
+                            {
+                                return Err(format!(
+                                    "cannot discover existing repository: {error}"
+                                ));
                             }
                         }
-                    }
-                    if !crate::absence::proven_absent(&ancestor.join("objects"))
-                        .map_err(|failure| failure.to_string())?
-                        && ["HEAD", "config", "refs"]
-                            .iter()
-                            .try_fold(false, |found, name| {
-                                crate::absence::proven_absent(&ancestor.join(name))
-                                    .map(|absent| found || !absent)
-                            })
-                            .map_err(|failure| failure.to_string())?
-                    {
-                        return Err(format!("cannot discover existing bare repository: {error}"));
+                        Ok(_) => {
+                            return Err(format!("cannot discover existing repository: {error}"))
+                        }
+                        Err(failure) => {
+                            return Err(format!("cannot inspect repository marker: {failure}"))
+                        }
                     }
                 }
-                Ok(None)
+                if !crate::absence::proven_absent(&ancestor.join("objects"))
+                    .map_err(|failure| failure.to_string())?
+                    && ["HEAD", "config", "refs"]
+                        .iter()
+                        .try_fold(false, |found, name| {
+                            crate::absence::proven_absent(&ancestor.join(name))
+                                .map(|absent| found || !absent)
+                        })
+                        .map_err(|failure| failure.to_string())?
+                {
+                    return Err(format!("cannot discover existing bare repository: {error}"));
+                }
             }
-            Err(error) => Err(format!("cannot discover repository: {error}")),
+            Ok(None)
         }
-    })()
-    .map_err(|error| format!("{error}; {}", crate::remedy::HOOK_INTEGRITY.remedy()))
+        Err(error) => Err(format!("cannot discover repository: {error}")),
+    }
+}
+
+pub(super) fn registration_error(error: &str) -> String {
+    format!("{error}; the operator runs `git worktree repair` in their own terminal outside the harness")
+}
+
+// Only an owner's enforcement paths require interpreting an unreadable
+// marker. A broken outer marker must not lock ordinary nested project files.
+fn could_enforce(target: &Path, root: &Path) -> bool {
+    [false, true].into_iter().any(|resolve| {
+        let (Ok(target), Ok(root)) = (
+            super::edit_guard::normalized(target, resolve),
+            super::edit_guard::normalized(root, resolve),
+        ) else {
+            return true;
+        };
+        let Ok(relative) = target.strip_prefix(&root) else {
+            return false;
+        };
+        let Some(first) = relative.components().next() else {
+            return true;
+        };
+        let first = first.as_os_str();
+        first.eq_ignore_ascii_case(".git")
+            || (git_directory(&root).unwrap_or(true)
+                && [
+                    "config",
+                    "config.worktree",
+                    "hooks",
+                    "HEAD",
+                    "packed-refs",
+                    "refs",
+                ]
+                .iter()
+                .any(|name| first.eq_ignore_ascii_case(name)))
+            || crate::security::actions::table()
+                .claude_edit_denies
+                .iter()
+                .any(|rule| {
+                    rule.strip_prefix("Edit(/")
+                        .and_then(|text| text.split('/').next())
+                        .is_some_and(|name| first.eq_ignore_ascii_case(name.trim_end_matches(')')))
+                })
+    })
+}
+
+fn git_directory(path: &Path) -> Result<bool, String> {
+    for name in ["HEAD", "objects", "refs"] {
+        if crate::absence::cannot_exist(&path.join(name)).map_err(|error| error.to_string())? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // libgit2 guesses the parent of a separate git directory when Git has not
@@ -270,12 +329,13 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
             super::edit_guard::normalized(target, resolve).map_err(|error| error.to_string())?;
         for ancestor in target.ancestors() {
             let marker = ancestor.join(".git");
-            if !crate::absence::cannot_exist(&marker).map_err(|error| {
+            if (!crate::absence::cannot_exist(&marker).map_err(|error| {
                 format!(
                     "cannot inspect target repository {}: {error}",
                     marker.display()
                 )
-            })? && !roots.iter().any(|root| root == ancestor)
+            })? || git_directory(ancestor)?)
+                && !roots.iter().any(|root| root == ancestor)
             {
                 roots.push(ancestor.to_path_buf());
             }
@@ -287,7 +347,22 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
         // Main and linked checkouts share the complete protection set. Open
         // each discovered owner first, so deduplication cannot hide a broken
         // pointer or a disagreement with its registration.
-        if let Some(repo) = open(&root)? {
+        let opened = match open(&root) {
+            Ok(repo) => repo,
+            Err(error) if could_enforce(target, &root) => {
+                let marker = if git_directory(&root).unwrap_or(false) {
+                    root.clone()
+                } else {
+                    root.join(".git")
+                };
+                return Err(format!(
+                    "cannot judge repository marker {}: {error}",
+                    marker.display()
+                ));
+            }
+            Err(_) => continue,
+        };
+        if let Some(repo) = opened {
             if !common.insert(canonical(repo.commondir(), "target common directory")?) {
                 continue;
             }
@@ -332,6 +407,15 @@ pub(super) fn hidden_checkout_under(target: &Path, root: &Path) -> Result<Option
         .ok_or_else(|| format!("cannot resolve configured worktree location `{entry}`"))?;
         let location = normalize(&location)?;
         let start = if target.starts_with(&location) {
+            for parent in target
+                .ancestors()
+                .skip(1)
+                .take_while(|parent| parent.starts_with(&location))
+            {
+                if !crate::absence::cannot_exist(&parent.join(".git")).map_err(|e| e.to_string())? {
+                    return Ok(None);
+                }
+            }
             target.clone()
         } else if location.starts_with(&target) {
             location
@@ -343,13 +427,14 @@ pub(super) fn hidden_checkout_under(target: &Path, root: &Path) -> Result<Option
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    let mut entries_read = 0;
+    let mut directories_read = 0;
     while let Some(dir) = pending.pop() {
         if !seen.insert(dir.clone()) {
             continue;
         }
         let marker = dir.join(".git");
-        if !crate::absence::cannot_exist(&marker).map_err(|e| e.to_string())?
+        let has_marker = !crate::absence::cannot_exist(&marker).map_err(|e| e.to_string())?;
+        if has_marker
             && std::fs::metadata(&marker)
                 .map_err(|e| e.to_string())?
                 .is_file()
@@ -361,12 +446,15 @@ pub(super) fn hidden_checkout_under(target: &Path, root: &Path) -> Result<Option
                 return Ok(Some(dir));
             }
         }
+        if has_marker {
+            continue;
+        }
+        directories_read += 1;
+        if directories_read > 4096 {
+            return Err("cannot inspect hidden checkouts beyond 4096 directories; narrow the cleanup target".into());
+        }
         for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
-            entries_read += 1;
-            if entries_read > 4096 {
-                return Err("cannot inspect worktree locations beyond 4096 entries".into());
-            }
             // Git metadata is not another checkout. Directory symlinks are
             // not traversed by recursive removal; a named alias was resolved
             // above before deciding which configured locations it reaches.
@@ -459,7 +547,9 @@ thread_local! {
 /// Absent targets are Git's prunable state, not live checkout roots. An
 /// unreadable target or an existing target with conflicting identity refuses.
 pub(super) fn checked_registration(admin: &Path) -> Result<Option<PathBuf>, String> {
-    super::edit_guard::registration_at(admin).map(|registration| registration.checkout)
+    super::edit_guard::registration_at(admin)
+        .map(|registration| registration.checkout)
+        .map_err(|error| registration_error(&error))
 }
 
 #[derive(Clone)]

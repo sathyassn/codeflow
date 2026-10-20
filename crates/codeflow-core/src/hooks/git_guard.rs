@@ -1775,17 +1775,13 @@ fn unknown_dir_name_violation(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
-pub(crate) fn token_integrity_path(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+pub(crate) fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
     // Each word brace expansion can make is judged (TSK-216 round 16).
     let Some(words) = word_readings(token) else {
-        return Some(BRACE_UNREAD);
+        return Some(BRACE_UNREAD.to_string());
     };
     words
         .iter()
@@ -1793,11 +1789,7 @@ pub(crate) fn token_integrity_path(
 }
 
 /// [`token_integrity_path`] for one word after brace expansion.
-fn token_integrity_path_spelled(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+fn token_integrity_path_spelled(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
@@ -1806,11 +1798,13 @@ fn token_integrity_path_spelled(
     // filled in at run time counts inside an enforcement directory it
     // follows (`alias/$x` with `alias` linked to `.codeflow`).
     if let Some(rest) = unknown_tilde_rest(token) {
-        return word_could_name(rest).or_else(|| rest.is_empty().then_some(BRACE_UNREAD_DIR));
+        return word_could_name(rest)
+            .or_else(|| rest.is_empty().then_some(BRACE_UNREAD_DIR))
+            .map(str::to_string);
     }
     if let Some(tail) = unresolved_tail(token) {
         if let Some(p) = word_could_name(tail) {
-            return Some(p);
+            return Some(p.to_string());
         }
         if tail.is_empty() {
             let cut = token
@@ -1822,7 +1816,7 @@ fn token_integrity_path_spelled(
                     && unresolved_tail(dir).is_none()
                     && in_enforcement_dir(&integrity_shell_path(dir, cwd)).unwrap_or(true)
                 {
-                    return Some("repository enforcement files");
+                    return Some("repository enforcement files".to_string());
                 }
             }
         }
@@ -1834,8 +1828,8 @@ fn token_integrity_path_spelled(
             return None;
         }
         match glob_integrity(token, cwd, payload_cwd) {
-            Ok(found) => found.map(|_| "repository enforcement files"),
-            Err(stop) => Some(stop.reason()),
+            Ok(found) => found.map(|_| "repository enforcement files".to_string()),
+            Err(stop) => Some(stop.reason().to_string()),
         }
     })
 }
@@ -1877,7 +1871,7 @@ const BRACE_UNREAD_DIR: &str =
 /// valid UTF-8 has no honest token (its storage key holds a NUL and resolves
 /// to nothing), so the file-system checks run on the exact path, links
 /// followed (OS text rule, issue 79).
-fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     // Slash conversion must not turn a verbatim drive marker into a UNC
     // server named `?`. Read the plain drive spelling before converting.
     let shown =
@@ -1891,12 +1885,12 @@ fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'stati
         cwd.join(path)
     };
     if super::edit_guard::repository_authority_target(&exact, payload_cwd, true) {
-        return Some(super::edit_guard::AUTHORITY_PATH);
+        return Some(super::edit_guard::AUTHORITY_PATH.to_string());
     }
     match super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true) {
-        Ok(true) => Some("repository enforcement files"),
+        Ok(true) => Some("repository enforcement files".to_string()),
         Ok(false) => None,
-        Err(_) => Some("repository enforcement paths (cannot read repository state)"),
+        Err(error) => Some(error),
     }
 }
 
@@ -1907,12 +1901,10 @@ pub(crate) fn resolved_path_integrity(
     cwd: &Path,
     payload_cwd: &Path,
 ) -> Option<String> {
-    path_integrity(path, cwd, payload_cwd)
-        .map(str::to_string)
-        .or_else(|| {
-            checkout_under(path, cwd, payload_cwd, None)
-                .map(|checkout| format!("the registered worktree {}", checkout.description()))
-        })
+    path_integrity(path, cwd, payload_cwd).or_else(|| {
+        checkout_under(path, cwd, payload_cwd, None)
+            .map(|checkout| format!("the registered worktree {}", checkout.description()))
+    })
 }
 
 /// Interpreter operands share the writer's file checks. A project location
@@ -1925,58 +1917,55 @@ pub(crate) fn interpreter_path_integrity(
     payload_cwd: &Path,
     code_literal: Option<&str>,
 ) -> Option<String> {
-    path_integrity(path, cwd, payload_cwd)
-        .map(str::to_string)
-        .or_else(
-            || match super::edit_guard::is_own_checkout_location(path, cwd, code_literal) {
-                Ok(true) => None,
-                Ok(false) => checkout_under(path, cwd, payload_cwd, None)
-                    .map(|checkout| format!("the registered worktree {}", checkout.description())),
-                Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
-            },
-        )
+    path_integrity(path, cwd, payload_cwd).or_else(|| {
+        match super::edit_guard::is_own_checkout_location(path, cwd, code_literal) {
+            Ok(true) => None,
+            Ok(false) => checkout_under(path, cwd, payload_cwd, None)
+                .map(|checkout| format!("the registered worktree {}", checkout.description())),
+            Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
+        }
+    })
 }
 
 /// [`token_integrity_path`] for the token as written, without expanding a
 /// glob in it.
-fn token_integrity_path_literal(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
     let path = integrity_shell_path(token, cwd);
     if super::edit_guard::global_git_config_target(&path, payload_cwd) {
-        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY);
+        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY.to_string());
     }
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
-        return Some(super::edit_guard::AUTHORITY_PATH);
+        return Some(super::edit_guard::AUTHORITY_PATH.to_string());
     }
     match super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
-        Ok(true) => return Some("repository enforcement files"),
+        Ok(true) => return Some("repository enforcement files".to_string()),
         Ok(false) => {}
-        Err(_) => return Some("repository enforcement paths (cannot read repository state)"),
+        Err(error) => return Some(error),
     }
-    integrity_target(&normalize_path(token)).or_else(|| {
-        let (Ok(base), Ok(path)) = (
-            integrity_disk_case(payload_cwd),
-            integrity_disk_case(&cwd.join(token)),
-        ) else {
-            return Some("repository enforcement paths (cannot read path case)");
-        };
-        if let Some(protected) = root_dot_pattern_target(&path) {
-            return Some(protected);
-        }
-        // A derived absolute path is not a typed scratch-copy exemption.
-        // Keep relative spellings (including `..`) relative to the tool cwd.
-        let target = path
-            .strip_prefix(&base)
-            .ok()
-            .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
-        integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
-    })
+    integrity_target(&normalize_path(token))
+        .map(str::to_string)
+        .or_else(|| {
+            let (Ok(base), Ok(path)) = (
+                integrity_disk_case(payload_cwd),
+                integrity_disk_case(&cwd.join(token)),
+            ) else {
+                return Some("repository enforcement paths (cannot read path case)".to_string());
+            };
+            if let Some(protected) = root_dot_pattern_target(&path) {
+                return Some(protected.to_string());
+            }
+            // A derived absolute path is not a typed scratch-copy exemption.
+            // Keep relative spellings (including `..`) relative to the tool cwd.
+            let target = path
+                .strip_prefix(&base)
+                .ok()
+                .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
+            integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
+                .map(str::to_string)
+        })
 }
 
 /// Whether a word holds pattern syntax some shell reads at run time: Bash's
@@ -3382,7 +3371,7 @@ fn integrity_target(path: &str) -> Option<&'static str> {
 }
 
 /// The integrity path named by any argument in `args`.
-fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<String> {
     args.iter()
         .find_map(|a| token_integrity_path(a, cwd, payload_cwd))
 }
@@ -4109,6 +4098,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
 /// files (TSK-216 review finding 1).
 enum CheckoutReach {
     Path(PathBuf),
+    Hidden(PathBuf),
     Unreadable(String),
 }
 
@@ -4116,6 +4106,7 @@ impl CheckoutReach {
     fn description(&self) -> String {
         match self {
             Self::Path(path) => path.display().to_string(),
+            Self::Hidden(path) => format!("hidden checkout {}", path.display()),
             Self::Unreadable(why) => format!("cannot read registered worktrees: {why}"),
         }
     }
@@ -4131,6 +4122,11 @@ fn checkout_delete_violation(
             "{what} would delete the registered worktree `{}` with its work and enforcement files",
             path.display()
         ),
+        CheckoutReach::Hidden(path) => format!(
+            "{what} would remove hidden checkout `{}`; {}",
+            path.display(),
+            super::repo::registration_error("its registration is absent")
+        ),
         CheckoutReach::Unreadable(why) => {
             format!("{what}: cannot read registered worktrees: {why}")
         }
@@ -4139,7 +4135,12 @@ fn checkout_delete_violation(
         "git.hook_integrity",
         level,
         message,
-        crate::remedy::WORKTREE_DELETE.remedy(),
+        match checkout {
+            CheckoutReach::Path(_) => crate::remedy::WORKTREE_DELETE.remedy(),
+            CheckoutReach::Hidden(_) | CheckoutReach::Unreadable(_) => {
+                crate::remedy::HOOK_INTEGRITY.remedy()
+            }
+        },
     )
 }
 
@@ -4151,7 +4152,12 @@ fn checkout_under(
 ) -> Option<CheckoutReach> {
     for root in [cwd, payload_cwd] {
         match super::edit_guard::registered_checkout_under(path, root, except) {
-            Ok(Some(path)) => return Some(CheckoutReach::Path(path)),
+            Ok(Some(super::edit_guard::Checkout::Registered(path))) => {
+                return Some(CheckoutReach::Path(path))
+            }
+            Ok(Some(super::edit_guard::Checkout::Hidden(path))) => {
+                return Some(CheckoutReach::Hidden(path))
+            }
             Ok(None) => {}
             Err(error) => return Some(CheckoutReach::Unreadable(error)),
         }
@@ -5142,6 +5148,85 @@ fn integrity_write_violation(
         .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
 }
 
+fn git_command_write_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    if let Some(finding) = xargs_git_write(cmd, args, level) {
+        return Some(finding);
+    }
+    if cmd == "git" {
+        if let Some((verb, rest)) = git_subcommand(args) {
+            let creates = verb == "clone"
+                || (verb == "worktree" && rest.first().is_some_and(|word| word == "add"));
+            if creates {
+                let mut directory = cwd.to_path_buf();
+                let globals = &args[..args.len() - rest.len() - 1];
+                for pair in globals.windows(2) {
+                    if pair[0] == "-C" {
+                        directory = directory.join(&pair[1]);
+                    }
+                }
+                let cwd = directory.as_path();
+                // All explicit path operands are judged. Option values may
+                // also be paths that Git uses while creating the checkout.
+                if let Some(path) = arg_integrity_path(rest, cwd, payload_cwd) {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!("`git {verb}` would create inside `{path}`"),
+                    ));
+                }
+                for word in rest.iter().filter(|word| !word.starts_with('-')) {
+                    let path = integrity_shell_path(word, cwd);
+                    let owners = match super::repo::target_roots(&path, payload_cwd) {
+                        Ok(owners) => owners,
+                        Err(error) => return Some(hook_integrity_violation(level, error)),
+                    };
+                    for owner in owners {
+                        let Ok(Some(repo)) = super::repo::open(&owner) else {
+                            continue;
+                        };
+                        let roots = match super::edit_guard::checkout_roots(&repo) {
+                            Ok(roots) => roots,
+                            Err(error) => return Some(hook_integrity_violation(level, error)),
+                        };
+                        for root in roots {
+                            let Ok(relative) = path.strip_prefix(&root) else {
+                                continue;
+                            };
+                            if relative.components().next().is_some_and(|first| {
+                                [
+                                    ".git",
+                                    ".claude",
+                                    ".codeflow",
+                                    ".codex",
+                                    ".grok",
+                                    ".agents",
+                                    ".github",
+                                ]
+                                .iter()
+                                .any(|name| first.as_os_str().eq_ignore_ascii_case(name))
+                            }) {
+                                return Some(hook_integrity_violation(
+                                    level,
+                                    format!(
+                                    "`git {verb}` would create inside enforcement directory `{}`",
+                                    path.display()
+                                ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The writes 3.0.0 judged directly: a mutating command's own path
 /// arguments, `dd of=`, `sed -i` files and script writes, the destination
 /// of `cp`, `ln` and `rsync`, and `git rm` or `git mv`.
@@ -5153,10 +5238,13 @@ fn direct_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
+    if let Some(finding) = git_command_write_violation(cmd, args, level, cwd, payload_cwd) {
+        return Some(finding);
+    }
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
         "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "mkdir"
-        | "touch" => Some(args),
+        | "touch" | "ed" | "ex" | "vi" | "vim" | "nvim" | "view" | "rview" | "rvim" => Some(args),
         _ => None,
     };
     // Every writer the table lists goes through the one judge exec-guard
@@ -5177,10 +5265,9 @@ fn direct_write_violation(
     }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
-            token_integrity_path(".", cwd, payload_cwd).map(str::to_string)
+            token_integrity_path(".", cwd, payload_cwd)
         } else {
             arg_integrity_path(paths, cwd, payload_cwd)
-                .map(str::to_string)
                 .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
         }
     }) {
@@ -5276,7 +5363,6 @@ impl GitWriter<'_> {
     /// on a line that names an enforcement path.
     fn integrity(&self, paths: &[String]) -> Option<String> {
         arg_integrity_path(paths, self.cwd, self.payload_cwd)
-            .map(str::to_string)
             .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
     }
 
@@ -5300,12 +5386,11 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             return None;
         }
         if cmd == "mv"
-            || (cmd == "rsync"
-                && copy
-                    .flags
-                    .iter()
-                    .any(|flag| flag == "--remove-source-files"))
+            || (cmd == "rsync" && copy.flags.iter().any(|flag| rsync_removes_source(flag)))
         {
+            if let Some(path) = self.integrity(&copy.sources) {
+                return Some(self.refuse(format!("`{cmd}` removes the integrity source `{path}`")));
+            }
             let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
             if let Some(finding) = worktree_delete_check(
                 &format!("`{cmd}` removes its source"),
@@ -8676,10 +8761,41 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
+fn rsync_removes_source(flag: &str) -> bool {
+    flag.starts_with("--remove-s")
+        && ["--remove-source-files", "--remove-sent-files"]
+            .iter()
+            .any(|full| full.starts_with(flag))
+}
+
+pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) -> Option<Violation> {
+    if launcher_name(cmd) != "xargs" || !level.is_active() {
+        return None;
+    }
+    let tail = xargs_command(args)?;
+    let (program, _) = strip_launchers(tail)?;
+    (basename(program) == "git").then(|| hook_integrity_violation(level,
+        "xargs supplies Git operands from input that the guard cannot prove; run the complete Git command directly".into()))
+}
+
 /// Shared by both shell hooks. Scope and file options cannot make a
 /// persistent discovery change safe; a read or a transient `-c` is unchanged.
 pub(crate) fn checkout_config_write(rest: &[String], level: PolicyLevel) -> Option<Violation> {
-    if !level.is_active() || config_only_reads(rest) {
+    if !level.is_active() {
+        return None;
+    }
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let mode = parsed.operands.first().copied().unwrap_or_default();
+    let key = parsed
+        .operands
+        .get(usize::from(matches!(mode, "set" | "unset" | "get")));
+    if key.is_some_and(|key| key.contains(['{', '}', '*', '?', '[', ']'])) {
+        return Some(hook_integrity_violation(
+            level,
+            "cannot inspect an expanded Git config key; pass a literal key".into(),
+        ));
+    }
+    if config_only_reads(rest) {
         return None;
     }
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
@@ -11420,6 +11536,7 @@ fn is_prefix_launcher(t: &str) -> bool {
             | "ionice"
             | "caffeinate"
             | "xcrun"
+            | "arch"
     )
 }
 
@@ -11471,6 +11588,7 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
         "stdbuf" => &["--input", "--output", "--error"],
         "ionice" => &["--class", "--classdata", "--pid", "--pgid", "--uid"],
         "xcrun" => &["--sdk", "--toolchain"],
+        "arch" => &["-arch", "-e", "-d"],
         _ => &[],
     };
     if long_valued.contains(&a) {
@@ -13922,6 +14040,7 @@ mod tests {
             "unbuffer -p git config --global alias.x '!id'",
             "xargs sh -c 'git config --global alias.x !id'",
             "xargs -I{} git config --global alias.x '!id'",
+            "xargs -I{} git config --global user.name Test",
             "find . -exec sh -c 'git config --global alias.x !id' \\;",
             "find . -execdir git config --global alias.x '!id' \\;",
             "find . -name x -ok git config --global alias.x '!id' {} +",
@@ -13937,7 +14056,6 @@ mod tests {
             "watch git status",
             "parallel echo ::: a b",
             "setsid git config --global user.name Test",
-            "xargs -I{} git config --global user.name Test",
             "find . -name '*.rs' -exec ls {} \\;",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -15782,7 +15900,7 @@ mod tests {
         let mut check = |word: &str, refuse: bool| {
             for finding in [
                 glob_reach(word, dir.path(), dir.path()),
-                token_integrity_path(word, dir.path(), dir.path()).map(str::to_string),
+                token_integrity_path(word, dir.path(), dir.path()),
             ] {
                 if finding.is_some() != refuse {
                     wrong.push(format!("{word}: refuse={refuse}: {finding:?}"));

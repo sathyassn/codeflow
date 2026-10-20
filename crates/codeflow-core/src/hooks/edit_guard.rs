@@ -274,11 +274,12 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
         for candidate in [&lexical, &resolved] {
             let text = path_text(candidate)?;
             let authority = repository_authority_target(candidate, ctx.root, false);
+            let enforcement = ctx.level.is_active()
+                && !authority
+                && repository_enforcement_target(candidate, ctx.root, false).map_err(EditError)?;
             if (authority
                 || (ctx.level.is_active()
-                    && (protected.iter().any(|pattern| covers(&text, pattern))
-                        || repository_enforcement_target(candidate, ctx.root, false)
-                            .map_err(EditError)?)))
+                    && (protected.iter().any(|pattern| covers(&text, pattern)) || enforcement)))
                 && seen.insert(lexical.clone())
             {
                 violations.push(Violation::new(
@@ -655,8 +656,10 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         }
         false
     };
-    super::repo::target_roots(target, root)
-        .map_or(true, |roots| roots.iter().any(|owner| read(owner)))
+    if read(root) {
+        return true;
+    }
+    super::repo::target_roots(target, root).is_ok_and(|roots| roots.iter().any(|owner| read(owner)))
 }
 
 /// Inventory includes outside the guard's fixed protected-path class.
@@ -781,6 +784,7 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("refs/remotes", true),
         ("packed-refs", false),
         ("config", false),
+        ("config.worktree", false),
     ] {
         protected.push((
             repo.commondir().join(name),
@@ -1000,6 +1004,20 @@ pub(crate) fn repository_enforcement_target(
     root: &Path,
     ancestors: bool,
 ) -> Result<bool, String> {
+    // An ancestor marker can change discovery for the entire session.
+    for resolve in [false, true] {
+        let target = normalized(target, resolve).map_err(|error| error.to_string())?;
+        let session = normalized(root, resolve).map_err(|error| error.to_string())?;
+        for ancestor in session.ancestors() {
+            let marker = ancestor.join(".git");
+            if target == marker
+                || (target.starts_with(&marker)
+                    && crate::absence::cannot_exist(&marker).map_err(|error| error.to_string())?)
+            {
+                return Ok(true);
+            }
+        }
+    }
     let read = |root: &Path| -> Result<bool, String> {
         let Some(protected) = protected_at(root)? else {
             return Ok(false);
@@ -1139,6 +1157,11 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>,
     Ok(found_all)
 }
 
+pub(crate) enum Checkout {
+    Registered(PathBuf),
+    Hidden(PathBuf),
+}
+
 /// The registered checkout of the repository at `root` that a recursive
 /// delete of `target` would remove: one equal to `target` or inside it,
 /// the main working tree included. Read lexically and with symlinks
@@ -1147,8 +1170,8 @@ pub(crate) fn registered_checkout_under(
     target: &Path,
     root: &Path,
     except: Option<&Path>,
-) -> Result<Option<PathBuf>, String> {
-    let read = |root: &Path| -> Result<Option<PathBuf>, String> {
+) -> Result<Option<Checkout>, String> {
+    let read = |root: &Path| -> Result<Option<Checkout>, String> {
         let Some(checkouts) = checkout_paths_at(root)? else {
             return Ok(None);
         };
@@ -1162,7 +1185,7 @@ pub(crate) fn registered_checkout_under(
             for (checkout, paths) in &checkouts.roots {
                 let path = &paths[reading];
                 if path.starts_with(&target) && !except.contains(path) {
-                    return Ok(Some(checkout.clone()));
+                    return Ok(Some(Checkout::Registered(checkout.clone())));
                 }
             }
         }
@@ -1176,7 +1199,7 @@ pub(crate) fn registered_checkout_under(
         }
         if let Some(hidden) = super::repo::hidden_checkout_under(target, &owner)? {
             if except != Some(hidden.as_path()) {
-                return Ok(Some(hidden));
+                return Ok(Some(Checkout::Hidden(hidden)));
             }
         }
     }

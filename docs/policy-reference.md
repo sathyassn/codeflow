@@ -476,6 +476,12 @@ checked, so a symlink does not remove the target owner's protection.
   to discovery checks when it returns. An unreadable or inconsistent pointer
   refuses the operation; missing registration is not proof of an ordinary
   directory. Each invocation reads current disk state.
+  A hidden-checkout search stops at a directory containing `.git` and does
+  not traverse checkout contents. It visits at most 4096 directories under
+  the configured locations reached by a removal target; ordinary files do
+  not count toward that bound. An unreadable walk or an exceeded bound
+  refuses and names the inspection problem; narrow a cleanup target when
+  the search exceeds the bound.
 - Shell moves of a worktree, and `rsync --remove-source-files` targeting its
   source, refuse. Copying a worktree does not authorize deleting its source.
   Use `git worktree move` or `git worktree remove` for lifecycle changes.
@@ -483,6 +489,9 @@ checked, so a symlink does not remove the target owner's protection.
   `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
   hooks, regardless of the config file or scope. Reads and command-local
   `git -c` settings keep their existing checks.
+  Expanded config keys that cannot be proven literal refuse. Git commands
+  fed by xargs refuse because their complete operands are unknown. The
+  arch launcher receives the same command checks as a direct invocation.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.
@@ -490,6 +499,17 @@ checked, so a symlink does not remove the target owner's protection.
 A target outside every repository and outside the session's protected paths
 does not acquire repository enforcement protection. Home startup and Git
 configuration protections retain their separate rules.
+
+Git directories outside a checkout, including submodule metadata and
+separate Git directories, protect their configuration, hooks, HEAD and
+remote-tracking metadata. This also applies to plain Git repositories that
+have not adopted CodeFlow. Unreadable enclosing markers refuse targets
+that could be their enforcement paths; they do not lock ordinary files in
+a nested project. Agent writes cannot create or rewrite a `.git` marker in
+an ancestor of the session project. Non-interactive editors are writers,
+and Git-native clone or worktree creation cannot target an enforcement
+directory. Source-removing rsync spellings protect the checkout's gitfile
+as well as its directory.
 
 ### Git settings that can run a program
 

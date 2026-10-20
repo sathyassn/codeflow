@@ -345,7 +345,7 @@ catalog! {
         "task work belongs in a linked worktree: put the root checkout back on its root branch with `git switch {root}`, then work and commit in a worktree (`git worktree add .worktrees/<slug> -b <branch>`, or `git worktree add .worktrees/<slug> <branch>` to continue an existing branch)";
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
-        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009); for a worktree registration that disagrees with its checkout, the operator runs `git worktree repair` in their own terminal outside the harness";
+        "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
     /// An interpreter given an argument that names, or may name, an
     /// enforcement path (TSK-302).
     INTERPRETER_ARGUMENT = Step::Codeflow("codeflow update"),
