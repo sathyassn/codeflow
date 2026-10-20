@@ -185,9 +185,13 @@ enters (git2 `*_bytes` accessors, NUL-separated git output, `OsStr` bytes).
 |---|---|---|
 | `bytes()`, `starts_with`, `joined`, a map keyed by `GitName` | comparing, keying, prefix tests, building a path | exact, never lossy |
 | `rule_text()` | a rule that needs text (a glob, a task prefix, a config key, a record path) | returns an error that carries the display form, so the read refuses |
-| `display()` | output to a person: messages, logs, advice; `display_text()` gives the same form for a name already held as text, such as a branch a remote names | escapes each invalid byte and control character as `\xNN` and a backslash as `\\`, so a name cannot write a terminal escape sequence; not a comparable value |
+| `display()` | output to a person: messages, logs, advice; `display_text()` gives the same form for a name already held as text, such as a branch a remote names | escapes each invalid byte and control character as `\xNN`, bidi, zero-width and separator characters as `\u{NNNN}`, and a backslash as `\\`; not a comparable value |
 | `os_path()` | a file system path | exact on Unix; refuses where the name cannot be one |
 | `storage_key()` | a key that is persisted or put in a map of text | valid text as is, else a lossy form, a NUL and hex: no two names share a key |
+
+Refusals and notes render each message through `display_message()`: the
+same escapes, keeping line breaks, with further lines indented so quoted
+remote text cannot pass as a CodeFlow line.
 
 The rule:
 
