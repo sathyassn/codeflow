@@ -1,0 +1,11 @@
+id = "ADR-0085"
+uid = "697c88bd-f38b-4c99-a574-4c80feede079"
+kind = "ADR"
+title = "Gate selection requires evidence for the exact check"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-20T01:03:02Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
