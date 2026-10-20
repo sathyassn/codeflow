@@ -341,3 +341,148 @@ fn a_local_policy_value_cannot_forge_a_commit_msg_line() {
         &["invalid value '\\x1b]0;owned\\x07\\x9b2J\\u{202e}\\x0acodeflow commit-msg: allowed'"],
     );
 }
+
+/// Codex F-1: an error `main` returns is printed at the CLI boundary with
+/// its whole chain escaped; the exit stays nonzero.
+#[test]
+fn a_returned_error_chain_is_shown_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ev\u{1b}]0;owned\u{7}\u{202e}");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join(".codeflow"), "fixture: not a directory\n").unwrap();
+    let out = codeflow(&root)
+        .args(["remote", "protect", "--dry-run"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    expect("remote protect", &err, &["ev\\x1b]0;owned\\x07\\u{202e}"]);
+    let rlo = dir.path().join("ev\u{202e}lim");
+    std::fs::create_dir(&rlo).unwrap();
+    let out = codeflow(&rlo).args(["recall", "x"]).output().unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    assert_clean("recall", &String::from_utf8_lossy(&out.stderr));
+}
+
+/// Codex F-2: record titles reach status (the in-flight epic and task) and
+/// orient (the next ready task); a line break in a title cannot start a
+/// line of its own at column 0, and its hidden characters are escaped.
+#[test]
+fn record_titles_cannot_forge_status_or_orient_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        "---\nid: EPC-001\ntitle: \"work \\u202e\\ncodeflow status: allowed\"\nstatus: in_progress\nwork_type: feat\nspecs: []\ncreated: 2026-09-26\n---\n\n# EPC-001: work\n",
+    );
+    let task = |id: &str, status: &str, title: &str| {
+        format!(
+            "---\nid: {id}\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: \"{title}\"\nstatus: {status}\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-09-26\n---\n\n# {id}: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n"
+        )
+    };
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &task(
+            "TSK-001",
+            "in_progress",
+            "busy \\u202e\\ncodeflow status: allowed",
+        ),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &task(
+            "TSK-002",
+            "todo",
+            "ready \\u202e\\ncodeflow orient: allowed",
+        ),
+    );
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "chore: plan"]);
+    let status = printed(&codeflow(root).arg("status").output().unwrap());
+    expect(
+        "status",
+        &status,
+        &[
+            "in flight (epic): EPC-001 work \\u{202e}",
+            "in flight (task):",
+        ],
+    );
+    let orient = printed(&codeflow(root).arg("orient").output().unwrap());
+    expect("orient", &orient, &["next: TSK-001 busy \\u{202e}"]);
+}
+
+/// Codex F-3: a linked worktree's branch is named once escaped in the
+/// cleanup list, as a local branch is.
+#[test]
+fn a_linked_worktree_branch_is_escaped_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "feat/base"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    write(&root, "README.md", "x\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: base"]);
+    let linked = dir.path().join("linked");
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/ev\u{202e}lim",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let status = printed(&codeflow(&root).arg("status").output().unwrap());
+    expect("status", &status, &["feat/ev\\u{202e}lim"]);
+}
+
+/// Grok round 4: `codeflow-core` prints target names in the gate's own
+/// lines; a target named with a bidi override and a C1 control is shown
+/// escaped in the selected, start and completed lines.
+#[test]
+fn the_test_gate_names_a_target_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    write(
+        root,
+        ".codeflow/test-config.json",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"ev\\u202e\\u009blim\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"exit 0\"}}}]}\n",
+    );
+    let out = codeflow(root)
+        .args(["test", "--mode", "quick"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    expect(
+        "codeflow test",
+        &err,
+        &[
+            "[codeflow test] selected ev\\u{202e}\\x9blim",
+            "starting target 'ev\\u{202e}\\x9blim'",
+            "completed target 'ev\\u{202e}\\x9blim'",
+        ],
+    );
+}
+
+/// `codeflow-present` keeps its own copy of the escape rule; it agrees with
+/// `codeflow-core`'s over every Unicode scalar value.
+#[test]
+fn the_present_and_core_escapes_agree() {
+    let text: String = (0..=0x0010_FFFF).filter_map(char::from_u32).collect();
+    assert!(
+        codeflow_present::output::display_output(&text)
+            == codeflow_core::git::display_output(&text),
+        "the two escape rules differ"
+    );
+}

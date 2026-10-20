@@ -3,15 +3,16 @@
 // The output sink (TSK-388). These shadow `println!`, `print!`, `eprintln!`
 // and `eprint!` for this crate: what they print goes through
 // `codeflow_core::git::display_output`, which escapes each control, format
-// and separator character other than a line break or tab. CodeFlow quotes
-// branch names a remote chose, record titles and policy values from a
-// checkout, and errors that carry them. A field that can hold a line break
-// is also shown through `cmd::shown`, so it cannot start a line of its own.
-// JSON goes through `codeflow_core::git::display_json` first, which leaves
-// this sink nothing to change. Not covered: `write!` and `writeln!` to a
-// terminal writer (each escapes its own fields), code in other crates
-// (`codeflow-core` escapes its own prints), and the standard library's
-// panic message and clap's usage and error output.
+// and separator character other than a line break or tab, and keeps
+// backslashes. CodeFlow quotes branch names a remote chose, record titles and
+// policy values from a checkout, and errors that carry them. A field that can
+// hold a line break also passes `cmd::shown`, so it cannot start a line of
+// its own; an error `run` returns is printed the same way in `main`. JSON
+// goes through `codeflow_core::git::display_json` first, which leaves this
+// sink nothing to change. `codeflow-core` and `codeflow-present` shadow
+// their own print macros the same way. Not covered here: `write!` and
+// `writeln!` to a terminal writer (each escapes its own fields), the
+// standard library's panic message, and clap's usage and error output.
 macro_rules! println {
     () => {
         ::std::println!()
@@ -338,7 +339,22 @@ fn selected_tier(minimal: bool, standard: bool, full: bool) -> Option<scaffold::
     }
 }
 
-fn main() -> anyhow::Result<()> {
+/// The CLI boundary (TSK-388): an error `run` returns is printed here, its
+/// whole chain in the form Rust's own termination prints (`Error: ...`
+/// with `Caused by:`), escaped through `cmd::shown`, and the process exits
+/// with status 1 as before. A path or name in the chain cannot write a
+/// terminal escape sequence or start a line of its own.
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", cmd::shown(&format!("{error:?}")));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.

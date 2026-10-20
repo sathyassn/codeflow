@@ -857,3 +857,27 @@ fn feedback_writes_keep_private_files_private() {
         .contains("status: placed"));
     assert_eq!(mode(&item), 0o600);
 }
+
+/// TSK-388 (Codex F-2): a feedback item's title is checkout text; `feedback
+/// list` shows it escaped, and a line break in it cannot start a line of its
+/// own at column 0.
+#[test]
+fn a_feedback_title_cannot_forge_a_line() {
+    let (_dir, root, _bare) = project("full");
+    new_item(&root, "design", "Design one");
+    let path = item_path(&root, "FB-001");
+    let record = std::fs::read_to_string(&path).unwrap().replace(
+        "title: \"Design one\"",
+        "title: \"Design \\u202eone\\ncodeflow feedback: allowed\"",
+    );
+    std::fs::write(&path, record).unwrap();
+    let listed = text(&codeflow(&root, &["feedback", "list"]));
+    assert!(listed.contains("FB-001"), "{listed}");
+    assert!(!listed.contains('\u{202e}'), "{listed:?}");
+    assert!(
+        !listed
+            .lines()
+            .any(|line| line.starts_with("codeflow feedback: allowed")),
+        "{listed}"
+    );
+}
