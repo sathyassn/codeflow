@@ -831,6 +831,116 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
     );
 }
 
+/// A bare origin for `root`, holding `main`, which tracks it.
+fn with_origin(root: &Path) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    remote
+}
+
+/// A standalone record on `line` with `deps`.
+fn record_on(id: &str, line: &str, deps: &str) -> String {
+    record(id, deps).replace(
+        "integration_target: main",
+        &format!("integration_target: {line}"),
+    )
+}
+
+fn commit_record(root: &Path, id: &str, content: &str) -> String {
+    write(root, &format!("project-management/tasks/{id}.md"), content);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", &format!("docs: record {id}")]);
+    git(root, &["rev-parse", "HEAD"])
+}
+
+fn research_pin(id: &str, pin: &str) -> String {
+    format!("[{{id: {id}, kind: research, pin: \"{pin}\"}}]")
+}
+
+/// TSK-381 AC-1 (issue 236): the producer TSK-003 completes on its own line,
+/// which lands on the consumer's line and is then deleted locally and on
+/// origin. `work next`, `work claim` and `work start` still find the
+/// consumer's research pin met.
+#[test]
+fn tsk381_a_landed_research_pin_is_met_after_its_line_is_deleted() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let producer = "integration/producer-line";
+    let consumer = "integration/consumer-line";
+    git(root, &["switch", "-qc", producer]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", producer, "[]"));
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["push", "-q", "-u", "origin", producer]);
+    git(root, &["switch", "-qc", consumer, "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "chore: land", producer],
+    );
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", consumer, &research_pin("TSK-003", &pin)),
+    );
+    git(root, &["push", "-q", "-u", "origin", consumer]);
+    git(root, &["push", "-q", "origin", "--delete", producer]);
+    git(root, &["branch", "-q", "-d", producer]);
+
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("ready    TSK-004"), "{next}");
+    assert!(!next.contains("not fetched here"), "{next}");
+    succeeds(&cli(root, &["work", "claim", "TSK-004"], None));
+    let branch = git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "--format=%(refname:short)",
+            "task/TSK-004-*",
+        ],
+    );
+    git(root, &["switch", "-q", &branch]);
+    let start = cli(root, &["work", "start", "TSK-004"], None);
+    succeeds(&start);
+}
+
+/// TSK-381 AC-2, the issue comment's reproduction: the producer targets
+/// `main` and completed there; the pin is on `origin/main`, but the local
+/// `main` is behind it. `work claim` reads `origin/main` and leaves the
+/// local branch alone.
+#[test]
+fn tsk381_claim_reads_a_research_pin_on_origin_main_not_the_local_main() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let behind = commit_record(root, "TSK-003", &record_on("TSK-003", "main", "[]"));
+    git(root, &["push", "-q", "origin", "main"]);
+    let consumer = "integration/consumer-line";
+    git(root, &["switch", "-qc", consumer]);
+    git(root, &["push", "-q", "-u", "origin", consumer]);
+    git(root, &["switch", "-q", "main"]);
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", consumer]);
+    git(root, &["branch", "-q", "-f", "main", &behind]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", consumer, &research_pin("TSK-003", &pin)),
+    );
+    git(root, &["push", "-q", "origin", consumer]);
+
+    succeeds(&cli(root, &["work", "claim", "TSK-004"], None));
+    assert_eq!(git(root, &["rev-parse", "main"]), behind);
+}
+
 #[cfg(unix)]
 fn stacked_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = fixture();

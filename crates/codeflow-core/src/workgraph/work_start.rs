@@ -2549,9 +2549,12 @@ fn code_dependency(
     }
 }
 
-/// A research or decision dependency is met when its pin is a commit on the
-/// predecessor's target that holds the predecessor's record as complete
-/// (R-112). The predecessor need not be in this base.
+/// A research or decision dependency is met when its pin is a commit that
+/// holds the predecessor's record as complete and is on a verified target
+/// that still exists: the predecessor's target, this task's target or the
+/// default branch, each read as [`tracking_reference`] reads it (R-112). The
+/// predecessor need not be in this base, and a deleted predecessor line does
+/// not unmeet a pin that landed (sathyassn/codeflow#236).
 fn pinned_dependency(
     repo: &Repository,
     records: &BTreeMap<String, Record>,
@@ -2575,20 +2578,38 @@ fn pinned_dependency(
     let commit = commit_by_object_id(repo, pin).map_err(refuse)?;
     let line = records
         .get(&dependency.id)
-        .and_then(|record| record.integration_target.clone())
-        .unwrap_or_else(|| target.to_string());
-    let Some(tip) = target_reference(repo, &line)? else {
-        return Err(WorkStartError::DependencyLineUnknown {
-            task_id: task_id.to_string(),
-            dependency: dependency.id.clone(),
-            line,
-        });
-    };
-    if tip.id() != commit.id()
-        && !history::descendant_of(repo, tip.id(), commit.id())
-            .map_err(|error| refuse(error.to_string()))?
-    {
-        return Err(refuse(format!("not on '{line}'")));
+        .and_then(|record| record.integration_target.clone());
+    let mut names = line
+        .into_iter()
+        .chain([target.to_string()])
+        .collect::<Vec<_>>();
+    for default in ["main", "master"] {
+        if tracking_reference(repo, default)?.is_some() {
+            names.push(default.to_string());
+            break;
+        }
+    }
+    let (mut read, mut unfetched) = (Vec::<String>::new(), Vec::<String>::new());
+    let mut landed = false;
+    for name in names {
+        match tracking_reference(repo, &name)? {
+            Some((shown, _)) if read.contains(&shown) => {}
+            Some((shown, tip)) => {
+                if tip == commit.id()
+                    || history::descendant_of(repo, tip, commit.id())
+                        .map_err(|error| refuse(error.to_string()))?
+                {
+                    landed = true;
+                    break;
+                }
+                read.push(shown);
+            }
+            None if unfetched.contains(&name) => {}
+            None => unfetched.push(name),
+        }
+    }
+    if !landed {
+        return Err(refuse(not_landed_reason(&read, &unfetched)));
     }
     let at_pin = commit
         .tree()
@@ -2602,6 +2623,78 @@ fn pinned_dependency(
         Some(status) => Err(refuse(format!("the record there is '{status}'"))),
         None => Err(refuse("the record is not there".to_string())),
     }
+}
+
+/// The ref readiness reads for a target, with its tip, as output shows it
+/// (`origin/main`). An explicit ref (`origin/<name>`, `refs/...`) is read as
+/// written. A bare name reads the remote-tracking ref: the upstream Git has
+/// configured for the local branch, else `origin/<name>`. The local branch is
+/// read only when it has no remote-tracking ref at all (a repository with no
+/// remote), so a local branch behind its remote never decides readiness
+/// (sathyassn/codeflow#236). `None` when the target is not fetched here.
+fn tracking_reference(
+    repo: &Repository,
+    name: &str,
+) -> Result<Option<(String, Oid)>, WorkStartError> {
+    let Some(candidates) = target_reference_names(name) else {
+        return Ok(None);
+    };
+    let local = format!("refs/heads/{name}");
+    let exact = &candidates[0];
+    if *exact != local {
+        return Ok(reference_commit(repo, exact)?.map(|tip| (reference_display_name(exact), tip)));
+    }
+    let (upstream, configured) = match repo.branch_upstream_name(&local) {
+        Ok(upstream) => (
+            upstream.as_str().map(str::to_owned).map_err(|error| {
+                WorkStartError::Repository(format!(
+                    "configured upstream is not valid UTF-8: {error}"
+                ))
+            })?,
+            true,
+        ),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            (format!("refs/remotes/origin/{name}"), false)
+        }
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
+    if let Some(tip) = reference_commit(repo, &upstream)? {
+        return Ok(Some((reference_display_name(&upstream), tip)));
+    }
+    if configured {
+        // A configured upstream that is not fetched leaves the target unknown.
+        return Ok(None);
+    }
+    Ok(reference_commit(repo, &local)?.map(|tip| (name.to_string(), tip)))
+}
+
+/// Why a pin is on no verified target: the refs read, then the targets that
+/// are not fetched here.
+fn not_landed_reason(read: &[String], unfetched: &[String]) -> String {
+    let quoted = |names: &[String], conjunction: &str| {
+        let names = names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>();
+        match names.split_last() {
+            Some((last, rest)) if !rest.is_empty() => {
+                format!("{} {conjunction} {last}", rest.join(", "))
+            }
+            _ => names.concat(),
+        }
+    };
+    let mut parts = Vec::new();
+    if !read.is_empty() {
+        parts.push(format!("not on {}", quoted(read, "or")));
+    }
+    if !unfetched.is_empty() {
+        let verb = if unfetched.len() == 1 { "is" } else { "are" };
+        parts.push(format!(
+            "{} {verb} not fetched here",
+            quoted(unfetched, "and")
+        ));
+    }
+    parts.join("; ")
 }
 
 /// Why an object id does not resolve to a commit.
