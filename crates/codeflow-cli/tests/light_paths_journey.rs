@@ -466,3 +466,36 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
         rows.join("\n")
     }
 }
+
+/// TSK-398 review F1: `epic new --integration` cuts the line from the full
+/// `refs/remotes/origin/main`, never from a local branch named `origin/main`
+/// that Git's short-name lookup prefers.
+#[test]
+fn epic_line_is_cut_from_the_remote_tracking_ref_beside_an_origin_main_shadow() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let protected = git(&root, &["rev-parse", "HEAD"]);
+    git(
+        &root,
+        &["update-ref", "refs/remotes/origin/main", &protected],
+    );
+    git(&root, &["switch", "-q", "-c", "plan/outcome"]);
+    std::fs::write(root.join("notes.md"), "Author notes.\n").unwrap();
+    commit(&root, "docs: add author notes");
+    let shadow = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["branch", "origin/main", &shadow]);
+    assert_eq!(git(&root, &["rev-parse", "origin/main"]), shadow);
+    ok(
+        &codeflow(&root, &["epic", "new", "--integration", "Outcome"]),
+        "epic new --integration",
+    );
+    assert_eq!(
+        git(&root, &["rev-parse", "integration/EPC-001-outcome"]),
+        protected
+    );
+}

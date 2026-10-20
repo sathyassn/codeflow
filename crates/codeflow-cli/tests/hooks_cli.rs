@@ -7933,10 +7933,10 @@ fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
     let f = Line::new();
     passes(&f.push(ZERO));
     let direct = f.direct();
-    blocks(&f.push(ZERO), "git reset --keep main");
+    blocks(&f.push(ZERO), "git reset --keep refs/heads/main");
     let refused = f.push(&f.git(&["rev-parse", "main"]));
     blocks(&refused, &direct[..9]);
-    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains(&format!("git reset --keep refs/remotes/origin/{LINE}")));
     assert!(output(&refused).contains("line_adoptions"));
     // The already shared direct commit must not prevent unrelated merges.
     f.git(&["switch", "-qc", "task/TSK-001-work"]);
@@ -7948,6 +7948,34 @@ fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
     f.land_adoption(&direct);
     passes(&f.push(ZERO));
     passes(&f.push(&direct));
+}
+
+/// TSK-398 review F1: with `refs/remotes/origin/main` at the protected tip,
+/// a local branch or tag named `origin/main` at the line tip cannot empty a
+/// first push's range. The direct commit is still refused and named, and the
+/// remedy spells the remote-tracking ref in full.
+#[test]
+fn epic_line_first_push_reads_the_full_default_ref_beside_an_origin_main_shadow() {
+    use line_adoption_fixture::{blocks, output, Line, LINE, ZERO};
+    for shadow in ["branch", "tag", "both"] {
+        let f = Line::new();
+        f.git(&["push", "-q", "origin", "main"]);
+        let direct = f.direct();
+        if shadow != "tag" {
+            f.git(&["branch", "origin/main", LINE]);
+        }
+        if shadow != "branch" {
+            f.git(&["tag", "origin/main", LINE]);
+        }
+        assert_eq!(f.git(&["rev-parse", "origin/main"]), direct, "{shadow}");
+        let out = f.push(ZERO);
+        blocks(&out, &direct[..9]);
+        assert!(
+            output(&out).contains("git reset --keep refs/remotes/origin/main"),
+            "{shadow}: {}",
+            output(&out)
+        );
+    }
 }
 
 /// TSK-248 AC-3 controls: a push of merges only passes, on an update and on

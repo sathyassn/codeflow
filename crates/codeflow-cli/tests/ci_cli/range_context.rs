@@ -1103,3 +1103,76 @@ fn local_origin_main_branch_never_replaces_the_remote_tracking_base() {
         );
     }
 }
+
+/// A pushed `main` with later work, and an undeclared branch with one
+/// commit on it. Returns the fixture and the protected tip.
+fn feature_on_pushed_main() -> (Line, String) {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.write("later.md", "Later main work.\n");
+    f.commit("docs: later main work");
+    f.git(&["push", "-q", "origin", "main"]);
+    let main = f.git(&["rev-parse", "refs/heads/main"]);
+    f.git(&["switch", "-qc", "fix/feature"]);
+    f.write("src/lib.rs", "pub fn feature() {}\n");
+    f.commit("fix: add the feature");
+    (f, main)
+}
+
+/// TSK-398 review F2: with the exact `refs/remotes/origin/main` absent, a
+/// local branch or tag whose full name is `refs/remotes/origin/main` never
+/// answers for it; the base stays the local `refs/heads/main`.
+#[test]
+fn a_ref_named_like_the_tracking_ref_never_answers_for_an_absent_one() {
+    for shadow in ["branch", "tag"] {
+        let (f, main) = feature_on_pushed_main();
+        f.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        let tip = f.git(&["rev-parse", "HEAD"]);
+        if shadow == "branch" {
+            f.git(&["branch", "refs/remotes/origin/main", &tip]);
+            assert_eq!(
+                f.git(&["rev-parse", "refs/heads/refs/remotes/origin/main"]),
+                tip
+            );
+        } else {
+            f.git(&["tag", "refs/remotes/origin/main", &tip]);
+            assert_eq!(
+                f.git(&["rev-parse", "refs/tags/refs/remotes/origin/main"]),
+                tip
+            );
+        }
+        let text = output(&ci(&f, &[], None));
+        assert!(
+            text.contains(&format!("range {}..", &main[..8])),
+            "{shadow}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("range {}..", &tip[..8])),
+            "{shadow}: {text}"
+        );
+    }
+}
+
+/// TSK-398 review N3: a base variable carrying revision syntax is ignored
+/// with a warning, so the base is the protected tip, never a walk from it.
+#[test]
+fn base_variables_with_revision_syntax_are_ignored() {
+    for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
+        for value in ["main~1", "main@{0}"] {
+            let (f, main) = feature_on_pushed_main();
+            let text = output(&ci(&f, &[], Some((key, value))));
+            assert!(
+                text.contains(&format!("{key} '{value}' is not a branch name")),
+                "{key}={value}: {text}"
+            );
+            assert!(
+                text.contains(&format!("range {}..", &main[..8])),
+                "{key}={value}: {text}"
+            );
+            assert!(
+                !text.contains(&format!("acceptance target '{value}'")),
+                "{key}={value}: {text}"
+            );
+        }
+    }
+}
