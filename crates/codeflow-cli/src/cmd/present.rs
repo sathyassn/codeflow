@@ -264,7 +264,7 @@ fn run_inner(command: &PresentCommand) -> codeflow_present::Result<i32> {
             let stdout = std::io::stdout();
             let mut output = stdout.lock();
             for line in store.feedback_lines(parse_id(session_id)?, &filter)? {
-                write_line(&mut output, &serde_json::to_vec(&line)?)?;
+                write_line(&mut output, &serde_json::to_string(&line)?)?;
             }
             Ok(0)
         }
@@ -939,7 +939,7 @@ fn deliver_pending(
     if !v2 {
         let pending = store.pending_feedback(id)?;
         for envelope in &pending {
-            write_line(output, &serde_json::to_vec(&envelope.v1_view())?)?;
+            write_line(output, &serde_json::to_string(&envelope.v1_view())?)?;
             store.mark_delivered(id, &[envelope.event_id])?;
         }
         return Ok(pending.len());
@@ -952,7 +952,7 @@ fn deliver_pending(
     for mut line in pending.iter().cloned() {
         // The line is the delivery: it reads as the state it leaves behind.
         line.status = DeliveryStatus::Delivered;
-        write_line(output, &serde_json::to_vec(&line)?)?;
+        write_line(output, &serde_json::to_string(&line)?)?;
         store.deliver(id, &[line.event_id])?;
     }
     Ok(pending.len())
@@ -975,9 +975,13 @@ fn announce_v2_pending(store: &SessionStore, id: Uuid) -> codeflow_present::Resu
 }
 
 /// Writes one JSON line and flushes it, so a reader sees each event whole.
-fn write_line(output: &mut impl Write, json: &[u8]) -> codeflow_present::Result<()> {
+/// One JSON line on stdout. Feedback text is what a reviewer typed, so each
+/// hidden character is written as a JSON escape (`display_json`, TSK-388);
+/// the line decodes to the same value.
+fn write_line(output: &mut impl Write, json: &str) -> codeflow_present::Result<()> {
+    let shown = codeflow_core::git::display_json(json);
     output
-        .write_all(json)
+        .write_all(shown.as_bytes())
         .and_then(|()| output.write_all(b"\n"))
         .and_then(|()| output.flush())
         .map_err(|error| PresentError::io("stdout", error))
