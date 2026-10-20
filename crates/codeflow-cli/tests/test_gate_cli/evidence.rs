@@ -11,10 +11,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(change: impl FnOnce(&mut Value)) -> Self {
-        Self::with_environment(change, &[])
+        Self::with_environment(change, None)
     }
 
-    fn with_environment(change: impl FnOnce(&mut Value), environment: &[(&str, &str)]) -> Self {
+    fn with_environment(change: impl FnOnce(&mut Value), marker: Option<&str>) -> Self {
         let root = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let dir = root.path();
@@ -72,12 +72,13 @@ impl Fixture {
         std::fs::write(dir.join("membership"), "checks_input\n").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-qm", "test: candidate"]);
-        let output = super::command(dir, home.path(), &["test", "--all"])
-            .envs(environment.iter().copied())
-            .output()
-            .unwrap();
+        let mut command = super::command(dir, home.path(), &["test", "--all"]);
+        if let Some(marker) = marker {
+            command.env("SELECTION_MARKER", marker);
+        }
+        let output = command.output().unwrap();
         assert!(output.status.success(), "{}", stderr(&output));
-        for (_, marker) in environment {
+        if let Some(marker) = marker {
             assert!(!stderr(&output).contains(marker), "secret in gate stderr");
             assert!(
                 !String::from_utf8_lossy(&output.stdout).contains(marker),
@@ -292,6 +293,13 @@ fn test_membership_change_runs() {
 }
 
 #[test]
+fn an_empty_tool_probe_is_missing_evidence() {
+    let fixture = Fixture::new(|_| {});
+    std::fs::write(fixture.root.path().join("tool.version"), "").unwrap();
+    fixture.selected("probe returned no evidence");
+}
+
+#[test]
 fn full_does_not_cover_quick_without_a_declared_relation() {
     let fixture = Fixture::new(|c| c["targets"][0]["evidence"]["covers_modes"] = json!([]));
     fixture.selected("mode is not covered");
@@ -388,7 +396,7 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
                 target["report"] = json!({"format":"junit","path":"target/secret-report.xml"});
             }
         },
-        &[("SELECTION_MARKER", first)],
+        Some(first),
     );
     for marker in [first, second] {
         let output = super::command(
@@ -405,6 +413,19 @@ fn secret_environment_is_opaque_in_every_gate_artifact_and_changes_run() {
         if marker == second {
             assert!(
                 stderr(&output).contains("selected rust-check"),
+                "{}",
+                stderr(&output)
+            );
+            if cfg!(unix) {
+                assert!(
+                    stderr(&output).contains("declared environment changed"),
+                    "{}",
+                    stderr(&output)
+                );
+            }
+        } else if cfg!(unix) {
+            assert!(
+                stderr(&output).contains("skipped rust-check"),
                 "{}",
                 stderr(&output)
             );

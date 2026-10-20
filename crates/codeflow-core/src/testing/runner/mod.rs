@@ -803,6 +803,15 @@ fn build_command(
     };
     cmd.current_dir(cwd);
 
+    configure_environment(&mut cmd, env, target_name)?;
+    Ok(cmd)
+}
+
+pub(super) fn configure_environment(
+    cmd: &mut Command,
+    env: &std::collections::BTreeMap<String, String>,
+    target_name: &str,
+) -> Result<(), TestingError> {
     // The test gate can run inside a git hook (the pre-push `test_gate_on_push`,
     // or `integrate`'s internal gate), where git exports GIT_DIR / GIT_WORK_TREE
     // / GIT_INDEX_FILE. Those would redirect any `git` the test command spawns
@@ -822,7 +831,7 @@ fn build_command(
         validate_env_key(key, target_name)?;
         cmd.env(key, val);
     }
-    Ok(cmd)
+    Ok(())
 }
 
 fn effective_shell(shell: CommandShell, windows: bool) -> CommandShell {

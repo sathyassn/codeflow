@@ -262,14 +262,23 @@ fn probe(root: &Path, target: &TargetConfig, argv: &[String]) -> Result<String, 
         &cwd,
     )
     .map_err(|_| "tool or membership probe unavailable")?;
-    let output = crate::git::process(&path)
-        .args(&argv[1..])
-        .current_dir(&cwd)
-        .envs(&target.env)
+    let mut command = crate::git::process(&path);
+    command.args(&argv[1..]).current_dir(&cwd);
+    super::runner::configure_environment(&mut command, &target.env, &target.name)
+        .map_err(|_| "invalid tool or membership environment")?;
+    let output = command
         .output()
         .map_err(|_| "tool or membership probe could not run")?;
     if !output.status.success() {
         return Err("tool or membership probe failed".into());
+    }
+    if output
+        .stdout
+        .iter()
+        .chain(&output.stderr)
+        .all(u8::is_ascii_whitespace)
+    {
+        return Err("tool or membership probe returned no evidence".into());
     }
     // Probe output is opaque equality data: it can contain environment values.
     Ok(delivery::digest(
@@ -401,7 +410,8 @@ pub(super) fn mismatch(before: &Identity, now: &Identity) -> Option<&'static str
 pub(super) fn generated_environment(name: &str) -> bool {
     matches!(
         name,
-        "CODEFLOW_BIN"
+        "TARGET"
+            | "CODEFLOW_BIN"
             | "CF_PRESENT_CODEFLOW"
             | "CODEFLOW_GATE_RESULTS"
             | "CODEFLOW_GATE_STARTED_AT"
