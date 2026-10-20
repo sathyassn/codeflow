@@ -13,3 +13,16 @@ path = "junit.xml"
 [[profile.codeflow.overrides]]
 filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
 test-group = "serial"
+
+# Essential uses the full gate's isolation and serial group without coverage.
+# Keep its overrides equal to profile.codeflow; doctests run after nextest.
+[profile.essential]
+fail-fast = false
+test-threads = 8
+
+[profile.essential.junit]
+path = "junit.xml"
+
+[[profile.essential.overrides]]
+filter = 'package(codeflow-present) | binary(present_cli) | binary(init_e2e) | test(process_group) | binary(test_gate_cli)'
+test-group = "serial"

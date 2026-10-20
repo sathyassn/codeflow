@@ -140,13 +140,17 @@
       "runner": "cargo",
       "modes": {
         "essential": {
-          "command": "cargo test --workspace --quiet"
+          "command": "cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc"
         }
       },
       "timeout_seconds": 3600,
       "requires": [
         "rust-build"
-      ]
+      ],
+      "report": {
+        "format": "junit",
+        "path": "target/nextest/essential/junit.xml"
+      }
     },
     {
       "name": "repository-update-noop",
