@@ -2630,10 +2630,10 @@ fn pinned_dependency(
 /// is always a remote-tracking ref, so no local ref decides readiness
 /// (sathyassn/codeflow#236):
 /// - a branch, bare (`main`) or spelled `refs/heads/main`, reads the upstream
-///   configured for it only when that upstream is a
-///   `refs/remotes/<remote>/<branch>` ref of a configured remote (never remote
-///   `.`, a local branch or a tag), else `refs/remotes/origin/<branch>` on the
-///   authority remote;
+///   configured for it only when that upstream is the same branch on a
+///   configured remote, `refs/remotes/<remote>/<branch>` (never remote `.`, a
+///   local branch, a tag or another branch), else
+///   `refs/remotes/origin/<branch>` on the authority remote;
 /// - an explicit remote-tracking ref (`origin/main`, `refs/remotes/...`) counts
 ///   only when a configured remote's fetch mapping owns it.
 ///
@@ -2669,9 +2669,10 @@ fn tracking_reference(
     read(&landing)
 }
 
-/// The upstream configured for local branch `branch`, when it is a
-/// `refs/remotes/<remote>/...` ref of a configured remote other than `.`.
-/// Any other upstream, including one git cannot map, is not honoured, and the
+/// The upstream configured for local branch `branch`, when it is
+/// `refs/remotes/<remote>/<branch>`, the same branch on a configured remote
+/// other than `.` (the fork case). Any other upstream, including another
+/// branch of that remote and one git cannot map, is not honoured, and the
 /// caller reads the authority remote's tracking ref instead. A configured
 /// name that is not valid UTF-8 is an error, never an absent upstream (issue
 /// 79).
@@ -2699,7 +2700,7 @@ fn configured_upstream(
     let upstream = upstream.as_str().map_err(|_| not_utf8("ref"))?;
     Ok(upstream
         .strip_prefix(&format!("refs/remotes/{remote}/"))
-        .is_some_and(|rest| !rest.is_empty())
+        .is_some_and(|rest| rest == branch)
         .then(|| upstream.to_owned()))
 }
 

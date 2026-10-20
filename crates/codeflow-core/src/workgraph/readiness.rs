@@ -2026,6 +2026,62 @@ mod tests {
         );
     }
 
+    /// TSK-381 review round 2 (SF-1R): `line`'s upstream is another branch,
+    /// `task/TSK-999-forge`, of the configured remote `origin`, which holds the
+    /// forged pin. Returns the pin and the verdict.
+    fn upstream_on_another_branch(root: &Path, line: &str) -> (String, WorkStartError) {
+        let (_origin, pin) = forged_producer(root, line, "side");
+        run(root, &["push", "-q", "origin", "side:task/TSK-999-forge"]);
+        run(root, &["fetch", "-q", "origin"]);
+        if line == "main" {
+            run(
+                root,
+                &["branch", "-q", "-u", "origin/task/TSK-999-forge", "main"],
+            );
+        } else {
+            run(
+                root,
+                &["config", &format!("branch.{line}.remote"), "origin"],
+            );
+            run(
+                root,
+                &[
+                    "config",
+                    &format!("branch.{line}.merge"),
+                    "refs/heads/task/TSK-999-forge",
+                ],
+            );
+        }
+        let error = verdict(root, "TSK-002").unwrap_err();
+        (pin, error)
+    }
+
+    /// SF-1R with `git branch -u origin/task/TSK-999-forge main`.
+    #[test]
+    fn an_upstream_on_another_branch_is_not_honoured() {
+        let dir = repo();
+        let (pin, error) = upstream_on_another_branch(dir.path(), "main");
+        assert_eq!(
+            error.to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'")
+        );
+    }
+
+    /// SF-1R through the producer line's branch config alone.
+    #[test]
+    fn a_line_config_naming_another_branch_is_not_honoured() {
+        let dir = repo();
+        let line = "integration/producer-line";
+        let (pin, error) = upstream_on_another_branch(dir.path(), line);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'; \
+                 '{line}' is not fetched here"
+            )
+        );
+    }
+
     /// The fork case stays: an upstream on another configured remote is the
     /// landing ref, although `origin/main` lacks the pin.
     #[test]
