@@ -254,7 +254,7 @@ fn green_base(
             reason = "legacy record: missing git_tree evidence";
             continue;
         }
-        if record["git_tree"] != tree.trim() {
+        if record["git_tree"] != tree.strip_suffix('\n').unwrap_or(&tree) {
             continue;
         }
         if record["config_digest"] != config_digest {
@@ -292,7 +292,10 @@ fn comparison_base(root: &Path, options: &GateOptions) -> Result<(String, String
             root,
             &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
         )?;
-        return Ok((sha.trim().into(), format!("explicit --since {base}")));
+        return Ok((
+            sha.strip_suffix('\n').unwrap_or(&sha).into(),
+            format!("explicit --since {base}"),
+        ));
     }
     let repo = git2::Repository::discover(root)
         .map_err(|_| "no comparison base: repository unavailable")?;
@@ -302,8 +305,9 @@ fn comparison_base(root: &Path, options: &GateOptions) -> Result<(String, String
     if repo.head_detached().unwrap_or(true) {
         return Err("no comparison base: detached HEAD has no task".into());
     }
-    let branch = head
-        .shorthand()
+    let branch_name = crate::git::name::reference_shorthand(&head);
+    let branch = branch_name
+        .rule_text()
         .map_err(|_| "no comparison base: branch is not UTF-8")?;
     let task = crate::workgraph::work_start::task_id_from_branch(root, branch)
         .map_err(|error| format!("cannot resolve task: {error}"))?
@@ -316,7 +320,7 @@ fn comparison_base(root: &Path, options: &GateOptions) -> Result<(String, String
         .ok_or("no comparison base: task line unavailable")?;
     let base = git_output(root, &["merge-base", "HEAD", &resolved.target])?;
     Ok((
-        base.trim().into(),
+        base.strip_suffix('\n').unwrap_or(&base).into(),
         format!(
             "merge base of HEAD with {task} integration target {target} ({})",
             resolved.target

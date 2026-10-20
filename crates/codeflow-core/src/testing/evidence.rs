@@ -299,15 +299,19 @@ fn fingerprint_key(root: &Path, home: Option<&Path>) -> Option<Vec<u8>> {
     use std::io::{Read, Write};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     let home = home?.canonicalize().ok()?;
-    if home.starts_with(root.canonicalize().ok()?) || git2::Repository::discover(&home).is_ok() {
+    if home.starts_with(root.canonicalize().ok()?) {
         return None;
+    }
+    match git2::Repository::discover(&home) {
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        _ => return None,
     }
     let path = home.join("gate-environment.key");
     let mut options = std::fs::OpenOptions::new();
     options.read(true).custom_flags(libc::O_NOFOLLOW);
     let mut file = match options.open(&path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(_) if crate::absence::proven_absent(&path).ok()? => {
             let mut options = std::fs::OpenOptions::new();
             options
                 .write(true)
