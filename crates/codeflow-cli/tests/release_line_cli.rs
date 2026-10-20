@@ -9,11 +9,9 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn clean_env(command: &mut Command) -> &mut Command {
     command
