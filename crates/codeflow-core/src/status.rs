@@ -168,7 +168,9 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
             (
                 branch,
                 worktrees,
-                target.as_ref().map(|item| item.name.clone()),
+                target
+                    .as_ref()
+                    .map(|item| crate::git::display_text(&item.name)),
                 cleanup,
             )
         } else {
@@ -417,10 +419,12 @@ fn classify_cleanup(
             "landing target or revision unavailable".to_string(),
         );
     };
+    // The remote names its default branch, which messages show escaped.
+    let shown = crate::git::display_text(&target.name);
     if branch.is_some_and(|name| readiness::is_open_claim(repo_root, repo, name, oid, target.oid)) {
         return (
             CleanupDisposition::RetainLive,
-            format!("open claim: nothing of it has landed in {}", target.name),
+            format!("open claim: nothing of it has landed in {shown}"),
         );
     }
     if let Err(error) = history::check(repo) {
@@ -429,18 +433,18 @@ fn classify_cleanup(
     if oid == target.oid || history::descendant_of(repo, target.oid, oid).unwrap_or(false) {
         return (
             CleanupDisposition::Removable,
-            format!("landed by ancestry in {}", target.name),
+            format!("landed by ancestry in {shown}"),
         );
     }
     if branch.is_some_and(|name| patch_equivalent(repo_root, &target.name, name)) {
         return (
             CleanupDisposition::Removable,
-            format!("patch-equivalent in {}", target.name),
+            format!("patch-equivalent in {shown}"),
         );
     }
     (
         CleanupDisposition::RetainUnproven,
-        format!("not proven landed in {}", target.name),
+        format!("not proven landed in {shown}"),
     )
 }
 
@@ -926,6 +930,38 @@ mod tests {
         )
         .unwrap();
         assert!(cleanup_target(&repo).is_err());
+    }
+
+    /// TSK-388: `origin/HEAD` names the branch the remote calls its default,
+    /// which can hold a control character that git accepts (the C1 CSI
+    /// here). Status shows it escaped; an ordinary name is unchanged.
+    #[test]
+    fn the_cleanup_target_shows_the_remote_default_branch_escaped() {
+        for (name, shown) in [("ev\u{9b}31mil", "ev\\x9b31mil"), ("trunk", "trunk")] {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path());
+            git(dir.path(), &["branch", "feat/landed"]);
+            let tracking = format!("refs/remotes/origin/{name}");
+            git(dir.path(), &["update-ref", &tracking, "HEAD"]);
+            git(
+                dir.path(),
+                &["symbolic-ref", "refs/remotes/origin/HEAD", &tracking],
+            );
+            let view = collect_status(dir.path());
+            assert_eq!(
+                view.cleanup_target.as_deref(),
+                Some(format!("origin/{shown}").as_str())
+            );
+            let landed = view
+                .cleanup
+                .iter()
+                .find(|item| item.name == "feat/landed")
+                .unwrap();
+            assert_eq!(
+                landed.proof,
+                format!("landed by ancestry in origin/{shown}")
+            );
+        }
     }
 
     fn init_repo(dir: &Path) {

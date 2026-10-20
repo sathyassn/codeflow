@@ -352,6 +352,16 @@ pub fn display_key(key: &str) -> String {
     GitName::from_storage_key(key).display().to_string()
 }
 
+/// The display form of a name already held as text, for a message. A
+/// remote supplies some names, such as the branch its `HEAD` names, and can
+/// put any character there: this escapes each control character and
+/// backslash, so such a name cannot write a terminal escape sequence into
+/// output (TSK-388). An ordinary branch name is unchanged.
+#[must_use]
+pub fn display_text(text: &str) -> String {
+    GitName::from_text(text).display().to_string()
+}
+
 /// What a tree walk does after an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Walk {

@@ -11,6 +11,7 @@ use super::{policy_schema, Policy, PolicyLevel};
 pub struct LandedPolicy {
     pub policy: Policy,
     pub project: Option<toml::Value>,
+    /// Where the policy was read, as messages show it.
     pub source: String,
     pub local_differs: bool,
     remote_head_advice: Option<String>,
@@ -89,13 +90,15 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
         }
         project = project.or(candidate_project);
     }
+    // The remote names its default branch: the source is shown escaped.
     let mut sources = defaults
         .iter()
         .map(|source| {
+            let source = crate::git::display_text(source);
             if fallback {
                 format!("{source} (remote HEAD not set)")
             } else {
-                source.clone()
+                source
             }
         })
         .collect::<Vec<_>>()
@@ -203,7 +206,12 @@ fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<Stri
     let tree = repo
         .revparse_single(reference)
         .and_then(|o| o.peel_to_tree())
-        .map_err(|e| format!("cannot read policy source {reference}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "cannot read policy source {}: {e}",
+                crate::git::display_text(reference)
+            )
+        })?;
     match tree.get_path(Path::new(path)) {
         Ok(entry) => {
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
@@ -468,6 +476,23 @@ mod tests {
         std::fs::write(git.join("packed-refs"), packed).unwrap();
         let error = load(dir.path()).err().expect("the read is refused");
         assert!(error.contains("cannot read policy source"), "{error}");
+    }
+
+    /// TSK-388: the remote names its default branch, which can hold a
+    /// control character that git accepts (the C1 CSI here). The policy
+    /// source shows it escaped; an ordinary name is shown unchanged.
+    #[test]
+    fn the_policy_source_shows_the_remote_default_branch_escaped() {
+        for (name, shown) in [("ev\u{9b}31mil", "ev\\x9b31mil"), ("trunk", "trunk")] {
+            let (dir, commit) = repository(b"");
+            let repo = Repository::open(dir.path()).unwrap();
+            let tracking = format!("refs/remotes/origin/{name}");
+            repo.reference(&tracking, commit, true, "test").unwrap();
+            repo.reference_symbolic("refs/remotes/origin/HEAD", &tracking, true, "test")
+                .unwrap();
+            let authority = load(dir.path()).unwrap();
+            assert_eq!(authority.source, format!("refs/remotes/origin/{shown}"));
+        }
     }
 
     /// Issue 79: git2's `Tree::walk` stops with an error at a directory whose
