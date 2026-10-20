@@ -1,0 +1,11 @@
+id = "TSK-409"
+uid = "8248751e-bcaf-424d-9623-39d552f6500c"
+kind = "TSK"
+title = "The docs portal takes the fixed vite release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-20T19:27:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
