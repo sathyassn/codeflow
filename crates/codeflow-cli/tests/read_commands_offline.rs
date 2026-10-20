@@ -16,11 +16,9 @@ use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
 
 const LINE: &str = "integration/EPC-001-offline";
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 /// The environment every command in these journeys runs under. `trap` is a
 /// directory put first on `PATH` that holds network tools which only record
