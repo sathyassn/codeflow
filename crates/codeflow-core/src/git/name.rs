@@ -62,6 +62,36 @@ impl fmt::Display for NotRepresentable {
 
 impl std::error::Error for NotRepresentable {}
 
+/// Whether output shows `c` escaped: a control character, or a format or
+/// separator character that can reorder or break the line a person reads
+/// (the Arabic letter mark, zero-width and direction marks, bidi embeddings,
+/// overrides and isolates, word joiners, the byte-order mark, and the line
+/// and paragraph separators). A name a remote supplies can hold any of them
+/// (TSK-388).
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{61c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{feff}'
+                | '\u{2028}'
+                | '\u{2029}'
+        )
+}
+
+/// `c` escaped: `\xNN` up to U+00FF, else `\u{NNNN}`.
+fn write_escaped(out: &mut impl fmt::Write, c: char) -> fmt::Result {
+    let code = u32::from(c);
+    if code <= 0xff {
+        write!(out, "\\x{code:02x}")
+    } else {
+        write!(out, "\\u{{{code:04x}}}")
+    }
+}
+
 /// A name's display form: formatting only, no `Deref` to `str`, no
 /// conversion back to a name.
 pub struct DisplayName<'a>(&'a [u8]);
@@ -72,7 +102,7 @@ impl fmt::Display for DisplayName<'_> {
             for character in chunk.valid().chars() {
                 match character {
                     '\\' => f.write_str("\\\\")?,
-                    c if c.is_control() => write!(f, "\\x{:02x}", u32::from(c))?,
+                    c if hidden(c) => write_escaped(f, c)?,
                     c => fmt::Write::write_char(f, c)?,
                 }
             }
@@ -354,12 +384,40 @@ pub fn display_key(key: &str) -> String {
 
 /// The display form of a name already held as text, for a message. A
 /// remote supplies some names, such as the branch its `HEAD` names, and can
-/// put any character there: this escapes each control character and
-/// backslash, so such a name cannot write a terminal escape sequence into
-/// output (TSK-388). An ordinary branch name is unchanged.
+/// put any character there: this escapes each control, format and separator
+/// character and each backslash, so such a name cannot write a terminal
+/// escape sequence into output or reorder or break its line (TSK-388). An
+/// ordinary branch name is unchanged.
 #[must_use]
 pub fn display_text(text: &str) -> String {
     GitName::from_text(text).display().to_string()
+}
+
+/// Output text as a terminal may show it: each control, format and
+/// separator character other than a line break or tab escaped, as
+/// [`display_text`] escapes them; backslashes are kept. For text that
+/// carries its own lines, such as a check's output the pre-push hook
+/// relays, or a message that can quote remote content (TSK-388).
+#[must_use]
+pub fn display_output(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for c in text.chars() {
+        if hidden(c) && !matches!(c, '\n' | '\t') {
+            let _ = write_escaped(&mut shown, c);
+        } else {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
+/// A message field as a refusal or note shows it: [`display_output`], with
+/// each further line of the field indented under its first, so text the
+/// message quotes cannot start a line that reads as one of `CodeFlow`'s own
+/// (TSK-388).
+#[must_use]
+pub fn display_message(text: &str) -> String {
+    display_output(text).replace('\n', "\n  ")
 }
 
 /// What a tree walk does after an entry.
@@ -461,6 +519,31 @@ mod tests {
         );
         assert_eq!(GitName::from_text("a\\b").display().to_string(), "a\\\\b");
         assert_eq!(GitName::from_text("a\nb").display().to_string(), "a\\x0ab");
+    }
+
+    /// TSK-388 round 1 (Grok F-2, security F3): format and separator
+    /// characters git accepts in a branch name reorder or break the line a
+    /// person reads, so the display form escapes them as it does controls.
+    #[test]
+    fn display_escapes_format_and_separator_characters() {
+        for (name, shown) in [
+            ("ev\u{202e}lim", "ev\\u{202e}lim"),
+            ("ev\u{2028}il", "ev\\u{2028}il"),
+            ("ev\u{2029}il", "ev\\u{2029}il"),
+            (
+                "a\u{61c}b\u{200b}c\u{200f}d",
+                "a\\u{061c}b\\u{200b}c\\u{200f}d",
+            ),
+            (
+                "a\u{202a}b\u{2066}c\u{2069}d",
+                "a\\u{202a}b\\u{2066}c\\u{2069}d",
+            ),
+            ("a\u{2060}b\u{feff}c", "a\\u{2060}b\\u{feff}c"),
+            ("ev\u{9b}31mil", "ev\\x9b31mil"),
+            ("caf\u{e9}/\u{5d0}", "caf\u{e9}/\u{5d0}"),
+        ] {
+            assert_eq!(display_text(name), shown);
+        }
     }
 
     #[test]
@@ -623,5 +706,27 @@ mod tests {
     fn a_name_is_an_exact_path_on_unix() {
         let path = GitName::from_bytes(b"d/caf\xe9").os_path().unwrap();
         assert_eq!(GitName::from_os_str(path.as_os_str()).bytes(), b"d/caf\xe9");
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::{display_message, display_output};
+
+    /// TSK-388 round 1: text with its own lines keeps line breaks and tabs
+    /// and backslashes, and escapes every other control, format and
+    /// separator character; a message field indents its further lines, so
+    /// quoted text cannot start a line of its own.
+    #[test]
+    fn output_keeps_lines_and_escapes_the_rest() {
+        assert_eq!(
+            display_output("a\tb\nc\\d\u{1b}]0;x\u{7}\u{202e}\u{2028}\r"),
+            "a\tb\nc\\d\\x1b]0;x\\x07\\u{202e}\\u{2028}\\x0d"
+        );
+        assert_eq!(
+            display_message("bad value\ncodeflow git-guard: allowed"),
+            "bad value\n  codeflow git-guard: allowed"
+        );
+        assert_eq!(display_message("plain text"), "plain text");
     }
 }

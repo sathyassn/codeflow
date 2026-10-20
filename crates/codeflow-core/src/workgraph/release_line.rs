@@ -494,7 +494,9 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<Strin
     protected.push(default.to_string());
     match pattern_problem(&pattern, &protected) {
         Some(problem) => Err(format!(
-            "git.release_branch_pattern '{pattern}' is refused: {problem}"
+            "git.release_branch_pattern '{}' is refused: {problem}",
+            // The policy at the default target is remote content (TSK-388).
+            display_text(&pattern)
         )),
         None => Ok(Some(pattern)),
     }
@@ -829,15 +831,17 @@ impl<'a> Lines<'a> {
             .map(|(_, tip)| *tip)
         else {
             return Some(format!(
-                "{line} is not an epic line the destination advertises"
+                "{} is not an epic line the destination advertises",
+                display_text(line)
             ));
         };
         if !self.verified(line, tip) {
-            return Some(format!("{line} fails the epic-line check"));
+            return Some(format!("{} fails the epic-line check", display_text(line)));
         }
         if !self.chain(tip).contains(&cutoff) {
             return Some(format!(
-                "{line}'s cutoff {} is not on its first-parent chain",
+                "{}'s cutoff {} is not on its first-parent chain",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -855,7 +859,8 @@ impl<'a> Lines<'a> {
         }
         if !self.chain(cutoff).contains(&landing) {
             return Some(format!(
-                "the landing is not on {line}'s first-parent chain at or before its release-rule cutoff {}",
+                "the landing is not on {}'s first-parent chain at or before its release-rule cutoff {}",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -2099,8 +2104,11 @@ impl Marker {
         match self {
             Self::Absent => "removed".to_string(),
             Self::Adopted => format!("{MARKER_KEY} = 1"),
-            Self::Changed(value) => format!("changed to `{MARKER_KEY} = {value}`"),
-            Self::Invalid(why) => format!("unreadable ({why})"),
+            // Project config at the default target is remote content.
+            Self::Changed(value) => {
+                format!("changed to `{MARKER_KEY} = {}`", display_text(value))
+            }
+            Self::Invalid(why) => format!("unreadable ({})", display_text(why)),
         }
     }
 }
@@ -2435,8 +2443,9 @@ fn bridge(
             (None, Marker::Adopted) => adopted = Some(at),
             (None, Marker::Changed(value)) => {
                 return Err(format!(
-                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {value}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
-                    short(chain[at])
+                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
+                    short(chain[at]),
+                    display_text(value)
                 ))
             }
             (Some(first), Marker::Absent | Marker::Changed(_) | Marker::Invalid(_)) => {
@@ -2487,11 +2496,7 @@ fn bridge(
                     .map(|why| format!("but {why}")),
             };
             if let Some(why) = why {
-                return Err(bridge_refusal(
-                    key,
-                    default,
-                    &format!("names {} as the cutoff of {line}, {why}", short(*cutoff)),
-                ));
+                return Err(cutoff_refusal(key, default, &short(*cutoff), line, &why));
             }
         }
     }
@@ -2499,13 +2504,12 @@ fn bridge(
         for (line, cutoff) in table {
             let cutoff = cutoff.to_string();
             if !approved.contains(&(line.as_str(), cutoff.as_str())) {
-                return Err(bridge_refusal(
+                return Err(cutoff_refusal(
                     key,
                     default,
-                    &format!(
-                        "names {} as the cutoff of {line}, which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
-                        &cutoff[..9]
-                    ),
+                    &cutoff[..9],
+                    line,
+                    "which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
                 ));
             }
         }
@@ -2513,6 +2517,20 @@ fn bridge(
     let records = tables.pop().unwrap_or_default();
     let rules = tables.pop().unwrap_or_default();
     Ok(Bridge { rules, records })
+}
+
+/// The refusal of a transition-table entry: `key` on `default` names
+/// `cutoff` as the cutoff of `line`, then `why`. The line is a key of
+/// project config at the default target, so it is shown escaped (TSK-388).
+fn cutoff_refusal(key: &str, default: &str, cutoff: &str, line: &str, why: &str) -> String {
+    bridge_refusal(
+        key,
+        default,
+        &format!(
+            "names {cutoff} as the cutoff of {}, {why}",
+            display_text(line)
+        ),
+    )
 }
 
 fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
@@ -2624,7 +2642,7 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
     for (line, value) in table {
         let entry = value
             .as_str()
-            .ok_or_else(|| format!("{key} entry for {line} is not a string"))?;
+            .ok_or_else(|| format!("{key} entry for {} is not a string", display_text(line)))?;
         let full = entry.len() == 40
             && entry
                 .bytes()
@@ -2634,7 +2652,9 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
             .flatten()
             .ok_or_else(|| {
                 format!(
-                    "{key} entry for {line} at the default target (`{entry}`) is not a full 40-character lowercase commit id"
+                    "{key} entry for {} at the default target (`{}`) is not a full 40-character lowercase commit id",
+                    display_text(line),
+                    display_text(entry)
                 )
             })?;
         cutoffs.insert(line.clone(), oid);
