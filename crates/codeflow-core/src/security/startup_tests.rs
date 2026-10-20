@@ -2345,3 +2345,52 @@ fn a_search_pattern_is_never_a_write_target() {
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
+
+/// TSK-380 review round 1: an unquoted glob or brace in the pattern
+/// position is judged as before, so is a pattern GNU `parallel` runs
+/// without `-q`, and `rg --pre` judges every root it searches as a
+/// recursive writer's target (P-1). exec-guard's deletion check refuses
+/// `parallel -q` on its own rule before this check runs, so the `-q` forms
+/// are pinned here.
+#[test]
+fn an_expanding_pattern_and_a_preprocessor_root_are_judged() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.project.join("docs")).unwrap();
+    std::fs::create_dir_all(f.project.join("env/deep")).unwrap();
+    std::fs::write(f.project.join("env/deep/.envrc"), "x\n").unwrap();
+    let mut wrong = Vec::new();
+    for command in [
+        "rg --pre tee ~/.*rc",
+        "rg --pre tee ~/.{a,zsh}rc",
+        "rg --files | xargs rg --pre tee ~/.?shrc",
+        "rg --hidden --pre tee x ~",
+        "cd ~ && rg -. --pre tee x",
+        "rg --pre tee x env",
+        "rg --pre tee x $(printf %s ~)",
+        "rg --frobnicate --pre tee x docs",
+        "rg --files | xargs rg --pre tee x",
+        "find ~ -exec rg --pre tee x {} +",
+        // GNU parallel runs its command through a shell unless `-q`.
+        "parallel rg '/CHANGELOG.md$' ::: docs",
+        "parallel -j 4 rg '~/.zsh*' ::: docs",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "rg --pre pdftotext needle docs",
+        "find docs -exec rg --pre pdftotext needle {} +",
+        "rg 'a b' docs",
+        // With `-q` the pattern stays one word, and `parallel`'s options
+        // are read, so the command after `-j 4` is `rg`.
+        "parallel -q -j 4 rg '/CHANGELOG.md$' ::: docs",
+        "parallel --quote --jobs 4 rg -e '/CHANGELOG.md$' ::: docs",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}

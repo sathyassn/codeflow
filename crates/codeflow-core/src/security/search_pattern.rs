@@ -8,10 +8,11 @@
 //! unresolved write, and git-guard's wrapper rules read a pattern that
 //! spells or globs an enforcement path (`xargs rg '.claude/settings.json'`)
 //! as the line naming that path. This reader names the pattern words of
-//! `rg`, `ag`, `grep`, `egrep` and `fgrep`, called directly or run by
-//! `xargs`, GNU `parallel` or `find -exec`, `-execdir`, `-ok` or `-okdir`.
-//! A direct `grep` is a reader whose words neither guard judges, and
-//! `git grep` is a git read the startup check passes whole.
+//! `rg`, `ag`, `grep`, `egrep`, `fgrep` and `git grep`, called directly or
+//! run by `xargs`, GNU `parallel` given `-q` or `find -exec`, `-execdir`,
+//! `-ok` or `-okdir`. A direct `grep` is a reader whose words neither guard
+//! judges, and a direct `git grep` is a git read the startup check passes
+//! whole.
 //!
 //! A pattern word is every `-e` or `--regexp` value, and the first operand
 //! when no `-e`, `--regexp`, `-f` or `--file` supplies the pattern and no
@@ -32,12 +33,30 @@
 //! supplies both a pattern and a `--pre` program is past the guard, as
 //! that program's own writes are, and the OS sandbox is the backstop.
 //!
+//! Review round 1 narrowed which words count. A word is a pattern word
+//! only when the shell passes it as one argument with the text written:
+//! quoted, or free of unquoted glob, brace and `$` or backtick expansion.
+//! An unquoted `~/.*rc` in the pattern position expands into several
+//! words, the first the pattern and the rest searched paths, so it is
+//! judged as before. GNU `parallel` joins its command into a shell line
+//! unless `-q` or `--quote` is given, so without one no word of its command
+//! is a pattern word. The line naming `RIPGREP_CONFIG_PATH` anywhere,
+//! through an assignment, `export`, `declare`, `typeset`, `read` or
+//! `printf -v`, keeps the `rg` first operand judged.
+//!
+//! [`preprocessor`] reads the other half of the round: `--pre` or
+//! `--pre-glob` makes ripgrep run a program on every file it searches, so
+//! the guards judge each root it searches as a recursive writer's target.
+//!
 //! A pattern word is only left out of the judgment of what a command
 //! writes. Its text still counts where a rule reads what the line names,
 //! such as the closed rule of TSK-242: search output carries text that
 //! matches the pattern, which a later command on the line may run.
 
-use crate::hooks::git_guard::{basename, xargs_command};
+use super::startup::git_subcommand;
+use crate::hooks::git_guard::{
+    basename, command_argv, expand_commands, parallel_template, xargs_command,
+};
 
 /// One search tool's option grammar.
 struct Grammar {
@@ -374,51 +393,122 @@ const GREP: Grammar = Grammar {
     no_pattern: &["--help", "--version", "-V"],
 };
 
+/// `git grep`'s options (git 2.4x `git grep -h`). It has no `--regexp`;
+/// `-O` opens a pager and is not read.
+const GIT_GREP: Grammar = Grammar {
+    flags: "vaiIwrhHEGFPnlLzocpWq",
+    valued: "efABCm",
+    digits: true,
+    long_flags: &[
+        "cached",
+        "index",
+        "untracked",
+        "exclude-standard",
+        "recurse-submodules",
+        "invert-match",
+        "ignore-case",
+        "word-regexp",
+        "text",
+        "textconv",
+        "recursive",
+        "full-name",
+        "extended-regexp",
+        "basic-regexp",
+        "fixed-strings",
+        "perl-regexp",
+        "line-number",
+        "column",
+        "files-with-matches",
+        "name-only",
+        "files-without-match",
+        "null",
+        "only-matching",
+        "count",
+        "color",
+        "break",
+        "heading",
+        "show-function",
+        "function-context",
+        "and",
+        "or",
+        "not",
+        "all-match",
+        "quiet",
+    ],
+    long_valued: &[
+        "max-depth",
+        "threads",
+        "after-context",
+        "before-context",
+        "context",
+        "max-count",
+    ],
+    long_optional: &["color"],
+    pattern: Some(('e', "")),
+    pattern_file: Some(('f', "")),
+    no_pattern: &[],
+};
+
 /// The grammar of a search tool, by program name.
 fn grammar(program: &str) -> Option<&'static Grammar> {
     match program {
         "rg" => Some(&RG),
         "ag" => Some(&AG),
         "grep" | "egrep" | "fgrep" => Some(&GREP),
+        "git grep" => Some(&GIT_GREP),
         _ => None,
     }
 }
 
 /// The indices into `args` of the words `program` takes as search
 /// patterns, or that a search tool it runs takes: the command of an
-/// `xargs` or a GNU `parallel`, and each `find -exec`, `-execdir`, `-ok` or
-/// `-okdir` command. Empty when no search tool this reader knows runs, or
-/// when its call holds an option the reader does not know. `environment`
-/// is every `NAME=value` the command line sets, read for
-/// `RIPGREP_CONFIG_PATH`.
+/// `xargs`, of a GNU `parallel` given `-q`, and of each `find -exec`,
+/// `-execdir`, `-ok` or `-okdir`. Empty when no search tool this reader
+/// knows runs, or when its call holds an option the reader does not know.
+///
+/// `literal` holds, for each word of `args`, whether the shell passes it
+/// as one argument with the text written ([`command_argv_literal`]); any
+/// other word is never a pattern word, since the shell may expand it into
+/// several words, the first the pattern and the rest searched paths
+/// (review round 1). `configured` says the line names
+/// `RIPGREP_CONFIG_PATH` ([`names_ripgrep_config`]).
+///
+/// [`command_argv_literal`]: crate::hooks::git_guard::command_argv_literal
 pub(crate) fn pattern_words(
     program: &str,
     args: &[String],
-    environment: &[(String, String)],
+    literal: &[bool],
+    configured: bool,
 ) -> Vec<usize> {
     let run = |start: usize, command: &[String]| -> Vec<usize> {
         command
             .split_first()
             .map_or_else(Vec::new, |(program, rest)| {
-                own_pattern_words(basename(program), rest, environment)
+                own_pattern_words(basename(program), rest, configured)
                     .into_iter()
                     .map(|at| start + 1 + at)
                     .collect()
             })
     };
-    match program {
+    let words = match program {
         "xargs" => xargs_command(args)
             .map_or_else(Vec::new, |command| run(args.len() - command.len(), command)),
-        "parallel" => args
-            .iter()
-            .position(|arg| !arg.starts_with('-'))
-            .map_or_else(Vec::new, |start| run(start, &args[start..])),
+        // GNU parallel joins its command into a shell line unless `-q`, so
+        // a word quoted for the outer shell is expanded again.
+        "parallel" => match parallel_command(args) {
+            Some((start, end, true)) => run(start, &args[start..end]),
+            _ => Vec::new(),
+        },
         "find" => find_commands(args)
             .into_iter()
             .flat_map(|(start, end)| run(start, &args[start..end]))
             .collect(),
-        _ => own_pattern_words(program, args, environment),
-    }
+        _ => own_pattern_words(program, args, configured),
+    };
+    words
+        .into_iter()
+        .filter(|at| literal.get(*at).copied().unwrap_or(false))
+        .collect()
 }
 
 /// The words of `args` that are not [`pattern_words`], in order: what a
@@ -426,14 +516,148 @@ pub(crate) fn pattern_words(
 pub(crate) fn other_words<'a>(
     program: &str,
     args: &'a [String],
-    environment: &[(String, String)],
+    literal: &[bool],
+    configured: bool,
 ) -> Vec<&'a String> {
-    let patterns = pattern_words(program, args, environment);
+    let patterns = pattern_words(program, args, literal, configured);
     args.iter()
         .enumerate()
         .filter(|(at, _)| !patterns.contains(at))
         .map(|(_, word)| word)
         .collect()
+}
+
+/// Whether the command line names `RIPGREP_CONFIG_PATH` anywhere, as
+/// written or as the shell decodes its words: an assignment, `export`,
+/// `declare`, `typeset`, `read`, `printf -v` or any other use may set the
+/// file ripgrep reads options from (review round 1). Reading the value
+/// counts too; that only keeps the first operand judged.
+pub(crate) fn names_ripgrep_config(line: &str) -> bool {
+    const NAME: &str = "RIPGREP_CONFIG_PATH";
+    line.contains(NAME)
+        || expand_commands(line)
+            .iter()
+            .flat_map(|segment| command_argv(segment))
+            .any(|word| word.contains(NAME))
+}
+
+/// How a call runs a ripgrep preprocessor, the program `--pre` names,
+/// which ripgrep runs on every file it searches (review round 1, P-1).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Preprocessor {
+    /// No `--pre` or `--pre-glob` is given to a ripgrep the call runs.
+    None,
+    /// The indices into `args` of the roots it searches; empty when it
+    /// searches the working directory.
+    Roots(Vec<usize>),
+    /// It runs on files the call's input names (`xargs`, `parallel`),
+    /// which the guard cannot see.
+    FromInput,
+    /// Its options cannot be read, so its roots are unknown.
+    Unread,
+}
+
+/// How `program` with `args` runs a ripgrep preprocessor: directly, as the
+/// command of `xargs` or `parallel`, or from a `find -exec` command, whose
+/// roots are `find`'s starting points with the command's own roots.
+pub(crate) fn preprocessor(
+    program: &str,
+    args: &[String],
+    literal: &[bool],
+    configured: bool,
+) -> Preprocessor {
+    let runs = |command: &[String]| {
+        command.split_first().is_some_and(|(program, rest)| {
+            basename(program) == "rg" && rest.iter().any(|a| names_preprocessor(a))
+        })
+    };
+    match program {
+        "xargs" => xargs_command(args)
+            .filter(|command| runs(command))
+            .map_or(Preprocessor::None, |_| Preprocessor::FromInput),
+        "parallel" => match parallel_command(args) {
+            Some((start, end, _)) if runs(&args[start..end]) => Preprocessor::FromInput,
+            _ => Preprocessor::None,
+        },
+        "find" => {
+            let mut roots = Vec::new();
+            let mut found = false;
+            for (start, end) in find_commands(args) {
+                let command = &args[start..end];
+                if !runs(command) {
+                    continue;
+                }
+                found = true;
+                let literal = literal.get(start + 1..end).unwrap_or_default();
+                match own_roots(&command[1..], literal, configured) {
+                    Some(own) => roots.extend(
+                        own.into_iter()
+                            .map(|at| start + 1 + at)
+                            .filter(|at| args[*at] != "{}"),
+                    ),
+                    None => return Preprocessor::Unread,
+                }
+            }
+            if !found {
+                return Preprocessor::None;
+            }
+            let skip = args
+                .iter()
+                .take_while(|a| matches!(a.as_str(), "-H" | "-L" | "-P"))
+                .count();
+            roots.extend(
+                (skip..args.len())
+                    .take_while(|at| {
+                        let a = args[*at].as_str();
+                        !a.starts_with('-') && !matches!(a, "!" | "(")
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            // Without a starting point `find` walks its working directory.
+            if roots.is_empty() {
+                Preprocessor::Roots(Vec::new())
+            } else {
+                Preprocessor::Roots(roots)
+            }
+        }
+        "rg" if args.iter().any(|a| names_preprocessor(a)) => {
+            own_roots(args, literal, configured).map_or(Preprocessor::Unread, Preprocessor::Roots)
+        }
+        _ => Preprocessor::None,
+    }
+}
+
+/// Whether `arg` gives ripgrep's `--pre` or `--pre-glob`.
+fn names_preprocessor(arg: &str) -> bool {
+    ["--pre", "--pre-glob"].iter().any(|option| {
+        arg == *option || arg.strip_prefix(option).is_some_and(|r| r.starts_with('='))
+    })
+}
+
+/// The roots a ripgrep call searches: every operand that is not a pattern
+/// word, or `None` when its options cannot be read.
+fn own_roots(args: &[String], literal: &[bool], configured: bool) -> Option<Vec<usize>> {
+    let call = read_call(&RG, args)?;
+    let patterns: Vec<usize> = pattern_words("rg", args, literal, configured);
+    Some(
+        call.operands
+            .into_iter()
+            .filter(|at| !patterns.contains(at))
+            .collect(),
+    )
+}
+
+/// GNU `parallel`'s command, as the range of `args` it spans up to its
+/// first input separator, and whether `-q` or `--quote` is given.
+fn parallel_command(args: &[String]) -> Option<(usize, usize, bool)> {
+    let (mut start, quoted) = parallel_template(args);
+    if args.get(start).is_some_and(|a| a == "--") {
+        start += 1;
+    }
+    let end = (start..args.len())
+        .find(|at| matches!(args[*at].as_str(), ":::" | ":::+" | "::::" | "::::+"))
+        .unwrap_or(args.len());
+    (start < end).then_some((start, end, quoted))
 }
 
 /// The commands a `find` runs for its matches, each as the range of
@@ -460,12 +684,20 @@ fn find_commands(args: &[String]) -> Vec<(usize, usize)> {
     commands
 }
 
-/// The pattern words of a search tool's own call.
-fn own_pattern_words(
-    program: &str,
-    args: &[String],
-    environment: &[(String, String)],
-) -> Vec<usize> {
+/// The pattern words of a search tool's own call, `git grep` after git's
+/// global options included.
+fn own_pattern_words(program: &str, args: &[String], configured: bool) -> Vec<usize> {
+    if program == "git" {
+        return git_subcommand(args)
+            .filter(|(sub, _)| *sub == "grep")
+            .map_or_else(Vec::new, |(_, rest)| {
+                let start = args.len() - rest.len();
+                own_pattern_words("git grep", rest, configured)
+                    .into_iter()
+                    .map(|at| start + at)
+                    .collect()
+            });
+    }
     let Some(grammar) = grammar(program) else {
         return Vec::new();
     };
@@ -475,13 +707,9 @@ fn own_pattern_words(
     let mut words = call.option_patterns;
     // ripgrep's configuration file may supply the pattern, which then
     // makes the first operand a searched path.
-    let configured = program == "rg"
-        && !call.no_config
-        && environment
-            .iter()
-            .any(|(name, _)| name == "RIPGREP_CONFIG_PATH");
+    let configured = program == "rg" && !call.no_config && configured;
     if !call.supplied && !call.no_pattern && !configured {
-        words.extend(call.first_operand);
+        words.extend(call.operands.first());
     }
     words
 }
@@ -490,8 +718,8 @@ fn own_pattern_words(
 struct Call {
     /// The indices of the `-e` and `--regexp` values.
     option_patterns: Vec<usize>,
-    /// The index of the first operand.
-    first_operand: Option<usize>,
+    /// The indices of the operands, the first one first.
+    operands: Vec<usize>,
     /// An option supplies the pattern (`-e`, `--regexp`, `-f`, `--file`).
     supplied: bool,
     /// An option drops the pattern operand (`rg --files`).
@@ -504,7 +732,7 @@ struct Call {
 fn read_call(grammar: &Grammar, args: &[String]) -> Option<Call> {
     let mut call = Call {
         option_patterns: Vec::new(),
-        first_operand: None,
+        operands: Vec::new(),
         supplied: false,
         no_pattern: false,
         no_config: false,
@@ -516,7 +744,7 @@ fn read_call(grammar: &Grammar, args: &[String]) -> Option<Call> {
         if options && a == "--" {
             options = false;
         } else if !options || a == "-" || !a.starts_with('-') {
-            call.first_operand.get_or_insert(at);
+            call.operands.push(at);
         } else if let Some(long) = a.strip_prefix("--") {
             at = read_long(grammar, args, at, long, &mut call)?;
         } else {
@@ -614,18 +842,42 @@ mod tests {
         line.split_whitespace().map(str::to_string).collect()
     }
 
-    /// The pattern words of `line`, a program and its arguments.
+    /// The pattern words of `line`, a program and its arguments split at
+    /// blanks, every word read as written: the grammar alone.
     fn patterns(line: &str) -> Vec<String> {
-        patterns_with(line, &[])
+        patterns_with(line, false)
     }
 
-    fn patterns_with(line: &str, environment: &[(String, String)]) -> Vec<String> {
+    fn patterns_with(line: &str, configured: bool) -> Vec<String> {
         let all = words(line);
         let args = &all[1..];
-        pattern_words(&all[0], args, environment)
+        pattern_words(&all[0], args, &vec![true; args.len()], configured)
             .into_iter()
             .map(|at| args[at].clone())
             .collect()
+    }
+
+    /// The pattern words of `line` as the shell parses it.
+    fn shell_patterns(line: &str) -> Vec<String> {
+        let (all, literal) = crate::hooks::git_guard::command_argv_literal(line);
+        let args = &all[1..];
+        pattern_words(&all[0], args, &literal[1..], names_ripgrep_config(line))
+            .into_iter()
+            .map(|at| args[at].clone())
+            .collect()
+    }
+
+    /// The preprocessor reading of `line` as the shell parses it, roots by
+    /// their words.
+    fn roots(line: &str) -> Result<Vec<String>, Preprocessor> {
+        let (all, literal) = crate::hooks::git_guard::command_argv_literal(line);
+        let args = &all[1..];
+        match preprocessor(&all[0], args, &literal[1..], false) {
+            Preprocessor::Roots(roots) => {
+                Ok(roots.into_iter().map(|at| args[at].clone()).collect())
+            }
+            other => Err(other),
+        }
     }
 
     #[test]
@@ -688,7 +940,16 @@ mod tests {
     fn a_search_tool_another_program_runs_has_its_pattern_read() {
         assert_eq!(patterns("xargs -0 grep -l /x$"), ["/x$"]);
         assert_eq!(patterns("xargs -I {} rg -e /x$ {}"), ["/x$"]);
-        assert_eq!(patterns("parallel rg /x$ ::: docs"), ["/x$"]);
+        // GNU parallel runs its command through a shell unless `-q`.
+        assert!(patterns("parallel rg /x$ ::: docs").is_empty());
+        assert_eq!(patterns("parallel -q -j 4 rg /x$ ::: docs"), ["/x$"]);
+        assert_eq!(
+            patterns("parallel --jobs 4 --quote rg /x$ ::: docs"),
+            ["/x$"]
+        );
+        assert_eq!(patterns("xargs git grep /x$"), ["/x$"]);
+        assert_eq!(patterns("xargs git -C sub grep -n -e /x$"), ["/x$"]);
+        assert_eq!(patterns("find docs -exec git grep /x$ {} +"), ["/x$"]);
         assert_eq!(
             patterns("find . -exec rg /x$ {} ; -execdir egrep -e /y {} +"),
             ["/x$", "/y"]
@@ -698,11 +959,84 @@ mod tests {
     }
 
     #[test]
-    fn a_ripgrep_configuration_set_on_the_line_may_supply_the_pattern() {
-        let set = [("RIPGREP_CONFIG_PATH".to_string(), "rc".to_string())];
-        assert!(patterns_with("rg /x$ docs", &set).is_empty());
-        assert_eq!(patterns_with("rg -e /x$ docs", &set), ["/x$"]);
-        assert_eq!(patterns_with("rg --no-config /x$ docs", &set), ["/x$"]);
-        assert_eq!(patterns_with("grep /x$ docs", &set), ["/x$"]);
+    fn a_ripgrep_configuration_the_line_names_may_supply_the_pattern() {
+        assert!(patterns_with("rg /x$ docs", true).is_empty());
+        assert_eq!(patterns_with("rg -e /x$ docs", true), ["/x$"]);
+        assert_eq!(patterns_with("rg --no-config /x$ docs", true), ["/x$"]);
+        assert_eq!(patterns_with("grep /x$ docs", true), ["/x$"]);
+        for line in [
+            "RIPGREP_CONFIG_PATH=rc rg x",
+            "read -r RIPGREP_CONFIG_PATH <<< rc; rg x",
+            "printf -v RIPGREP_CONFIG_PATH rc; rg x",
+            "declare -x RIPGREP_CONFIG_PATH; rg x",
+            "typeset RIPGREP_CONFIG_PATH=rc; rg x",
+            "export RIPGREP_CONF''IG_PATH=rc; rg x",
+        ] {
+            assert!(names_ripgrep_config(line), "{line}");
+        }
+        assert!(!names_ripgrep_config("rg x docs"));
+    }
+
+    #[test]
+    fn a_word_the_shell_can_expand_is_never_a_pattern() {
+        assert_eq!(
+            shell_patterns("rg '/CHANGELOG.md$' docs"),
+            ["/CHANGELOG.md$"]
+        );
+        assert_eq!(shell_patterns("rg \"$HOME/x\" docs"), ["$HOME/x"]);
+        assert_eq!(shell_patterns("rg -e '^/etc/.*' docs"), ["^/etc/.*"]);
+        assert_eq!(shell_patterns("rg 'a b'c docs"), ["a bc"]);
+        for line in [
+            "rg ~/.*rc",
+            "rg $HOME/.*rc",
+            "rg ~/.[bz]*",
+            "rg ~/.?shrc",
+            "rg ~/.{a,zsh}rc",
+            "rg ~/.zshrc",
+            "rg $P docs",
+            "rg `echo x` docs",
+            "rg $(echo x) docs",
+            "rg -e x* docs",
+            "rg =ls docs",
+            "xargs rg ~/.*rc",
+            "find . -exec rg ~/.?shrc {} +",
+            "parallel -q rg ~/.*rc ::: x",
+            "parallel rg '/x$' ::: x",
+        ] {
+            assert!(shell_patterns(line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_preprocessor_judges_every_root_it_searches() {
+        assert_eq!(roots("rg x docs"), Err(Preprocessor::None));
+        assert_eq!(roots("rg --pre tee x docs"), Ok(vec!["docs".to_string()]));
+        assert_eq!(roots("rg --pre tee x"), Ok(vec![]));
+        assert_eq!(
+            roots("rg --hidden --pre=tee x ~ docs").map(|r| r.len()),
+            Ok(2)
+        );
+        assert_eq!(
+            roots("rg --pre-glob '*.pdf' x a"),
+            Ok(vec!["a".to_string()])
+        );
+        // A word the shell expands is a root, not a pattern.
+        assert_eq!(roots("rg --pre tee ~/.*rc").map(|r| r.len()), Ok(1));
+        assert_eq!(roots("rg --files --pre tee a b").map(|r| r.len()), Ok(2));
+        assert_eq!(
+            roots("rg --frobnicate --pre tee x"),
+            Err(Preprocessor::Unread)
+        );
+        assert_eq!(roots("xargs rg --pre tee x"), Err(Preprocessor::FromInput));
+        assert_eq!(
+            roots("parallel -j 2 rg --pre tee x ::: a"),
+            Err(Preprocessor::FromInput)
+        );
+        assert_eq!(
+            roots("find a b -exec rg --pre tee x {} +"),
+            Ok(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(roots("find -exec rg --pre tee x {} +"), Ok(vec![]));
+        assert_eq!(roots("find a -exec rg x {} +"), Err(Preprocessor::None));
     }
 }
