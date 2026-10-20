@@ -129,7 +129,8 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
             eprintln!("estimate outcomes: report serialization failed");
             return 1;
         };
-        println!("{text}");
+        // Values exact, no hidden character in the bytes (TSK-388).
+        println!("{}", codeflow_core::git::display_json(&text));
     } else {
         print!("{}", report.render());
     }
@@ -157,7 +158,8 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
             eprintln!("estimate check: report serialization failed");
             return 1;
         };
-        println!("{text}");
+        // Values exact, no hidden character in the bytes (TSK-388).
+        println!("{}", codeflow_core::git::display_json(&text));
     } else {
         for finding in &report.findings {
             println!(

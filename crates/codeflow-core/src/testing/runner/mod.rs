@@ -815,7 +815,12 @@ fn spawn_reader_with_progress<R: Read + Send + 'static>(
                         || line.contains(" PASS ")
                         || line.contains(" FAIL ")
                     {
-                        eprintln!("[codeflow test] {name}: {line}");
+                        // A target's own output: shown escaped (TSK-388).
+                        eprintln!(
+                            "[codeflow test] {}: {}",
+                            crate::git::display_output(name),
+                            crate::git::display_output(line)
+                        );
                     }
                 }
             }

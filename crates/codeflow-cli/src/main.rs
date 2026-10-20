@@ -1,15 +1,17 @@
 //! codeflow — the AI-development discipline layer CLI.
 
-// The output sink (TSK-388). These shadow the standard printing macros for
-// this whole crate: every line the CLI prints goes through
+// The output sink (TSK-388). These shadow `println!`, `print!`, `eprintln!`
+// and `eprint!` for this crate: what they print goes through
 // `codeflow_core::git::display_output`, which escapes each control, format
 // and separator character other than a line break or tab. CodeFlow quotes
 // branch names a remote chose, record titles and policy values from a
-// checkout, and errors that carry them; none of them reaches the terminal
-// raw. A field that can hold a line break is also shown through
-// `cmd::shown`, so it cannot start a line of its own. JSON is printed
-// through `codeflow_core::git::display_json` first, which leaves this sink
-// nothing to change.
+// checkout, and errors that carry them. A field that can hold a line break
+// is also shown through `cmd::shown`, so it cannot start a line of its own.
+// JSON goes through `codeflow_core::git::display_json` first, which leaves
+// this sink nothing to change. Not covered: `write!` and `writeln!` to a
+// terminal writer (each escapes its own fields), code in other crates
+// (`codeflow-core` escapes its own prints), and the standard library's
+// panic message and clap's usage and error output.
 macro_rules! println {
     () => {
         ::std::println!()
@@ -226,7 +228,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
     let base = match scaffold::release_pin::release_url() {
         Ok(base) => base,
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            eprintln!(
+                "codeflow update --pin: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -241,7 +246,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            eprintln!(
+                "codeflow update --pin: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
@@ -253,7 +261,10 @@ fn print_workspace_hint(root: &std::path::Path) {
     let policy = match codeflow_core::hooks::policy::Policy::load(root) {
         Ok(policy) => policy.git,
         Err(error) => {
-            eprintln!("codeflow: cannot read workspace policy: {error}");
+            eprintln!(
+                "codeflow: cannot read workspace policy: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return;
         }
     };

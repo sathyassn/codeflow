@@ -204,10 +204,21 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "target": entry.target,
             "state": entry.state.as_str(),
             "reason": entry.reason,
-            "branches": entry.branches,
+            // The names git stores; `display_json` escapes them on output.
+            "branches": entry.branch_names,
             "informational_branches": entry.informational_branches,
         })).collect::<Vec<_>>(),
-        "conflicts": backlog.conflicts,
+        "conflicts": backlog
+            .conflicts
+            .keys()
+            .filter_map(|id| {
+                backlog
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.task_id == id)
+                    .map(|entry| (id.clone(), entry.branch_names.clone()))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>(),
     })
 }
 

@@ -224,6 +224,39 @@ fn status_and_work_next_show_names_and_titles_escaped() {
         "{titles:?}"
     );
     assert_eq!(value["snapshot"][0]["ref"], C1);
+    // Round 3 (Grok F-2): a claim branch decodes to the name git stores;
+    // the text line shows its display form.
+    let claimed = value["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(claimed["branches"][0], format!("task/TSK-001-{C1}"));
+}
+
+/// Round 3 (security S2): `codeflow test` relays a target's progress lines,
+/// which a checkout's test command writes; they are shown escaped.
+#[test]
+fn the_test_runner_relays_progress_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    write(
+        root,
+        ".codeflow/test-config.json",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"hostile\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"printf 'Summary ev\\\\342\\\\200\\\\256lim \\\\302\\\\233x\\\\n'\"}}}]}\n",
+    );
+    let out = codeflow(root)
+        .args(["test", "--mode", "quick"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    expect(
+        "codeflow test",
+        &err,
+        &["[codeflow test] hostile: Summary ev\\u{202e}lim \\x9bx"],
+    );
 }
 
 #[test]

@@ -76,8 +76,13 @@ pub struct Entry {
     pub state: State,
     /// Why it is not ready (empty when ready or active).
     pub reason: String,
-    /// Visible, unlanded branches carrying the task id.
+    /// Visible, unlanded branches carrying the task id, in display form
+    /// (`GitName::display`), for text output.
     pub branches: Vec<String>,
+    /// The same branches as git stores them, for machine output: the exact
+    /// text, or the display form for a name that is not valid UTF-8, which
+    /// no text can hold exactly (TSK-388).
+    pub branch_names: Vec<String>,
     /// Branches on unrelated remotes, reported as information rather than claims.
     pub informational_branches: Vec<String>,
 }
@@ -160,6 +165,13 @@ impl Backlog {
                 .unwrap_or("never (local refs only)")
         )
     }
+}
+
+/// `name` as machine output carries it: the exact text, or the display
+/// form for a name that is not valid UTF-8, which no text can hold.
+fn exact_text(name: &GitName) -> String {
+    name.rule_text()
+        .map_or_else(|_| name.display().to_string(), str::to_owned)
 }
 
 /// The identity of a target name, for comparing a branch with declared
@@ -820,10 +832,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             // The report shows names; the decisions above used exact bytes.
             out.landed
                 .extend(done.iter().map(|name| name.display().to_string()));
-            let names: Vec<String> = names
+            let (branch_names, names): (Vec<String>, Vec<String>) = names
                 .iter()
-                .map(|name| name.display().to_string())
-                .collect();
+                .map(|name| (exact_text(name), name.display().to_string()))
+                .unzip();
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
@@ -854,6 +866,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 state,
                 reason,
                 branches: names,
+                branch_names,
                 informational_branches: carried.information(&record.id, reference),
             });
         }
