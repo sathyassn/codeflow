@@ -431,7 +431,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "a65753bc53b30d1d74d6f82dec32da45bc07a0edb021eaae9e9b07ea7863063b",
+      "sha256": "30b85cbb06470ac75fcf2656d99fbfdea87746b33398741a58e19e024def02ea",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -1271,7 +1271,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "a65753bc53b30d1d74d6f82dec32da45bc07a0edb021eaae9e9b07ea7863063b",
+      "sha256": "30b85cbb06470ac75fcf2656d99fbfdea87746b33398741a58e19e024def02ea",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1799,13 +1799,13 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "b0143ee287c7676cf25dbf5365ae6ffa6e99f33338bfc27cd2b7dab93401ddc1",
+      "sha256": "84b501509997a8579f13ecdb238c9432f2e5978e547719cdb2eec8dc11522dca",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "b95b9c808895a020e517b6252f0fa6a0a88406e88e6df61fd7c37b10237cf228",
+      "sha256": "f74e65e5839e96c4c2bc4df4eb09dc25c9a30a76384d73904403b0bbba53abe9",
       "exec": false
     },
     ".gitignore": {

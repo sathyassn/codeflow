@@ -43,13 +43,9 @@ const PRESENT_SCHEMAS: &[&str] = &[
     "utility-tokens-v1.schema.json",
 ];
 
-/// Shared isolated `CODEFLOW_HOME` so the suite never writes the developer's
-/// real `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));

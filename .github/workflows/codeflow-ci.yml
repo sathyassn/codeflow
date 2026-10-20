@@ -891,12 +891,16 @@ jobs:
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # The exit traps remove the folders the step makes in the runner's
+          # temp directory; the report and log below stay there.
           tool=$(mktemp -d "$RUNNER_TEMP/gitleaks-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$tool/$archive"
           printf '%s  %s\n' "$GITLEAKS_SHA256" "$tool/$archive" | sha256sum -c -
           tar -xzf "$tool/$archive" -C "$tool" gitleaks
           workspace=$(pwd -P)
           trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
+          trap 'rm -rf "$tool" "$trusted" || true' EXIT
           mkdir "$trusted/tree"
           real_git=$(command -v git)
           mkdir "$trusted/bin"
@@ -1456,6 +1460,7 @@ jobs:
           # Download outside the checkout, so a link the change commits at the
           # download path cannot redirect the write.
           tool=$(mktemp -d "${RUNNER_TEMP:?}/osv-tool.XXXXXX")
+          trap 'rm -rf "$tool" || true' EXIT
           curl -sSfL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o "$tool/osv-scanner"
           printf '%s  %s\n' "$OSV_SHA256" "$tool/osv-scanner" | sha256sum -c -
           chmod +x "$tool/osv-scanner"

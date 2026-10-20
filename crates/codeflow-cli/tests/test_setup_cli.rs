@@ -4,11 +4,9 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
@@ -260,4 +258,52 @@ fn unsafe_or_unknown_template_name_cannot_read_arbitrary_files() {
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(!config_path(dir.path()).exists());
+}
+
+/// Makes the home this process's tests share, and fails when
+/// `SHARED_HOME_PROBE_FAILS` is set. The next test runs it in a process of
+/// its own.
+#[test]
+fn a_test_process_makes_its_shared_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = codeflow(dir.path(), &["test", "setup", "--list-templates"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(isolated_home().is_dir());
+    assert!(
+        std::env::var_os("SHARED_HOME_PROBE_FAILS").is_none(),
+        "failing as asked"
+    );
+}
+
+/// TSK-386: the shared home is removed when the test process exits, after a
+/// passing and after a failing test, so no run of the suite leaves it in the
+/// temporary directory.
+#[test]
+fn the_shared_home_is_removed_when_the_test_process_exits() {
+    for fails in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut probe = Command::new(std::env::current_exe().unwrap());
+        probe
+            .args(["--exact", "a_test_process_makes_its_shared_home"])
+            .args(["--test-threads", "1"])
+            .env("TMPDIR", temp.path())
+            .env("TMP", temp.path())
+            .env("TEMP", temp.path())
+            .env_remove("SHARED_HOME_PROBE_FAILS");
+        if fails {
+            probe.env("SHARED_HOME_PROBE_FAILS", "1");
+        }
+        let out = probe.output().unwrap();
+        let printed = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out.status.success(), !fails, "{printed}");
+        assert!(
+            printed.contains("1 passed") || printed.contains("1 failed"),
+            "{printed}"
+        );
+        let left: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(left.is_empty(), "fails={fails}: left {left:?}");
+    }
 }

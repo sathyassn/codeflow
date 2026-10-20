@@ -136,7 +136,7 @@ codeflow_install() {
   else
     echo "codeflow: warning: no release digest is pinned in .codeflow/project.toml at $3, so codeflow $1 is checked only against its release's own sha256.sum; run \`codeflow update --pin $1\` and land it to pin the reviewed digest" >&2
   fi
-  work=$(mktemp -d)
+  work=$(mktemp -d "${codeflow_tmp}/release.XXXXXX")
   curl -fsSL "${url}/sha256.sum" -o "${work}/sha256.sum" ||
     codeflow_fail "codeflow $1 has no published checksum file (sha256.sum); refusing an unverified binary"
   expected=$(awk -v a="$asset" '{n=$2; sub(/^\*/, "", n)} n == a {print $1; exit}' "${work}/sha256.sum")
@@ -175,7 +175,18 @@ for base in $(git merge-base --all "$target" "$head" || true); do
   if [ "$head_pin" = "$(codeflow_pin "$base")" ]; then kept=yes; else kept=no; break; fi
 done
 [ "$kept" != yes ] || head_pin="$pin"
-bin=$(mktemp -d)
+# Everything the run downloads and checks out goes in one temporary folder
+# of its own, made under TMPDIR, which macOS's `mktemp -d` would ignore.
+# The exit trap removes that folder and nothing else, after a failure too,
+# and the signal traps make every sh run it when the runner stops the job.
+codeflow_tmp=$(mktemp -d "${TMPDIR:-/tmp}/codeflow.XXXXXX")
+case $codeflow_tmp in /*) ;; *) codeflow_tmp="$(pwd)/${codeflow_tmp}" ;; esac
+readonly codeflow_tmp
+trap 'rm -rf "$codeflow_tmp" || true' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+bin="${codeflow_tmp}/bin"
 codeflow_install "$pin" "$bin" "$target"
 PATH="${bin}:${PATH}"
 export PATH
@@ -183,7 +194,7 @@ lowered=
 if [ "$head_pin" != "$pin" ]; then
   if [ -n "$head_pin" ] && codeflow_older "$pin" "$head_pin"; then
     # Upgrade step one: test the candidate the head pins, never enforce with it.
-    candidate=$(mktemp -d)
+    candidate="${codeflow_tmp}/candidate"
     codeflow_install "$head_pin" "$candidate" "$head"
     "${candidate}/codeflow" --version
     "${candidate}/codeflow" validate --docs
@@ -193,9 +204,9 @@ if [ "$head_pin" != "$pin" ]; then
 fi
 # The target's binary judges the range from a checkout of the target, so the
 # target's policy applies and the head is read only as git data.
-judge=$(mktemp -d)
+judge="${codeflow_tmp}/judge"
 git worktree add -q --detach "${judge}/target" "$target"
-trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
+trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true' EXIT
 branch=$(git symbolic-ref --short -q HEAD || true)
 (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
 # Refuse a lowered pin before the project's own code runs, so nothing the
@@ -209,19 +220,23 @@ branch=$(git symbolic-ref --short -q HEAD || true)
 # update` never writes it.
 # The hook runs with the gate's authority, like this file, so it is
 # reviewed as this file is. These lines keep it from skipping the gate
-# by accident: the shell variables naming the binary and folder are
-# read-only (the binary itself is not), set -eu holds again once it
-# returns, and a run it ends (an `exit`) fails.
+# by accident: the shell variables naming the binary, the folder and the
+# exit action are read-only (the binary itself is not), set -eu and the
+# exit trap hold again once it returns, and a run it ends (an `exit`)
+# fails while it leaves the exit trap in place. The cleanup never changes
+# the run's status.
 codeflow_bin=$(command -v codeflow)
 codeflow_root=$(pwd)
-readonly codeflow_bin codeflow_root
+codeflow_exit='codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; rm -rf "$codeflow_tmp" || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"'
+readonly codeflow_bin codeflow_root codeflow_exit
 codeflow_gated=
-trap 'codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"' EXIT
+trap "$codeflow_exit" EXIT
 if [ -f .codeflow/ci-setup.sh ]; then
   echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
   . ./.codeflow/ci-setup.sh
   set -eu
   cd "$codeflow_root"
+  trap "$codeflow_exit" EXIT
 fi
 codeflow_gated=1
 "$codeflow_bin" test --strict

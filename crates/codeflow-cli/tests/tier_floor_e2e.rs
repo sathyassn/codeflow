@@ -55,13 +55,9 @@ const METHOD_ARTIFACTS: [&str; 5] = [
     ".claude/workflows/pipeline.workflow.js",
 ];
 
-/// Shared isolated `CODEFLOW_HOME` so the suite never writes the developer's
-/// real `~/.codeflow/registry.json` (the `init_e2e.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 /// Runs the binary under test with the git-hook shims pointed back at it (they
 /// `exec codeflow` from PATH) and host git config neutralized.
