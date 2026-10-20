@@ -1629,7 +1629,7 @@ fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             if matches!(file, "-" | "/dev/stdin") {
-                let elsewhere = line_without_reads(line, args, &reads);
+                let elsewhere = line_without_reads(line, "sed", args, &reads);
                 words.extend(words_of(std::iter::once(&elsewhere)));
             } else if !Path::new(file).is_absolute() {
                 return UnknownDirUse::Uncertain(format!(
@@ -1674,21 +1674,23 @@ fn sed_read_flags(args: &[String]) -> Vec<bool> {
 }
 
 /// The command line a `sed` script from its input can come from, without
-/// the files this `sed` only reads (TSK-216 round 8). The line is judged
-/// command by command: every other command, producers, heredoc bodies and
-/// here-strings included, is kept whole. In the one command whose argument
-/// list is this `sed`'s own, the words at the read operands' positions are
-/// dropped; nothing is searched for by text. When no command, or more than
-/// one, has that argument list, the position cannot be established and
-/// the whole line is kept.
-fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
+/// the files this `sed` only reads (TSK-216 round 8), or the line an
+/// `xargs` or a `find` is judged against, without the search
+/// patterns of the command it runs (TSK-380). The line is judged command
+/// by command: every other command, producers, heredoc bodies and
+/// here-strings included, is kept whole. In the one command that runs
+/// `program` with this argument list, the words at the dropped positions
+/// are left out; nothing is searched for by text. When no command, or
+/// more than one, has that argument list, the position cannot be
+/// established and the whole line is kept.
+fn line_without_reads(line: &str, program: &str, args: &[String], reads: &[bool]) -> String {
     let segments = expand_commands(line);
     let mut own = Vec::new();
     for (at, segment) in segments.iter().enumerate() {
         let mut tokens = shell_tokens(segment);
         strip_reserved_words(&mut tokens);
         let matches = strip_launchers(&tokens)
-            .is_some_and(|(program, rest)| basename(program) == "sed" && rest == args);
+            .is_some_and(|(name, rest)| basename(name) == program && rest == args);
         if matches {
             own.push((at, tokens));
         }
@@ -4448,7 +4450,7 @@ fn sed_text_violation(
         .zip(&scripts)
         .filter(|((_, read), script)| !**read && !**script)
         .map(|((arg, _), _)| arg);
-    let without_scripts = line_without_reads(line, args, &scripts);
+    let without_scripts = line_without_reads(line, "sed", args, &scripts);
     if let Some(p) = unresolved_names_enforcement(filled, &without_scripts, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
@@ -4462,7 +4464,7 @@ fn sed_text_violation(
         .zip(&scripts)
         .map(|(read, script)| *read || *script)
         .collect();
-    let elsewhere = line_without_reads(line, args, &quiet);
+    let elsewhere = line_without_reads(line, "sed", args, &quiet);
     let line = elsewhere.as_str();
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
@@ -4665,11 +4667,19 @@ fn find_action_violation(
         rest[..end].iter().map(String::as_str).collect()
     };
     if find_mutates(rest) {
-        if let Some(p) = rest
+        // A search pattern in a command it runs names nothing (TSK-380).
+        let (searched, patterns) = line_without_patterns("find", args, line);
+        let words: Vec<&String> = rest
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !patterns.contains(&(skip + at)))
+            .map(|(_, word)| word)
+            .collect();
+        if let Some(p) = words
             .iter()
             .find_map(|a| enforcement_text(a))
             .map(str::to_string)
-            .or_else(|| unresolved_names_enforcement(rest, line, cwd, payload_cwd))
+            .or_else(|| unresolved_names_enforcement(words, &searched, cwd, payload_cwd))
         {
             return Some(hook_integrity_violation(
                 level,
@@ -4895,6 +4905,23 @@ pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     args.get(at..).filter(|c| !c.is_empty())
 }
 
+/// The command line an `xargs` or a `find` is judged against, without the
+/// search patterns of the command it runs, and the positions of those
+/// patterns in `args` (TSK-380): a pattern is text the search matches,
+/// never a path the command reads from its input or changes, so it names
+/// nothing on the line. GNU `parallel` is not read this way: the commands
+/// it builds are judged as segments of their own, which keep the pattern.
+fn line_without_patterns(cmd: &str, args: &[String], line: &str) -> (String, Vec<usize>) {
+    let segments = expand_commands(line);
+    let environment = crate::security::unresolved::line_assignments(&segments);
+    let patterns = crate::security::search_pattern::pattern_words(cmd, args, &environment);
+    if patterns.is_empty() {
+        return (line.to_string(), patterns);
+    }
+    let drop: Vec<bool> = (0..args.len()).map(|at| patterns.contains(&at)).collect();
+    (line_without_reads(line, cmd, args, &drop), patterns)
+}
+
 /// An `xargs` takes its paths from its input, which the guard cannot see.
 /// Its command is judged as written, and one that changes files is refused
 /// when the command line names an enforcement path or a worktree folder,
@@ -4911,6 +4938,8 @@ fn xargs_violation(
     if read_only_program(command) {
         return None;
     }
+    let (line, _) = line_without_patterns("xargs", args, line);
+    let line = line.as_str();
     if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
         return Some(v);
     }
@@ -14643,7 +14672,7 @@ mod tests {
                 .find(|tokens| tokens.first().is_some_and(|p| p == "sed"))
                 .expect("a sed command");
             let args = &sed[1..];
-            line_without_reads(line, args, &sed_read_flags(args))
+            line_without_reads(line, "sed", args, &sed_read_flags(args))
         };
         let escaped =
             judged("sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED");

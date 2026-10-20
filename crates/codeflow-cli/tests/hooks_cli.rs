@@ -9566,3 +9566,102 @@ fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hoo
         );
     }
 }
+
+/// TSK-380 AC-1 and AC-2 (issue 242): with the built binary, neither guard
+/// refuses a search pattern that looks like an absolute or unresolved path,
+/// for each search tool and each way it takes a pattern, nor git-guard a
+/// pattern that spells an enforcement path in a command `xargs` or
+/// `find -exec` runs. Exec-guard still refuses a path operand after the
+/// pattern, a pattern file, a `--pre` program and a redirect into a
+/// startup file, and git-guard the same forms on an enforcement path.
+#[test]
+fn guards_read_a_search_pattern_as_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(".zshrc"), "# fixture\n").unwrap();
+    enforced_repo(&root);
+    let run = |hook: &str, command: &str| {
+        let payload = serde_json::json!({
+            "tool_name": "Bash", "tool_input": {"command": command}, "cwd": root,
+        });
+        run_with_stdin(
+            codeflow()
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env("SHELL", "/bin/zsh")
+                .env_remove("ZDOTDIR")
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("RIPGREP_CONFIG_PATH")
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(&root),
+            &payload.to_string(),
+        )
+    };
+    let mut allowed = vec![
+        "rg --files | rg '/CHANGELOG.md$'".to_string(),
+        "grep -rn '/etc/hosts' docs/".to_string(),
+        "rg --files | xargs rg '.claude/settings.json'".to_string(),
+        "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
+        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
+    ];
+    for form in ["'/CHANGELOG.md$'", "'^/etc/.*'", "\"$HOME/x\""] {
+        for tool in ["rg", "grep", "egrep", "fgrep", "git grep", "ag"] {
+            allowed.push(format!("{tool} {form} docs"));
+            // `ag` has no `-e`, and `git grep` no `--regexp`.
+            if tool != "ag" {
+                allowed.push(format!("{tool} -e {form} docs"));
+            }
+            if !matches!(tool, "ag" | "git grep") {
+                allowed.push(format!("{tool} --regexp {form} docs"));
+            }
+            if tool != "git grep" {
+                allowed.push(format!("rg --files | xargs {tool} {form}"));
+            }
+        }
+    }
+    let mut wrong = Vec::new();
+    for command in &allowed {
+        for hook in ["exec-guard", "git-guard"] {
+            let out = run(hook, command);
+            if out.status.code() != Some(0) {
+                let err = String::from_utf8_lossy(&out.stderr);
+                wrong.push(format!("{hook} should allow: {command}: {err}"));
+            }
+        }
+    }
+    for command in [
+        "rg x > ~/.zshrc",
+        "grep x docs/a.md > ~/.zshrc",
+        "rg '/x$' ~/.zshrc",
+        "rg -e '/x$' ~/.zshrc",
+        "rg -f ~/.zshrc docs",
+        "rg --pre ~/.zshrc x docs",
+        "ag x ~/.zshrc",
+        "rg --files | xargs grep '/x$' ~/.zshrc",
+    ] {
+        let out = run("exec-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("security.shell_startup") {
+            wrong.push(format!("exec-guard should refuse: {command}: {err}"));
+        }
+    }
+    for command in [
+        "rg --files > .claude/settings.json",
+        "rg --files | xargs rg x .claude/settings.json",
+        "rg --files | xargs rg -f .claude/settings.json",
+        "echo .claude/settings.json | xargs rg x",
+        "find docs -exec rg x .claude/settings.json \\;",
+        "grep -l x .claude/settings.json | xargs sed -i 's/a/b/'",
+        "sed -i 's/a/b/' .claude/settings.json",
+    ] {
+        let out = run("git-guard", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("git-guard should refuse: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

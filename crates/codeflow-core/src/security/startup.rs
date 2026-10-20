@@ -2333,13 +2333,16 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // A writer the table lists is judged by the one reader both guards use:
     // what it copies, the files its options and operands write, an option
     // the table does not list, and where it places files (review round 23).
+    // A search pattern is text the tool matches, never a file it writes
+    // (TSK-380), so it is not judged; every other word is.
     let entry = super::unresolved::has_writer_entry(name);
+    let judged = super::search_pattern::other_words(name, args, &line.environment);
     if entry {
         if let Some(v) = ExecWriter::judge(name, args, line, &dirs) {
             return Some(v);
         }
     } else {
-        for word in args {
+        for word in &judged {
             if let Some(v) = word_violation(name, word, line, &dirs) {
                 return Some(v);
             }
@@ -2349,7 +2352,7 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // a class file, refuses as an unresolved redirect does. A word that
     // reads as a path was judged above.
     if line.names(line.text).is_some() && line.expands_unread(segment) {
-        if let Some(code) = args.iter().find(|word| {
+        if let Some(code) = judged.iter().find(|word| {
             !path_like(value_of(word))
                 && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
         }) {

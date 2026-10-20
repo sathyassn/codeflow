@@ -2252,3 +2252,96 @@ fn user_git_config_writes_refuse_under_hook_integrity() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// TSK-380 (issue 242): a search tool's pattern is text it matches, never
+/// a file it writes, whatever path it looks like, as the first operand,
+/// an `-e` or `--regexp` value, or under `xargs` or `find -exec`. A path
+/// operand after it, a pattern file, `rg --pre`, an option the reader does
+/// not know and a redirect are judged as before.
+#[test]
+fn a_search_pattern_is_never_a_write_target() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "rg --files | rg '/CHANGELOG.md$'",
+        "rg '/CHANGELOG.md$'",
+        "rg -n '^/etc/.*' docs",
+        "rg \"$HOME/x\" docs",
+        "rg -e '/CHANGELOG.md$' docs",
+        "rg -ie '^/etc/.*' docs",
+        "rg --regexp '/CHANGELOG.md$' docs",
+        "rg --regexp=\"$HOME/x\" docs",
+        "rg -e x -e '/CHANGELOG.md$' docs",
+        "rg -- '/CHANGELOG.md$'",
+        "rg --no-config '~/.zshrc' docs",
+        "rg --no-config -e 'source ~/.bashrc' docs",
+        "rg --no-config '~/.gitconfig' docs",
+        "timeout 5 rg '/CHANGELOG.md$'",
+        "env rg -C 2 '/CHANGELOG.md$' docs",
+        "ag '/CHANGELOG.md$' docs",
+        "ag -C 2 '^/etc/.*'",
+        "ag \"$HOME/x\" docs",
+        "grep -rn '/etc/hosts' docs/",
+        "grep -rn '~/.zshrc' docs/",
+        "egrep '^/etc/.*' notes.txt",
+        "fgrep \"$HOME/x\" notes.txt",
+        "grep -e '/CHANGELOG.md$' notes.txt",
+        "grep --regexp='~/.zshrc' notes.txt",
+        "git grep '/CHANGELOG.md$'",
+        "git grep -e '~/.zshrc'",
+        "rg --files | xargs grep -l '/CHANGELOG.md$'",
+        "rg --files | xargs -0 egrep -e '^/etc/.*'",
+        "rg --files | xargs rg --regexp '/CHANGELOG.md$'",
+        "find docs -name '*.md' -exec fgrep -l '/CHANGELOG.md$' {} +",
+        "find docs -exec rg \"$HOME/x\" {} \\;",
+    ] {
+        let found = f.judge(command);
+        if !found.is_empty() {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    // A pattern that names a startup file is not judged as a write target,
+    // but its text still names the file on the line: search output carries
+    // text that matches it, so the closed rule of TSK-242 holds where the
+    // line runs a program that can run a command of its own (`rg` reading
+    // a configuration) or hands its output on.
+    for command in [
+        "rg '~/.zshrc' docs",
+        "ag \"$HOME/.zshrc\" docs",
+        "rg --no-config -e 'echo x >> ~/.zshrc' notes.txt | sh",
+        "grep 'echo x >> ~/.zshrc' notes.txt | sh",
+    ] {
+        let found = f.judge(command);
+        let line_rule = found.iter().any(|v| {
+            v.rule == RULE && !v.message.contains("takes") && !v.message.contains("targets")
+        });
+        if !line_rule {
+            wrong.push(format!("not held to the line rule: {command}: {found:?}"));
+        }
+    }
+    for command in [
+        "rg x > ~/.zshrc",
+        "rg '/CHANGELOG.md$' > H/.bashrc",
+        "grep x notes.txt > ~/.zshrc",
+        "egrep x notes.txt >> ~/.bashrc",
+        "rg '/x$' ~/.zshrc",
+        "rg -e '/x$' ~/.zshrc",
+        "rg -f ~/.zshrc docs",
+        "rg -f pats.txt ~/.zshrc",
+        "rg --pre ~/.zshrc x docs",
+        "rg --pre=./x '/x$' ~/.zshrc",
+        "rg --files ~/.zshrc",
+        "rg --frobnicate ~/.zshrc docs",
+        "RIPGREP_CONFIG_PATH=rgconfig rg ~/.zshrc",
+        "ag x ~/.zshrc",
+        "ag -g x ~/.zshrc",
+        "rg --files | xargs grep '/x$' ~/.zshrc",
+        "find docs -exec grep -l x ~/.zshrc \\;",
+        "rg --files | tee ~/.zshrc",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
