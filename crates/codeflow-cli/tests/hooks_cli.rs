@@ -42,15 +42,9 @@ impl Drop for RestorePermissions {
     }
 }
 
-/// Shared isolated `CODEFLOW_HOME`: these tests initialize tempdir repos
-/// (policy.json / project.toml), so without the override every invocation's
-/// registry touch would write them into the developer's real
-/// `~/.codeflow/registry.json` (per the `recall_remote_cli.rs` pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn codeflow() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));

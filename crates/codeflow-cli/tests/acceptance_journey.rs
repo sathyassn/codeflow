@@ -9,11 +9,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
+#[path = "support/process_folders.rs"]
+mod process_folders;
+use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
@@ -510,6 +508,371 @@ fn a_journey_tag_reads_with_sentence_punctuation_on_a_fresh_project() {
         "{}",
         text(&inside)
     );
+}
+
+/// Journey (TSK-382 AC-4, issue #199): on a fresh `codeflow init --full`
+/// project whose epic journey criterion carries amendment notes, a task
+/// serving it passes `codeflow ci` on an adopter-facing range, and so does
+/// a task whose own journey criterion carries one; a note that is no
+/// amendment still hides the tag, and the refusal names it.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the three tasks in the order a project meets them.
+fn an_amended_journey_criterion_still_counts_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    git(&root, &["switch", "-q", "-c", LINE]);
+    git(&root, &["switch", "-q", "-c", "plan/amended"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    for title in ["serving", "own", "hidden"] {
+        let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
+        ok(&codeflow(&root, &args), "task new");
+    }
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the release shall install (journey)\n  - Amended 2026-10-12 (plan version 4): reworded for the installer.\n  - Moved 2026-10-13 from AC-4.\n",
+    );
+    edit(
+        &root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 The installer shall run (serves EPC-001 AC-1)\n",
+    );
+    edit(
+        &root,
+        SECOND,
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Amended 2026-10-14 (plan version 5): narrowed to Linux.\n",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-003.md",
+        "- AC-1\n",
+        "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Note: reworded after review.\n",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the amended journey");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/amended",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+
+    // A task serving the amended epic journey criterion, and a task whose
+    // own journey criterion carries an amendment note.
+    for (task, branch, file) in [
+        ("TSK-001", "task/TSK-001-serving", "src/first.rs"),
+        ("TSK-002", "task/TSK-002-own", "src/second.rs"),
+    ] {
+        git(&root, &["switch", "-q", "-c", branch, LINE]);
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(file), "pub fn added() {}\n").unwrap();
+        commit(&root, "feat: add a function");
+        let passed = ok(&ci(&root, branch, task), "ci with an amended journey");
+        assert!(!passed.contains("work.journey_criterion"), "{passed}");
+    }
+
+    // A note that is no amendment still hides the closing tag.
+    let branch = "task/TSK-003-hidden";
+    git(&root, &["switch", "-q", "-c", branch, LINE]);
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-003"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/third.rs"), "pub fn third() {}\n").unwrap();
+    commit(&root, "feat: add the third function");
+    let hidden = ci(&root, branch, "TSK-003");
+    fails(
+        &hidden,
+        "a closing tag hidden by a note",
+        "the note \"- Note: reworded after review.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
+    );
+}
+
+/// An acceptance block for a two-criterion record whose AC-2 is its
+/// journey, with AC-1's outcome given and `TSK-008` as the follow-up.
+fn round_acceptance(dir: &Path, reviewed: &str, ac1: &str) -> String {
+    let body = format!(
+        "acceptance:\n  reviewed: {reviewed}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: verified | the journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey.rs\n  not_verified: none\n  follow_ups: TSK-008\n  verdict: approved\n"
+    );
+    let path = dir.join("round.yaml");
+    std::fs::write(&path, body).unwrap();
+    path.to_string_lossy().to_string()
+}
+
+/// `codeflow task status <task> complete` with AC-1's outcome given.
+fn complete(root: &Path, dir: &Path, task: &str, reviewed: &str, ac1: &str) -> Output {
+    let block = round_acceptance(dir, reviewed, ac1);
+    codeflow(
+        root,
+        &["task", "status", task, "complete", "--acceptance", &block],
+    )
+}
+
+const DEFERRED: &str = "deferred | owner: ops; window: a month; follow-up: TSK-008";
+
+/// TSK-382 review round 1, on a fresh `codeflow init --full` project: a
+/// note is a dash sub-bullet whose first word is exactly `Amended` or
+/// `Moved`, followed by a date; any other sub-bullet stays criterion text
+/// and is named when it hides a tag; a reflow that moves a tag past a note
+/// is a criteria delta for the task's own record and frozen for another's;
+/// and `task status complete` reads the tags the same way.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the review's inputs in the order it gave them.
+fn the_review_inputs_are_judged_as_stated_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    git(&root, &["switch", "-q", "-c", LINE]);
+    git(&root, &["switch", "-q", "-c", "plan/round"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    let journey = "- AC-2 (journey) On a fresh project, the command shall succeed.\n";
+    let after_release = format!(
+        "- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest of the sentence.\n{journey}"
+    );
+    let tasks = [
+        (
+            "reflow-journey",
+            "- AC-1 The command shall pass (journey) - Amended 2026-10-14: keep the log.\n"
+                .to_string(),
+        ),
+        ("reflow-after", after_release.clone()),
+        ("other", after_release.clone()),
+        (
+            "moved-words",
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Moved files shall stay listed in the report.\n".to_string(),
+        ),
+        (
+            "bold",
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  - **Amended** 2026-10-14: bold word.\n".to_string(),
+        ),
+        (
+            "split",
+            format!("- AC-1 Look fine (after release)\n  - Amended 2026-10-18: split the proof.\n  - The command shall pass the suite before release (journey).\n{}", journey.replace("(journey) ", "")),
+        ),
+        (
+            "serves-note",
+            "- AC-1 The installer shall run.\n  - Amended 2026-10-14: now (serves EPC-001 AC-1).\n".to_string(),
+        ),
+        ("follow", "- AC-1 The metric shall be read.\n".to_string()),
+        (
+            "serves-later",
+            "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n  - The command shall print the plan.\n".to_string(),
+        ),
+        (
+            "serves-inside",
+            "- AC-1 The installer (serves EPC-001 AC-1) shall run.\n".to_string(),
+        ),
+        (
+            "serves-noted",
+            "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n".to_string(),
+        ),
+    ];
+    for (index, (title, criteria)) in tasks.iter().enumerate() {
+        let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
+        ok(&codeflow(&root, &args), "task new");
+        edit(
+            &root,
+            &format!("project-management/tasks/TSK-{:03}.md", index + 1),
+            "- AC-1\n",
+            criteria,
+        );
+    }
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 (journey) On a fresh project, the release shall install.\n",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the review inputs");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/round",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+    let start = |task: &str, branch: &str, file: &str| -> String {
+        git(&root, &["switch", "-q", "-c", branch, LINE]);
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(file), "pub fn added() {}\n").unwrap();
+        commit(&root, "feat: add a function")
+    };
+
+    // TSK-011 of the verdict: one line keeps the tag inside the text; the
+    // reflow onto a note gains it, and CI prints that as the delta.
+    let branch = "task/TSK-001-reflow-journey";
+    start("TSK-001", branch, "src/first.rs");
+    fails(
+        &ci(&root, branch, "TSK-001"),
+        "a tag inside one line",
+        "AC-1 carries `(journey)` inside its text",
+    );
+    edit(&root, TASK, " - Amended", "\n  - Amended");
+    commit(&root, "chore: reflow AC-1");
+    let reflowed = ok(&ci(&root, branch, "TSK-001"), "ci after the reflow");
+    assert!(
+        reflowed.contains(
+            "TSK-001 criteria delta: AC-1 changed its tags with the same text: no tag -> (journey)"
+        ),
+        "{reflowed}"
+    );
+
+    // TSK-012 of the verdict: completion reads the same tags before and
+    // after the reflow, and CI prints the change.
+    let branch = "task/TSK-002-reflow-after";
+    let reviewed = start("TSK-002", branch, "src/second.rs");
+    fails(
+        &complete(&root, dir.path(), "TSK-002", &reviewed, DEFERRED),
+        "deferred before the reflow",
+        "AC-1 has outcome `deferred`; use verified, waived or failed",
+    );
+    ok(
+        &complete(&root, dir.path(), "TSK-002", &reviewed, "verified | ran"),
+        "verified before the reflow",
+    );
+    git(&root, &["reset", "-q", "--hard", &reviewed]);
+    edit(&root, SECOND, " - Amended", "\n  - Amended");
+    let reflow = commit(&root, "chore: reflow AC-1");
+    let reflowed = ok(&ci(&root, branch, "TSK-002"), "ci after the reflow");
+    assert!(
+        reflowed.contains(
+            "TSK-002 criteria delta: AC-1 changed its tags with the same text: no tag -> (after release)"
+        ),
+        "{reflowed}"
+    );
+    fails(
+        &complete(&root, dir.path(), "TSK-002", &reflow, "verified | ran"),
+        "verified after the reflow",
+        "AC-1 is observable only after release and is never `verified` at build time",
+    );
+    ok(
+        &complete(&root, dir.path(), "TSK-002", &reflow, DEFERRED),
+        "deferred after the reflow",
+    );
+    commit(&root, "chore: complete TSK-002");
+
+    // TSK-009 of the verdict: the requirement after the note counts, so
+    // the journey passes and AC-1 is no longer deferrable; the refusal
+    // names the sub-bullet that hides `(after release)`.
+    let branch = "task/TSK-006-split";
+    let reviewed = start("TSK-006", branch, "src/sixth.rs");
+    let passed = ok(
+        &ci(&root, branch, "TSK-006"),
+        "ci with a requirement after a note",
+    );
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
+    fails(
+        &complete(&root, dir.path(), "TSK-006", &reviewed, DEFERRED),
+        "deferred with the tag hidden",
+        "AC-1 has outcome `deferred`; use verified, waived or failed; the note \"- The command shall pass the suite before release (journey).\" under AC-1 hides its `(after release)` tag; move the tag to the start of the criterion (R-50)",
+    );
+
+    // TSK-026 of the verdict: the same reflow of another task's record is
+    // frozen.
+    edit(
+        &root,
+        "project-management/tasks/TSK-003.md",
+        " - Amended",
+        "\n  - Amended",
+    );
+    commit(&root, "chore: reflow another task's AC-1");
+    fails(
+        &ci(&root, branch, "TSK-006"),
+        "another task's tag-only reflow",
+        "TSK-003 changes its criteria on this branch",
+    );
+
+    // TSK-010, TSK-023 and TSK-004 of the verdict: a sub-bullet that is no
+    // dated dash note stays criterion text and is named, and so is a serve
+    // only in a note.
+    for (task, branch, file, named) in [
+        (
+            "TSK-004",
+            "task/TSK-004-moved-words",
+            "src/fourth.rs",
+            "the note \"- Moved files shall stay listed in the report.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
+        ),
+        (
+            "TSK-005",
+            "task/TSK-005-bold",
+            "src/fifth.rs",
+            "the note \"- **Amended** 2026-10-14: bold word.\" under AC-1 hides its `(journey)` tag",
+        ),
+        (
+            "TSK-007",
+            "task/TSK-007-serves-note",
+            "src/seventh.rs",
+            "the note \"- Amended 2026-10-14: now (serves EPC-001 AC-1).\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)",
+        ),
+    ] {
+        start(task, branch, file);
+        fails(&ci(&root, branch, task), task, named);
+    }
+
+    // Review round 2 (TSK-038, TSK-039, TSK-040 of the verdict): a serves
+    // tag reads like the other tags, where it opens or closes the
+    // criterion's own text.
+    start("TSK-009", "task/TSK-009-serves-later", "src/ninth.rs");
+    fails(
+        &ci(&root, "task/TSK-009-serves-later", "TSK-009"),
+        "a serve before a later sub-bullet",
+        "the note \"- The command shall print the plan.\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)",
+    );
+    start("TSK-010", "task/TSK-010-serves-inside", "src/tenth.rs");
+    fails(
+        &ci(&root, "task/TSK-010-serves-inside", "TSK-010"),
+        "a serve inside the text",
+        "TSK-010 changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion",
+    );
+    start("TSK-011", "task/TSK-011-serves-noted", "src/eleventh.rs");
+    let passed = ok(
+        &ci(&root, "task/TSK-011-serves-noted", "TSK-011"),
+        "a closing serve before a dated note",
+    );
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
 }
 
 /// An acceptance block for a one-criterion record (`AC-1` only).
