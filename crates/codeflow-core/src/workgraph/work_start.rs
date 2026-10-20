@@ -2625,13 +2625,20 @@ fn pinned_dependency(
     }
 }
 
-/// The ref readiness reads for a target, with its tip, as output shows it
-/// (`origin/main`). An explicit ref (`origin/<name>`, `refs/...`) is read as
-/// written. A bare name reads the remote-tracking ref: the upstream Git has
-/// configured for the local branch, else `origin/<name>`. The local branch is
-/// read only when it has no remote-tracking ref at all (a repository with no
-/// remote), so a local branch behind its remote never decides readiness
-/// (sathyassn/codeflow#236). `None` when the target is not fetched here.
+/// The landing ref readiness reads for a target, with its tip, as output
+/// shows it (`origin/main`). In a repository with any remote, a landing ref
+/// is always a remote-tracking ref, so no local ref decides readiness
+/// (sathyassn/codeflow#236):
+/// - a branch, bare (`main`) or spelled `refs/heads/main`, reads the upstream
+///   configured for it only when that upstream is a
+///   `refs/remotes/<remote>/<branch>` ref of a configured remote (never remote
+///   `.`, a local branch or a tag), else `refs/remotes/origin/<branch>` on the
+///   authority remote;
+/// - an explicit remote-tracking ref (`origin/main`, `refs/remotes/...`) counts
+///   only when a configured remote's fetch mapping owns it.
+///
+/// The local branch is a landing ref only in a repository with no remote at
+/// all. `None` when the target is not fetched here.
 fn tracking_reference(
     repo: &Repository,
     name: &str,
@@ -2639,33 +2646,50 @@ fn tracking_reference(
     let Some(candidates) = target_reference_names(name) else {
         return Ok(None);
     };
-    let local = format!("refs/heads/{name}");
     let exact = &candidates[0];
-    if *exact != local {
-        return Ok(reference_commit(repo, exact)?.map(|tip| (reference_display_name(exact), tip)));
-    }
-    let (upstream, configured) = match repo.branch_upstream_name(&local) {
-        Ok(upstream) => (
-            upstream.as_str().map(str::to_owned).map_err(|error| {
-                WorkStartError::Repository(format!(
-                    "configured upstream is not valid UTF-8: {error}"
-                ))
-            })?,
-            true,
-        ),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {
-            (format!("refs/remotes/origin/{name}"), false)
-        }
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    let read = |reference: &str| {
+        Ok(reference_commit(repo, reference)?.map(|tip| (reference_display_name(reference), tip)))
     };
-    if let Some(tip) = reference_commit(repo, &upstream)? {
-        return Ok(Some((reference_display_name(&upstream), tip)));
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let branch = exact.strip_prefix("refs/heads/");
+    if remotes.is_empty() {
+        return branch.map_or(Ok(None), |_| read(exact));
     }
-    if configured {
-        // A configured upstream that is not fetched leaves the target unknown.
-        return Ok(None);
+    let Some(branch) = branch else {
+        return if repo.branch_remote_name(exact).is_ok() {
+            read(exact)
+        } else {
+            Ok(None)
+        };
+    };
+    let landing = configured_upstream(repo, branch, &remotes)
+        .unwrap_or_else(|| format!("refs/remotes/{}/{branch}", crate::ids::AUTHORITY));
+    read(&landing)
+}
+
+/// The upstream configured for local branch `branch`, when it is a
+/// `refs/remotes/<remote>/...` ref of a configured remote other than `.`.
+/// Any other upstream, or one that cannot be read, is not honoured, and the
+/// caller reads the authority remote's tracking ref instead.
+fn configured_upstream(
+    repo: &Repository,
+    branch: &str,
+    remotes: &git2::string_array::StringArray,
+) -> Option<String> {
+    let local = format!("refs/heads/{branch}");
+    let remote = repo.branch_upstream_remote(&local).ok()?;
+    let remote = remote.as_str().ok()?;
+    if remote == "." || !remotes.iter_bytes().any(|name| name == remote.as_bytes()) {
+        return None;
     }
-    Ok(reference_commit(repo, &local)?.map(|tip| (name.to_string(), tip)))
+    let upstream = repo.branch_upstream_name(&local).ok()?;
+    let upstream = upstream.as_str().ok()?;
+    upstream
+        .strip_prefix(&format!("refs/remotes/{remote}/"))
+        .is_some_and(|rest| !rest.is_empty())
+        .then(|| upstream.to_owned())
 }
 
 /// Why a pin is on no verified target: the refs read, then the targets that

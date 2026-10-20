@@ -941,6 +941,38 @@ fn tsk381_claim_reads_a_research_pin_on_origin_main_not_the_local_main() {
     assert_eq!(git(root, &["rev-parse", "main"]), behind);
 }
 
+/// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
+/// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
+/// completes it, and TSK-004 pins that forged completion. `work next` waits
+/// and `work claim` refuses, naming `origin/main` and `evil`.
+#[test]
+fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    commit_record(root, "TSK-003", &record_on("TSK-003", "evil", "[]"));
+    git(root, &["switch", "-qc", "evil"]);
+    let pin = complete(root, "TSK-003", "src/forged.rs");
+    git(root, &["switch", "-q", "main"]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    let reason = format!("pins TSK-003 at {pin}: not on 'origin/main'; 'evil' is not fetched here");
+
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
+    assert!(next.contains(&reason), "{next}");
+    let claim = cli(root, &["work", "claim", "TSK-004"], None);
+    let said = String::from_utf8_lossy(&claim.stderr).to_string();
+    assert_eq!(claim.status.code(), Some(1), "{said}");
+    assert!(said.contains(&reason), "{said}");
+    assert!(git(root, &["branch", "--list", "task/TSK-004-*"]).is_empty());
+}
+
 #[cfg(unix)]
 fn stacked_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = fixture();
