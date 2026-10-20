@@ -2441,7 +2441,10 @@ fn detect_target<F: Fn(&str) -> Option<String>>(env: F) -> Option<String> {
 
 /// Normalize a branch name or branch ref (`origin/main` and
 /// `refs/heads/origin/main` name `main`); a commit id, a revision expression
-/// or a value with a space or control character names no branch.
+/// or a value with a space or control character names no branch. One prefix
+/// is stripped; a remainder that still starts with `origin/` in any case, or
+/// still contains `refs/`, names no branch, because it would select a local
+/// branch such as `refs/heads/origin/main` instead of the remote-tracking ref.
 fn named_branch(base: &str) -> Option<String> {
     let hex = base.len() >= 7 && base.chars().all(|c| c.is_ascii_hexdigit());
     if base.bytes().any(|byte| byte <= b' ' || byte == 0x7f) {
@@ -2456,7 +2459,12 @@ fn named_branch(base: &str) -> Option<String> {
         })
         .or_else(|| base.strip_prefix("origin/"))
         .unwrap_or(base);
-    (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
+    let remote_shaped = name
+        .get(.."origin/".len())
+        .is_some_and(|head| head.eq_ignore_ascii_case("origin/"))
+        || name.contains("refs/");
+    (!hex && !remote_shaped && !name.is_empty() && !name.contains(['~', '^', ':', '@']))
+        .then(|| name.to_string())
 }
 
 /// `origin`'s fetch URL: `Ok(None)` when the repository has no such remote
@@ -4575,7 +4583,19 @@ mod tests {
         // TSK-398 review N3: `main~1` or `main@{0}` would walk the base away
         // from the branch tip; the next base source is used instead.
         for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
-            for value in ["main~1", "main@{0}", "main ", " main", "main\t"] {
+            for value in [
+                "main~1",
+                "main@{0}",
+                "main ",
+                " main",
+                "main\t",
+                // Round 3 minor: no remainder may still name a remote or a ref.
+                "refs/heads/origin/origin/main",
+                "refs/remotes/origin/origin/main",
+                "Origin/main",
+                "refs/heads/Origin/main",
+                "refs/heads/refs/heads/origin/main",
+            ] {
                 let r = detect_range(env_from(&[(key, value)]), &protected());
                 assert!(
                     matches!(r.source, RangeSource::ProtectedBranches),
