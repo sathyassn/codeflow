@@ -29,38 +29,51 @@ pub struct Criterion {
     pub sub_items: Vec<SubItem>,
 }
 
-/// An indented sub-bullet under a criterion (`  - ...`).
+/// An indented sub-bullet under a criterion (`  - ...`, `  * ...` or
+/// `  + ...`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubItem {
     /// Where the sub-bullet starts in the criterion's `text`, in bytes.
     pub at: usize,
     /// Its first line, whitespace-collapsed, marker included.
     pub line: String,
-    /// An amendment note: its first word is `Amended` or `Moved`, in any
-    /// case. The criterion's own text ends where the first one begins.
-    pub amendment: bool,
+    /// An amendment note: a dash sub-bullet whose first word is exactly
+    /// `Amended` or `Moved` and whose next word is a `YYYY-MM-DD` date.
+    /// The note and its wrapped lines are left out of the criterion's own
+    /// text, where tags are read.
+    pub note: bool,
 }
 
 impl SubItem {
     /// Read one indented line as a sub-bullet, `at` its offset in the
     /// criterion text; `None` for a wrapped line of text.
     fn read(at: usize, line: &str) -> Option<Self> {
+        let marker = line.chars().next()?;
         let rest = line
             .strip_prefix(['-', '*', '+'])
             .filter(|rest| rest.starts_with([' ', '\t']))?;
-        let first = rest
-            .split([' ', '\t'])
-            .find(|word| !word.is_empty())
+        let mut words = rest.split([' ', '\t']).filter(|word| !word.is_empty());
+        let first = words.next().unwrap_or_default();
+        let date = words
+            .next()
             .unwrap_or_default()
-            .trim_matches(['*', '_', ':', ',', ';', '.']);
+            .trim_end_matches([':', ',', ';', '.']);
         Some(Self {
             at,
             line: line.to_string(),
-            amendment: ["amended", "moved"]
-                .iter()
-                .any(|word| first.eq_ignore_ascii_case(word)),
+            note: marker == '-' && matches!(first, "Amended" | "Moved") && is_date(date),
         })
     }
+}
+
+/// Whether `word` is a `YYYY-MM-DD` date in form.
+fn is_date(word: &str) -> bool {
+    let bytes = word.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 /// Whether `tag` opens or closes `text` (R-50). Sentence punctuation after
@@ -71,18 +84,56 @@ fn opens_or_closes(text: &str, tag: &str) -> bool {
     text.starts_with(tag) || closing.ends_with(tag)
 }
 
+/// The remedy a refusal gives for a tag a sub-bullet hides
+/// ([`Criterion::tag_hidden_by`]): it names the sub-bullet (its first line,
+/// at most 60 characters), the criterion `name` and the tag `label`.
+#[must_use]
+pub fn hidden_tag_message(name: &str, label: &str, line: &str) -> String {
+    const LIMIT: usize = 60;
+    let mut quoted: String = line.chars().take(LIMIT).collect();
+    if line.chars().count() > LIMIT {
+        quoted.push_str("...");
+    }
+    format!(
+        "the note \"{quoted}\" under {name} hides its `{label}` tag; move the tag to the start of the criterion (R-50)"
+    )
+}
+
+/// The `(serves ...)` opening a criterion's serves tag.
+const SERVES: &str = "(serves ";
+
 impl Criterion {
-    /// The criterion's own text: `text` up to its first amendment note, so
-    /// a note recording a change is never read as the criterion (R-50,
-    /// issue #199). Every tag is read here.
-    #[must_use]
-    pub fn own_text(&self) -> &str {
-        let end = self
+    /// The parts of `text`: the head, then each sub-bullet with its
+    /// wrapped lines, each with the sub-bullet it starts with.
+    fn parts(&self) -> impl Iterator<Item = (Option<&SubItem>, &str)> {
+        let head_end = self
             .sub_items
-            .iter()
-            .find(|item| item.amendment)
+            .first()
             .map_or(self.text.len(), |item| item.at);
-        self.text[..end].trim_end_matches([' ', '\t'])
+        let head = std::iter::once((None, &self.text[..head_end]));
+        let items = self.sub_items.iter().enumerate().map(|(index, item)| {
+            let end = self
+                .sub_items
+                .get(index + 1)
+                .map_or(self.text.len(), |next| next.at);
+            (Some(item), &self.text[item.at..end])
+        });
+        head.chain(items)
+    }
+
+    /// The criterion's own text: `text` without its amendment notes and
+    /// their wrapped lines, so a note recording a change is never read as
+    /// the criterion (R-50, issue #199). Every tag is read here.
+    #[must_use]
+    pub fn own_text(&self) -> String {
+        collapse(
+            &self
+                .parts()
+                .filter(|(item, _)| !item.is_some_and(|item| item.note))
+                .map(|(_, part)| part)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
     }
 
     /// A journey criterion ends with `(journey)` (R-50); a record may also
@@ -100,28 +151,40 @@ impl Criterion {
         !self.is_journey() && self.own_text().contains("(journey)")
     }
 
-    /// The first line of the sub-bullet that keeps `(journey)` from
-    /// counting, when one does: a sub-bullet the tag closes the text
-    /// before, or an amendment note that carries the tag. The journey
-    /// refusal names it with its remedy.
+    /// The first line of the sub-bullet that keeps `tag` (`(journey)`,
+    /// `(after release)`, or `(serves ` for the serves tag) from counting,
+    /// when one does: a sub-bullet the tag closes the own text before, or
+    /// an amendment note that carries the tag. A refusal names it with its
+    /// remedy.
     #[must_use]
-    pub fn journey_hidden_by(&self) -> Option<&str> {
-        const TAG: &str = "(journey)";
-        if self.is_journey() {
+    pub fn tag_hidden_by(&self, tag: &str) -> Option<&str> {
+        let serves = tag == SERVES;
+        let counts = if serves {
+            self.serves().is_some()
+        } else {
+            self.has_tag(tag)
+        };
+        if counts {
             return None;
         }
-        self.sub_items
-            .iter()
-            .enumerate()
-            .find(|(index, item)| {
-                let end = self
-                    .sub_items
-                    .get(index + 1)
-                    .map_or(self.text.len(), |next| next.at);
-                opens_or_closes(&self.text[..item.at], TAG)
-                    || (item.amendment && self.text[item.at..end].contains(TAG))
-            })
-            .map(|(_, item)| item.line.as_str())
+        let mut before = String::new();
+        for (item, part) in self.parts() {
+            if let Some(item) = item {
+                let hides = if item.note {
+                    part.contains(tag)
+                } else {
+                    !serves && opens_or_closes(&before, tag)
+                };
+                if hides {
+                    return Some(item.line.as_str());
+                }
+            }
+            if !item.is_some_and(|item| item.note) {
+                before.push(' ');
+                before.push_str(part);
+            }
+        }
+        None
     }
 
     /// A criterion observable only after release carries `(after release)`
@@ -137,7 +200,7 @@ impl Criterion {
     /// it; a tag inside the text, or only in an amendment note, is not a
     /// tag.
     fn has_tag(&self, tag: &str) -> bool {
-        opens_or_closes(self.own_text(), tag)
+        opens_or_closes(&self.own_text(), tag)
     }
 
     /// What a text correction of a completed criterion keeps (ADR-0080):
@@ -157,8 +220,8 @@ impl Criterion {
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
         let text = self.own_text();
-        let start = text.find("(serves ")?;
-        let rest = &text[start + "(serves ".len()..];
+        let start = text.find(SERVES)?;
+        let rest = &text[start + SERVES.len()..];
         let end = rest.find(')')?;
         let mut parts = rest[..end]
             .split([' ', '\t'])
@@ -198,14 +261,61 @@ impl CriteriaList {
         self.items.iter().any(|item| item.checkbox.is_some())
     }
 
-    /// Ids and text, without the checkbox mark: ticking a legacy box is not a
-    /// change of criteria.
+    /// Ids, text and the tags the parser reads, without the checkbox mark:
+    /// ticking a legacy box is not a change of criteria, and a reflow that
+    /// keeps the text but moves a tag past an amendment note is one.
     #[must_use]
-    pub fn signature(&self) -> Vec<(String, String)> {
-        self.items
-            .iter()
-            .map(|item| (item.id.clone(), item.text.clone()))
-            .collect()
+    pub fn signature(&self) -> Vec<CriterionKey> {
+        self.items.iter().map(CriterionKey::of).collect()
+    }
+}
+
+/// One criterion as criteria equality reads it ([`CriteriaList::signature`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CriterionKey {
+    /// `AC-n`.
+    pub id: String,
+    /// The whitespace-collapsed text, amendment notes included.
+    pub text: String,
+    /// `(journey)` counts.
+    pub journey: bool,
+    /// `(after release)` counts.
+    pub after_release: bool,
+    /// The epic criterion it serves.
+    pub serves: Option<(String, String)>,
+}
+
+impl CriterionKey {
+    /// The key of one criterion.
+    #[must_use]
+    pub fn of(item: &Criterion) -> Self {
+        Self {
+            id: item.id.clone(),
+            text: item.text.clone(),
+            journey: item.is_journey(),
+            after_release: item.is_after_release(),
+            serves: item.serves(),
+        }
+    }
+
+    /// The tags this key reads, as a criteria delta prints them.
+    #[must_use]
+    pub fn tag_list(&self) -> String {
+        let mut tags = Vec::new();
+        if self.journey {
+            tags.push("(journey)".to_string());
+        }
+        if self.after_release {
+            tags.push("(after release)".to_string());
+        }
+        if let Some((epic, criterion)) = &self.serves {
+            tags.push(format!("(serves {epic} {criterion})"));
+        }
+        if tags.is_empty() {
+            "no tag".to_string()
+        } else {
+            tags.join(" ")
+        }
     }
 }
 
@@ -1353,8 +1463,15 @@ pub fn check_block(
                 }
                 "failed" => problems.push(format!("{} failed: {}", criterion.id, result.evidence)),
                 other => problems.push(format!(
-                    "{} has outcome `{other}`; use verified, waived or failed",
-                    criterion.id
+                    "{} has outcome `{other}`; use verified, waived or failed{}",
+                    criterion.id,
+                    criterion
+                        .tag_hidden_by("(after release)")
+                        .map(|line| format!(
+                            "; {}",
+                            hidden_tag_message(&criterion.id, "(after release)", line)
+                        ))
+                        .unwrap_or_default()
                 )),
             },
         }
@@ -1664,7 +1781,10 @@ their sources, or the `init_e2e` case that renders them (journey).";
              It starts at publication.\n  \
              - Moved 2026-10-15 from AC-9.\n\
              - [ ] AC-4 On a fresh project, init shall pass (journey).\n  \
-             - amended 2026-10-16: lower case still reads as a note.\n",
+             - Moved 2026-10-16, from AC-8.\n\
+             - AC-5 The command shall pass (journey)\n  \
+             - Amended 2026-10-18: split the proof.\n  \
+             - Print the plan first.\n",
         );
         assert!(items[0].is_journey(), "{:?}", items[0]);
         assert_eq!(
@@ -1673,6 +1793,17 @@ their sources, or the `init_e2e` case that renders them (journey).";
         );
         assert!(items[2].is_after_release(), "{:?}", items[2]);
         assert!(items[3].is_journey(), "{:?}", items[3]);
+        // A note is left out, and a later sub-bullet that is no note stays
+        // criterion text, so here it hides the tag and is named.
+        assert_eq!(
+            items[4].own_text(),
+            "The command shall pass (journey) - Print the plan first."
+        );
+        assert!(!items[4].is_journey(), "{:?}", items[4]);
+        assert_eq!(
+            items[4].tag_hidden_by("(journey)"),
+            Some("- Print the plan first.")
+        );
         // The note stays part of the recorded text, so adding or changing
         // it is still a criteria change.
         assert!(
@@ -1685,6 +1816,82 @@ their sources, or the `init_e2e` case that renders them (journey).";
             "- AC-1 The command shall run.\n  - Moved 2026-10-13 from (serves EPC-001 AC-2) to none.\n",
         );
         assert_eq!(noted[0].serves(), None);
+        assert_eq!(
+            noted[0].tag_hidden_by("(serves "),
+            Some("- Moved 2026-10-13 from (serves EPC-001 AC-2) to none.")
+        );
+    }
+
+    /// TSK-382 review round 1: a note is a dash sub-bullet whose first word
+    /// is exactly `Amended` or `Moved`, followed by a `YYYY-MM-DD` date.
+    /// Any other sub-bullet is criterion text, and a requirement written
+    /// after a note still counts.
+    #[test]
+    fn only_a_dated_dash_note_is_left_out_of_the_criterion() {
+        for (line, note) in [
+            ("- Amended 2026-10-14: reworded.", true),
+            ("- Moved 2026-10-13 from AC-4.", true),
+            ("- Amended 2026-10-12 (plan version 4): reworded.", true),
+            ("- Moved files shall stay listed in the report.", false),
+            ("- **Amended** 2026-10-14: bold word.", false),
+            ("- amended 2026-10-14: lower case.", false),
+            ("- Amended: 2026-10-14 reworded.", false),
+            ("- Amended 2026-10: no day.", false),
+            ("* Amended 2026-10-14: a star marker.", false),
+            ("+ Moved 2026-10-14: a plus marker.", false),
+        ] {
+            let items = listed(&format!(
+                "- AC-1 On a fresh project, the command shall succeed (journey)\n  {line}\n"
+            ));
+            assert_eq!(items[0].is_journey(), note, "{line}");
+            assert_eq!(items[0].sub_items[0].note, note, "{line}");
+            if !note {
+                assert_eq!(items[0].tag_hidden_by("(journey)"), Some(line), "{line}");
+            }
+        }
+        // TSK-009 of the review: the closing `(journey)` after the note
+        // counts, and the head's `(after release)` no longer closes the
+        // criterion, so a requirement written after a note still binds.
+        let items = listed(
+            "- AC-1 Look fine (after release)\n  - Amended 2026-10-18: split the proof.\n  \
+             - The command shall pass the suite before release (journey).\n",
+        );
+        assert!(items[0].is_journey(), "{:?}", items[0]);
+        assert!(!items[0].is_after_release(), "{:?}", items[0]);
+        assert_eq!(
+            items[0].tag_hidden_by("(after release)"),
+            Some("- The command shall pass the suite before release (journey).")
+        );
+        // A wrapped line of a note is part of the note.
+        let items = listed(
+            "- AC-1 The command shall pass (journey)\n  - Amended 2026-10-18: one\n    more line of the note.\n",
+        );
+        assert_eq!(items[0].own_text(), "The command shall pass (journey)");
+    }
+
+    /// TSK-382 review round 1: the signature reads the tags, so a reflow
+    /// that keeps the collapsed text but moves a tag past a note is a
+    /// criteria change.
+    #[test]
+    fn a_reflow_that_moves_a_tag_changes_the_signature() {
+        for (one_line, split) in [
+            (
+                "- AC-1 The command shall pass (journey) - Amended 2026-10-14: keep the log.\n",
+                "- AC-1 The command shall pass (journey)\n  - Amended 2026-10-14: keep the log.\n",
+            ),
+            (
+                "- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest of the sentence.\n",
+                "- AC-1 Prove the metric now (after release)\n  - Amended 2026-10-14: the rest of the sentence.\n",
+            ),
+        ] {
+            let (before, after) = (listed(one_line), listed(split));
+            assert_eq!(before[0].text, after[0].text);
+            assert_ne!(
+                parse_criteria(&format!("## Acceptance Criteria\n\n{one_line}")).signature(),
+                parse_criteria(&format!("## Acceptance Criteria\n\n{split}")).signature(),
+                "{split}"
+            );
+        }
     }
 
     /// TSK-382 AC-2: wrapped lines and substantive sub-bullets stay criterion
@@ -1898,7 +2105,11 @@ their sources, or the `init_e2e` case that renders them (journey).";
             "## Acceptance Criteria\n\n<!--\n- AC-9 hidden\n-->\n- AC-1 shown\n```text\n- AC-8 example\n```\n",
         );
         assert_eq!(
-            criteria.signature(),
+            criteria
+                .signature()
+                .into_iter()
+                .map(|key| (key.id, key.text))
+                .collect::<Vec<_>>(),
             vec![("AC-1".to_string(), "shown".to_string())]
         );
         assert_eq!(

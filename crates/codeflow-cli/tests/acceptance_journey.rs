@@ -614,6 +614,235 @@ fn an_amended_journey_criterion_still_counts_on_a_fresh_project() {
     );
 }
 
+/// An acceptance block for a two-criterion record whose AC-2 is its
+/// journey, with AC-1's outcome given and `TSK-008` as the follow-up.
+fn round_acceptance(dir: &Path, reviewed: &str, ac1: &str) -> String {
+    let body = format!(
+        "acceptance:\n  reviewed: {reviewed}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: verified | the journey ran\n  journey: verified | crates/codeflow-cli/tests/acceptance_journey.rs\n  not_verified: none\n  follow_ups: TSK-008\n  verdict: approved\n"
+    );
+    let path = dir.join("round.yaml");
+    std::fs::write(&path, body).unwrap();
+    path.to_string_lossy().to_string()
+}
+
+/// `codeflow task status <task> complete` with AC-1's outcome given.
+fn complete(root: &Path, dir: &Path, task: &str, reviewed: &str, ac1: &str) -> Output {
+    let block = round_acceptance(dir, reviewed, ac1);
+    codeflow(
+        root,
+        &["task", "status", task, "complete", "--acceptance", &block],
+    )
+}
+
+const DEFERRED: &str = "deferred | owner: ops; window: a month; follow-up: TSK-008";
+
+/// TSK-382 review round 1, on a fresh `codeflow init --full` project: a
+/// note is a dash sub-bullet whose first word is exactly `Amended` or
+/// `Moved`, followed by a date; any other sub-bullet stays criterion text
+/// and is named when it hides a tag; a reflow that moves a tag past a note
+/// is a criteria delta for the task's own record and frozen for another's;
+/// and `task status complete` reads the tags the same way.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the review's inputs in the order it gave them.
+fn the_review_inputs_are_judged_as_stated_on_a_fresh_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    git(&root, &["switch", "-q", "-c", LINE]);
+    git(&root, &["switch", "-q", "-c", "plan/round"]);
+    ok(&codeflow(&root, &["epic", "new", "outcome"]), "epic new");
+    let journey = "- AC-2 (journey) On a fresh project, the command shall succeed.\n";
+    let after_release = format!(
+        "- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest of the sentence.\n{journey}"
+    );
+    let tasks = [
+        (
+            "reflow-journey",
+            "- AC-1 The command shall pass (journey) - Amended 2026-10-14: keep the log.\n"
+                .to_string(),
+        ),
+        ("reflow-after", after_release.clone()),
+        ("other", after_release.clone()),
+        (
+            "moved-words",
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  - Moved files shall stay listed in the report.\n".to_string(),
+        ),
+        (
+            "bold",
+            "- AC-1 On a fresh project, the command shall succeed (journey)\n  - **Amended** 2026-10-14: bold word.\n".to_string(),
+        ),
+        (
+            "split",
+            format!("- AC-1 Look fine (after release)\n  - Amended 2026-10-18: split the proof.\n  - The command shall pass the suite before release (journey).\n{}", journey.replace("(journey) ", "")),
+        ),
+        (
+            "serves-note",
+            "- AC-1 The installer shall run.\n  - Amended 2026-10-14: now (serves EPC-001 AC-1).\n".to_string(),
+        ),
+        ("follow", "- AC-1 The metric shall be read.\n".to_string()),
+    ];
+    for (index, (title, criteria)) in tasks.iter().enumerate() {
+        let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
+        ok(&codeflow(&root, &args), "task new");
+        edit(
+            &root,
+            &format!("project-management/tasks/TSK-00{}.md", index + 1),
+            "- AC-1\n",
+            criteria,
+        );
+    }
+    edit(
+        &root,
+        EPIC,
+        "- AC-1\n",
+        "- AC-1 (journey) On a fresh project, the release shall install.\n",
+    );
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["src/**"]);
+    std::fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).unwrap() + "\n",
+    )
+    .unwrap();
+    commit(&root, "chore: plan the review inputs");
+    git(&root, &["switch", "-q", LINE]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "plan/round",
+            "-m",
+            "chore: land the plan",
+        ],
+    );
+    let start = |task: &str, branch: &str, file: &str| -> String {
+        git(&root, &["switch", "-q", "-c", branch, LINE]);
+        ok(&codeflow(&root, &["work", "start", task]), "work start");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(file), "pub fn added() {}\n").unwrap();
+        commit(&root, "feat: add a function")
+    };
+
+    // TSK-011 of the verdict: one line keeps the tag inside the text; the
+    // reflow onto a note gains it, and CI prints that as the delta.
+    let branch = "task/TSK-001-reflow-journey";
+    start("TSK-001", branch, "src/first.rs");
+    fails(
+        &ci(&root, branch, "TSK-001"),
+        "a tag inside one line",
+        "AC-1 carries `(journey)` inside its text",
+    );
+    edit(&root, TASK, " - Amended", "\n  - Amended");
+    commit(&root, "chore: reflow AC-1");
+    let reflowed = ok(&ci(&root, branch, "TSK-001"), "ci after the reflow");
+    assert!(
+        reflowed.contains(
+            "TSK-001 criteria delta: AC-1 changed its tags with the same text: no tag -> (journey)"
+        ),
+        "{reflowed}"
+    );
+
+    // TSK-012 of the verdict: completion reads the same tags before and
+    // after the reflow, and CI prints the change.
+    let branch = "task/TSK-002-reflow-after";
+    let reviewed = start("TSK-002", branch, "src/second.rs");
+    fails(
+        &complete(&root, dir.path(), "TSK-002", &reviewed, DEFERRED),
+        "deferred before the reflow",
+        "AC-1 has outcome `deferred`; use verified, waived or failed",
+    );
+    ok(
+        &complete(&root, dir.path(), "TSK-002", &reviewed, "verified | ran"),
+        "verified before the reflow",
+    );
+    git(&root, &["reset", "-q", "--hard", &reviewed]);
+    edit(&root, SECOND, " - Amended", "\n  - Amended");
+    let reflow = commit(&root, "chore: reflow AC-1");
+    let reflowed = ok(&ci(&root, branch, "TSK-002"), "ci after the reflow");
+    assert!(
+        reflowed.contains(
+            "TSK-002 criteria delta: AC-1 changed its tags with the same text: no tag -> (after release)"
+        ),
+        "{reflowed}"
+    );
+    fails(
+        &complete(&root, dir.path(), "TSK-002", &reflow, "verified | ran"),
+        "verified after the reflow",
+        "AC-1 is observable only after release and is never `verified` at build time",
+    );
+    ok(
+        &complete(&root, dir.path(), "TSK-002", &reflow, DEFERRED),
+        "deferred after the reflow",
+    );
+    commit(&root, "chore: complete TSK-002");
+
+    // TSK-009 of the verdict: the requirement after the note counts, so
+    // the journey passes and AC-1 is no longer deferrable; the refusal
+    // names the sub-bullet that hides `(after release)`.
+    let branch = "task/TSK-006-split";
+    let reviewed = start("TSK-006", branch, "src/sixth.rs");
+    let passed = ok(
+        &ci(&root, branch, "TSK-006"),
+        "ci with a requirement after a note",
+    );
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
+    fails(
+        &complete(&root, dir.path(), "TSK-006", &reviewed, DEFERRED),
+        "deferred with the tag hidden",
+        "AC-1 has outcome `deferred`; use verified, waived or failed; the note \"- The command shall pass the suite before release (journey).\" under AC-1 hides its `(after release)` tag; move the tag to the start of the criterion (R-50)",
+    );
+
+    // TSK-026 of the verdict: the same reflow of another task's record is
+    // frozen.
+    edit(
+        &root,
+        "project-management/tasks/TSK-003.md",
+        " - Amended",
+        "\n  - Amended",
+    );
+    commit(&root, "chore: reflow another task's AC-1");
+    fails(
+        &ci(&root, branch, "TSK-006"),
+        "another task's tag-only reflow",
+        "TSK-003 changes its criteria on this branch",
+    );
+
+    // TSK-010, TSK-023 and TSK-004 of the verdict: a sub-bullet that is no
+    // dated dash note stays criterion text and is named, and so is a serve
+    // only in a note.
+    for (task, branch, file, named) in [
+        (
+            "TSK-004",
+            "task/TSK-004-moved-words",
+            "src/fourth.rs",
+            "the note \"- Moved files shall stay listed in the report.\" under AC-1 hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
+        ),
+        (
+            "TSK-005",
+            "task/TSK-005-bold",
+            "src/fifth.rs",
+            "the note \"- **Amended** 2026-10-14: bold word.\" under AC-1 hides its `(journey)` tag",
+        ),
+        (
+            "TSK-007",
+            "task/TSK-007-serves-note",
+            "src/seventh.rs",
+            "the note \"- Amended 2026-10-14: now (serves EPC-001 AC-1).\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)",
+        ),
+    ] {
+        start(task, branch, file);
+        fails(&ci(&root, branch, task), task, named);
+    }
+}
+
 /// An acceptance block for a one-criterion record (`AC-1` only).
 fn single_acceptance(dir: &Path, name: &str, reviewed: &str) -> String {
     let body = format!(

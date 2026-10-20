@@ -23,8 +23,8 @@ use git2::{Oid, Repository};
 use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
 use super::record_text::{
-    acceptance_blocks, frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock,
-    Criterion,
+    acceptance_blocks, frontmatter_len, hidden_tag_message, outcome_word, scan_record,
+    section_span, AcceptanceBlock, Criterion, CriterionKey,
 };
 use super::work_start::RecordKind;
 
@@ -2196,7 +2196,7 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
             .items
             .iter()
             .filter(|criterion| {
-                criterion.has_inner_journey() && criterion.journey_hidden_by().is_none()
+                criterion.has_inner_journey() && criterion.tag_hidden_by("(journey)").is_none()
             })
             .map(|criterion| criterion.id.as_str())
             .collect();
@@ -2209,12 +2209,8 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
                 if inner.len() == 1 { "carries" } else { "carry" }
             )
         };
-        for (name, hiding) in hidden_journeys(task, graph) {
-            let _ = write!(
-                note,
-                "; the note \"{}\" under {name} hides its `(journey)` tag; move the tag to the start of the criterion (R-50)",
-                truncate_note(hiding)
-            );
+        for (name, tag, hiding) in hidden_tags(task, graph) {
+            let _ = write!(note, "; {}", hidden_tag_message(&name, tag, hiding));
         }
         format!(
             "{task_id} changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion{note}"
@@ -2222,15 +2218,19 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
     })
 }
 
-/// The task's criteria, and the epic criteria it serves, whose `(journey)`
-/// a sub-bullet keeps from counting: each criterion's name (`AC-n`, or
-/// `EPC-NNN AC-n` for a served one) with the hiding sub-bullet's first
-/// line.
-fn hidden_journeys<'g>(task: &'g RecordView, graph: &'g Graph) -> Vec<(String, &'g str)> {
-    let own = task.criteria.items.iter().filter_map(|criterion| {
-        criterion
-            .journey_hidden_by()
-            .map(|hiding| (criterion.id.clone(), hiding))
+/// The tags a sub-bullet keeps from counting on the task's criteria (its
+/// `(journey)` and `(serves ...)`) and on the epic criteria it serves (their
+/// `(journey)`): each criterion's name (`AC-n`, or `EPC-NNN AC-n` for a
+/// served one), the tag and the hiding sub-bullet's first line.
+fn hidden_tags<'g>(task: &'g RecordView, graph: &'g Graph) -> Vec<(String, &'static str, &'g str)> {
+    let own = task.criteria.items.iter().flat_map(|criterion| {
+        [("(journey)", "(journey)"), ("(serves ", "(serves ...)")]
+            .into_iter()
+            .filter_map(|(tag, label)| {
+                criterion
+                    .tag_hidden_by(tag)
+                    .map(|hiding| (criterion.id.clone(), label, hiding))
+            })
     });
     let served = task.criteria.items.iter().filter_map(|item| {
         let (epic_id, criterion_id) = item.serves()?;
@@ -2244,21 +2244,10 @@ fn hidden_journeys<'g>(task: &'g RecordView, graph: &'g Graph) -> Vec<(String, &
             .iter()
             .find(|criterion| criterion.id == criterion_id)?;
         criterion
-            .journey_hidden_by()
-            .map(|hiding| (format!("{} {}", epic.id, criterion.id), hiding))
+            .tag_hidden_by("(journey)")
+            .map(|hiding| (format!("{} {}", epic.id, criterion.id), "(journey)", hiding))
     });
     own.chain(served).collect()
-}
-
-/// A sub-bullet's first line as a refusal quotes it: at most 60
-/// characters, then an ellipsis.
-fn truncate_note(line: &str) -> String {
-    const LIMIT: usize = 60;
-    let mut out: String = line.chars().take(LIMIT).collect();
-    if line.chars().count() > LIMIT {
-        out.push_str("...");
-    }
-    out
 }
 
 /// Records of the range whose criteria differ from the criteria the judged
@@ -2751,7 +2740,17 @@ pub(super) fn criteria_delta(old: &[Criterion], new: &[Criterion]) -> Vec<String
                 "{} changed: {} -> {}",
                 item.id, item.text, next.text
             )),
-            _ => {}
+            Some(next) => {
+                let (before, after) = (CriterionKey::of(item), CriterionKey::of(next));
+                if before != after {
+                    delta.push(format!(
+                        "{} changed its tags with the same text: {} -> {}",
+                        item.id,
+                        before.tag_list(),
+                        after.tag_list()
+                    ));
+                }
+            }
         }
     }
     for item in new
@@ -4316,5 +4315,41 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("the note"), "{message}");
+
+        // Review round 1 (TSK-004 of the verdict): a `(serves ...)` only in
+        // a note is named with the same remedy.
+        let in_note =
+            "- AC-1 The command shall run.\n  - Amended 2026-10-14: now (serves EPC-001 AC-1).\n";
+        let graph = journey_graph(&[
+            (
+                RecordKind::Epic,
+                "EPC-001",
+                "- AC-1 (journey) On a fresh project, it shall install.\n",
+            ),
+            (RecordKind::Task, "TSK-001", in_note),
+        ]);
+        let message = journey_requirement(&graph, "TSK-001").unwrap();
+        assert!(
+            message.contains(
+                "the note \"- Amended 2026-10-14: now (serves EPC-001 AC-1).\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)"
+            ),
+            "{message}"
+        );
+    }
+
+    /// Review round 1: a reflow that keeps the text but moves a tag is a
+    /// criteria delta, printed with the tags on each side.
+    #[test]
+    fn a_tag_change_with_the_same_text_is_a_criteria_delta() {
+        let one_line =
+            items("- AC-1 Prove the metric now (after release) - Amended 2026-10-14: the rest.\n");
+        let split = items(
+            "- AC-1 Prove the metric now (after release)\n  - Amended 2026-10-14: the rest.\n",
+        );
+        assert_eq!(
+            criteria_delta(&one_line, &split),
+            vec!["AC-1 changed its tags with the same text: no tag -> (after release)".to_string()]
+        );
+        assert!(criteria_delta(&split, &split).is_empty());
     }
 }
