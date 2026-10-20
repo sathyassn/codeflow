@@ -51,9 +51,14 @@ class ContractScanJourneys(unittest.TestCase):
 
     def test_a_new_scan_is_discovered_and_its_failure_reaches_the_caller(self):
         self.assert_control()
-        self.write("crates/codeflow-core/tests/new_repository_scan.rs",
-                   '#[test] fn newly_added_scan() { panic!("new scan ran"); }\n')
-        self.assert_failure("new scan ran")
+        for relative in ["new_repository_scan.rs", "new_repository_scan/main.rs"]:
+            with self.subTest(relative=relative):
+                name = "crates/codeflow-core/tests/" + relative
+                self.write(name, '#[test] fn newly_added_scan() { panic!("new scan ran"); }\n')
+                try:
+                    self.assert_failure("new scan ran")
+                finally:
+                    (self.root / name).unlink()
 
     def test_a_missing_remedy_proof_fails_the_runner(self):
         self.assert_control()

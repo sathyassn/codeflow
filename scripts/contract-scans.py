@@ -36,8 +36,10 @@ OUTSIDE_SCANS = {
 
 
 def commands(root: Path) -> list[list[str]]:
-    scans = sorted(path.stem for path in (root / "crates/codeflow-core/tests").glob("*.rs")
-                   if path.stem not in OUTSIDE_SCANS)
+    tests = root / "crates/codeflow-core/tests"
+    discovered = {path.stem for path in tests.glob("*.rs")}
+    discovered.update(path.parent.name for path in tests.glob("*/main.rs"))
+    scans = sorted(discovered - OUTSIDE_SCANS.keys())
     if not scans:
         raise ValueError("no core integration scans discovered")
     core = ["cargo", "test", "-p", "codeflow-core"]
