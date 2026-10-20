@@ -623,6 +623,12 @@ fn collect_delivery(
 /// only counts by status appear.
 #[must_use]
 pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
+    // Status quotes ref names, record text and errors; every control,
+    // format and separator character in them is shown escaped (TSK-388).
+    crate::git::display_output(&render_status_text(view, capabilities_table))
+}
+
+fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
     let mut out = String::new();
 
     match &view.branch {
@@ -720,7 +726,7 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     for note in &view.notes {
-        let _ = writeln!(out, "note: {note}");
+        let _ = writeln!(out, "note: {}", crate::git::display_message(note));
     }
 
     out
@@ -734,12 +740,17 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
             out,
             "  active: {} {} ({})",
             entry.task_id,
-            entry.title,
+            crate::git::display_message(&entry.title),
             shown_branches(&entry.branches)
         );
     }
     for entry in backlog.in_state(State::Ready) {
-        let _ = writeln!(out, "  ready: {} {}", entry.task_id, entry.title);
+        let _ = writeln!(
+            out,
+            "  ready: {} {}",
+            entry.task_id,
+            crate::git::display_message(&entry.title)
+        );
     }
     // A Blocker or an invalid record outranks a claim; the branch stays shown.
     for state in [State::Blocked, State::Invalid] {
@@ -752,7 +763,7 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
                 "  {}: {} ({}; {})",
                 state.as_str(),
                 entry.task_id,
-                entry.reason,
+                crate::git::display_message(&entry.reason),
                 shown_branches(&entry.branches)
             );
         }
@@ -765,7 +776,8 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
         );
     }
     for branch in &backlog.landed {
-        let _ = writeln!(out, "  landed: {}", crate::git::display_text(branch));
+        // In display form already, as the backlog holds it.
+        let _ = writeln!(out, "  landed: {branch}");
     }
     for (epic, progress) in &backlog.epics {
         let _ = writeln!(
@@ -776,14 +788,11 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
     }
 }
 
-/// Branch names as status shows them, comma separated. A claim branch can
-/// be a remote's, whose name can hold any character git accepts (TSK-388).
+/// Branch names as status shows them, comma separated. The backlog holds
+/// them in display form already (`GitName::display`), so they are joined
+/// as they are; escaping them again would double each backslash.
 fn shown_branches(branches: &[String]) -> String {
-    branches
-        .iter()
-        .map(|branch| crate::git::display_text(branch))
-        .collect::<Vec<_>>()
-        .join(", ")
+    branches.join(", ")
 }
 
 fn render_cleanup(out: &mut String, view: &StatusView) {
@@ -845,6 +854,10 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
 /// same way the base view does.
 #[must_use]
 pub fn render_delivery(view: &StatusView) -> String {
+    crate::git::display_output(&render_delivery_text(view))
+}
+
+fn render_delivery_text(view: &StatusView) -> String {
     let mut out = String::new();
     match &view.delivery {
         Some(caps) if !caps.is_empty() => {

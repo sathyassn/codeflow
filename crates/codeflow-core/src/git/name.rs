@@ -62,25 +62,50 @@ impl fmt::Display for NotRepresentable {
 
 impl std::error::Error for NotRepresentable {}
 
-/// Whether output shows `c` escaped: a control character, or a format or
-/// separator character that can reorder or break the line a person reads
-/// (the Arabic letter mark, zero-width and direction marks, bidi embeddings,
-/// overrides and isolates, word joiners, the byte-order mark, and the line
-/// and paragraph separators). A name a remote supplies can hold any of them
-/// (TSK-388).
+/// Whether output shows `c` escaped (TSK-388): a control character (Cc), a
+/// line or paragraph separator, or a character a terminal or reader does not
+/// show as itself: the Unicode `Default_Ignorable_Code_Point` set (bidi
+/// controls, zero-width and joiner characters, variation selectors, the
+/// tag block and the rest) and the other format characters (Cf). A name a
+/// remote supplies can hold any of them. Combining marks such as U+0301 are
+/// ordinary text in names and are shown as they are: that is the bound.
 fn hidden(c: char) -> bool {
     c.is_control()
-        || matches!(
-            c,
-            '\u{61c}'
-                | '\u{200b}'..='\u{200f}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{feff}'
-                | '\u{2028}'
-                | '\u{2029}'
-        )
+        || matches!(u32::from(c), 0x2028 | 0x2029)
+        || IGNORABLE
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&u32::from(c)))
 }
+
+/// `Default_Ignorable_Code_Point` (Unicode 16 `DerivedCoreProperties`) and
+/// the format characters (Cf) outside it, as inclusive ranges.
+const IGNORABLE: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),   // soft hyphen
+    (0x034F, 0x034F),   // combining grapheme joiner
+    (0x0600, 0x0605),   // Arabic number signs (Cf)
+    (0x061C, 0x061C),   // Arabic letter mark
+    (0x06DD, 0x06DD),   // Arabic end of ayah (Cf)
+    (0x070F, 0x070F),   // Syriac abbreviation mark (Cf)
+    (0x0890, 0x0891),   // Arabic pound and piastre marks (Cf)
+    (0x08E2, 0x08E2),   // Arabic disputed end of ayah (Cf)
+    (0x115F, 0x1160),   // Hangul choseong and jungseong fillers
+    (0x17B4, 0x17B5),   // Khmer inherent vowels
+    (0x180B, 0x180F),   // Mongolian variation selectors and vowel separator
+    (0x200B, 0x200F),   // zero-width space, joiners, direction marks
+    (0x202A, 0x202E),   // bidi embeddings and overrides
+    (0x2060, 0x206F),   // word joiner, invisible operators, isolates, deprecated
+    (0x3164, 0x3164),   // Hangul filler
+    (0xFE00, 0xFE0F),   // variation selectors
+    (0xFEFF, 0xFEFF),   // byte-order mark
+    (0xFFA0, 0xFFA0),   // halfwidth Hangul filler
+    (0xFFF0, 0xFFFB),   // unassigned specials and interlinear annotation
+    (0x110BD, 0x110BD), // Kaithi number sign (Cf)
+    (0x110CD, 0x110CD), // Kaithi number sign above (Cf)
+    (0x13430, 0x1343F), // Egyptian hieroglyph format controls (Cf)
+    (0x1BCA0, 0x1BCA3), // shorthand format controls
+    (0x1D173, 0x1D17A), // musical symbol format controls
+    (0xE0000, 0xE0FFF), // tags and variation selectors supplement
+];
 
 /// `c` escaped: `\xNN` up to U+00FF, else `\u{NNNN}`.
 fn write_escaped(out: &mut impl fmt::Write, c: char) -> fmt::Result {
@@ -411,6 +436,28 @@ pub fn display_output(text: &str) -> String {
     shown
 }
 
+/// Serialized JSON as a terminal may show it: each character
+/// [`display_text`] escapes is written as a JSON `\uXXXX` escape (a
+/// surrogate pair above U+FFFF). Such characters can only stand inside
+/// JSON strings, so the document decodes to the same values, while the
+/// bytes on the terminal hold none of them (TSK-388). `serde_json` itself
+/// escapes only the C0 controls, the quote and the backslash.
+#[must_use]
+pub fn display_json(json: &str) -> String {
+    let mut shown = String::with_capacity(json.len());
+    for c in json.chars() {
+        if hidden(c) && !matches!(c, '\n' | '\t' | '\r') {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = fmt::Write::write_fmt(&mut shown, format_args!("\\u{unit:04x}"));
+            }
+        } else {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
 /// A message field as a refusal or note shows it: [`display_output`], with
 /// each further line of the field indented under its first, so text the
 /// message quotes cannot start a line that reads as one of `CodeFlow`'s own
@@ -540,6 +587,16 @@ mod tests {
             ),
             ("a\u{2060}b\u{feff}c", "a\\u{2060}b\\u{feff}c"),
             ("ev\u{9b}31mil", "ev\\x9b31mil"),
+            // Round 2: the rest of Default_Ignorable_Code_Point and the tags.
+            ("a\u{ad}b\u{34f}c\u{180e}d", "a\\xadb\\u{034f}c\\u{180e}d"),
+            (
+                "a\u{206a}b\u{fe0e}c\u{fff9}d",
+                "a\\u{206a}b\\u{fe0e}c\\u{fff9}d",
+            ),
+            ("main\u{e0001}\u{e0061}", "main\\u{e0001}\\u{e0061}"),
+            ("a\u{e0100}b\u{1d173}c", "a\\u{e0100}b\\u{1d173}c"),
+            // The stated bound: a combining mark is ordinary text.
+            ("cafe\u{301}", "cafe\u{301}"),
             ("caf\u{e9}/\u{5d0}", "caf\u{e9}/\u{5d0}"),
         ] {
             assert_eq!(display_text(name), shown);
@@ -711,7 +768,24 @@ mod tests {
 
 #[cfg(test)]
 mod output_tests {
-    use super::{display_message, display_output};
+    use super::{display_json, display_message, display_output};
+
+    /// TSK-388 round 2: JSON keeps every value, and its bytes hold no C1,
+    /// bidi or tag character.
+    #[test]
+    fn json_escapes_hidden_characters_and_keeps_the_values() {
+        let value = serde_json::json!({"ref": "ev\u{9b}31mil", "title": "a\u{202e}b\u{e0001}\nc"});
+        let text = serde_json::to_string(&value).unwrap();
+        let shown = display_json(&text);
+        assert_eq!(
+            shown,
+            "{\"ref\":\"ev\\u009b31mil\",\"title\":\"a\\u202eb\\udb40\\udc01\\nc\"}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&shown).unwrap(),
+            value
+        );
+    }
 
     /// TSK-388 round 1: text with its own lines keeps line breaks and tabs
     /// and backslashes, and escapes every other control, format and

@@ -118,7 +118,11 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
                 .map_err(|error| format!("{error}; run git fetch {remote}"))?;
             policy = stricter(policy, &line)?;
             project = line_project.or(project);
-            let _ = write!(sources, " + {target_ref} (stricter policy levels)");
+            let _ = write!(
+                sources,
+                " + {} (stricter policy levels)",
+                crate::git::display_text(&target_ref)
+            );
         }
     }
     let mut authority = finish(root, policy, project, sources)?;
@@ -558,6 +562,44 @@ mod tests {
                 "{printed:?}"
             );
         }
+    }
+
+    /// TSK-388 round 2 (security N1): the task branch's declared target, a
+    /// line the remote holds, joins the policy source; its name is shown
+    /// escaped there.
+    #[test]
+    fn the_stricter_policy_target_is_shown_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(
+                b"project-management/tasks/TSK-007.md",
+                b"---\nid: TSK-007\nintegration_target: \"integration/ev\\u009b31mil\"\n---\n",
+            )],
+        );
+        repo.remote("origin", "https://example.invalid/origin.git")
+            .unwrap();
+        for name in ["main", "integration/ev\u{9b}31mil"] {
+            repo.reference(&format!("refs/remotes/origin/{name}"), commit, true, "test")
+                .unwrap();
+        }
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test",
+        )
+        .unwrap();
+        repo.reference("refs/heads/task/TSK-007-late", commit, true, "test")
+            .unwrap();
+        repo.set_head("refs/heads/task/TSK-007-late").unwrap();
+        let source = load(dir.path()).unwrap().source;
+        assert!(
+            source
+                .contains("refs/remotes/origin/integration/ev\\x9b31mil (stricter policy levels)"),
+            "{source:?}"
+        );
+        assert!(!source.contains('\u{9b}'), "{source:?}");
     }
 
     /// Issue 79: git2's `Tree::walk` stops with an error at a directory whose

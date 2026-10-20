@@ -14,8 +14,9 @@ pub mod remote_query;
 pub(crate) mod stdin;
 
 pub use name::{
-    diff_paths, display_key, display_message, display_output, display_text, gitfile_dir,
-    key_is_text, tracking_branch, walk_tree, DisplayName, GitName, NotRepresentable, NotUtf8, Walk,
+    diff_paths, display_json, display_key, display_message, display_output, display_text,
+    gitfile_dir, key_is_text, tracking_branch, walk_tree, DisplayName, GitName, NotRepresentable,
+    NotUtf8, Walk,
 };
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary

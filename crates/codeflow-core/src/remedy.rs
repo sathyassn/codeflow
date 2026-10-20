@@ -161,7 +161,13 @@ impl Finding {
 
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (clear it: {})", self.text, self.remedy)
+        // The text can quote a name or content a remote supplied (TSK-388).
+        write!(
+            f,
+            "{} (clear it: {})",
+            crate::git::display_message(&self.text),
+            crate::git::display_message(&self.remedy)
+        )
     }
 }
 

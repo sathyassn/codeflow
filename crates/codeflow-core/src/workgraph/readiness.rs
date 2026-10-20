@@ -130,18 +130,25 @@ impl Backlog {
     }
 
     /// One line naming the snapshot the verdicts were read from (R-41).
+    /// The reference and target are ref names, which can hold any
+    /// character git accepts, so they are shown escaped (TSK-388).
     #[must_use]
     pub fn snapshot_line(&self) -> String {
+        use crate::git::{display_message, display_text};
         let tips = self
             .snapshots
             .iter()
             .map(
                 |snapshot| match (&snapshot.reference, &snapshot.tip, &snapshot.problem) {
                     (Some(reference), Some(tip), _) => {
-                        format!("{reference}@{}", &tip[..tip.len().min(9)])
+                        format!("{}@{}", display_text(reference), &tip[..tip.len().min(9)])
                     }
-                    (_, _, Some(problem)) => format!("{} ({problem})", snapshot.target),
-                    _ => format!("{} (not found)", snapshot.target),
+                    (_, _, Some(problem)) => format!(
+                        "{} ({})",
+                        display_text(&snapshot.target),
+                        display_message(problem)
+                    ),
+                    _ => format!("{} (not found)", display_text(&snapshot.target)),
                 },
             )
             .collect::<Vec<_>>()
@@ -315,7 +322,7 @@ impl WorkBranches {
                 format!(
                     "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
                     branch.display(),
-                    shown(target)
+                    crate::git::display_text(&shown(target))
                 )
             })
             .collect()

@@ -2730,7 +2730,12 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
     // Signal 2: a protected branch checked out in a non-root worktree.
     let policy = match crate::hooks::policy::Policy::load(&root) {
         Ok(policy) => policy.git,
-        Err(error) => return fail(format!("cannot read policy: {error}")),
+        Err(error) => {
+            return fail(format!(
+                "cannot read policy: {}",
+                crate::git::display_message(&error)
+            ))
+        }
     };
     let list = match opts.do_exec(
         "git",
@@ -2846,7 +2851,8 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
                 name: "adopter-fit".into(),
                 status: Status::Fail,
                 message: format!(
-                    "cannot read policy: {error}\n      clear it: {}",
+                    "cannot read policy: {}\n      clear it: {}",
+                    crate::git::display_message(&error),
                     remedy::DOCTOR_POLICY_DECISION.with(&[(
                         "decision",
                         "repair its syntax and values so the policy can be read",
