@@ -960,6 +960,37 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
         &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
     );
     let reason = format!("pins TSK-003 at {pin}: not on 'origin/main'; 'evil' is not fetched here");
+    // Review round 2 (Grok F1): git-guard refuses a case-different write of
+    // the tracking ref, which a case-insensitive filesystem would store as
+    // `refs/remotes/origin/evil`.
+    for name in [
+        "REFS/REMOTES/origin/evil",
+        "refs/Remotes/origin/evil",
+        "Refs/remotes/origin/evil",
+    ] {
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_input":{{"command":"git update-ref {name} {pin}"}},"cwd":"{}"}}"#,
+            root.display()
+        );
+        let mut guard = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args(["hook", "git-guard"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(guard.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+        let out = guard.wait_with_output().unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     let next = cli(root, &["work", "next"], None);
     succeeds(&next);

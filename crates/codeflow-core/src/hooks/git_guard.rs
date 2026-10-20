@@ -9370,8 +9370,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
 
     // The fetched registry is what issue and CI verify against (R-10, R-11);
     // only a real, non-forced fetch may move it.
-    if refname
-        .strip_prefix("refs/remotes/")
+    if strip_ref_prefix(refname, "refs/remotes/")
         .and_then(|rest| rest.split_once('/'))
         .is_some_and(|(_, branch)| branch == crate::ids::REGISTRY_BRANCH)
     {
@@ -9393,7 +9392,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
         return;
     }
 
-    if let Some(branch) = refname.strip_prefix("refs/heads/") {
+    if let Some(branch) = strip_ref_prefix(refname, "refs/heads/") {
         if !policy.branch_is_protected(branch) {
             return;
         }
@@ -9420,7 +9419,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
 /// When `refname` is `refs/remotes/<remote>/<branch>` and `<branch>` is
 /// protected, return the branch; else `None`.
 fn protected_component_of_remote_ref<'a>(refname: &'a str, policy: &GitPolicy) -> Option<&'a str> {
-    let rest = refname.strip_prefix("refs/remotes/")?;
+    let rest = strip_ref_prefix(refname, "refs/remotes/")?;
     // rest is `<remote>/<branch...>`; the branch is everything after the first
     // path component.
     let (_remote, branch) = rest.split_once('/')?;
@@ -9444,7 +9443,7 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
     // set or its target names a protected branch.
     if positionals.len() >= 2 {
         let touches_protected = positionals.iter().any(|p| {
-            let name = p.strip_prefix("refs/heads/").unwrap_or(p);
+            let name = strip_ref_prefix(p, "refs/heads/").unwrap_or(p);
             policy.branch_is_protected(name)
         });
         if touches_protected {
@@ -10240,6 +10239,17 @@ const GIT_UPDATE_REF_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
+/// `name` after `prefix`, the prefix compared without regard to ASCII case.
+/// Git accepts a ref name such as `REFS/REMOTES/origin/main` or
+/// `Refs/Heads/main`, and on a case-insensitive filesystem stores it as the
+/// loose ref `refs/remotes/origin/main` or `refs/heads/main`, so a guard
+/// that matched only the exact bytes would let the write through.
+pub(crate) fn strip_ref_prefix<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = name.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &name[prefix.len()..])
+}
+
 pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
     let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
     let writing = sub == "update-ref"
@@ -10251,7 +10261,7 @@ pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
             || parsed
                 .operands
                 .iter()
-                .any(|name| name.starts_with("refs/remotes/")))
+                .any(|name| strip_ref_prefix(name, "refs/remotes/").is_some()))
 }
 
 /// `git reset` (git-reset(1)): the mode options are booleans, and only the
@@ -16545,6 +16555,45 @@ mod tests {
             assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
             assert!(v[0].message.contains("remote-tracking"), "{cmd}: {v:?}");
         }
+    }
+
+    /// TSK-381 review round 2 (Grok F1): on a case-insensitive filesystem
+    /// git stores a case-different prefix as the same ref, so each spelling
+    /// gets the refusal the exact one does.
+    #[test]
+    fn test_update_ref_case_different_prefixes_are_refused() {
+        let p = default_policy();
+        for name in [
+            "REFS/REMOTES/origin/evil",
+            "refs/Remotes/origin/evil",
+            "Refs/remotes/origin/evil",
+        ] {
+            let cmd = format!("git update-ref {name} deadbeef");
+            assert!(
+                has_rule(&evaluate(&cmd, &ctx(&p, "feat/x")), "git.policy_authority"),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "git update-ref REFS/REMOTES/origin/main deadbeef",
+            "git update-ref Refs/Heads/main deadbeef",
+            "git update-ref REFS/HEADS/main deadbeef",
+        ] {
+            assert!(
+                has_rule(
+                    &evaluate(cmd, &ctx(&p, "feat/x")),
+                    "git.local_ref_protection"
+                ),
+                "{cmd}"
+            );
+        }
+        assert!(has_rule(
+            &evaluate("git update-ref -d refs/Heads/main", &ctx(&p, "feat/x")),
+            "git.delete_protected"
+        ));
+        assert_eq!(strip_ref_prefix("REFS/heads/x", "refs/heads/"), Some("x"));
+        assert_eq!(strip_ref_prefix("refs/head", "refs/heads/"), None);
+        assert_eq!(strip_ref_prefix("ref\u{e9}/heads/x", "refs/heads/"), None);
     }
 
     #[test]

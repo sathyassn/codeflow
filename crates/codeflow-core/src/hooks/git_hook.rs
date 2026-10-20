@@ -744,7 +744,7 @@ pub fn ref_line_touches_local_branch(line: &str) -> bool {
     // holds none: other whitespace (a no-break space) is part of the name.
     line.splitn(3, ' ')
         .nth(2)
-        .is_some_and(|r| r.starts_with("refs/heads/"))
+        .is_some_and(|r| super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some())
 }
 
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
@@ -790,7 +790,7 @@ pub fn reference_transaction(
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
-        let Some(branch) = refname.strip_prefix("refs/heads/") else {
+        let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
             continue;
         };
         if !policy.branch_is_protected(branch) {
@@ -2629,6 +2629,32 @@ mod tests {
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.local_ref_protection");
         assert_eq!(report.violations[0].level, PolicyLevel::Block);
+    }
+
+    /// TSK-381 review round 2: git passes the ref name as typed, and on a
+    /// case-insensitive filesystem `Refs/Heads/main` is the loose ref
+    /// `refs/heads/main`, so a case-different prefix is still that branch.
+    #[test]
+    fn test_reference_transaction_reads_a_case_different_prefix_as_the_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["Refs/Heads/main", "REFS/HEADS/main", "refs/Heads/main"] {
+            assert!(ref_line_touches_local_branch(&format!(
+                "{ZERO40} {ahead} {name}"
+            )));
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
     }
 
     #[test]

@@ -1828,6 +1828,31 @@ fn git_guard_blocks_remote_tracking_ref_poisoning_with_exit_2() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.local_ref_protection"));
 }
 
+/// TSK-381 review round 2 (Grok F1): a case-different `refs/remotes/`
+/// prefix names the same ref on a case-insensitive filesystem, so git-guard
+/// refuses each spelling with exit 2.
+#[test]
+fn git_guard_blocks_case_different_remote_tracking_writes_with_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for name in [
+        "REFS/REMOTES/origin/evil",
+        "refs/Remotes/origin/evil",
+        "Refs/remotes/origin/evil",
+    ] {
+        let cmd = format!("git update-ref {name} deadbeef");
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(&cmd, dir.path()),
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{cmd}: {stderr}");
+        assert!(stderr.contains("git.policy_authority"), "{cmd}: {stderr}");
+    }
+}
+
 #[test]
 fn exec_guard_blocks_dangerous_command_with_exit_2() {
     // Task 6: a PreToolUse block must map to exit 2, not 0.
