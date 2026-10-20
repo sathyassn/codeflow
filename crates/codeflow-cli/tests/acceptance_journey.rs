@@ -684,13 +684,25 @@ fn the_review_inputs_are_judged_as_stated_on_a_fresh_project() {
             "- AC-1 The installer shall run.\n  - Amended 2026-10-14: now (serves EPC-001 AC-1).\n".to_string(),
         ),
         ("follow", "- AC-1 The metric shall be read.\n".to_string()),
+        (
+            "serves-later",
+            "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n  - The command shall print the plan.\n".to_string(),
+        ),
+        (
+            "serves-inside",
+            "- AC-1 The installer (serves EPC-001 AC-1) shall run.\n".to_string(),
+        ),
+        (
+            "serves-noted",
+            "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n".to_string(),
+        ),
     ];
     for (index, (title, criteria)) in tasks.iter().enumerate() {
         let args = ["task", "new", "--epic", "EPC-001", "--into", LINE, title];
         ok(&codeflow(&root, &args), "task new");
         edit(
             &root,
-            &format!("project-management/tasks/TSK-00{}.md", index + 1),
+            &format!("project-management/tasks/TSK-{:03}.md", index + 1),
             "- AC-1\n",
             criteria,
         );
@@ -841,6 +853,28 @@ fn the_review_inputs_are_judged_as_stated_on_a_fresh_project() {
         start(task, branch, file);
         fails(&ci(&root, branch, task), task, named);
     }
+
+    // Review round 2 (TSK-038, TSK-039, TSK-040 of the verdict): a serves
+    // tag reads like the other tags, where it opens or closes the
+    // criterion's own text.
+    start("TSK-009", "task/TSK-009-serves-later", "src/ninth.rs");
+    fails(
+        &ci(&root, "task/TSK-009-serves-later", "TSK-009"),
+        "a serve before a later sub-bullet",
+        "the note \"- The command shall print the plan.\" under AC-1 hides its `(serves ...)` tag; move the tag to the start of the criterion (R-50)",
+    );
+    start("TSK-010", "task/TSK-010-serves-inside", "src/tenth.rs");
+    fails(
+        &ci(&root, "task/TSK-010-serves-inside", "TSK-010"),
+        "a serve inside the text",
+        "TSK-010 changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion",
+    );
+    start("TSK-011", "task/TSK-011-serves-noted", "src/eleventh.rs");
+    let passed = ok(
+        &ci(&root, "task/TSK-011-serves-noted", "TSK-011"),
+        "a closing serve before a dated note",
+    );
+    assert!(!passed.contains("work.journey_criterion"), "{passed}");
 }
 
 /// An acceptance block for a one-criterion record (`AC-1` only).

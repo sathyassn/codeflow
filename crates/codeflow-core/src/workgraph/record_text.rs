@@ -172,8 +172,10 @@ impl Criterion {
             if let Some(item) = item {
                 let hides = if item.note {
                     part.contains(tag)
+                } else if serves {
+                    serves_tag(&before).is_some()
                 } else {
-                    !serves && opens_or_closes(&before, tag)
+                    opens_or_closes(&before, tag)
                 };
                 if hides {
                     return Some(item.line.as_str());
@@ -215,22 +217,32 @@ impl Criterion {
         }
     }
 
-    /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)` in
-    /// its own text.
+    /// The epic criterion this one serves, from a `(serves EPC-NNN AC-m)`
+    /// tag that opens or closes its own text (R-50), like the other tags.
     #[must_use]
     pub fn serves(&self) -> Option<(String, String)> {
-        let text = self.own_text();
-        let start = text.find(SERVES)?;
-        let rest = &text[start + SERVES.len()..];
-        let end = rest.find(')')?;
-        let mut parts = rest[..end]
-            .split([' ', '\t'])
-            .filter(|part| !part.is_empty());
-        let epic = parts.next()?;
-        let criterion = parts.next()?;
-        (parts.next().is_none() && is_criterion_id(criterion))
-            .then(|| (epic.to_string(), criterion.to_string()))
+        serves_tag(&self.own_text())
     }
+}
+
+/// The epic criterion a `(serves EPC-NNN AC-m)` tag that opens or closes
+/// `text` names. Sentence punctuation after a closing tag does not hide it;
+/// a tag inside the text is not a tag.
+fn serves_tag(text: &str) -> Option<(String, String)> {
+    let text = text.trim_matches([' ', '\t']);
+    let closing = text.trim_end_matches(['.', ',', ';', ':']);
+    let inner = if let Some(rest) = text.strip_prefix(SERVES) {
+        &rest[..rest.find(')')?]
+    } else {
+        let rest = &closing[closing.rfind(SERVES)? + SERVES.len()..];
+        rest.strip_suffix(')')
+            .filter(|inner| !inner.contains(')'))?
+    };
+    let mut parts = inner.split([' ', '\t']).filter(|part| !part.is_empty());
+    let epic = parts.next()?;
+    let criterion = parts.next()?;
+    (parts.next().is_none() && is_criterion_id(criterion))
+        .then(|| (epic.to_string(), criterion.to_string()))
 }
 
 /// The tags of one criterion ([`Criterion::tags`]).
@@ -1867,6 +1879,35 @@ their sources, or the `init_e2e` case that renders them (journey).";
             "- AC-1 The command shall pass (journey)\n  - Amended 2026-10-18: one\n    more line of the note.\n",
         );
         assert_eq!(items[0].own_text(), "The command shall pass (journey)");
+    }
+
+    /// TSK-382 review round 2: a serves tag counts only where it opens or
+    /// closes the criterion's own text, like the other tags.
+    #[test]
+    fn a_serves_tag_reads_where_it_opens_or_closes() {
+        let served = Some(("EPC-001".to_string(), "AC-1".to_string()));
+        for (section, counts, hidden) in [
+            (
+                "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n  - The command shall print the plan.\n",
+                false,
+                Some("- The command shall print the plan."),
+            ),
+            ("- AC-1 The installer (serves EPC-001 AC-1) shall run.\n", false, None),
+            (
+                "- AC-1 The installer shall run (serves EPC-001 AC-1)\n  - Amended 2026-10-14: dated note.\n",
+                true,
+                None,
+            ),
+            ("- AC-1 (serves EPC-001 AC-1) The installer shall run.\n", true, None),
+            ("- AC-1 The installer shall run (serves EPC-001 AC-1).\n", true, None),
+        ] {
+            let items = listed(section);
+            assert_eq!(items[0].serves().is_some(), counts, "{section}");
+            if counts {
+                assert_eq!(items[0].serves(), served, "{section}");
+            }
+            assert_eq!(items[0].tag_hidden_by("(serves "), hidden, "{section}");
+        }
     }
 
     /// TSK-382 review round 1: the signature reads the tags, so a reflow
