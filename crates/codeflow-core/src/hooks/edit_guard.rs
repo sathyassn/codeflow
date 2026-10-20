@@ -737,6 +737,13 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         true,
         repo.commondir().to_path_buf(),
     ));
+    // The namespace itself contains submodule enforcement state. Individual
+    // descendants keep the Git-directory owner's precise protection set.
+    protected.push((
+        repo.commondir().join("modules"),
+        false,
+        repo.commondir().to_path_buf(),
+    ));
     for admin in super::repo::registrations(repo)? {
         let registration = registration_at(&admin)?;
         if registration.checkout.is_none() {
@@ -1083,6 +1090,9 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>,
             .iter()
             .map(|entry| entry.path[1].clone().map(|path| (path, entry.directory)))
             .collect::<Result<_, _>>()?;
+        if let Some(hidden) = super::repo::hidden_checkout_under(&start, root)? {
+            held.push((hidden, false));
+        }
         if let Some(checkouts) = checkout_paths_at(root)? {
             held.extend(
                 checkouts

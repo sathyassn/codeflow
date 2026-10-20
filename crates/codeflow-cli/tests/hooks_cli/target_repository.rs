@@ -200,6 +200,7 @@ fn target_worktree_configuration_writes() {
                 "git config core.worktre? /y",
                 "git config core.worktre[e] /x",
                 "git config {core.hooksPath,/dev/null}",
+                "git config {--get,core.bare,true}",
             ] {
                 let out = f.command(&cwd, hook, command);
                 if !refused(&out) {
@@ -223,9 +224,374 @@ fn target_worktree_configuration_writes() {
             }
             let out = f.command(&cwd, hook, "git -c core.worktree=/decoy status");
             assert_eq!(out.status.code(), Some(0), "transient {hook}: {out:?}");
+            let out = f.command(&cwd, hook, r"git config --get-regexp 'remote\..*\.url'");
+            assert_eq!(out.status.code(), Some(0), "read {hook}: {out:?}");
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+// Each round-two regression drives the built hook, including allowed controls.
+#[test]
+fn repair2_config_reads() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for flag in [
+            "--get",
+            "--get-all",
+            "--get-regexp",
+            "--get-urlmatch",
+            "-l",
+            "--list",
+            "get",
+            "list",
+        ] {
+            let command = format!("git config {flag} 'remote\\..*\\.url'");
+            let out = f.command(&f.root, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_xargs_guarded_verbs() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in ["git diff --name-only | xargs git add", "xargs git status"] {
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for tail in [
+            "",
+            "config",
+            "worktree",
+            "update-ref",
+            "symbolic-ref",
+            "branch -D",
+            "branch -d",
+            "branch main",
+            "push",
+            "reset --hard",
+            "reset HEAD",
+            "clean",
+            "checkout --",
+            "switch --",
+            "restore --",
+            "rm",
+        ] {
+            let command = format!("printf x | xargs git {tail}");
+            let out = f.command(&f.root, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_planted_markers_cannot_hide_checkouts() {
+    for plant in ["repository", "empty", "foreign", "garbage"] {
+        let f = Fixture::new();
+        let cover = f.root.join(".worktrees/cover");
+        let below = cover.join("below");
+        std::fs::create_dir_all(&cover).unwrap();
+        git(
+            &f.root,
+            &[
+                "worktree",
+                "move",
+                &shell_path(&f.linked),
+                &shell_path(&below),
+            ],
+        );
+        let away = f.temp.path().join("away");
+        std::fs::rename(&below, &away).unwrap();
+        git(&f.root, &["worktree", "prune", "--expire", "now"]);
+        std::fs::rename(&away, &below).unwrap();
+        match plant {
+            "repository" => git(&cover, &["init"]),
+            "empty" => std::fs::create_dir(cover.join(".git")).unwrap(),
+            "foreign" => {
+                let foreign = f.temp.path().join("foreign");
+                std::fs::create_dir(&foreign).unwrap();
+                git(&foreign, &["init"]);
+                std::fs::write(
+                    cover.join(".git"),
+                    format!("gitdir: {}\n", shell_path(&foreign.join(".git"))),
+                )
+                .unwrap();
+            }
+            _ => std::fs::write(cover.join(".git"), "garbage\n").unwrap(),
+        }
+        for hook in ["git-guard"] {
+            for command in [
+                "rm -rf .worktrees",
+                "find .worktrees -delete",
+                "git clean -ffd .worktrees",
+                "rm -rf .worktrees/cover/below",
+            ] {
+                let out = f.command(&f.root, hook, command);
+                assert!(refused(&out), "{plant} {hook} {command}: {out:?}");
+                if command != "rm -rf .worktrees/cover/below" {
+                    assert!(
+                        String::from_utf8_lossy(&out.stderr).contains("git worktree repair"),
+                        "{plant} {command}: {out:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn repair2_planted_ancestor_marker() {
+    let f = Fixture::new();
+    let cover = f.root.join(".worktrees/cover");
+    let content = cover.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    let below = content.join("below");
+    git(
+        &f.root,
+        &[
+            "worktree",
+            "move",
+            &shell_path(&f.linked),
+            &shell_path(&below),
+        ],
+    );
+    let away = f.temp.path().join("away");
+    std::fs::rename(&below, &away).unwrap();
+    git(&f.root, &["worktree", "prune", "--expire", "now"]);
+    std::fs::rename(&away, &below).unwrap();
+    git(&cover, &["init"]);
+    let out = f.command(&f.root, "git-guard", "rm -rf .worktrees/cover/content");
+    assert!(refused(&out), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("git worktree repair"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn repair2_git_init_locations() {
+    let f = Fixture::new();
+    for cwd in repair_cwds(&f) {
+        for hook in ["git-guard", "exec-guard"] {
+            for dir in [
+                ".worktrees/cover",
+                ".claude/new",
+                ".codeflow/new",
+                ".git/hooks/new",
+                ".git/modules/new",
+            ] {
+                for option in ["", "--separate-git-dir /unused-git-dir "] {
+                    let command = format!("git init {option}'{}'", shell_path(&f.root.join(dir)));
+                    let out = f.command(&cwd, hook, &command);
+                    assert!(refused(&out), "{cwd:?} {hook} {command}: {out:?}");
+                }
+                let command = format!(
+                    "git init --separate-git-dir='{}' '{}'",
+                    shell_path(&f.root.join(dir)),
+                    shell_path(&f.temp.path().join("scratch"))
+                );
+                let out = f.command(&cwd, hook, &command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+            let command = format!("git init '{}'", shell_path(&f.temp.path().join("scratch")));
+            let out = f.command(&cwd, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+            let command = format!(
+                "git -C '{}' init --separate-git-dir '{}'",
+                shell_path(&f.root.join(".worktrees")),
+                shell_path(&f.temp.path().join("admin"))
+            );
+            let out = f.command(&cwd, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_editor_scripts() {
+    let f = Fixture::new();
+    for cwd in repair_cwds(&f) {
+        for hook in ["git-guard", "exec-guard"] {
+            for command in [
+                "printf 'e .git/config\\na\\nhooksPath = /tmp/evil\\n.\\nw\\nq\\n' | ed -s",
+                "printf 'e .git/config\\na\\n# marker\\n.\\nw\\nq\\n' | ed -s",
+                "printf 'e .git/config\\nw\\nq\\n' | ex -s",
+                "printf 'e .git/config\\n:wq\\n' | vim -es",
+                "printf 'e .git/config\\nw\\nq\\n' | vi -s",
+                "printf 'e .git/config\\nwq\\n' | nvim --headless",
+                "emacs --batch --eval '(write-region \"pwn\\n\" nil \".git/config\" t)'",
+                "printf 'e .git/config\\nw\\nq\\n' | ed -s README.md",
+            ] {
+                let out = f.command(&cwd, hook, command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+            let out = f.command(&cwd, hook, "vim README.md");
+            assert_eq!(out.status.code(), Some(0), "interactive {hook}: {out:?}");
+            // The guard does not interpret editor scripts. A file operand
+            // cannot prove that stdin does not switch to a second file.
+            let out = f.command(
+                &cwd,
+                hook,
+                "printf 'a\\ntext\\n.\\nw\\nq\\n' | ed -s README.md",
+            );
+            assert!(refused(&out), "unread script {hook}: {out:?}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains("editor script"),
+                "{out:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn repair2_git_creation_assignments() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "D=.claude; git clone /source $D/newclone",
+            "D=.git/hooks; git clone /source $D/planted",
+            "D=.claude; git worktree add $D/wtvar",
+            "git clone /source $UNKNOWN/newclone",
+            "git clone /source $D/newclone; D=scratch",
+            "D=.claude; git -C \"$D\" clone /source newclone",
+            "git -C \"$UNKNOWN\" clone /source newclone",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        let out = f.command(&f.root, hook, "D=scratch; git clone /source $D/newclone");
+        assert_eq!(out.status.code(), Some(0), "ordinary {hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair2_creation_path_spellings() {
+    let f = Fixture::new();
+    std::fs::create_dir(f.root.join("scratch")).unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git clone /source scratch/../.claude/newclone",
+            "D=scratch/../.claude; git clone /source $D/newclone",
+            "git worktree add scratch/../.git/hooks/planted",
+            "git init scratch/../.codeflow/new",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_git_command_runners() {
+    let f = Fixture::new();
+    target_journey_in(&f, "submodule", "native");
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git rebase -x 'git -C ../.. config core.hooksPath /dev/null' HEAD~1",
+            "git rebase --exec 'git config core.bare true' HEAD~1",
+            "git rebase --exec='git config core.worktree /decoy' HEAD~1",
+            "git rebase -x 'rm -rf ../../.claude' HEAD~1",
+            "git bisect run git config core.bare true",
+            "git submodule foreach 'rm -rf ../.claude'",
+        ] {
+            let cwd = if command.starts_with("git submodule") {
+                &f.root
+            } else {
+                &f.linked
+            };
+            let out = f.command(cwd, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git rebase -x 'cargo test' HEAD~3",
+            "git bisect run ./test.sh",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_git_directory_parents() {
+    let f = Fixture::new();
+    for cwd in repair_cwds(&f) {
+        let modules = shell_path(&f.root.join(".git/modules"));
+        for hook in ["git-guard"] {
+            for command in [
+                format!("rm -rf '{modules}'"),
+                format!("mv '{modules}' /unused-destination"),
+                format!("find '{modules}' -delete"),
+                format!("rsync -a --delete /empty/ '{modules}/'"),
+            ] {
+                let out = f.command(&cwd, hook, &command);
+                assert!(refused(&out), "{cwd:?} {hook} {command}: {out:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn repair2_separate_git_directory_container() {
+    let f = Fixture::new();
+    let container = f.temp.path().join("metadata");
+    std::fs::create_dir(&container).unwrap();
+    let separate = container.join("separate");
+    let checkout = f.temp.path().join("checkout");
+    git(
+        f.temp.path(),
+        &[
+            "init",
+            "--separate-git-dir",
+            &shell_path(&separate),
+            &shell_path(&checkout),
+        ],
+    );
+    for cwd in repair_cwds(&f) {
+        let path = shell_path(&container);
+        for command in [
+            format!("rm -rf '{path}'"),
+            format!("mv '{path}' /unused-destination"),
+            format!("find '{path}' -delete"),
+            format!("rsync -a --delete /empty/ '{path}/'"),
+        ] {
+            let out = f.command(&cwd, "git-guard", &command);
+            assert!(refused(&out), "{cwd:?} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair2_modules_namespace() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.root.join(".git/modules")).unwrap();
+    let out = f.command(&f.root, "git-guard", "rm -rf .git/modules");
+    assert!(refused(&out), "{out:?}");
+}
+
+#[test]
+fn repair2_marker_error_messages() {
+    let f = Fixture::new();
+    let away = f.temp.path().join("away");
+    std::fs::rename(&f.linked, &away).unwrap();
+    git(&f.root, &["worktree", "prune", "--expire", "now"]);
+    std::fs::rename(&away, &f.linked).unwrap();
+    for route in ["native", "redirect", "interpreter"] {
+        let out = f.write(&f.root, route, &f.linked.join(".claude/settings.json"));
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(refused(&out), "{out:?}");
+        assert!(message.contains("git worktree repair"), "{message}");
+        assert!(
+            !message.contains("class=") && !message.contains("code="),
+            "{message}"
+        );
+        assert!(
+            message.contains(&shell_path(&f.linked.join(".git"))),
+            "{message}"
+        );
+    }
 }
 
 // Round-one repairs are exercised through the installed hook CLI contract.

@@ -2255,8 +2255,27 @@ fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Op
     if let Some(finding) = crate::hooks::git_guard::xargs_git_write(name, args, line.integrity) {
         return Some(finding);
     }
+    if line.kind == Kind::GitConfig {
+        if let Some(finding) =
+            crate::hooks::git_guard::unread_editor_script(name, args, line.integrity)
+        {
+            return Some(finding);
+        }
+    }
     if name != "git" {
         return None;
+    }
+    for dir in &line.dirs {
+        if let Some(finding) = crate::hooks::git_guard::git_command_write_violation(
+            name,
+            args,
+            line.integrity,
+            dir,
+            dir,
+            line.text,
+        ) {
+            return Some(finding);
+        }
     }
     let filled: Vec<_> = args.iter().map(|arg| line.substitute(arg)).collect();
     let ("config", rest) = git_subcommand(&filled)? else {

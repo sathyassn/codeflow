@@ -134,6 +134,12 @@ pub fn evaluate_in(
     // certified prose line is judged here too: the startup check is a
     // write-target check, not a raw-text word check.
     if violations.is_empty() {
+        if let Some(finding) = super::git_guard::git_runner_write_violation(command, cwd, integrity)
+        {
+            violations.push(finding);
+        }
+    }
+    if violations.is_empty() {
         violations.extend(crate::security::startup::evaluate_with(
             command,
             cwd,

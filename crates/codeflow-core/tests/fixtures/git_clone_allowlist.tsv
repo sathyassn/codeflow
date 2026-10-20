@@ -1,8 +1,19 @@
 # file	normalized call span	count	reason
 crates/codeflow-cli/tests/delegate_pty_stress.rs	expect("clone PTY reader")	1	Diagnostic for duplicating a PTY reader, unrelated to Git.
 crates/codeflow-cli/tests/remedy_clearing/records.rs	join("clone")	2	Fixture directory name only; not a command argument.
-crates/codeflow-core/src/hooks/git_guard.rs	"clone"	2	Git subcommand vocabulary used for command classification and enforcement-destination refusal; never executes this literal.
+crates/codeflow-core/src/hooks/git_guard.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
+crates/codeflow-core/src/hooks/git_guard.rs	matches!(verb,"clone"|"init")	1	Git creation classification only; never starts Git.
+crates/codeflow-core/src/hooks/git_guard.rs	is_none_or(|(verb,_)|matchverb{"branch"|"reset"|"config"|"worktree"|"update-ref"|"symbolic-ref"|"push"|"clean"|"checkout"|"switch"|"restore"|"rm"|"mv"|"commit"|"merge"|"cherry-pick"|"rebase"|"bisect"|"submodule"|"fast-import"|"clone"|"init"|"fetch"|"pull"|"stash"=>true,_=>expands(verb),})	1	Classifies xargs Git verbs for refusal; never starts Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"clone /source"	1	Inert hook payload for the enforcement-directory refusal matrix; passed to CodeFlow for judgment, never executed as Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.claude; git clone /source $D/newclone"	1	Inert assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.git/hooks; git clone /source $D/planted"	1	Inert assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source $D/newclone; D=scratch"	1	Inert late-assignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source $UNKNOWN/newclone"	1	Inert unresolved-target payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=.claude; git -C \"$D\" clone /source newclone"	1	Inert assigned-cwd payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git -C \"$UNKNOWN\" clone /source newclone"	1	Inert unresolved-cwd payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	command(&f.root,hook,"D=scratch; git clone /source $D/newclone")	1	Inert ordinary-target control judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone /source scratch/../.claude/newclone"	1	Inert dot-component target payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"D=scratch/../.claude; git clone /source $D/newclone"	1	Inert assigned dot-component target payload judged by the built hook; no Git clone executes.
 crates/codeflow-core/src/security/deletion.rs	"clone"	2	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/headless.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
 crates/codeflow-core/src/security/startup.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.

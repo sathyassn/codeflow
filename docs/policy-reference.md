@@ -476,8 +476,9 @@ checked, so a symlink does not remove the target owner's protection.
   to discovery checks when it returns. An unreadable or inconsistent pointer
   refuses the operation; missing registration is not proof of an ordinary
   directory. Each invocation reads current disk state.
-  A hidden-checkout search stops at a directory containing `.git` and does
-  not traverse checkout contents. It visits at most 4096 directories under
+  A hidden-checkout search stops at a verified checkout of the same
+  repository. Foreign, empty or malformed `.git` markers do not hide a
+  checkout below them. The search visits at most 4096 directories under
   the configured locations reached by a removal target; ordinary files do
   not count toward that bound. An unreadable walk or an exceeded bound
   refuses and names the inspection problem; narrow a cleanup target when
@@ -489,9 +490,13 @@ checked, so a symlink does not remove the target owner's protection.
   `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
   hooks, regardless of the config file or scope. Reads and command-local
   `git -c` settings keep their existing checks.
-  Expanded config keys that cannot be proven literal refuse. Git commands
-  fed by xargs refuse because their complete operands are unknown. The
-  arch launcher receives the same command checks as a direct invocation.
+  Expanded config keys that cannot be proven literal refuse; explicit
+  config reads can still use regular expressions. Git commands fed by
+  xargs refuse when the subcommand is absent or guarded, because their
+  complete operands are unknown. Ordinary `xargs git add` and `xargs git
+  status` remain available. The arch launcher and Git's rebase exec,
+  bisect run and submodule foreach commands receive the same checks as
+  their command payloads.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.
@@ -506,10 +511,21 @@ remote-tracking metadata. This also applies to plain Git repositories that
 have not adopted CodeFlow. Unreadable enclosing markers refuse targets
 that could be their enforcement paths; they do not lock ordinary files in
 a nested project. Agent writes cannot create or rewrite a `.git` marker in
-an ancestor of the session project. Non-interactive editors are writers,
-and Git-native clone or worktree creation cannot target an enforcement
-directory. Source-removing rsync spellings protect the checkout's gitfile
-as well as its directory.
+an ancestor of the session project. Removing a directory that contains
+submodule or separate Git metadata also refuses. Inspection for contained
+Git directories counts at most 4096 directories, excluding ordinary files;
+an unreadable or larger walk refuses with the inspection reason.
+
+Non-interactive editor scripts refuse when the guard cannot prove which
+files they write, even with an initial file argument: a script can switch
+files. Interactive edits of ordinary files remain available. Git-native
+clone or worktree creation cannot target an enforcement directory, including
+through a same-line variable assignment. An unresolved creation target
+refuses. `git init`, including `--separate-git-dir`, cannot create inside
+an enforcement directory or a configured worktree location. Scratch
+initialization outside these locations remains available.
+Source-removing rsync spellings protect the checkout's gitfile as well
+as its directory.
 
 ### Git settings that can run a program
 
