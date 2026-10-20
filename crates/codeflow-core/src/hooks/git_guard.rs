@@ -5299,6 +5299,26 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
         if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
             return None;
         }
+        if cmd == "mv"
+            || (cmd == "rsync"
+                && copy
+                    .flags
+                    .iter()
+                    .any(|flag| flag == "--remove-source-files"))
+        {
+            let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
+            if let Some(finding) = worktree_delete_check(
+                &format!("`{cmd}` removes its source"),
+                &sources,
+                self.level,
+                self.cwd,
+                self.payload_cwd,
+                self.line,
+                None,
+            ) {
+                return Some(finding);
+            }
+        }
         if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
             return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
         }
@@ -8522,7 +8542,9 @@ fn judge_git_sub(
             // Hook-path manipulation via config (`git config core.hooksPath …`
             // / `--unset core.hooksPath`) disarms the client hooks. Every read
             // (`git config core.hooksPath`, `--get`, `--list`) stays allowed.
-            if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
+            if let Some(finding) = checkout_config_write(rest, policy.hook_integrity) {
+                out.push(finding);
+            } else if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
                 out.push(hook_integrity_violation(
                     policy.hook_integrity,
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
@@ -8652,6 +8674,46 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
+}
+
+/// Shared by both shell hooks. Scope and file options cannot make a
+/// persistent discovery change safe; a read or a transient `-c` is unchanged.
+pub(crate) fn checkout_config_write(rest: &[String], level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() || config_only_reads(rest) {
+        return None;
+    }
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let mode = parsed.operands.first().copied().unwrap_or_default();
+    let edit = parsed.has_short(&['e']) || parsed.has_long("--edit") || mode == "edit";
+    let section = parsed.has_long("--rename-section")
+        || parsed.has_long("--remove-section")
+        || matches!(mode, "rename-section" | "remove-section");
+    if edit
+        || (section
+            && parsed.operands.iter().any(|word| {
+                word.eq_ignore_ascii_case("core")
+                    || word.eq_ignore_ascii_case("extensions")
+                    || expands(word)
+            }))
+    {
+        return Some(hook_integrity_violation(level,
+            "`git config` can rewrite repository discovery settings through an editor or section change".into()));
+    }
+    let key = parsed
+        .operands
+        .get(usize::from(matches!(mode, "set" | "unset")))?;
+    if expands(key) {
+        return Some(hook_integrity_violation(level, format!(
+            "cannot inspect persistent config key `{key}`; it may change repository or worktree discovery"
+        )));
+    }
+    if !git::relocates_checkout(key) {
+        return None;
+    }
+    Some(hook_integrity_violation(
+        level,
+        format!("`git config` would write `{key}`, which changes repository or worktree discovery"),
+    ))
 }
 
 /// Where a `git config --file` path sits, as [`config_file_scope`] judges it.
@@ -14398,6 +14460,43 @@ mod tests {
                 && !unknown.contains("runs that value"),
             "{unknown}"
         );
+    }
+
+    #[test]
+    fn persistent_checkout_settings_refuse_in_every_scope() {
+        let p = default_policy();
+        for key in [
+            "core.worktree",
+            "CORE.WorkTree",
+            "core.bare",
+            "extensions.worktreeConfig",
+        ] {
+            for form in [
+                "",
+                "--local ",
+                "--worktree ",
+                "--file .git/config ",
+                "set ",
+                "--add ",
+                "--unset ",
+            ] {
+                let value = if form == "--unset " { "" } else { " decoy" };
+                let command = format!("git config {form}{key}{value}");
+                let found = evaluate(&command, &ctx(&p, "feat/x"));
+                assert!(
+                    has_rule(&found, "git.hook_integrity"),
+                    "{command}: {found:?}"
+                );
+            }
+            for form in ["", "--get ", "get --local "] {
+                let command = format!("git config {form}{key}");
+                let found = evaluate(&command, &ctx(&p, "feat/x"));
+                assert!(
+                    !has_rule(&found, "git.hook_integrity"),
+                    "{command}: {found:?}"
+                );
+            }
+        }
     }
 
     #[test]

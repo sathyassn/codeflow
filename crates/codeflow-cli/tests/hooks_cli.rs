@@ -12,6 +12,9 @@ use std::process::{Command, Output, Stdio};
 #[path = "hooks_cli/checkout_identity.rs"]
 mod checkout_identity;
 
+#[path = "hooks_cli/target_repository.rs"]
+mod target_repository;
+
 #[cfg(unix)]
 struct RestorePermissions {
     path: std::path::PathBuf,

@@ -461,6 +461,36 @@ level:
 The backstop reads text, not a parse of copier behavior. For reviewers, a
 new copier option is a residual, not a new member of the startup class.
 
+### Repository discovery and enforcement targets
+
+Enforcement-path checks judge every repository enclosing the target, as
+well as the session repository and its registered worktrees. Nested
+repositories and submodules do not hide an enclosing checkout. An absolute
+target in another repository receives the same checks, including when the
+command starts outside any repository. Both lexical and resolved paths are
+checked, so a symlink does not remove the target owner's protection.
+
+- Shell redirects, native file edits and interpreter arguments protect the
+  owning checkout's enforcement files and its common Git directory.
+- A checkout whose `.git` pointer survives a move and prune remains subject
+  to discovery checks when it returns. An unreadable or inconsistent pointer
+  refuses the operation; missing registration is not proof of an ordinary
+  directory. Each invocation reads current disk state.
+- Shell moves of a worktree, and `rsync --remove-source-files` targeting its
+  source, refuse. Copying a worktree does not authorize deleting its source.
+  Use `git worktree move` or `git worktree remove` for lifecycle changes.
+- Persistent writes of `core.worktree`, `core.bare` and
+  `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
+  hooks, regardless of the config file or scope. Reads and command-local
+  `git -c` settings keep their existing checks.
+- An honestly deleted checkout remains prunable. When registration and a
+  live checkout disagree, the operator runs `git worktree repair` in their
+  own terminal outside the harness.
+
+A target outside every repository and outside the session's protected paths
+does not acquire repository enforcement protection. Home startup and Git
+configuration protections retain their separate rules.
+
 ### Git settings that can run a program
 
 git-guard refuses a user- or system-scope git setting that is not known to
@@ -491,7 +521,8 @@ number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
 Any other value is a program git runs, so `core.fsmonitor 08` refuses
 (`08` is no octal number) while `true` and `0x10` pass (review round 13);
 keys match by exact name. Repository-scope settings, unsets and
-reads pass. git has many keys that run a program and adds more, so a list
+reads pass this program-setting check; the discovery settings and hook-path
+settings have the separate integrity checks described above. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
 refusal the operator can clear by setting it by hand.
 

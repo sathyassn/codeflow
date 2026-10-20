@@ -6128,6 +6128,8 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated; only their already obtained types select traversal."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_file", 1, "Marker absence is proven first and metadata errors propagate; its obtained type selects gitfile parsing."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
     ("crates/codeflow-core/src/hooks/repo.rs", "registered_marker", "is_file", 1, "Registration symlink metadata is read with errors propagated; only a regular file is accepted, so a symlink or another type fails closed before absence is judged."),
     ("crates/codeflow-core/src/hooks/repo.rs", "read_registration", "is_file", 1, "Marker metadata was obtained with errors propagated; the type selects the physical gitfile parent cross-check."),

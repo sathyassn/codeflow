@@ -601,58 +601,62 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
 
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    if global_git_config_target(target, root) {
-        return true;
-    }
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return false;
-    };
-    let mut paths = vec![
-        (PathBuf::from("refs/remotes"), true),
-        (PathBuf::from("packed-refs"), false),
-        (PathBuf::from("config"), false),
-        (PathBuf::from("config.worktree"), false),
-    ];
-    if let Ok(names) = repo.worktrees() {
-        // OS text rule (issue 79, `docs/architecture.md`): the names are kept
-        // as bytes. A worktree whose folder name is not valid UTF-8 still has
-        // a `config.worktree` that authority rests on, so it must stay in the
-        // protected list instead of dropping out of it.
-        for name in crate::git::name::names_of(&names) {
-            // A folder the platform cannot hold as a path cannot be listed, so
-            // the target is judged protected rather than left out.
-            let Ok(folder) = name.os_path() else {
-                return true;
-            };
-            paths.push((
-                Path::new("worktrees").join(folder).join("config.worktree"),
-                false,
-            ));
+    let read = |root: &Path| {
+        if global_git_config_target(target, root) {
+            return true;
         }
-    }
-    for resolve in [false, true] {
-        let (Ok(target), Ok(common)) = (
-            normalized(target, resolve),
-            normalized(repo.commondir(), resolve),
-        ) else {
-            continue;
+        let Ok(repo) = git2::Repository::discover(root) else {
+            return false;
         };
-        if !target.starts_with(&common) {
-            continue;
-        }
-        for (name, directory) in &paths {
-            let Ok(protected) = normalized(&common.join(name), resolve) else {
-                continue;
-            };
-            if target == protected
-                || (*directory && target.starts_with(&protected))
-                || (ancestors && protected.starts_with(&target))
-            {
-                return true;
+        let mut paths = vec![
+            (PathBuf::from("refs/remotes"), true),
+            (PathBuf::from("packed-refs"), false),
+            (PathBuf::from("config"), false),
+            (PathBuf::from("config.worktree"), false),
+        ];
+        if let Ok(names) = repo.worktrees() {
+            // OS text rule (issue 79, `docs/architecture.md`): the names are kept
+            // as bytes. A worktree whose folder name is not valid UTF-8 still has
+            // a `config.worktree` that authority rests on, so it must stay in the
+            // protected list instead of dropping out of it.
+            for name in crate::git::name::names_of(&names) {
+                // A folder the platform cannot hold as a path cannot be listed, so
+                // the target is judged protected rather than left out.
+                let Ok(folder) = name.os_path() else {
+                    return true;
+                };
+                paths.push((
+                    Path::new("worktrees").join(folder).join("config.worktree"),
+                    false,
+                ));
             }
         }
-    }
-    false
+        for resolve in [false, true] {
+            let (Ok(target), Ok(common)) = (
+                normalized(target, resolve),
+                normalized(repo.commondir(), resolve),
+            ) else {
+                continue;
+            };
+            if !target.starts_with(&common) {
+                continue;
+            }
+            for (name, directory) in &paths {
+                let Ok(protected) = normalized(&common.join(name), resolve) else {
+                    continue;
+                };
+                if target == protected
+                    || (*directory && target.starts_with(&protected))
+                    || (ancestors && protected.starts_with(&target))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    super::repo::target_roots(target, root)
+        .map_or(true, |roots| roots.iter().any(|owner| read(owner)))
 }
 
 /// Inventory includes outside the guard's fixed protected-path class.
@@ -865,6 +869,8 @@ impl RepoFactsScope {
             outer
         });
         if outer {
+            super::repo::TARGET_ROOTS
+                .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             REGISTRATIONS
                 .with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
             CHECKOUTS.with(|cache| *cache.borrow_mut() = Some(std::collections::HashMap::new()));
@@ -876,6 +882,7 @@ impl RepoFactsScope {
 impl Drop for RepoFactsScope {
     fn drop(&mut self) {
         if self.outer {
+            super::repo::TARGET_ROOTS.with(|cache| *cache.borrow_mut() = None);
             REGISTRATIONS.with(|cache| *cache.borrow_mut() = None);
             PROTECTED.with(|cache| *cache.borrow_mut() = None);
             CHECKOUTS.with(|cache| *cache.borrow_mut() = None);
@@ -934,10 +941,28 @@ pub(crate) fn is_own_checkout_location(
 /// resolved once per [`RepoFactsScope`] and otherwise on each call. `None`
 /// outside a repository.
 fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
+    let cached = |key: &Path| {
+        PROTECTED.with(|cache| {
+            cache
+                .borrow()
+                .as_ref()
+                .and_then(|map| map.get(key))
+                .cloned()
+        })
+    };
+    if let Some(value) = cached(root) {
+        return value;
+    }
     let read = || {
         let Some(repo) = super::repo::open(root)? else {
             return Ok(None);
         };
+        // Main and linked roots protect the same complete set. Validate the
+        // caller's own discovery above, then reuse that set by common directory.
+        let common = repo.commondir().to_path_buf();
+        if let Some(value) = cached(&common) {
+            return value;
+        }
         let both = |path: &Path| {
             [false, true]
                 .map(|resolve| normalized(path, resolve).map_err(|error| error.to_string()))
@@ -951,15 +976,21 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
                 resolved_base: Default::default(),
             })
             .collect();
-        Ok(Some(std::rc::Rc::new(resolved)))
+        let value = Ok(Some(std::rc::Rc::new(resolved)));
+        PROTECTED.with(|cache| {
+            if let Some(map) = cache.borrow_mut().as_mut() {
+                map.insert(common, value.clone());
+            }
+        });
+        value
     };
+    let value = read();
     PROTECTED.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        match cache.as_mut() {
-            Some(map) => map.entry(root.to_path_buf()).or_insert_with(read).clone(),
-            None => read(),
+        if let Some(map) = cache.borrow_mut().as_mut() {
+            map.insert(root.to_path_buf(), value.clone());
         }
-    })
+    });
+    value
 }
 
 /// Resolve enforcement paths in every checkout sharing this repository.
@@ -969,28 +1000,39 @@ pub(crate) fn repository_enforcement_target(
     root: &Path,
     ancestors: bool,
 ) -> Result<bool, String> {
-    let Some(protected) = protected_at(root)? else {
-        return Ok(false);
-    };
-    for (reading, resolve) in [false, true].into_iter().enumerate() {
-        let target = normalized(target, resolve).map_err(|error| error.to_string())?;
-        for entry in protected.iter() {
-            let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
-            if target == *path
-                || (entry.directory && target.starts_with(path))
-                || (ancestors
-                    && path.starts_with(&target)
-                    && target.starts_with(
-                        entry.resolved_base[reading]
-                            .get_or_init(|| {
-                                normalized(&entry.base, resolve).map_err(|error| error.to_string())
-                            })
-                            .as_ref()
-                            .map_err(Clone::clone)?,
-                    ))
-            {
-                return Ok(true);
+    let read = |root: &Path| -> Result<bool, String> {
+        let Some(protected) = protected_at(root)? else {
+            return Ok(false);
+        };
+        for (reading, resolve) in [false, true].into_iter().enumerate() {
+            let target = normalized(target, resolve).map_err(|error| error.to_string())?;
+            for entry in protected.iter() {
+                let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
+                if target == *path
+                    || (entry.directory && target.starts_with(path))
+                    || (ancestors
+                        && path.starts_with(&target)
+                        && target.starts_with(
+                            entry.resolved_base[reading]
+                                .get_or_init(|| {
+                                    normalized(&entry.base, resolve)
+                                        .map_err(|error| error.to_string())
+                                })
+                                .as_ref()
+                                .map_err(Clone::clone)?,
+                        ))
+                {
+                    return Ok(true);
+                }
             }
+        }
+        Ok(false)
+    };
+
+    for owner in super::repo::target_roots(target, root)? {
+        let found = read(&owner)?;
+        if found {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -1008,84 +1050,93 @@ const CANDIDATE_WALK_LIMIT: usize = 4096;
 /// directory. A protected directory too large to walk is represented by
 /// `<dir>/*`, which every check reads as inside it.
 pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>, String> {
-    let Some(protected) = protected_at(root)? else {
-        return Ok(Vec::new());
-    };
-    let start = normalized(start, true).map_err(|error| error.to_string())?;
-    let mut out: Vec<PathBuf> = Vec::new();
-    let mut push = |path: PathBuf| {
-        if !out.contains(&path) {
-            out.push(path);
-        }
-    };
-    let mut held: Vec<(PathBuf, bool)> = protected
-        .iter()
-        .map(|entry| entry.path[1].clone().map(|path| (path, entry.directory)))
-        .collect::<Result<_, _>>()?;
-    if let Some(checkouts) = checkout_paths_at(root)? {
-        held.extend(
-            checkouts
-                .roots
-                .iter()
-                .map(|(_, paths)| (paths[1].clone(), false)),
-        );
-    }
-    for (path, directory) in held {
-        if start.starts_with(&path) && (directory || start == path) {
-            push(start.clone());
-            continue;
-        }
-        if !path.starts_with(&start) {
-            continue;
-        }
-        for ancestor in path.ancestors() {
-            push(ancestor.to_path_buf());
-            if ancestor == start {
-                break;
+    let read = |root: &Path| -> Result<Vec<PathBuf>, String> {
+        let Some(protected) = protected_at(root)? else {
+            return Ok(Vec::new());
+        };
+        let start = normalized(start, true).map_err(|error| error.to_string())?;
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut push = |path: PathBuf| {
+            if !out.contains(&path) {
+                out.push(path);
             }
+        };
+        let mut held: Vec<(PathBuf, bool)> = protected
+            .iter()
+            .map(|entry| entry.path[1].clone().map(|path| (path, entry.directory)))
+            .collect::<Result<_, _>>()?;
+        if let Some(checkouts) = checkout_paths_at(root)? {
+            held.extend(
+                checkouts
+                    .roots
+                    .iter()
+                    .map(|(_, paths)| (paths[1].clone(), false)),
+            );
         }
-        if directory {
-            let mut stack = vec![path.clone()];
-            let mut seen = 0;
-            while let Some(dir) = stack.pop() {
-                if crate::absence::proven_absent(&dir).map_err(|error| {
-                    format!("cannot read protected directory {}: {error}", dir.display())
-                })? {
-                    continue;
-                }
-                let entries = match std::fs::read_dir(&dir) {
-                    Ok(entries) => entries,
-                    Err(error) => {
-                        return Err(format!(
-                            "cannot read protected directory {}: {error}",
-                            dir.display()
-                        ))
-                    }
-                };
-                for entry in entries {
-                    let entry = entry.map_err(|error| {
-                        format!("cannot read protected directory entry: {error}")
-                    })?;
-                    seen += 1;
-                    if seen > CANDIDATE_WALK_LIMIT {
-                        push(path.join("*"));
-                        stack.clear();
-                        break;
-                    }
-                    let entry_path = entry.path();
-                    if entry
-                        .file_type()
-                        .map_err(|error| format!("cannot read protected file type: {error}"))?
-                        .is_dir()
-                    {
-                        stack.push(entry_path.clone());
-                    }
-                    push(entry_path);
+        for (path, directory) in held {
+            if start.starts_with(&path) && (directory || start == path) {
+                push(start.clone());
+                continue;
+            }
+            if !path.starts_with(&start) {
+                continue;
+            }
+            for ancestor in path.ancestors() {
+                push(ancestor.to_path_buf());
+                if ancestor == start {
+                    break;
                 }
             }
+            if directory {
+                let mut stack = vec![path.clone()];
+                let mut seen = 0;
+                while let Some(dir) = stack.pop() {
+                    if crate::absence::proven_absent(&dir).map_err(|error| {
+                        format!("cannot read protected directory {}: {error}", dir.display())
+                    })? {
+                        continue;
+                    }
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(entries) => entries,
+                        Err(error) => {
+                            return Err(format!(
+                                "cannot read protected directory {}: {error}",
+                                dir.display()
+                            ))
+                        }
+                    };
+                    for entry in entries {
+                        let entry = entry.map_err(|error| {
+                            format!("cannot read protected directory entry: {error}")
+                        })?;
+                        seen += 1;
+                        if seen > CANDIDATE_WALK_LIMIT {
+                            push(path.join("*"));
+                            stack.clear();
+                            break;
+                        }
+                        let entry_path = entry.path();
+                        if entry
+                            .file_type()
+                            .map_err(|error| format!("cannot read protected file type: {error}"))?
+                            .is_dir()
+                        {
+                            stack.push(entry_path.clone());
+                        }
+                        push(entry_path);
+                    }
+                }
+            }
         }
+        Ok(out)
+    };
+
+    let mut found_all = Vec::new();
+    for owner in super::repo::target_roots(start, root)? {
+        let found = read(&owner)?;
+        found_all.extend(found);
     }
-    Ok(out)
+    Ok(found_all)
 }
 
 /// The registered checkout of the repository at `root` that a recursive
@@ -1097,20 +1148,35 @@ pub(crate) fn registered_checkout_under(
     root: &Path,
     except: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(checkouts) = checkout_paths_at(root)? else {
-        return Ok(None);
+    let read = |root: &Path| -> Result<Option<PathBuf>, String> {
+        let Some(checkouts) = checkout_paths_at(root)? else {
+            return Ok(None);
+        };
+        let except: Vec<PathBuf> = except
+            .into_iter()
+            .flat_map(|path| [normalized(path, false), normalized(path, true)])
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        for (reading, resolve) in [false, true].into_iter().enumerate() {
+            let target = normalized(target, resolve).map_err(|e| e.to_string())?;
+            for (checkout, paths) in &checkouts.roots {
+                let path = &paths[reading];
+                if path.starts_with(&target) && !except.contains(path) {
+                    return Ok(Some(checkout.clone()));
+                }
+            }
+        }
+        Ok(None)
     };
-    let except: Vec<PathBuf> = except
-        .into_iter()
-        .flat_map(|path| [normalized(path, false), normalized(path, true)])
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.to_string())?;
-    for (reading, resolve) in [false, true].into_iter().enumerate() {
-        let target = normalized(target, resolve).map_err(|e| e.to_string())?;
-        for (checkout, paths) in &checkouts.roots {
-            let path = &paths[reading];
-            if path.starts_with(&target) && !except.contains(path) {
-                return Ok(Some(checkout.clone()));
+
+    for owner in super::repo::target_roots(target, root)? {
+        let found = read(&owner)?;
+        if found.is_some() {
+            return Ok(found);
+        }
+        if let Some(hidden) = super::repo::hidden_checkout_under(target, &owner)? {
+            if except != Some(hidden.as_path()) {
+                return Ok(Some(hidden));
             }
         }
     }
@@ -1123,19 +1189,29 @@ pub(crate) fn registered_checkout_under(
 /// it lies in, so a linked checkout's root holds its own files (TSK-216
 /// round 3).
 pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool, String> {
-    let Some(protected) = protected_at(root)? else {
-        return Ok(false);
-    };
-    for (reading, resolve) in [false, true].into_iter().enumerate() {
-        let target = normalized(target, resolve).map_err(|e| e.to_string())?;
-        for entry in protected.iter() {
-            if entry.path[reading]
-                .as_ref()
-                .map_err(Clone::clone)?
-                .starts_with(&target)
-            {
-                return Ok(true);
+    let read = |root: &Path| -> Result<bool, String> {
+        let Some(protected) = protected_at(root)? else {
+            return Ok(false);
+        };
+        for (reading, resolve) in [false, true].into_iter().enumerate() {
+            let target = normalized(target, resolve).map_err(|e| e.to_string())?;
+            for entry in protected.iter() {
+                if entry.path[reading]
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .starts_with(&target)
+                {
+                    return Ok(true);
+                }
             }
+        }
+        Ok(false)
+    };
+
+    for owner in super::repo::target_roots(target, root)? {
+        let found = read(&owner)?;
+        if found {
+            return Ok(true);
         }
     }
     Ok(false)

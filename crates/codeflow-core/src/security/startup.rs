@@ -2251,6 +2251,17 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     })
 }
 
+fn checkout_config_violation(args: &[String], line: &Line<'_>) -> Option<Violation> {
+    if line.kind != Kind::GitConfig {
+        return None;
+    }
+    let filled: Vec<_> = args.iter().map(|arg| line.substitute(arg)).collect();
+    let ("config", rest) = git_subcommand(&filled)? else {
+        return None;
+    };
+    crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
+}
+
 /// The writes one simple command makes.
 fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let noun = line.noun();
@@ -2296,6 +2307,9 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let (program, args) = strip_launchers(&tokens)?;
     let name = basename(program);
     if name == "git" {
+        if let Some(finding) = checkout_config_violation(args, line) {
+            return Some(finding);
+        }
         if let Some(why) = git_setting_violation(args, line) {
             return Some(line.finding(format!(
                 "{why}, which a program the line runs would execute"
