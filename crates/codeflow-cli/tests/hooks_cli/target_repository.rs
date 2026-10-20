@@ -409,6 +409,11 @@ fn repair_rsync_source_spellings_and_gitfile() {
     for cwd in repair_cwds(&f) {
         for flag in [
             "--remove-source-files",
+            "--rem",
+            "--remo",
+            "--remov",
+            "--remove",
+            "--remove-s",
             "--remove-source",
             "--remove-sent-files",
             "--remove-sent",

@@ -8762,7 +8762,8 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
 }
 
 fn rsync_removes_source(flag: &str) -> bool {
-    flag.starts_with("--remove-s")
+    flag.starts_with("--")
+        && flag.len() > 2
         && ["--remove-source-files", "--remove-sent-files"]
             .iter()
             .any(|full| full.starts_with(flag))
