@@ -1,0 +1,11 @@
+id = "TSK-408"
+uid = "f12bdc73-197c-48cb-8e4a-7e677b1b4a5f"
+kind = "TSK"
+title = "A recursive copy or sync is judged by the enforcement files it creates, replaces or deletes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-20T07:38:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
