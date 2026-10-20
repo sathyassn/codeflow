@@ -27,6 +27,8 @@ use std::sync::OnceLock;
 use codeflow_core::remedy::{Clearing, Step, CATALOG};
 
 mod guards;
+#[path = "../support/process_folders.rs"]
+mod process_folders;
 mod push;
 mod records;
 
@@ -308,8 +310,7 @@ fn exe() -> PathBuf {
 }
 
 fn home() -> &'static Path {
-    static HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().unwrap()).path()
+    process_folders::isolated_home()
 }
 
 /// A command with the binary under test first on `PATH` (the git hooks
@@ -534,16 +535,15 @@ fn ci(root: &Path, extra: &[&str]) -> String {
     codeflow(root, &args)
 }
 
-/// A fresh `codeflow init --yes <tier>` project, made once per tier and
-/// copied for each test.
+/// A fresh `codeflow init --yes <tier>` project, made once per tier, kept
+/// until the process exits, and copied for each test.
 fn scaffolded(tier: &str) -> tempfile::TempDir {
-    static TEMPLATES: OnceLock<std::sync::Mutex<Vec<(String, tempfile::TempDir)>>> =
-        OnceLock::new();
+    static TEMPLATES: OnceLock<std::sync::Mutex<Vec<(String, PathBuf)>>> = OnceLock::new();
     let templates = TEMPLATES.get_or_init(|| std::sync::Mutex::new(Vec::new()));
     let mut made = templates.lock().unwrap();
     if !made.iter().any(|(t, _)| t == tier) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("p");
+        let dir = process_folders::until_exit(tempfile::tempdir().unwrap());
+        let root = dir.join("p");
         std::fs::create_dir(&root).unwrap();
         let out = codeflow(&root, &["init", "--yes", tier]);
         assert!(root.join(".codeflow/project.toml").exists(), "{out}");
@@ -553,7 +553,7 @@ fn scaffolded(tier: &str) -> tempfile::TempDir {
     let copy = tempfile::tempdir().unwrap();
     let status = Command::new("cp")
         .args(["-R"])
-        .arg(template.path().join("p"))
+        .arg(template.join("p"))
         .arg(copy.path().join("p"))
         .status()
         .unwrap();
@@ -828,7 +828,10 @@ fn prove_body(row: &str, policy: &str, bad: &str, good: &str, finding: &str) {
     let dir = ci_repo(policy);
     let root = dir.path();
     commit(root, "x.txt", "feat: add x");
-    let body = root.parent().unwrap().join(format!("{row}.md"));
+    // The body sits outside the repository, in a folder of its own: the
+    // repository's parent is the shared temporary directory.
+    let bodies = tempfile::tempdir().unwrap();
+    let body = bodies.path().join(format!("{row}.md"));
     std::fs::write(&body, bad).unwrap();
     let body_path = body.to_str().unwrap().to_string();
     let range = ["--base", "main", "--head", "HEAD", "--branch", "feat/x"];
@@ -1023,7 +1026,8 @@ fn clears_ci_body_unsupplied() {
     let dir = ci_repo(DEFAULTS);
     let root = dir.path();
     commit(root, "x.txt", "feat: add x");
-    let body = root.parent().unwrap().join("body.md");
+    let bodies = tempfile::tempdir().unwrap();
+    let body = bodies.path().join("body.md");
     std::fs::write(&body, BODY).unwrap();
     let finding = "pull request body was not supplied";
     let before = text(

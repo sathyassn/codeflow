@@ -491,7 +491,12 @@ criterion tagged `(after release)` is `deferred` with owner, window and a
 listed follow-up; at epic close that line also closes the criterion when its
 follow-up is a serving task that is still open. A tag opens or closes its
 criterion, trailing sentence punctuation included; a tag inside the text does
-not count.
+not count. Tags are read without the criterion's amendment notes: indented
+dash sub-bullets whose first word is exactly `Amended` or `Moved`, followed by
+a `YYYY-MM-DD` date. An amended criterion keeps its closing tag, other
+sub-bullets stay criterion text, the refusal names a sub-bullet or note that
+still hides a tag, and a reflow that changes which tags count is a criteria
+change (issue #199).
 `git.work_records` sets the binding and journey rules; the frozen criteria of
 other records always block.
 
