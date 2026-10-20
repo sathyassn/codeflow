@@ -1093,7 +1093,7 @@ fn criteria_source(points: &[(Oid, Held)], authority: &Authority, unordered: boo
 /// ([`same_version`]) only for such lines whose criteria agree.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Version {
-    criteria: Vec<(String, String)>,
+    criteria: Vec<super::record_text::CriterionKey>,
     standing: Option<(String, Option<String>)>,
 }
 
