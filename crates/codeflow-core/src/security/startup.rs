@@ -2371,30 +2371,8 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
             })
             .collect()
     };
-    // Redirects write their targets whatever the program.
-    let redirects = redirect_writes(segment);
-    for target in redirects.targets.iter().chain(&redirects.unread) {
-        match line.judge(target, &dirs) {
-            Judged::Class(label) => {
-                return Some(line.finding(format!("a redirect writes the {noun} `{label}`")))
-            }
-            Judged::Unresolved(word) => {
-                if let Some(why) = line.unresolved_near_class(&word, &dirs) {
-                    return Some(line.finding(format!(
-                        "a redirect writes `{word}`, which the guard cannot resolve, and {why}"
-                    )));
-                }
-            }
-            Judged::Placement(_) | Judged::Ordinary => {
-                if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
-                    if let Some(file) = line.names(target) {
-                        return Some(line.finding(format!(
-                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the {noun} `{file}`"
-                        )));
-                    }
-                }
-            }
-        }
+    if let Some(finding) = segment_redirect_violation(segment, line, &dirs) {
+        return Some(finding);
     }
     let (program, args) = strip_launchers(&tokens)?;
     let name = basename(program);
@@ -2474,6 +2452,40 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
         return None;
     }
     placing_violation(name, args, line, &dirs)
+}
+
+fn segment_redirect_violation(
+    segment: &str,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Option<Violation> {
+    let noun = line.noun();
+    // Redirects write their targets whatever the program.
+    let redirects = redirect_writes(segment);
+    for target in redirects.targets.iter().chain(&redirects.unread) {
+        match line.judge(target, dirs) {
+            Judged::Class(label) => {
+                return Some(line.finding(format!("a redirect writes the {noun} `{label}`")))
+            }
+            Judged::Unresolved(word) => {
+                if let Some(why) = line.unresolved_near_class(&word, dirs) {
+                    return Some(line.finding(format!(
+                        "a redirect writes `{word}`, which the guard cannot resolve, and {why}"
+                    )));
+                }
+            }
+            Judged::Placement(_) | Judged::Ordinary => {
+                if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
+                    if let Some(file) = line.names(target) {
+                        return Some(line.finding(format!(
+                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the {noun} `{file}`"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The words of a call the guard judges as paths it may write: every word

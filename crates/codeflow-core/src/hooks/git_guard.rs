@@ -5558,51 +5558,8 @@ fn direct_write_violation(
             ));
         }
     }
-    if cmd == "sed" && requests_in_place(args) {
-        if let Some(p) = sed_file_operands(args)
-            .into_iter()
-            .find_map(|file| token_integrity_path(file, cwd, payload_cwd))
-        {
-            return Some(hook_integrity_violation(
-                level,
-                format!("`sed -i` edits the integrity path `{p}`"),
-            ));
-        }
-    }
     if cmd == "sed" {
-        match sed_script_writes(args, cwd) {
-            SedRead::Read(paths) => {
-                if let Some((path, p)) = paths.iter().find_map(|path| {
-                    token_integrity_path(path, cwd, payload_cwd).map(|p| (path, p))
-                }) {
-                    // Name what runs: a word of a command that `e` or the
-                    // `e` flag of `s` runs, or a file a `w` command, the
-                    // `w` flag or an in-place backup writes.
-                    let runs = match sed_script_split(args, Some(cwd)) {
-                        SedRead::Read((writes, run, _)) => {
-                            run.contains(path) && !writes.contains(path)
-                        }
-                        SedRead::Unreadable { .. } => false,
-                    };
-                    let what = if runs {
-                        "a command a `sed` script runs (`e` or the `e` flag of `s`) can write"
-                    } else {
-                        "a `sed` script `w` command or backup writes"
-                    };
-                    return Some(hook_integrity_violation(
-                        level,
-                        format!("{what} the integrity path `{p}`"),
-                    ));
-                }
-            }
-            SedRead::Unreadable { file, why } => {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!("cannot read `sed` script `{file}`: {why}"),
-                ))
-            }
-        }
-        if let Some(v) = sed_file_command_violation(args, level, cwd, payload_cwd) {
+        if let Some(v) = sed_integrity_violation(args, level, cwd, payload_cwd) {
             return Some(v);
         }
     }
@@ -5613,6 +5570,60 @@ fn direct_write_violation(
                 format!("`git {}` removes the integrity path `{p}`", args[0]),
             ));
         }
+    }
+    None
+}
+
+fn sed_integrity_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    if requests_in_place(args) {
+        if let Some(p) = sed_file_operands(args)
+            .into_iter()
+            .find_map(|file| token_integrity_path(file, cwd, payload_cwd))
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`sed -i` edits the integrity path `{p}`"),
+            ));
+        }
+    }
+    match sed_script_writes(args, cwd) {
+        SedRead::Read(paths) => {
+            if let Some((path, p)) = paths
+                .iter()
+                .find_map(|path| token_integrity_path(path, cwd, payload_cwd).map(|p| (path, p)))
+            {
+                // Name what runs: a word of a command that `e` or the
+                // `e` flag of `s` runs, or a file a `w` command, the
+                // `w` flag or an in-place backup writes.
+                let runs = match sed_script_split(args, Some(cwd)) {
+                    SedRead::Read((writes, run, _)) => run.contains(path) && !writes.contains(path),
+                    SedRead::Unreadable { .. } => false,
+                };
+                let what = if runs {
+                    "a command a `sed` script runs (`e` or the `e` flag of `s`) can write"
+                } else {
+                    "a `sed` script `w` command or backup writes"
+                };
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("{what} the integrity path `{p}`"),
+                ));
+            }
+        }
+        SedRead::Unreadable { file, why } => {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot read `sed` script `{file}`: {why}"),
+            ))
+        }
+    }
+    if let Some(v) = sed_file_command_violation(args, level, cwd, payload_cwd) {
+        return Some(v);
     }
     None
 }
