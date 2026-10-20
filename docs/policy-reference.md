@@ -343,22 +343,43 @@ programs it does not read.
 
 A search tool's pattern is never judged as a path it writes (TSK-380,
 issue 242). The pattern words are every `-e` or `--regexp` value of `rg`,
-`grep`, `egrep` and `fgrep`, and the first operand of those tools and `ag`
-when no `-e`, `--regexp`, `-f` or `--file` supplies the pattern, whether
-the tool is called directly or run by `xargs`, `parallel` or `find -exec`.
-So `rg --files | rg '/CHANGELOG.md$'` runs, and git-guard's `xargs` and
-`find` rules no longer read `xargs rg '.claude/settings.json'` as naming
-an enforcement path; its `parallel` rule still reads the commands
-`parallel` builds whole, pattern included. `ag` has no `-e`, and
-`git grep` is a read both guards pass. Every other word is judged as before: a path operand after the
-pattern, a `-f` pattern file, `rg --pre`, a redirect and every word of a
-call with an option the reader does not know, so `rg x > ~/.zshrc`
-refuses. When the line sets `RIPGREP_CONFIG_PATH` and `rg` has no
-`--no-config`, the first operand stays judged, since the configuration
+`grep`, `egrep`, `fgrep` and `git grep`, and the first operand of those
+tools and `ag` when no `-e`, `--regexp`, `-f` or `--file` supplies the
+pattern, whether the tool is called directly or run by `xargs`,
+`parallel -q` or `find -exec`. So `rg --files | rg '/CHANGELOG.md$'` runs,
+and git-guard's `xargs` and `find` rules no longer read
+`xargs rg '.claude/settings.json'` as naming an enforcement path. A word
+counts only when the shell passes it as one argument with the text
+written: quoted, or free of unquoted glob, brace and `$` or backtick
+expansion. An unquoted `~/.*rc` in the pattern position expands into the
+pattern and more searched paths, so it is judged as before. GNU
+`parallel` without `-q` runs its command through a shell, so no word of
+it is a pattern word, and git-guard's `parallel` rule reads the commands
+it builds whole. `ag` has no `-e`, and a direct `git grep` is a read both
+guards pass. Every other word is judged as before: a path operand after
+the pattern, a `-f` pattern file, a redirect and every word of a call
+with an option the reader does not know, so `rg x > ~/.zshrc` refuses.
+When the line names `RIPGREP_CONFIG_PATH` (an assignment, `export`,
+`declare`, `typeset`, `read`, `printf -v` or any other use) and `rg` has
+no `--no-config`, the first operand stays judged, since the configuration
 may supply the pattern. A pattern's text still names a file for the line
 rules above, because search output carries text that matches it:
 `rg '~/.zshrc' docs` refuses because `rg` may run a `--pre` program from
 its configuration, while `grep` or `rg --no-config` runs.
+
+A ripgrep `--pre` or `--pre-glob` given on the line runs a program on
+every file `rg` searches, so both guards judge each root it searches as a
+recursive writer's target: its path operands, or the directory it runs
+in when it names none. exec-guard refuses a root that is a startup file,
+the home, `/etc` or a directory above a class entry, a root it cannot
+resolve, and one below which a `.envrc`, a link leaving the root or more
+than 4096 directories lie, so `rg --hidden --pre tee x ~` and
+`cd ~ && rg -. --pre tee x` refuse. git-guard refuses a root that holds an
+enforcement file, as it does a recursive `rm`, so `rg --pre tee x` at the
+repository root refuses while `rg --pre pdftotext needle docs/` runs. A
+`--pre` under `xargs` or `parallel` searches the files the input names,
+which the guards cannot see, and refuses; under `find -exec` its roots are
+`find`'s starting points.
 
 The guards refuse under `security.shell_startup`, whatever the integrity
 level:
@@ -475,7 +496,8 @@ level:
   `--target-directory`, when the named file lands in the class;
 - `rg` without `--no-config` on a class file it is given (a pattern word
   is not one, as above), since its configuration file can name a `--pre`
-  program, and `sed` unless its options change no file and its script is
+  program; `rg` with a `--pre` on the line over a root that can hold one,
+  as above; and `sed` unless its options change no file and its script is
   only addressed print commands.
 
 The backstop reads text, not a parse of copier behavior. For reviewers, a
