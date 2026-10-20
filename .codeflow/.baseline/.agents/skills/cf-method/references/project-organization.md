@@ -346,6 +346,14 @@ branch, whose `Task:` line names the task or a follow-up of it: every
 criterion and tag stays, CI prints the delta, the reviewer confirms the
 meaning is unchanged, and the task stays complete (ADR-0080).
 
+An amendment may leave a note under the criterion it changes: an indented
+sub-bullet whose first word is `Amended` or `Moved`, as in
+`- Amended <date> (<plan version>): <what changed>`. The criterion's own
+text ends where its first note begins, so a `(journey)`, `(serves EPC-NNN
+AC-n)` or `(after release)` tag closing the head line still counts. Wrapped
+lines and other sub-bullets stay criterion text, and when one of them
+hides a tag, the journey refusal names it.
+
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
 revision replaces it. `implemented` is derived when every consumer is
