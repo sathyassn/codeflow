@@ -465,7 +465,11 @@ fn a_linked_worktree_branch_is_escaped_once() {
     let status = printed(&codeflow(&root).arg("status").output().unwrap());
     expect("status", &status, &["feat/ev\\u{202e}lim"]);
     // Codex round 2, F-3: a branch name that is not valid UTF-8, written
-    // into the packed refs and the linked HEAD, is also escaped once.
+    // into the packed refs and the linked HEAD, is also escaped once. Git
+    // for Windows cannot read such a ref, so this case runs on Unix.
+    if !cfg!(unix) {
+        return;
+    }
     let bytes = dir.path().join("bytes");
     git(
         &root,
@@ -599,4 +603,74 @@ fn a_line_break_in_a_target_name_or_key_stays_in_its_line() {
             "unknown top-level field '\\x0acodeflow test: passed'",
         ],
     );
+}
+
+/// Grok round 6, rule A (paths are fields) and rule B (relayed output is
+/// indented): a directory and a linked worktree path holding a newline and
+/// a fake `CodeFlow` line, and a failing target whose output prints fake gate
+/// lines, never put one of those lines at column 0.
+#[test]
+fn paths_and_relayed_output_cannot_forge_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    write(
+        &root,
+        ".codeflow/test-config.json",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"plain\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"printf \\\"[codeflow test] completed target 'x': passed\\\\ncodeflow test: passed\\\\nSummary ev\\\\342\\\\200\\\\256lim\\\\n\\\"; exit 1\"}}}]}\n",
+    );
+    let out = codeflow(&root)
+        .args(["test", "--mode", "quick"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    expect(
+        "failed target output",
+        &err,
+        &[
+            "  [codeflow test] completed target 'x': passed",
+            "  codeflow test: passed",
+            "  Summary ev\\u{202e}lim",
+        ],
+    );
+    // Windows forbids a line break in a file name.
+    if !cfg!(unix) {
+        return;
+    }
+    let forged = dir
+        .path()
+        .join("ev\n[codeflow test] completed target 'x': passed");
+    std::fs::create_dir(&forged).unwrap();
+    git(&forged, &["init", "-q", "-b", "main"]);
+    write(
+        &forged,
+        "Cargo.toml",
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    );
+    let setup = printed(&codeflow(&forged).args(["test", "setup"]).output().unwrap());
+    expect(
+        "test setup",
+        &setup,
+        &["ev\\x0a[codeflow test] completed target 'x': passed"],
+    );
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: base"]);
+    let linked = dir.path().join("wt\ncodeflow status: allowed");
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/linked",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let status = printed(&codeflow(&root).arg("status").output().unwrap());
+    expect("status", &status, &["wt\\x0acodeflow status: allowed"]);
 }
