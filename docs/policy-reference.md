@@ -536,9 +536,30 @@ checked, so a symlink does not remove the target owner's protection.
   config reads can still use regular expressions. Git commands fed by
   xargs refuse when the subcommand is absent or guarded, because their
   complete operands are unknown. Ordinary `xargs git add` and `xargs git
-  status` remain available. The arch launcher and Git's rebase exec,
-  bisect run and submodule foreach commands receive the same checks as
-  their command payloads.
+  status` remain available. The arch launcher and Git command runners
+  receive the same checks as their command payloads. A shared catalog
+  covers command-valued options, effective configuration and environment,
+  including rebase exec, bisect run, submodule foreach, filter-branch,
+  diff tools, pagers and transport programs. Saved rebase exec instructions
+  and clone-local callback settings use the same reader. Filter consumers
+  include plumbing commands such as `cat-file` and `hash-object`. Saved
+  instructions are read before continuation, bounded to a regular UTF-8 file
+  of 1 MiB.
+  For-each-repo bodies use the configured repositories. The reader follows
+  Git option arity, short bundles and unambiguous long-option prefixes.
+  Aliases, dashed Git programs and the submodule helper use the same reader. An unclassified
+  runner option or an unresolved checkout refuses under active hook
+  integrity. This includes an unresolved target for `git status`, which can
+  run a configured filesystem monitor. Each body is judged from the checkout
+  or submodule where Git runs it, including Git commands nested in the body.
+  A body that only names a script path remains unread; these checks do not inspect that
+  script's contents. Nested Git commands inherit command-local config
+  options and environment, including alias overrides. The `ext::` transport
+  syntax refuses because its percent expansion is not a classified shell
+  body; this includes configured URLs, URL rewrites and direct helper calls.
+  A preceding config write that could change command settings or a saved-instruction rewrite
+  makes the next Git command's runner state unknown; run those commands
+  separately so the guard can read the resulting state.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.

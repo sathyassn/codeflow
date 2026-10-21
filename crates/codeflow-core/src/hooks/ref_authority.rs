@@ -599,7 +599,15 @@ mod tests {
         );
         let read_only =
             r21_report_command(root.path(), r#"git -C "$R21_UNKNOWN_REPOSITORY" status"#);
-        assert!(read_only.violations.is_empty(), "{read_only:?}");
+        // Status can run a configured filesystem monitor. An unknown target
+        // has unread command settings even though no ref update is requested.
+        assert!(
+            read_only.violations.iter().any(|finding| {
+                finding.rule == "git.hook_integrity"
+                    && finding.level == super::super::policy::PolicyLevel::Block
+            }),
+            "{read_only:?}"
+        );
     }
 
     #[test]

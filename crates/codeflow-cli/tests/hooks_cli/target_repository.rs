@@ -1052,3 +1052,545 @@ fn target_installed_adopter_journey() {
     assert!(refused(&out), "{out:?}");
     println!("External move, actual prune, return: all writes refused from both checkouts; parent deletion refused");
 }
+
+#[test]
+fn repair3_runner_options() {
+    let f = Fixture::new();
+    let findings = codeflow_core::hooks::exec_guard::evaluate_in(
+        "git rebase --unknown-runner-option 'cargo test' HEAD~1",
+        true,
+        &codeflow_core::hooks::policy::SecuritySection::default(),
+        codeflow_core::hooks::policy::PolicyLevel::Warn,
+        &f.linked,
+        &f.root,
+    );
+    assert!(findings
+        .iter()
+        .any(|finding| finding.rule == "git.hook_integrity"
+            && finding.level == codeflow_core::hooks::policy::PolicyLevel::Block));
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git -c color.ui=never rebase -ix 'cargo test' HEAD~3",
+            "git rebase --exe='cargo test' HEAD~3",
+            "git rebase -x'cargo test' -x 'true' HEAD~3",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git rebase -ix 'rm -rf .claude' HEAD~1",
+            "git rebase -rx 'rm -rf .claude' HEAD~1",
+            "git rebase --exe 'rm -rf .claude' HEAD~1",
+            "git rebase --ex='rm -rf .claude' HEAD~1",
+            "git rebase -x'rm -rf .claude' HEAD~1",
+            "git rebase -x 'true' -x 'rm -rf .claude' HEAD~1",
+            "git rebase {--exec,'rm -rf .claude'} HEAD~1",
+            "git rebase --unknown-runner-option 'cargo test' HEAD~1",
+            "git rebase -x",
+            "git rebase --exec",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair3_runner_reserved_words_and_launchers() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "! command git rebase -x 'cargo test' HEAD~3",
+            "sh -c \"git rebase -x 'cargo test' HEAD~3\"",
+            "env X=1 git bisect run ./test.sh",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "! git rebase -x '! rm -rf .claude' HEAD~1",
+            "if git bisect run rm -rf .claude; then true; fi",
+            "while git rebase -x 'rm -rf .claude' HEAD~1; do true; done",
+            "command git rebase -x 'env X=1 sh -c \"! rm -rf .claude\"' HEAD~1",
+            "env X=1 arch -arm64 git rebase -ix 'rm -rf .claude' HEAD~1",
+            "sh -c \"! git rebase -x 'rm -rf .claude' HEAD~1\"",
+            "git rebase -x '$UNKNOWN_COMMAND' HEAD~1",
+            "git -c alias.hidden='config core.bare true' rebase -x 'git hidden' HEAD~1",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair3_runner_locations() {
+    let f = Fixture::new();
+    git(&f.root, &["switch", "-c", "task/runner"]);
+    let scratch = f.temp.path().join("scratch");
+    std::fs::create_dir(&scratch).unwrap();
+    let root = shell_path(&f.root);
+    let subdir = f.linked.join("src");
+    std::fs::create_dir(&subdir).unwrap();
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git rebase -x 'cargo test' HEAD~3".to_string(),
+            "D=..; cd \"$D\"; git rebase -x 'cargo test' HEAD~3".to_string(),
+            format!(
+                "git -c color.ui=never -C '{}' rebase -x 'cargo test' HEAD~3",
+                shell_path(&f.linked)
+            ),
+        ] {
+            let out = f.command(&subdir, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            format!("git --git-dir='{root}/.git' --work-tree='{root}' rebase -x 'rm -rf .claude' HEAD~1"),
+            format!("GIT_DIR='{root}/.git' GIT_WORK_TREE='{root}' git bisect run rm -rf .claude"),
+            format!("git --git-dir='{root}/.git' rebase -x 'rm -rf .claude' HEAD~1"),
+            format!("git --git-dir='{root}/.git' -c core.worktree='{}' rebase -x 'rm -rf .claude' HEAD~1", shell_path(&scratch)),
+            format!("git --git-dir='{root}/.git' -c core.worktree='{}' rebase -x 'cargo test' HEAD~1", shell_path(&scratch)),
+            format!("git --git-dir='{root}/.git' --work-tree='{}' rebase -x 'cargo test' HEAD~1", shell_path(&scratch)),
+            "git -C \"$UNKNOWN\" rebase -x 'rm -rf .claude' HEAD~1".into(),
+            "git -C \"$UNKNOWN\" status".into(),
+            "git rebase -x 'rm -rf .claude' HEAD~1".into(),
+        ] {
+            let out = f.command(&scratch, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+    // The administrative namespace has its existing git-guard authority
+    // refusal; exec-guard can still resolve the literal runner checkout.
+    let administrative = format!(
+        "git --git-dir='{root}/.git/worktrees/w' --work-tree='{}' rebase -x 'cargo test' HEAD~3",
+        shell_path(&f.linked)
+    );
+    let allowed = f.command(&subdir, "exec-guard", &administrative);
+    assert_eq!(allowed.status.code(), Some(0), "{allowed:?}");
+    let protected = f.command(&subdir, "git-guard", &administrative);
+    assert_eq!(protected.status.code(), Some(2), "{protected:?}");
+    assert!(
+        String::from_utf8_lossy(&protected.stderr).contains("git.policy_authority"),
+        "{protected:?}"
+    );
+}
+
+#[test]
+fn repair3_runner_aliases_and_program_names() {
+    let f = Fixture::new();
+    target_journey_in(&f, "submodule", "native");
+    git(
+        &f.root,
+        &["config", "alias.runner", "rebase -x 'rm -rf .claude'"],
+    );
+    git(
+        &f.root,
+        &["config", "alias.safe-runner", "rebase -x 'cargo test'"],
+    );
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git safe-runner HEAD~3",
+            "git -c \"alias.once=rebase -x 'cargo test'\" once HEAD~3",
+            "git-rebase -x 'cargo test' HEAD~3",
+            "git-bisect run ./test.sh",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git submodule foreach 'git status --short'",
+            "git submodule foreach --recursive 'cargo test'",
+            "git submodule--helper foreach --quiet 'true'",
+            "git-submodule foreach 'printf hello'",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git runner HEAD~1",
+            "git -c \"alias.runner=rebase -ix 'rm -rf .claude'\" runner HEAD~1",
+            "git-rebase -ix 'rm -rf .claude' HEAD~1",
+            "/usr/libexec/git-core/git-rebase -ix 'rm -rf .claude' HEAD~1",
+            "git-rebase.exe -ix 'rm -rf .claude' HEAD~1",
+            "git-bisect run rm -rf .claude",
+            "git-submodule foreach 'rm -rf .claude'",
+            "git submodule--helper foreach 'rm -rf .claude'",
+        ] {
+            let cwd = if command.contains("submodule") {
+                &f.root
+            } else {
+                &f.linked
+            };
+            let out = f.command(cwd, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair3_runner_git_uses_submodule_branch() {
+    let f = Fixture::new();
+    target_journey_in(&f, "submodule", "native");
+    let command = format!(
+        "git -C '{}' submodule foreach 'git reset --hard'",
+        shell_path(&f.root)
+    );
+    let out = f.command(&f.linked, "git-guard", &command);
+    assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("git.hard_reset_protected"),
+        "{out:?}"
+    );
+    let sub = f.root.join("sub");
+    git(&sub, &["switch", "-c", "task/sub"]);
+    git(
+        &sub,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &shell_path(&f.temp.path().join("source")),
+            "inner",
+        ],
+    );
+    let direct = f.command(&f.linked, "git-guard", &command);
+    assert!(
+        !String::from_utf8_lossy(&direct.stderr).contains("git.hard_reset_protected"),
+        "{direct:?}"
+    );
+    let recursive = command.replace("foreach", "foreach --recursive");
+    let nested = f.command(&f.linked, "git-guard", &recursive);
+    assert_eq!(nested.status.code(), Some(2), "{nested:?}");
+    assert!(
+        String::from_utf8_lossy(&nested.stderr).contains("git.hard_reset_protected"),
+        "{nested:?}"
+    );
+}
+
+#[test]
+fn repair3_runner_filter_and_option_sources() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for option in [
+            "--setup",
+            "--env-filter",
+            "--tree-filter",
+            "--index-filter",
+            "--parent-filter",
+            "--msg-filter",
+            "--commit-filter",
+            "--tag-name-filter",
+        ] {
+            let command =
+                format!("git filter-branch -f {option} 'git config core.hooksPath /dev/null' HEAD");
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git difftool -y -x 'rm -rf .claude' HEAD~1 HEAD",
+            "git difftool --extcmd='rm -rf .claude' HEAD~1 HEAD",
+            "git grep -O'rm -rf .claude' needle",
+            "git grep --open-files-in-pager='rm -rf .claude' needle",
+            "git clone -u 'rm -rf .claude' /source scratch",
+            "git fetch --upload-pack='rm -rf .claude' /source",
+            "git ls-remote --upload-pack='rm -rf .claude' /source",
+            "git push --receive-pack='rm -rf .claude' /source task/w",
+            "git send-pack --exec='rm -rf .claude' /source task/w",
+            "git archive --exec='rm -rf .claude' --remote=/source HEAD",
+            "git daemon --access-hook='rm -rf .claude' .",
+            "git instaweb --httpd='rm -rf .claude' --start",
+            "git instaweb -d 'rm -rf .claude' --start",
+            "git send-email --to-cmd='rm -rf .claude' patch",
+            "printf payload | xargs git difftool",
+            "printf payload | xargs git-filter-branch",
+            "printf payload | xargs git for-each-repo",
+            "git ls-remote 'ext::sh -c rm% -rf% .claude'",
+            "git remote-ext fixture 'sh -c rm% -rf% .claude'",
+            "git-remote-ext fixture 'sh -c rm% -rf% .claude'",
+            "git clone -c 'filter.fixture.smudge=rm -rf .claude' /source scratch",
+            "git clone --config='core.sshCommand=rm -rf .claude' /source scratch",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git filter-branch -f --index-filter 'true' HEAD",
+            "git difftool -y -x 'diff' HEAD~1 HEAD",
+            "git grep -Oless needle",
+            "git rebase -x ./test.sh HEAD~3",
+            "git filter-branch --tree-filter ./test.sh HEAD",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+    // Existing policy-authority checks already refuse command-local remote
+    // changes. Read an out-of-band setting to exercise the runner itself.
+    for (key, value) in [
+        ("remote.fixture.url", "ext::sh -c rm% -rf% .claude"),
+        ("url.ext::sh -c rm% -rf% .claude.insteadOf", "fixture"),
+    ] {
+        let configured = Fixture::new();
+        git(&configured.root, &["config", key, value]);
+        for hook in ["exec-guard", "git-guard"] {
+            let out = configured.command(&configured.linked, hook, "git ls-remote fixture");
+            assert!(refused(&out), "{hook} {key}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair3_runner_configuration_and_environment_sources() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for (key, verb) in [
+            ("mergetool.fixture.cmd", "mergetool -y -t fixture"),
+            ("core.sshCommand", "ls-remote ssh://example.test/none"),
+            ("diff.fixture.textconv", "diff"),
+            ("filter.fixture.clean", "add README.md"),
+            ("filter.fixture.smudge", "cat-file --filters HEAD:README.md"),
+            (
+                "diff.fixture.textconv",
+                "cat-file --textconv HEAD:README.md",
+            ),
+            ("filter.fixture.clean", "hash-object README.md"),
+            ("filter.fixture.smudge", "sparse-checkout reapply"),
+            ("core.editor", "commit"),
+            ("sequence.editor", "rebase -i HEAD~1"),
+            ("core.pager", "log"),
+            ("tar.fixture.command", "archive --format=fixture HEAD"),
+        ] {
+            let command = format!("git -c '{key}=rm -rf .claude' {verb}");
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for (name, verb) in [
+            ("GIT_SSH_COMMAND", "ls-remote ssh://example.test/none"),
+            ("GIT_SSH", "ls-remote ssh://example.test/none"),
+            ("GIT_EXTERNAL_DIFF", "diff"),
+            ("GIT_PAGER", "log"),
+            ("GIT_EDITOR", "commit"),
+            ("GIT_SEQUENCE_EDITOR", "rebase -i HEAD~1"),
+            ("GIT_DIFFTOOL_EXTCMD", "difftool -y HEAD~1 HEAD"),
+        ] {
+            let command = format!("{name}='rm -rf .claude' git {verb}");
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git -c core.pager=cat log",
+            "git --version",
+            "git -v",
+            "C=never git --config-env=color.ui=C log -1",
+            "EDITOR='rm -rf .claude' git config --get user.name",
+            "git config alias.example status; git status",
+            "GIT_SSH_COMMAND=ssh git status",
+            "git -c core.fsmonitor=false status",
+            "git -c core.editor=./editor.sh status",
+            "git -c core.editor='git status --short' status",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "EDITOR='rm -rf .claude' git config --edit",
+            "C='rm -rf .claude' git --config-env=core.editor=C commit",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+    // An out-of-band config write must be read on the next invocation.
+    for hook in ["exec-guard", "git-guard"] {
+        let out = f.command(
+            &f.linked,
+            hook,
+            "git -c core.sshCommand='rm -rf .claude' submodule update --init",
+        );
+        assert!(refused(&out), "{hook}: {out:?}");
+    }
+    git(
+        &f.root,
+        &["config", "difftool.fixture.cmd", "rm -rf .claude"],
+    );
+    for hook in ["exec-guard", "git-guard"] {
+        let out = f.command(&f.linked, hook, "git difftool -y -t fixture HEAD~1 HEAD");
+        assert!(refused(&out), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_saved_rebase_instructions() {
+    let f = Fixture::new();
+    let repo = git2::Repository::open(&f.linked).unwrap();
+    let state = repo.path().join("rebase-merge");
+    std::fs::create_dir(&state).unwrap();
+    let todo = state.join("git-rebase-todo");
+    for hook in ["exec-guard", "git-guard"] {
+        for line in [
+            "exec rm -rf .claude\n",
+            "x git config core.bare true\n",
+            "unread-operation cargo test\n",
+            "exec\u{a0}true\n",
+        ] {
+            std::fs::write(&todo, line).unwrap();
+            let out = f.command(&f.linked, hook, "git rebase --continue");
+            assert!(refused(&out), "{hook} {line}: {out:?}");
+        }
+        std::fs::write(&todo, "# next\nexec cargo test\nx ./test.sh\n").unwrap();
+        let out = f.command(&f.linked, hook, "git rebase --continue");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_for_each_repo_uses_configured_directories() {
+    let f = Fixture::new();
+    git(
+        &f.root,
+        &["config", "runner.repositories", &shell_path(&f.root)],
+    );
+    for hook in ["exec-guard", "git-guard"] {
+        let out = f.command(
+            &f.linked,
+            hook,
+            "git for-each-repo --config=runner.repositories config core.bare true",
+        );
+        assert!(refused(&out), "{hook}: {out:?}");
+        let out = f.command(
+            &f.linked,
+            hook,
+            "git for-each-repo --config runner.repositories status --short",
+        );
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+    let out = f.command(
+        &f.linked,
+        "git-guard",
+        "git for-each-repo --config=runner.repositories reset --hard",
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("git.hard_reset_protected"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn repair3_runner_sources_changed_earlier_on_the_line() {
+    let f = Fixture::new();
+    let repo = git2::Repository::open(&f.linked).unwrap();
+    let state = repo.path().join("rebase-merge");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::write(state.join("git-rebase-todo"), "exec true\n").unwrap();
+    let included = f.temp.path().join("included.conf");
+    std::fs::write(&included, "[color]\nui = never\n").unwrap();
+    git(&f.root, &["config", "include.path", &shell_path(&included)]);
+    git(
+        &f.root,
+        &["config", "alias.fixture.fsmonitor", "rm -rf .claude"],
+    );
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            format!(
+                "printf 'exec rm -rf .claude\\n' > '{}'; git rebase --continue",
+                shell_path(&state.join("git-rebase-todo"))
+            ),
+            "git config core.editor 'rm -rf .claude'; git commit".to_string(),
+            "git config --rename-section alias.fixture core; git status".to_string(),
+            format!(
+                "printf '[core]\\npager = rm -rf .claude\\n' > '{}'; git log",
+                shell_path(&included)
+            ),
+        ] {
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        let ordinary = f.command(
+            &f.linked,
+            hook,
+            "printf note > notes.txt; git rebase --continue",
+        );
+        assert_eq!(ordinary.status.code(), Some(0), "{hook}: {ordinary:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_inherits_command_configuration() {
+    let f = Fixture::new();
+    git(&f.root, &["config", "alias.hidden", "status"]);
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git -c alias.hidden='config core.bare true' rebase -x 'git hidden' HEAD~1",
+            "git -c alias.hidden=config rebase -x 'git hidden core.bare true' HEAD~1",
+            "git -c core.sshCommand='rm -rf .claude' rebase -x 'git ls-remote ssh://example.test/none' HEAD~1",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hidden GIT_CONFIG_VALUE_0='config core.bare true' git rebase -x 'git hidden' HEAD~1",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        let out = f.command(
+            &f.linked,
+            hook,
+            "git -c alias.hidden='status --short' rebase -x 'git hidden' HEAD~1",
+        );
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+        let out = f.command(&f.linked, hook, "git -c alias.hidden='config core.bare true' rebase -x 'git -c alias.hidden=status hidden' HEAD~1");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_reads_each_configured_helper() {
+    let f = Fixture::new();
+    // Only submit hook payloads. Never execute a credential operation or helper.
+    for hook in ["exec-guard", "git-guard"] {
+        let command = "git -c credential.helper= -c 'credential.helper=!rm -rf .claude' -c credential.helper=true ls-remote https://example.test/none";
+        let out = f.command(&f.linked, hook, command);
+        assert!(refused(&out), "{hook} {command}: {out:?}");
+        let cleared = "git -c 'credential.helper=!rm -rf .claude' -c credential.helper= ls-remote https://example.test/none";
+        let out = f.command(&f.linked, hook, cleared);
+        assert_eq!(out.status.code(), Some(0), "{hook} {cleared}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_rejects_non_unicode_command_environment() {
+    let f = Fixture::new();
+    #[cfg(unix)]
+    let unread = {
+        use std::os::unix::ffi::OsStringExt as _;
+        std::ffi::OsString::from_vec(vec![0xff])
+    };
+    #[cfg(windows)]
+    let unread = {
+        use std::os::windows::ffi::OsStringExt as _;
+        std::ffi::OsString::from_wide(&[0xd800])
+    };
+    for hook in ["exec-guard", "git-guard"] {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(&f.linked)
+                .env("HOME", f.temp.path())
+                .env("USERPROFILE", f.temp.path())
+                .env("GIT_SSH_COMMAND", &unread),
+            &guard_payload("git ls-remote ssh://example.test/none", &f.linked),
+        );
+        assert!(refused(&out), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_rejects_non_unicode_transport() {
+    let f = Fixture::new();
+    let config = f.root.join(".git/config");
+    let mut bytes = std::fs::read(&config).unwrap();
+    bytes.extend_from_slice(b"\n[remote \"fixture\"]\nurl = ext::sh -c rm% -rf% .claude\xff\n");
+    std::fs::write(config, bytes).unwrap();
+    for hook in ["exec-guard", "git-guard"] {
+        let out = f.command(&f.linked, hook, "git ls-remote fixture");
+        assert!(refused(&out), "{hook}: {out:?}");
+    }
+}

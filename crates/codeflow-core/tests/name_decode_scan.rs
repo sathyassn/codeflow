@@ -1486,6 +1486,15 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // A reader error blocks active integrity unless authority or integrity
+    // already denies it. Inactive integrity retains independent branch checks.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "evaluate_report_with_runners",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
     // Discovery has already failed. These optional reads only choose whether
     // its refusal names worktree repair; failure retains the marker refusal.
     (

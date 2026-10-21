@@ -28,11 +28,28 @@ pub(crate) struct Include {
 #[derive(Debug)]
 pub(crate) struct EffectiveConfig {
     entries: Vec<Entry>,
+    /// Files contributing values, resolved from Git's reported origin directory.
+    pub(crate) sources: Vec<PathBuf>,
     /// Includes named by the files Git read, including inactive conditions.
     pub(crate) includes: Vec<Include>,
 }
 
 impl EffectiveConfig {
+    /// Effective key names, without exposing or executing their values.
+    pub(crate) fn keys(&self) -> Result<Vec<&str>, String> {
+        let mut keys = self
+            .entries
+            .iter()
+            .map(|entry| {
+                std::str::from_utf8(&entry.key)
+                    .map_err(|_| "cannot verify Git configuration: a key is not UTF-8".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        keys.sort_unstable();
+        keys.dedup();
+        Ok(keys)
+    }
+
     pub(crate) fn get(&self, key: &str) -> Result<Option<&str>, String> {
         self.get_all(key)
             .last()
@@ -210,6 +227,7 @@ fn parse(
         .split(|byte| *byte == 0);
     let mut entries = Vec::new();
     let mut includes = Vec::new();
+    let mut sources = Vec::new();
     while let Some(scope) = fields.next() {
         if scope.is_empty() && bytes.is_empty() {
             break;
@@ -221,6 +239,9 @@ fn parse(
             .map_err(|_| "cannot verify Git configuration: scope is not UTF-8")?;
         let origin = std::str::from_utf8(origin)
             .map_err(|_| "cannot verify Git configuration: origin is not UTF-8")?;
+        if let Some(file) = origin.strip_prefix("file:") {
+            sources.push(directory.join(file));
+        }
         let entry = fields
             .next()
             .ok_or("cannot verify Git configuration: incomplete output")?;
@@ -268,7 +289,13 @@ fn parse(
     }
     includes.sort();
     includes.dedup();
-    Ok(EffectiveConfig { entries, includes })
+    sources.sort();
+    sources.dedup();
+    Ok(EffectiveConfig {
+        entries,
+        sources,
+        includes,
+    })
 }
 
 fn include_path(

@@ -26,6 +26,8 @@ use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
+mod runners;
+
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
 /// empty means the current branch's PR) to its base branch name, when it can
 /// be determined. Returns `None` on any doubt — an unreachable API, an
@@ -482,15 +484,30 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 
 /// Evaluate a command using the tool payload's working directory for paths.
 #[must_use]
-#[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
+    evaluate_report_with_runners(command, ctx, cwd, true)
+}
+
+#[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
+fn evaluate_report_with_runners(
+    command: &str,
+    ctx: &GuardContext<'_>,
+    cwd: &Path,
+    read_runners: bool,
+) -> Evaluation {
     let _facts = super::edit_guard::RepoFactsScope::enter();
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
     branches.line = command.to_string();
-    let expanded = expand_commands_read(command);
+    // Disabling hook integrity must not drop the independent branch checks
+    // that already read inline Git payloads through the generic expander.
+    let expanded = if ctx.policy.hook_integrity.is_active() {
+        expand_shell_commands(command)
+    } else {
+        expand_commands_read(command)
+    };
     let segments = &expanded.segments;
     // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
     // top-level command and `None` for one nested in a substitution or a
@@ -500,9 +517,6 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
     let mut notes = Vec::new();
-    if let Some(finding) = git_runner_write_violation(command, cwd, ctx.policy.hook_integrity) {
-        violations.push(finding);
-    }
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
     // token behind — subshells `( )`, brace groups `{ }`, `bash -c '…'`,
@@ -666,6 +680,45 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             }
         }
     }
+    if read_runners {
+        match runners::read(command, cwd) {
+            Ok(bodies) => {
+                for body in bodies {
+                    let Some(directory) = body.directory.to_str() else {
+                        violations.push(Violation::always_blocking(
+                            "git.policy_authority",
+                            "cannot represent the Git runner directory without losing path bytes"
+                                .to_string(),
+                            "use a checkout path the command reader can represent exactly",
+                        ));
+                        continue;
+                    };
+                    let nested = format!(
+                        "cd {} && {}",
+                        quote_words(&[directory.to_string()]),
+                        body.command
+                    );
+                    let judged = evaluate_report_with_runners(&nested, ctx, cwd, false);
+                    violations.extend(judged.violations);
+                    notes.extend(judged.notes);
+                }
+            }
+            Err(why)
+                if ctx.policy.hook_integrity.is_active()
+                    && !violations.iter().any(|finding| {
+                        finding.level == PolicyLevel::Block
+                            && matches!(
+                                finding.rule.as_str(),
+                                "git.policy_authority" | "git.hook_integrity"
+                            )
+                    }) =>
+            {
+                violations.push(runners::unread(&why));
+            }
+            Err(_) => {}
+        }
+    }
+
     report.notes = notes;
     report
 }
@@ -3009,20 +3062,6 @@ pub(crate) fn run_dirs_from_home(
             continue;
         };
         let name = basename(program);
-        if name == "git" && !git_runner_commands(args).is_empty() {
-            match git_runner_directories(args, &run.dirs) {
-                Ok(dirs) => {
-                    for dir in dirs {
-                        if !add_run_dir(&mut run, dir) {
-                            return run;
-                        }
-                    }
-                }
-                Err(error) => {
-                    run.unknown.get_or_insert(error);
-                }
-            }
-        }
         if unresolved_word(program) {
             run.unknown
                 .get_or_insert_with(|| "a program filled in at run time".to_string());
@@ -5973,10 +6012,18 @@ pub(crate) struct Expanded {
 /// the line assigned a literal before it is read with that literal
 /// (`CMD='git config ...'; sh -c "$CMD"`, TSK-242 review round 15).
 pub(crate) fn expand_commands_read(command: &str) -> Expanded {
+    expand_command_bodies(command, true)
+}
+
+fn expand_shell_commands(command: &str) -> Expanded {
+    expand_command_bodies(command, false)
+}
+
+fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
     let mut out = Expanded::default();
-    expand_segments(raw, &mut out, 1, &mut Literals::default());
+    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
     out
 }
 
@@ -5992,13 +6039,19 @@ fn expand_segments(
     out: &mut Expanded,
     depth: usize,
     literals: &mut Literals,
+    git_bodies: bool,
 ) {
     for seg in segments {
-        let toks = command_argv(&seg);
-        let mut bodies: Vec<String> = carried_commands(&toks)
-            .iter()
-            .map(|body| literals.fill(body))
-            .collect();
+        let mut toks = command_argv(&seg);
+        strip_reserved_words(&mut toks);
+        let carries_git = strip_launchers(&toks)
+            .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
+        let carried = if !git_bodies && carries_git {
+            Vec::new()
+        } else {
+            carried_commands(&toks)
+        };
+        let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         let mut words = toks;
         strip_reserved_words(&mut words);
         if let Some((program, _)) = strip_launchers(&words) {
@@ -6028,7 +6081,7 @@ fn expand_segments(
         for body in bodies {
             let mut inner = Vec::new();
             split_into_segments(&body, &mut inner, depth, false);
-            expand_segments(inner, out, depth + 1, literals);
+            expand_segments(inner, out, depth + 1, literals, git_bodies);
         }
     }
 }
@@ -6123,6 +6176,9 @@ impl Literals {
 /// `setsid` and `unbuffer` ([`launcher_commands`]), and git or a command
 /// string run by `xargs` or `find -exec` (TSK-242 review round 14).
 fn carried_commands(toks: &[String]) -> Vec<String> {
+    let mut words = toks.to_vec();
+    strip_reserved_words(&mut words);
+    let toks = words.as_slice();
     if let Some(command) = env_split_command(toks) {
         return vec![command];
     }
@@ -6150,8 +6206,10 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
         vec![args.join(" ")]
-    } else if name == "git" {
-        git_runner_commands(args)
+    } else if let Some(args) = runners::arguments(prog, args) {
+        // Active integrity checks use the fallible reader; other security
+        // readers still inspect every command the option table can read.
+        runners::carried(&args)
     } else if name == "sed" {
         sed_run_commands(args)
     } else {
@@ -6159,98 +6217,7 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     }
 }
 
-/// Git commands that execute shell text or argv supplied by the caller.
-fn git_runner_commands(args: &[String]) -> Vec<String> {
-    let Some((verb, rest)) = git_subcommand(args) else {
-        return Vec::new();
-    };
-    match verb {
-        "rebase" => {
-            let mut bodies = Vec::new();
-            let mut words = rest.iter();
-            while let Some(word) = words.next() {
-                if matches!(word.as_str(), "-x" | "--exec") {
-                    if let Some(body) = words.next() {
-                        bodies.push(body.clone());
-                    }
-                } else if let Some(body) = word
-                    .strip_prefix("--exec=")
-                    .or_else(|| word.strip_prefix("-x").filter(|body| !body.is_empty()))
-                {
-                    bodies.push(body.to_string());
-                }
-            }
-            bodies
-        }
-        "bisect" if rest.first().is_some_and(|word| word == "run") => vec![quote_words(&rest[1..])],
-        "submodule" => rest
-            .iter()
-            .position(|word| word == "foreach")
-            .map_or_else(Vec::new, |at| {
-                let words: Vec<_> = rest[at + 1..]
-                    .iter()
-                    .skip_while(|word| word.starts_with('-'))
-                    .cloned()
-                    .collect();
-                vec![words.join(" ")]
-            }),
-        _ => Vec::new(),
-    }
-}
-
-/// Git runs rebase/bisect commands at the checkout root and foreach commands
-/// inside checked-out submodules. Include these alongside the shell's cwd.
-fn git_runner_directories(args: &[String], starts: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let Some((verb, rest)) = git_subcommand(args) else {
-        return Ok(Vec::new());
-    };
-    let globals = &args[..args.len() - rest.len() - 1];
-    let mut dirs = Vec::new();
-    for start in starts {
-        let mut at = start.clone();
-        for pair in globals.windows(2) {
-            if pair[0] == "-C" {
-                if expands(&pair[1]) {
-                    return Err("a Git runner directory expands at run time".into());
-                }
-                at = integrity_shell_path(&pair[1], &at);
-            }
-        }
-        let Some(repo) = super::repo::open(&at)? else {
-            continue;
-        };
-        if let Some(root) = repo.workdir() {
-            dirs.push(root.to_path_buf());
-        }
-        if verb == "submodule" {
-            let recursive = rest.iter().any(|arg| arg == "--recursive");
-            let mut pending = vec![repo];
-            while let Some(repo) = pending.pop() {
-                for module in repo.submodules().map_err(|e| e.message().to_string())? {
-                    let Some(root) = repo.workdir() else { continue };
-                    let path = root.join(module.path());
-                    if crate::absence::cannot_exist(&path.join(".git"))
-                        .map_err(|e| e.to_string())?
-                    {
-                        continue;
-                    }
-                    dirs.push(path.clone());
-                    if dirs.len() > RUN_DIR_LIMIT {
-                        return Err("too many Git runner directories to inspect".into());
-                    }
-                    if recursive {
-                        if let Some(child) = super::repo::open(&path)? {
-                            pending.push(child);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(dirs)
-}
-
-/// Exec-guard also judges the enforcement writes of Git's command payloads.
+/// Exec-guard judges the same runner bodies and directories as git-guard.
 pub(crate) fn git_runner_write_violation(
     command: &str,
     cwd: &Path,
@@ -6259,27 +6226,40 @@ pub(crate) fn git_runner_write_violation(
     if !level.is_active() {
         return None;
     }
-    let expanded = expand_commands_read(command);
-    let carries_git = expanded.segments.iter().any(|segment| {
-        let words = command_argv(segment);
-        strip_launchers(&words).is_some_and(|(program, args)| {
-            basename(program) == "git" && !git_runner_commands(args).is_empty()
-        })
-    });
-    if !carries_git {
-        return None;
-    }
-    let run = run_dirs(&expanded.segments, cwd);
-    expanded.segments.iter().find_map(|segment| {
-        integrity_write_in_run(
-            &shell_tokens(segment),
-            &redirect_writes(segment),
+    let bodies = match runners::read(command, cwd) {
+        Ok(bodies) => bodies,
+        Err(why) => return Some(runners::unread(&why)),
+    };
+    for body in bodies {
+        let expanded = expand_shell_commands(&body.command);
+        let run = run_dirs(&expanded.segments, &body.directory);
+        for segment in &expanded.segments {
+            let mut words = shell_tokens(segment);
+            strip_reserved_words(&mut words);
+            if let Some(finding) = integrity_write_in_run(
+                &words,
+                &redirect_writes(segment),
+                level,
+                &run,
+                cwd,
+                &body.command,
+            ) {
+                return Some(finding);
+            }
+        }
+        if let Some(finding) = crate::security::startup::evaluate_with(
+            &body.command,
+            &body.directory,
+            &crate::security::startup::StartupEnv::from_process_at(&body.directory),
             level,
-            &run,
-            cwd,
-            command,
         )
-    })
+        .into_iter()
+        .next()
+        {
+            return Some(finding);
+        }
+    }
+    None
 }
 
 /// The shell commands a `sed` runs through GNU `e` and the `e` flag of `s`,
@@ -9256,17 +9236,15 @@ pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) ->
     }
     let tail = xargs_command(args)?;
     let (program, args) = strip_launchers(tail)?;
-    if basename(program) != "git" {
-        return None;
-    }
+    let args = runners::arguments(program, args)?;
     // Appended stdin words can also be options, such as branch -D or reset
     // --hard. These verbs remain guarded even with an existing path operand.
-    let guarded = git_subcommand(args).is_none_or(|(verb, _)| match verb {
+    let guarded = git_subcommand(&args).is_none_or(|(verb, _)| match verb {
         "branch" | "reset" | "config" | "worktree" | "update-ref" | "symbolic-ref" | "push"
         | "clean" | "checkout" | "switch" | "restore" | "rm" | "mv" | "commit" | "merge"
         | "cherry-pick" | "rebase" | "bisect" | "submodule" | "fast-import" | "clone" | "init"
         | "fetch" | "pull" | "stash" => true,
-        _ => expands(verb),
+        _ => expands(verb) || runners::command_options(verb) || !GIT_BUILTINS.contains(&verb),
     });
     guarded.then(|| hook_integrity_violation(level,
         "xargs supplies operands to a guarded Git command from input that the guard cannot prove; run the complete Git command directly".into()))
@@ -10848,6 +10826,13 @@ const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
 /// them is read as the `<upstream>` or `<branch>` operand.
 const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
     short: &[
+        ('i', Arity::Flag),
+        ('q', Arity::Flag),
+        ('v', Arity::Flag),
+        ('n', Arity::Flag),
+        ('f', Arity::Flag),
+        ('m', Arity::Flag),
+        ('h', Arity::Flag),
         ('s', Arity::Value),
         ('X', Arity::Value),
         ('x', Arity::Value),
@@ -10856,6 +10841,58 @@ const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
         ('r', Arity::Flag),
     ],
     long: &[
+        ("--keep-base", Arity::Flag),
+        ("--no-keep-base", Arity::Flag),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--no-quiet", Arity::Flag),
+        ("--verbose", Arity::Flag),
+        ("--no-verbose", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--signoff", Arity::Flag),
+        ("--no-signoff", Arity::Flag),
+        ("--committer-date-is-author-date", Arity::Flag),
+        ("--no-committer-date-is-author-date", Arity::Flag),
+        ("--reset-author-date", Arity::Flag),
+        ("--no-reset-author-date", Arity::Flag),
+        ("--ignore-date", Arity::Flag),
+        ("--ignore-whitespace", Arity::Flag),
+        ("--no-ignore-whitespace", Arity::Flag),
+        ("--force-rebase", Arity::Flag),
+        ("--no-force-rebase", Arity::Flag),
+        ("--ff", Arity::Flag),
+        ("--no-ff", Arity::Flag),
+        ("--continue", Arity::Flag),
+        ("--skip", Arity::Flag),
+        ("--abort", Arity::Flag),
+        ("--quit", Arity::Flag),
+        ("--edit-todo", Arity::Flag),
+        ("--show-current-patch", Arity::Flag),
+        ("--apply", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--no-interactive", Arity::Flag),
+        ("--rerere-autoupdate", Arity::Flag),
+        ("--no-rerere-autoupdate", Arity::Flag),
+        ("--autosquash", Arity::Flag),
+        ("--no-autosquash", Arity::Flag),
+        ("--update-refs", Arity::Flag),
+        ("--no-update-refs", Arity::Flag),
+        ("--autostash", Arity::Flag),
+        ("--no-autostash", Arity::Flag),
+        ("--fork-point", Arity::Flag),
+        ("--no-fork-point", Arity::Flag),
+        ("--reschedule-failed-exec", Arity::Flag),
+        ("--no-reschedule-failed-exec", Arity::Flag),
+        ("--reapply-cherry-picks", Arity::Flag),
+        ("--no-reapply-cherry-picks", Arity::Flag),
+        ("--no-exec", Arity::Flag),
+        ("--no-rebase-merges", Arity::Flag),
+        ("--no-gpg-sign", Arity::Flag),
+        ("--no-root", Arity::Flag),
+        ("--help", Arity::Flag),
         ("--onto", Arity::Value),
         ("--strategy", Arity::Value),
         ("--strategy-option", Arity::Value),
@@ -10882,7 +10919,17 @@ fn rebase_branch(rest: &[String]) -> Option<&str> {
 /// `git push` (git-push(1)). The destructive options are what the guard reads,
 /// so they resolve through the same abbreviation rule as every other command.
 const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
-    short: &[('o', Arity::Value)],
+    short: &[
+        ('o', Arity::Value),
+        ('f', Arity::Flag),
+        ('d', Arity::Flag),
+        ('u', Arity::Flag),
+        ('q', Arity::Flag),
+        ('v', Arity::Flag),
+        ('n', Arity::Flag),
+        ('4', Arity::Flag),
+        ('6', Arity::Flag),
+    ],
     long: &[
         ("--force", Arity::Flag),
         ("--force-with-lease", Arity::AttachedValue),
@@ -11345,6 +11392,8 @@ enum Seen<'a> {
 /// `--delete-branch`; `sequence` keeps every option in the order it was
 /// written, for flags whose last assignment wins.
 struct ParsedOptions<'a> {
+    /// Unclassified options and missing required values, for strict readers.
+    unread: Vec<&'a str>,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -11385,6 +11434,7 @@ impl<'a> ParsedOptions<'a> {
 /// that begins with `-`.
 fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedOptions<'a> {
     let mut parsed = ParsedOptions {
+        unread: Vec::new(),
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -11414,6 +11464,9 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
                     .extend(args[index..].iter().map(AsRef::as_ref));
                 return parsed;
             }
+            if canonical.is_none() {
+                parsed.unread.push(token);
+            }
             let name = canonical.unwrap_or(written);
             parsed.long.push((name, attached));
             parsed.sequence.push(Seen::Long(name, attached));
@@ -11422,6 +11475,8 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             } else if canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value)) {
                 if let Some(value) = args.get(index) {
                     parsed.values.push((Seen::Long(name, None), value.as_ref()));
+                } else {
+                    parsed.unread.push(token);
                 }
                 index += 1;
             }
@@ -11432,6 +11487,9 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             continue;
         };
         for (offset, letter) in cluster.char_indices() {
+            if !spec.short.iter().any(|(known, _)| *known == letter) {
+                parsed.unread.push(token);
+            }
             parsed.short.push(letter);
             parsed.sequence.push(Seen::Short(letter));
             let rest = &cluster[offset + letter.len_utf8()..];
@@ -11447,6 +11505,8 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
                     if rest.is_empty() {
                         if let Some(value) = args.get(index) {
                             parsed.values.push((Seen::Short(letter), value.as_ref()));
+                        } else {
+                            parsed.unread.push(token);
                         }
                         index += 1;
                     } else {
@@ -12764,6 +12824,7 @@ mod tests {
             .is_empty());
         let readable = |_: &Retarget<'_>| same_repo("feat/x");
         let context = ctx_with_dir_branch(&policy, "feat/x", &readable);
+        git2::Repository::init(dir.path()).unwrap();
         assert!(
             evaluate_report_at("git -C . commit -m x", &context, dir.path())
                 .violations
@@ -13326,6 +13387,26 @@ mod tests {
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
+    }
+
+    #[test]
+    fn disabled_integrity_keeps_literal_runner_branch_checks() {
+        let policy = GitPolicy {
+            hook_integrity: PolicyLevel::Allow,
+            ..GitPolicy::default()
+        };
+        let mut context = ctx(&policy, "task/example");
+        context.discard_lookup = None;
+        let findings = evaluate(
+            "git rebase --unclassified -x 'git push origin HEAD:main' HEAD~1",
+            &context,
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "git.push_to_protected"),
+            "{findings:?}"
+        );
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
@@ -16999,10 +17080,11 @@ mod tests {
         // Resolver reports the target repo is on a feature branch — allowed.
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| same_repo("feat/y");
-        assert!(evaluate(
+        assert!(fixture_report(
             "git -C /other commit -m x",
             &ctx_with_dir_branch(&p, "main", &resolver)
         )
+        .violations
         .is_empty());
     }
 
@@ -17580,7 +17662,7 @@ mod tests {
             "git -C /repo switch -c feat/x && git -C /repo commit -m x",
             "git -C /repo switch -c feat/x && git -C /repo/ commit -m x",
         ] {
-            let v = evaluate(cmd, &ctx_with_dir_branch(&p, "main", &resolver));
+            let v = fixture_report(cmd, &ctx_with_dir_branch(&p, "main", &resolver)).violations;
             assert!(v.is_empty(), "{cmd}: {v:?}");
         }
     }
@@ -17810,7 +17892,85 @@ mod tests {
 
     fn report(cmd: &str, session: &str) -> Evaluation {
         let p = default_policy();
-        evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+        fixture_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+    }
+
+    // Branch answers remain controlled by these branch-tracker tests. The
+    // command-source reader also needs actual repository configuration, so
+    // materialize the named repositories instead of relying on host paths.
+    fn fixture_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
+        let temp = tempfile::tempdir().unwrap();
+        let prefix = temp.path().to_str().unwrap().replace('\\', "/");
+        for name in [
+            "session",
+            "session/scratch",
+            "session/work/scratch",
+            "repo",
+            "other",
+            "scratch",
+            "scratch-main",
+            "work",
+            "work/scratch",
+            "release-repo",
+            "aliased",
+        ] {
+            let repo = git2::Repository::init(temp.path().join(name)).unwrap();
+            let mut config = repo.config().unwrap();
+            config.set_str("alias.st", "status --short").unwrap();
+            config.set_str("alias.ci", "commit").unwrap();
+            if name == "aliased" {
+                for (key, value) in [
+                    ("x", "commit"),
+                    ("sh", "!git commit"),
+                    ("opt", "-C /elsewhere commit"),
+                    ("loop", "loop"),
+                    ("quoted", "commit -m 'a b'"),
+                ] {
+                    config.set_str(&format!("alias.{key}"), value).unwrap();
+                }
+            }
+        }
+        std::fs::write(temp.path().join("aliases.ini"), "[alias]\nx = commit\n").unwrap();
+        let command = command.replace("cd / &&", &format!("cd {prefix} &&"));
+        let paths = regex::Regex::new(r#"(^|[ ="'])/(?:work/scratch|scratch-main|release-repo|aliases\.ini|session|scratch|aliased|other|repo|work)\b"#).unwrap();
+        let command = paths.replace_all(&command, |captures: &regex::Captures<'_>| {
+            let separator = &captures[1];
+            format!("{separator}{prefix}{}", &captures[0][separator.len()..])
+        });
+        let target = |spec: &Retarget<'_>| {
+            context.dir_target_lookup.unwrap()(&Retarget {
+                path: spec.path.strip_prefix(&prefix).unwrap_or(spec.path),
+                git_dir: spec.git_dir,
+            })
+        };
+        let alias = |query: &AliasQuery<'_>| {
+            let mapped = query.target.map(|spec| Retarget {
+                path: spec.path.strip_prefix(&prefix).unwrap_or(spec.path),
+                git_dir: spec.git_dir,
+            });
+            let config: Vec<String> = query
+                .config
+                .iter()
+                .map(|value| value.replace(&prefix, ""))
+                .collect();
+            context.alias_lookup.unwrap()(&AliasQuery {
+                target: mapped,
+                config: &config,
+                name: query.name,
+            })
+        };
+        let context = GuardContext {
+            policy: context.policy,
+            current_branch: context.current_branch,
+            integrate_token: context.integrate_token,
+            pr_base_lookup: context.pr_base_lookup,
+            dir_target_lookup: Some(&target),
+            alias_lookup: Some(&alias),
+            branch_lookup: context.branch_lookup,
+            discard_lookup: context.discard_lookup,
+            root_checkout: context.root_checkout,
+        };
+        evaluate_report_at(&command, &context, &temp.path().join("session"))
     }
 
     // Aliases (TSK-112, primary ruling after round 4): a subcommand that is
@@ -17874,12 +18034,11 @@ mod tests {
         let p = default_policy();
         assert!(blocks(&evaluate("git frobnicate", &ctx(&p, "feat/x"))));
         // Controls: a builtin wins over an alias of its name, as in git; an
-        // alias to a read-only command, a name that is no alias, and a commit
+        // alias to a read-only command and a commit
         // alias on a feature branch pass.
         for (cmd, session) in [
             ("git -c alias.log=commit log", "main"),
             ("git st", "main"),
-            ("git frobnicate", "main"),
             ("git ci -m x", "feat/s"),
             ("git -c alias.x=commit x -m y", "feat/s"),
             ("echo \"$HOME\" && git -c alias.x=status x", "main"),
@@ -17888,6 +18047,8 @@ mod tests {
             let r = report(cmd, session);
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
         }
+        // Unknown programs can carry commands outside the catalog.
+        assert!(has(&report("git frobnicate", "main"), "git.hook_integrity"));
     }
 
     #[test]
@@ -18342,9 +18503,14 @@ mod tests {
                 .starts_with("`git commit`: target unresolved: `$DEST`"));
             assert!(r.notes[0].remedy.contains("literal path"), "{}", r.notes[0]);
         }
-        // A read of an unresolved target is not a mutation: allowed, noted.
+        // Status can run a configured filesystem monitor, so its unresolved
+        // command settings refuse even though it does not mutate refs.
         let r = report("git -C \"$DEST\" status", "feat/s");
-        assert!(r.violations.is_empty(), "{:?}", r.violations);
+        assert!(
+            has_rule(&r.violations, "git.hook_integrity"),
+            "{:?}",
+            r.violations
+        );
         assert_eq!(r.notes.len(), 1);
     }
 
