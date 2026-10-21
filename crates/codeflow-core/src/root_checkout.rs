@@ -2005,7 +2005,7 @@ impl fmt::Display for WorkspaceReport {
                 f,
                 "  the {} '{}' is already in .gitignore",
                 n.kind.noun(),
-                n.path
+                crate::git::display_line(&n.path)
             )?;
         }
         writeln!(f, "next steps:")?;

@@ -714,7 +714,10 @@ fn session_summary(stdin: &str) -> i32 {
         stdin,
     ) {
         Ok(Some(path)) => {
-            eprintln!("codeflow session-summary: recorded to {}", path.display());
+            eprintln!(
+                "codeflow session-summary: recorded to {}",
+                codeflow_core::git::display_path(&path)
+            );
             0
         }
         Ok(None) => {

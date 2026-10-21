@@ -15,11 +15,11 @@ pub(super) fn text(report: &OutcomeReport) -> String {
         t.minimum, t.low, t.high, t.note
     );
     for forecast in &report.forecasts {
-        let _ = writeln!(
-            out,
-            "forecast: {} ({} task(s) joined)",
-            forecast.path, forecast.joined_tasks
+        let (path, joined) = (
+            crate::git::display_line(&forecast.path),
+            forecast.joined_tasks,
         );
+        let _ = writeln!(out, "forecast: {path} ({joined} task(s) joined)");
     }
     if report.tasks.is_empty() {
         let _ = writeln!(out, "tasks: no complete or cancelled task record matches");

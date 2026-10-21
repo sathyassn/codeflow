@@ -174,7 +174,7 @@ pub fn run(args: &FeedbackArgs) -> i32 {
                         "{id}  {} -> {}  {}",
                         outcome.from,
                         outcome.to,
-                        outcome.path.display()
+                        codeflow_core::git::display_path(&outcome.path)
                     );
                     0
                 }
@@ -314,7 +314,11 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let Some(record) = issuer.settle(result) else {
         return 1;
     };
-    println!("{}  {}", record.id, record.path.display());
+    println!(
+        "{}  {}",
+        record.id,
+        codeflow_core::git::display_path(&record.path)
+    );
     0
 }
 
@@ -338,6 +342,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     let loaded = feedback::load(root);
     for (path, reason) in &loaded.unreadable {
         let reason = shown(&reason);
+        let path = codeflow_core::git::display_line(path);
         eprintln!("warning: {path} cannot be read: {reason}");
     }
     // An item or a directory that cannot be read is an error, never a
@@ -359,12 +364,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         // its file and a listed topic, nothing that could inject Markdown.
         let errors = feedback::lint(root).errors;
         if !errors.is_empty() {
-            for finding in &errors {
-                eprintln!(
-                    "error: {}:{}: {}",
-                    finding.path, finding.line, finding.message
-                );
-            }
+            errors.iter().for_each(print_lint_error);
             eprintln!(
                 "error: {} not written; fix the items `codeflow validate --docs` names first",
                 feedback::INDEX_PATH
@@ -425,4 +425,14 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         }
     }
     0
+}
+
+/// One lint error: the item path and message are checkout text (TSK-388).
+fn print_lint_error(finding: &codeflow_core::feedback::LintFinding) {
+    let path = codeflow_core::git::display_line(&finding.path);
+    eprintln!(
+        "error: {path}:{}: {}",
+        finding.line,
+        shown(&finding.message)
+    );
 }

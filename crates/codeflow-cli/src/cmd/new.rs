@@ -292,7 +292,7 @@ pub fn run_task(args: &TaskArgs) -> i32 {
                 Ok(path) => {
                     println!(
                         "{id}: redacted {}; results and review provenance retained",
-                        path.display()
+                        codeflow_core::git::display_path(&path)
                     );
                     0
                 }
@@ -398,7 +398,7 @@ fn new_task(
         eprintln!(
             "error: epic {} not found under {}",
             epic.unwrap_or_default(),
-            pm.display()
+            codeflow_core::git::display_path(&pm)
         );
         return 1;
     }
@@ -741,7 +741,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
         if !exists {
             eprintln!(
                 "error: work item {work_item} not found under {}",
-                pm.display()
+                codeflow_core::git::display_path(&pm)
             );
             return 1;
         }
@@ -789,7 +789,7 @@ fn run_status(
             Err(error) => {
                 eprintln!(
                     "error: cannot read {}: {error}",
-                    path.display(),
+                    codeflow_core::git::display_path(path),
                     error = crate::cmd::shown(&error)
                 );
                 return 1;
@@ -822,7 +822,7 @@ fn run_status(
                 "{id}  {} -> {}  {}",
                 outcome.from,
                 outcome.to,
-                outcome.path.display()
+                codeflow_core::git::display_path(&outcome.path)
             );
             0
         }
@@ -880,7 +880,11 @@ fn check_acceptance_file(path: &Path, text: &str) -> Result<(), String> {
 
 /// Print the allocated id and the file written, then return exit code 0.
 fn report(rec: &NewRecord) -> i32 {
-    println!("{}  {}", rec.id, rec.path.display());
+    println!(
+        "{}  {}",
+        rec.id,
+        codeflow_core::git::display_path(&rec.path)
+    );
     0
 }
 

@@ -71,3 +71,10 @@ pub fn display_output(text: &str) -> String {
 pub fn display_message(text: &str) -> String {
     display_output(text).replace('\n', "\n  ")
 }
+
+/// A filesystem path as an output line shows it, its line breaks escaped
+/// too, as in `codeflow_core::git::display_path`.
+#[must_use]
+pub fn display_path(path: &std::path::Path) -> String {
+    display_output(&path.display().to_string()).replace('\n', "\\x0a")
+}

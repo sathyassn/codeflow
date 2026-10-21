@@ -165,11 +165,12 @@ pub fn run(args: &TestArgs) -> i32 {
                     }
                     let stdout = r.stdout.trim();
                     if !stdout.is_empty() {
-                        eprintln!("  stdout:\n{stdout}");
+                        // Relayed output: every line indented (TSK-388).
+                        eprintln!("  stdout:\n{}", codeflow_core::git::display_relay(stdout));
                     }
                     let stderr = r.stderr.trim();
                     if !stderr.is_empty() {
-                        eprintln!("  stderr:\n{stderr}");
+                        eprintln!("  stderr:\n{}", codeflow_core::git::display_relay(stderr));
                     }
                 }
             }
@@ -303,7 +304,7 @@ fn run_setup(args: &SetupArgs) -> i32 {
             Err(SetupError::ConfigExists(path)) => {
                 eprintln!(
                     "codeflow test setup: {} already exists; inspect it or rerun this template with --replace",
-                    path.display()
+                    codeflow_core::git::display_path(&path)
                 );
                 1
             }
@@ -343,7 +344,7 @@ fn run_setup(args: &SetupArgs) -> i32 {
             // Idempotent: a real, populated config is never overwritten.
             println!(
                 "{} already has targets — leaving it unchanged.",
-                path.display()
+                codeflow_core::git::display_path(&path)
             );
             0
         }
@@ -376,9 +377,12 @@ fn print_coverage_report(reports: &[CoverageReport]) {
         };
         println!(
             "  {}: {overall} overall — {} pass, {} fail{exceptions}",
-            r.target, r.thresholds_passed, r.thresholds_failed,
+            codeflow_core::git::display_text(&r.target),
+            r.thresholds_passed,
+            r.thresholds_failed,
         );
         for (file, pct, threshold) in &r.failing_files {
+            let file = codeflow_core::git::display_line(file);
             println!("    below threshold: {file} {pct:.1}% < {threshold}");
         }
     }

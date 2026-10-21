@@ -113,12 +113,16 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
             println!(
                 "{}. [{}] {} ({}) — {}",
                 i + 1,
-                r.repo,
-                r.path,
+                // Indexed records: each field is one line (TSK-388).
+                codeflow_core::git::display_line(&r.repo),
+                codeflow_core::git::display_line(&r.path),
                 r.kind,
-                r.title
+                codeflow_core::git::display_line(&r.title)
             );
-            println!("   {}", r.snippet.replace('\n', " "));
+            println!(
+                "   {}",
+                codeflow_core::git::display_line(&r.snippet.replace('\n', " "))
+            );
         }
     }
 

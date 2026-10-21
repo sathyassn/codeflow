@@ -90,7 +90,8 @@ pub fn run(args: &IdsArgs) -> i32 {
             let Some(id) = parse_id(id) else { return 2 };
             match seed::retarget(&root, &id) {
                 Ok(done) => {
-                    println!("{}  ->  {}  {}", done.from, done.to, done.path.display());
+                    let path = codeflow_core::git::display_path(&done.path);
+                    println!("{}  ->  {}  {path}", done.from, done.to);
                     println!("registry: {}", done.standing.describe());
                     println!("links rewritten in {} file(s)", done.rewritten.len());
                     0
@@ -185,7 +186,7 @@ fn run_seed(root: &std::path::Path, map: Option<&PathBuf>) -> i32 {
             Err(error) => {
                 eprintln!(
                     "error: cannot read {}: {error}",
-                    path.display(),
+                    codeflow_core::git::display_path(path),
                     error = crate::cmd::shown(&error)
                 );
                 return 1;

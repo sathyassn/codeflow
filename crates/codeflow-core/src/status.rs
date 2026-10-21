@@ -646,7 +646,13 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
     } else {
         let _ = writeln!(out, "worktrees: {}", view.worktrees.len());
         for wt in &view.worktrees {
-            let _ = writeln!(out, "  {} -> {}", wt.name, wt.path);
+            // A path is a field: a line break in it is escaped (TSK-388).
+            let _ = writeln!(
+                out,
+                "  {} -> {}",
+                wt.name,
+                crate::git::display_line(&wt.path)
+            );
         }
     }
 
@@ -824,7 +830,7 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                 let path = item
                     .path
                     .as_deref()
-                    .map(|path| format!(" -> {path}"))
+                    .map(|path| format!(" -> {}", crate::git::display_line(path)))
                     .unwrap_or_default();
                 let _ = writeln!(
                     out,

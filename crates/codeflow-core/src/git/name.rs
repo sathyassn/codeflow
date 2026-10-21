@@ -468,6 +468,34 @@ pub fn display_line(text: &str) -> String {
     display_output(text).replace('\n', "\\x0a")
 }
 
+/// A filesystem path as an output line shows it: [`display_line`] of its
+/// `Path::display` form. A directory name can hold a line break or a
+/// terminal escape sequence like any other name (TSK-388); backslashes,
+/// the Windows separator, are kept.
+#[must_use]
+pub fn display_path(path: &std::path::Path) -> String {
+    display_line(&path.display().to_string())
+}
+
+/// Text another program wrote, as `CodeFlow` relays it: [`display_output`]
+/// with every line, the first included, indented two spaces, so no relayed
+/// line can start at column 0 and pass as one of `CodeFlow`'s own (TSK-388).
+#[must_use]
+pub fn display_relay(text: &str) -> String {
+    let shown = display_output(text);
+    let mut out = String::with_capacity(shown.len() + 16);
+    for (index, line) in shown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        if !line.is_empty() {
+            out.push_str("  ");
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// A message field as a refusal or note shows it: [`display_output`], with
 /// each further line of the field indented under its first, so text the
 /// message quotes cannot start a line that reads as one of `CodeFlow`'s own

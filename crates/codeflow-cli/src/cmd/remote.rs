@@ -78,7 +78,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if ProtectionPlan::policy_absent(&policy_path).map_err(anyhow::Error::msg)? {
         eprintln!(
             "note: {} not found — using charter defaults (main, master)",
-            policy_path.display()
+            codeflow_core::git::display_path(&policy_path)
         );
     }
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where

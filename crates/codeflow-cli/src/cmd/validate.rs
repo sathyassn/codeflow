@@ -176,6 +176,7 @@ fn validate_policy(root: &Path) -> bool {
 /// Frontmatter validation over a file or tree. Returns `true` when clean.
 fn validate_records(root: &Path, path: Option<&Path>) -> bool {
     let base = path.map_or_else(|| root.join("project-management"), Path::to_path_buf);
+    let shown = codeflow_core::git::display_path(&base);
 
     let metadata = match std::fs::metadata(&base) {
         Ok(metadata) => metadata,
@@ -187,18 +188,12 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 && std::fs::symlink_metadata(&base)
                     .is_err_and(|leaf| leaf.kind() == std::io::ErrorKind::NotFound) =>
         {
-            println!(
-                "validate: {} absent — no records to validate at this tier",
-                base.display()
-            );
+            println!("validate: {shown} absent — no records to validate at this tier");
             return true;
         }
         Err(error) => {
-            eprintln!(
-                "validate: cannot read {}: {error}",
-                base.display(),
-                error = crate::cmd::shown(&error)
-            );
+            let error = crate::cmd::shown(&error);
+            eprintln!("validate: cannot read {shown}: {error}");
             return false;
         }
     };
@@ -209,8 +204,7 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         let name = base.file_name().unwrap_or_default().as_encoded_bytes();
         if !name.starts_with(b"TSK-") && !name.starts_with(b"EPC-") && !name.starts_with(b"SPC-") {
             eprintln!(
-                "validate: {} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated",
-                base.display()
+                "validate: {shown} is not a work record (expected an EPC-*/SPC-*/TSK-* filename) — nothing validated"
             );
             return false;
         }
@@ -219,18 +213,15 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         match collect_record_files(&base) {
             Ok(files) => files,
             Err(error) => {
-                eprintln!(
-                    "validate: cannot read records under {}: {error}",
-                    base.display(),
-                    error = crate::cmd::shown(&error)
-                );
+                let error = crate::cmd::shown(&error);
+                eprintln!("validate: cannot read records under {shown}: {error}");
                 return false;
             }
         }
     };
 
     if files.is_empty() {
-        println!("validate: no work records under {}", base.display());
+        println!("validate: no work records under {shown}");
         return true;
     }
 
@@ -254,13 +245,17 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
         match result {
             Ok((errors, warnings)) => {
                 for e in &errors {
-                    eprintln!("{}: error: {e}", file.display(), e = crate::cmd::shown(&e));
+                    eprintln!(
+                        "{}: error: {e}",
+                        codeflow_core::git::display_path(&file),
+                        e = crate::cmd::shown(&e)
+                    );
                 }
                 for w in &warnings {
                     eprintln!(
                         "{}",
                         w.finding(&file)
-                            .line(&file.display().to_string(), "warning")
+                            .line(&codeflow_core::git::display_path(&file), "warning")
                     );
                 }
                 if !errors.is_empty() {
@@ -268,7 +263,11 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
                 }
             }
             Err(e) => {
-                eprintln!("{}: error: {e}", file.display(), e = crate::cmd::shown(&e));
+                eprintln!(
+                    "{}: error: {e}",
+                    codeflow_core::git::display_path(&file),
+                    e = crate::cmd::shown(&e)
+                );
                 clean = false;
             }
         }

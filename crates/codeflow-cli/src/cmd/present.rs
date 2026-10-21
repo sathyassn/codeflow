@@ -518,7 +518,7 @@ fn export(
     } else {
         export_session(store, parse_id(session_id)?, out, theme, mode)?;
     }
-    println!("exported {}", out.display());
+    println!("exported {}", codeflow_core::git::display_path(out));
     Ok(())
 }
 
@@ -559,7 +559,7 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
         println!(
             "session {} ready; open the owner-private bootstrap file {} in a qualified isolated browser profile",
             session.id,
-            ready.bootstrap_path.display()
+            codeflow_core::git::display_path(&ready.bootstrap_path)
         );
         print_handoff_link(store, &ready.bootstrap_path)?;
         return Ok(());
@@ -599,8 +599,8 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
         if no_launch {
             println!(
                 "session {id} recovered; open the owner-private bootstrap file {} in the isolated profile {}",
-                ready.bootstrap_path.display(),
-                profile.display()
+                codeflow_core::git::display_path(&ready.bootstrap_path),
+                codeflow_core::git::display_path(&profile)
             );
             print_handoff_link(store, &ready.bootstrap_path)?;
             return Ok(());
@@ -618,7 +618,10 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, &profile)? {
             if no_launch {
-                println!("http://{authority}/app/ profile={}", profile.display());
+                println!(
+                    "http://{authority}/app/ profile={}",
+                    codeflow_core::git::display_path(&profile)
+                );
                 return Ok(());
             }
             return Err(PresentError::BrowserAlreadyOpen(id.to_string()));
@@ -631,8 +634,8 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
     if no_launch {
         println!(
             "session {id} ready; open the owner-private bootstrap file {} in the isolated profile {}",
-            ready.bootstrap_path.display(),
-            profile.display()
+            codeflow_core::git::display_path(&ready.bootstrap_path),
+            codeflow_core::git::display_path(&profile)
         );
         print_handoff_link(store, &ready.bootstrap_path)?;
     } else {

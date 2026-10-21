@@ -164,7 +164,9 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
         for finding in &report.findings {
             println!(
                 "{} at {}: {}",
-                finding.code, finding.location, finding.message
+                finding.code,
+                codeflow_core::git::display_line(&finding.location),
+                finding.message
             );
         }
         println!(

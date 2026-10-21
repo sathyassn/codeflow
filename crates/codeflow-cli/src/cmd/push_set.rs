@@ -837,8 +837,12 @@ fn run_check_with(
             );
         }
         Ok(out) => {
-            eprint!("{}", relayed_text(&String::from_utf8_lossy(&out.stdout)));
-            eprint!("{}", relayed_text(&String::from_utf8_lossy(&out.stderr)));
+            // A failing check's whole output, every line indented, so no
+            // line of it can pass as one of the hook's own (TSK-388).
+            let stdout = remote_query::display_urls(&String::from_utf8_lossy(&out.stdout));
+            eprint!("{}", codeflow_core::git::display_relay(&stdout));
+            let stderr = remote_query::display_urls(&String::from_utf8_lossy(&out.stderr));
+            eprint!("{}", codeflow_core::git::display_relay(&stderr));
             if let Some(rules) = &rules_out {
                 report.refused_by.extend(rules.read());
             }
