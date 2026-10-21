@@ -2100,7 +2100,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Trims captured test output only when printing failure reports.
     (
         "crates/codeflow-cli/src/cmd/test.rs",
-        "run",
+        "print_failure",
         "trim",
         2,
         "display",
