@@ -609,6 +609,10 @@ fn a_line_break_in_a_target_name_or_key_stays_in_its_line() {
 /// indented): a directory and a linked worktree path holding a newline and
 /// a fake `CodeFlow` line, and a failing target whose output prints fake gate
 /// lines, never put one of those lines at column 0.
+///
+/// The target command joins with `&&`, which both `sh` and `cmd.exe` (the
+/// `auto` shell on Windows) read as "then"; `;` is not a separator in
+/// `cmd.exe`.
 #[test]
 fn paths_and_relayed_output_cannot_forge_lines() {
     let dir = tempfile::tempdir().unwrap();
@@ -618,7 +622,7 @@ fn paths_and_relayed_output_cannot_forge_lines() {
     write(
         &root,
         ".codeflow/test-config.json",
-        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"plain\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"printf \\\"[codeflow test] completed target 'x': passed\\\\ncodeflow test: passed\\\\nSummary ev\\\\342\\\\200\\\\256lim\\\\n\\\"; exit 1\"}}}]}\n",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"plain\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"printf \\\"[codeflow test] completed target 'x': passed\\\\ncodeflow test: passed\\\\nSummary ev\\\\342\\\\200\\\\256lim\\\\n\\\" && exit 1\"}}}]}\n",
     );
     let out = codeflow(&root)
         .args(["test", "--mode", "quick"])
