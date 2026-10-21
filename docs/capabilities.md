@@ -328,9 +328,9 @@ id: CAP-004
 name: test-gate
 area: engine
 status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
+verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs", "codeflow-cli tests/test_gate_cli.rs", "cargo test testing::delivery", "cargo test testing::evidence"]
 epics: [EPC-001, EPC-022, EPC-023]
-adrs: [ADR-0021, ADR-0031]
+adrs: [ADR-0021, ADR-0031, ADR-0085]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
@@ -341,6 +341,9 @@ or a detected stack.
   into a non-zero exit for unattended callers.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
   the verdict (ADR-0021).
+- The task's declared line supplies the default comparison base. Only content
+  targets with matching candidate evidence can be skipped; missing evidence runs
+  the target. The [test-gate reference](test-gate.md) defines the fields.
 - `codeflow test setup` fills absent configs and never auto-replaces populated
   ones.
 
@@ -356,7 +359,7 @@ or a detected stack.
 | Full gate | Behaviour |
 |---|---|
 | Scheduling | a target may declare `requires`, `outputs`, `narrow` inputs and `exclusive`: producers and prerequisites run first, targets with no producer and consumer relation run in parallel up to `max_parallel`, a dependent of a red target reports "not run: prerequisite failed", and a missing or cyclic prerequisite fails the run before any target starts. The run names its candidate tree after the producers ran and fails when generation changed tracked bytes |
-| Change-aware selection | a target is skipped only when its declared inputs are unchanged since a `--since` base that has a recorded green run for the same config; an unmatched path, a Rust, asset, build, config or workflow change, a rename or deletion, no base, and `--all` (the epic close) run every target, and the run prints what it selected and skipped and why |
+| Change-aware selection | quick and essential compare with the task line's merge base by default; only content checks with matching per-target evidence from a clean, complete full run of the base tree can be skipped. Unknown evidence runs the check and names the reason. Skip credit is local convenience; full landing gates execute every target and integration refuses incomplete runs. `--all` executes every eligible target, and summaries distinguish executed and skipped counts |
 | Split across runners | `--only` runs the named targets and their prerequisites, so one gate can run as parallel CI jobs; a limited run is recorded as not complete, so no single part serves as a green base, and a name that is not an enabled target of the mode is refused before any target starts. CodeFlow's own CI runs its full gate in four such parts behind one `codeflow gates` check, and `scripts/gate-parity.py` refuses a full-mode target no part runs |
 | Preflight | refuses before any target when the temp directory is not writable, a configured lock cannot be taken, or a tool a selected target needs is missing |
 | Concurrency | one full gate runs at a time on a machine; a second refuses, naming the holder |

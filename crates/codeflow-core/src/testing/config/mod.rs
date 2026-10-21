@@ -73,6 +73,44 @@ pub struct DefaultsConfig {
     pub coverage: Vec<CoverageRule>,
 }
 
+/// Sources a check reads beyond its declared files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputClass {
+    Content,
+    History,
+    Remote,
+    Time,
+    External,
+}
+
+/// An explicit audit of a target's dependencies. Missing declarations run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceConfig {
+    /// Version probes as executable and argument arrays; an empty map means no tools.
+    pub tools: BTreeMap<String, Vec<String>>,
+    /// Every relevant inherited or configured environment input must be classified.
+    pub environment: BTreeMap<String, EnvironmentClass>,
+    /// True only after auditing the command and its transitive environment reads.
+    pub environment_complete: bool,
+    /// Membership probe, or an empty array for a check with no test membership.
+    pub membership: Vec<String>,
+    /// Other modes covered by this target's full command. Commands must be identical.
+    #[serde(default)]
+    pub covers_modes: Vec<String>,
+}
+
+/// Storage policy for an environment dependency. Values are never recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvironmentClass {
+    AuditedNonSecret,
+    Fingerprint,
+    Sensitive,
+    Unclassified,
+}
+
 /// A single test target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetConfig {
@@ -108,6 +146,14 @@ pub struct TargetConfig {
     /// Input globs that can narrow selection. Empty means always selected.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub narrow: Vec<String>,
+
+    /// Only content targets with complete evidence can be skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_class: Option<InputClass>,
+
+    /// Audited dependencies used to compare an execution with candidate evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidenceConfig>,
 
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -447,6 +493,8 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "requires",
         "outputs",
         "narrow",
+        "input_class",
+        "evidence",
         "exclusive",
     ];
     if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
@@ -987,6 +1035,8 @@ mod tests {
                 requires: Vec::new(),
                 outputs: Vec::new(),
                 narrow: Vec::new(),
+                input_class: None,
+                evidence: None,
                 exclusive: false,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
