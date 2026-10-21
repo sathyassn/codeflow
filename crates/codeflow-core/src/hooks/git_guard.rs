@@ -57,6 +57,10 @@ pub struct TargetRepo {
     /// The repository's root checkout when the location is one, judged by
     /// its own policy; `None` in a linked worktree (TSK-165).
     pub root: Option<RootCheckout>,
+    /// Whether its git directory is on a case-insensitive filesystem
+    /// ([`super::repo::case_insensitive_git_dir`]), so a ref name with a
+    /// non-ASCII byte may name another ref there (TSK-381 SF-5).
+    pub case_insensitive: bool,
 }
 
 /// Resolves a retargeted repository location to its branch and policy, so a
@@ -261,6 +265,7 @@ pub fn read_target(
         branch,
         policy,
         root,
+        case_insensitive: super::repo::case_insensitive_git_dir(repo.commondir()),
     })
 }
 
@@ -7402,6 +7407,7 @@ fn check_authority(
     args: &[String],
     moved: &Moves<'_>,
     cwd: &Path,
+    ctx: &GuardContext<'_>,
     violations: &mut Vec<Violation>,
 ) {
     let transport = git_subcommand(args).is_some_and(|(sub, rest)| {
@@ -7443,7 +7449,19 @@ fn check_authority(
                 ));
             }
         }
-        if let Some(reason) = super::ref_authority::check(&target, args) {
+        // Another repository is judged by its own filesystem; one the
+        // resolver cannot read may fold names (TSK-381 SF-5).
+        let folds = spec.as_ref().map(|spec| {
+            lookup(
+                &Retarget {
+                    path: &spec.path,
+                    git_dir: spec.git_dir,
+                },
+                ctx,
+            )
+            .is_none_or(|repo| repo.case_insensitive)
+        });
+        if let Some(reason) = with_folds(folds, || super::ref_authority::check(&target, args)) {
             violations.push(Violation::always_blocking(
                 "git.policy_authority",
                 reason,
@@ -7464,12 +7482,7 @@ fn check_git(
     depth: usize,
     cwd: &Path,
 ) {
-    // A command that runs in another repository is judged as if its
-    // filesystem folds names: the session's probe does not describe it
-    // (TSK-381 SF-5).
-    let _aliasing =
-        runs_elsewhere(args, moved).then(|| super::policy::NonAsciiAliasingScope::set(true));
-    check_authority(args, moved, cwd, out);
+    check_authority(args, moved, cwd, ctx, out);
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
@@ -7633,15 +7646,14 @@ fn check_git(
         // name a protected ref from anywhere.
         let acts_on_current = known.is_some_and(|s| CURRENT_BRANCH_SUBCOMMANDS.contains(&s));
         let exposed = !acts_on_current
-            || judged
-                .cases
-                .iter()
-                .any(|(branch, rules, _)| rules.branch_is_protected_any_case(branch));
+            || judged.cases.iter().any(|(branch, rules, _, folds)| {
+                with_folds(*folds, || rules.branch_is_protected_any_case(branch))
+            });
         if exposed {
             let strictest = judged
                 .cases
                 .iter()
-                .filter_map(|(_, rules, _)| u.violation(rules, known))
+                .filter_map(|(_, rules, _, folds)| with_folds(*folds, || u.violation(rules, known)))
                 .max_by_key(|v| severity(v.level));
             out.extend(strictest);
         }
@@ -7693,7 +7705,8 @@ fn check_git(
     };
 
     let mut found: Vec<Violation> = Vec::new();
-    for (branch, rules, root) in &judged.cases {
+    for (branch, rules, root, folds) in &judged.cases {
+        let _folds = folds.map(super::policy::NonAsciiAliasingScope::set);
         let view = GuardContext {
             policy: rules,
             current_branch: ctx.current_branch,
@@ -8301,9 +8314,23 @@ enum Track {
     Unplaced,
 }
 
-/// A branch a git op is judged on, the policy it is judged by, and the root
-/// checkout it runs in, if it runs in one.
-type Case<'p> = (String, Cow<'p, GitPolicy>, Option<RootCheckout>);
+/// A branch a git op is judged on, the policy it is judged by, the root
+/// checkout it runs in, if it runs in one, and whether that repository's git
+/// directory folds names (`None` for the session repository, whose decision
+/// is already in force; TSK-381 SF-5).
+type Case<'p> = (
+    String,
+    Cow<'p, GitPolicy>,
+    Option<RootCheckout>,
+    Option<bool>,
+);
+
+/// Run `judge` under `folds`, a repository's own non-ASCII aliasing decision
+/// (`None` keeps the decision in force).
+fn with_folds<T>(folds: Option<bool>, judge: impl FnOnce() -> T) -> T {
+    let _scope = folds.map(super::policy::NonAsciiAliasingScope::set);
+    judge()
+}
 
 /// The cases a git op is judged against.
 struct Judged<'p> {
@@ -8338,6 +8365,7 @@ fn judge_target<'p>(
                         b.clone(),
                         Cow::Borrowed(ctx.policy),
                         ctx.root_checkout.cloned(),
+                        None,
                     )
                 })),
                 Some(spec) => cases.extend(
@@ -8349,11 +8377,11 @@ fn judge_target<'p>(
         // A branch an unplaced checkout moved may be checked out here too.
         let moved: Vec<_> = cases
             .iter()
-            .flat_map(|(_, rules, root)| {
+            .flat_map(|(_, rules, root, folds)| {
                 branches
                     .anywhere()
                     .iter()
-                    .map(move |b| (b.clone(), rules.clone(), root.clone()))
+                    .map(move |b| (b.clone(), rules.clone(), root.clone(), *folds))
             })
             .collect();
         cases.extend(moved);
@@ -8375,7 +8403,8 @@ fn judge_target<'p>(
                 .unwrap_or_default();
             Judged {
                 track: Track::Unplaced,
-                cases: vec![(branch, Cow::Borrowed(ctx.policy), None)],
+                // An unresolved target may fold names: fail closed.
+                cases: vec![(branch, Cow::Borrowed(ctx.policy), None, Some(true))],
                 unresolved: Some(why),
             }
         }
@@ -8403,15 +8432,6 @@ struct TargetSpec {
 /// (`--git-dir`, else a `GIT_DIR` in the op's launcher environment), which git
 /// reads relative to the `-C` directory. `None` in the result is the session's
 /// own working directory. `Err` names what could not be resolved.
-/// `true` when the command may run in a repository other than the
-/// session's: `-C`, `--git-dir`, `GIT_DIR` or a `cd`, or a location the
-/// guard cannot resolve.
-fn runs_elsewhere(args: &[String], moved: &Moves<'_>) -> bool {
-    inherited_locations(|name| std::env::var(name))
-        .and_then(|inherited| compose_targets_with(args, moved, &inherited))
-        .map_or(true, |specs| specs.iter().any(Option::is_some))
-}
-
 fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
     compose_targets_with(args, moved, &[])
 }
@@ -8579,6 +8599,7 @@ fn resolve_target<'p>(
                     b.unwrap_or_else(|| repo.branch.clone()),
                     rules.clone(),
                     repo.root.clone(),
+                    Some(repo.case_insensitive),
                 )
             })
             .collect(),
@@ -12864,6 +12885,7 @@ mod tests {
             branch: branch.to_string(),
             policy: None,
             root: None,
+            case_insensitive: true,
         })
     }
 
@@ -16681,8 +16703,8 @@ mod tests {
         let p = default_policy();
         for cmd in [
             "git update-ref refs/heads/ma\u{17f}ter deadbeef",
-            "git update-ref re\u{17f}s/heads/master deadbeef",
-            "git update-ref re\u{17f}s/remotes/origin/evil deadbeef",
+            "git update-ref ref\u{17f}/heads/master deadbeef",
+            "git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
             "git update-ref REFS/heads/feat/y deadbeef",
             "git symbolic-ref HEAD refs/heads/ma\u{17f}ter",
         ] {
@@ -16722,26 +16744,64 @@ mod tests {
         ));
     }
 
-    /// TSK-381 SF-5: the session's case probe does not describe another
-    /// repository, so a command retargeted with `-C` is judged as if that
-    /// repository's filesystem folds names.
+    /// TSK-381 SF-5 and Codex F1: a retargeted command is judged by the
+    /// target repository's own filesystem, read through target resolution,
+    /// in both directions and for `-C`, `--git-dir` and a composed `cd`;
+    /// the session's decision still judges the session repository.
     #[test]
-    fn test_a_retargeted_command_is_judged_as_case_insensitive() {
-        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+    fn test_a_retargeted_command_is_judged_by_the_targets_filesystem() {
+        fn resolver(spec: &Retarget<'_>) -> Option<TargetRepo> {
+            let case_insensitive = match spec.path {
+                "/folds" | "/folds/.git" => true,
+                "/exact" | "/exact/.git" => false,
+                _ => return None,
+            };
+            Some(TargetRepo {
+                branch: "feat/x".to_string(),
+                policy: Some(GitPolicy::default()),
+                root: None,
+                case_insensitive,
+            })
+        }
         let p = default_policy();
-        let here = evaluate(
-            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
-            &ctx(&p, "feat/x"),
-        );
-        assert!(here.is_empty(), "{here:?}");
-        let there = evaluate(
-            "git -C ../other update-ref refs/heads/ma\u{17f}ter deadbeef",
-            &ctx(&p, "feat/x"),
-        );
-        assert!(
-            there.iter().any(|v| v.message.contains("non-ASCII")),
-            "{there:?}"
-        );
+        let mentions_alias = |cmd: &str| {
+            evaluate(cmd, &ctx_with_dir_branch(&p, "feat/s", &resolver))
+                .iter()
+                .any(|v| v.message.contains("non-ASCII"))
+        };
+        let protected = |cmd: &str| {
+            evaluate(cmd, &ctx_with_dir_branch(&p, "feat/s", &resolver))
+                .iter()
+                .any(|v| v.rule == "git.local_ref_protection")
+        };
+        {
+            // A case-sensitive session cannot vouch for a folding target.
+            let _session = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+            for cmd in [
+                "git -C /folds update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+                "git --git-dir=/folds/.git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+                "cd /folds && git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+            ] {
+                assert!(mentions_alias(cmd), "{cmd}");
+            }
+            assert!(protected("git -C /folds branch -f feat/caf\u{e9} HEAD"));
+            assert!(!mentions_alias(
+                "git update-ref ref\u{17f}/remotes/origin/evil deadbeef"
+            ));
+        }
+        // A folding session does not refuse an ordinary name in an exact target.
+        let _session = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for cmd in [
+            "git -C /exact update-ref refs/heads/feat/caf\u{e9} deadbeef",
+            "git --git-dir=/exact/.git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+            "cd /exact && git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+        ] {
+            assert!(!mentions_alias(cmd), "{cmd}");
+        }
+        assert!(!protected("git -C /exact branch -f feat/caf\u{e9} HEAD"));
+        assert!(mentions_alias(
+            "git update-ref refs/heads/feat/caf\u{e9} deadbeef"
+        ));
     }
 
     #[test]
@@ -17225,6 +17285,7 @@ mod tests {
                 branch: branch.to_string(),
                 policy: Some(policy),
                 root: None,
+                case_insensitive: true,
             })
         };
         match (spec.path, spec.git_dir) {

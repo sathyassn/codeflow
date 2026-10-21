@@ -1925,9 +1925,9 @@ fn git_guard_refuses_non_ascii_ref_names_with_exit_2() {
     let (_, first) = two_commit_main(dir.path());
     let insensitive = case_insensitive_git_dir(dir.path());
     for name in [
-        "refs/heads/ma\u{17f}n",
-        "re\u{17f}s/heads/main",
-        "re\u{17f}s/remotes/origin/evil",
+        "refs/heads/ma\u{17f}ter",
+        "ref\u{17f}/heads/main",
+        "ref\u{17f}/remotes/origin/evil",
     ] {
         let cmd = format!("git update-ref {name} {first}");
         let out = guard_run(&cmd, dir.path());
@@ -1973,13 +1973,14 @@ fn reference_transaction_blocks_folded_ref_prefixes() {
     let out = git_out(dir.path(), &["update-ref", "REFS/heads/main", &first]);
     assert!(!out.status.success(), "a case-different prefix must block");
     assert_eq!(rev(dir.path(), "main"), main, "REFS/heads/main moved main");
-    // On a case-sensitive git directory `reſs/heads/main` is another ref.
-    let out = git_out(dir.path(), &["update-ref", "re\u{17f}s/heads/main", &first]);
-    assert_eq!(out.status.success(), !insensitive, "re\u{17f}s/heads/main");
+    // `refſ/heads/main` is `refs/heads/main` where the git directory folds
+    // names, and another ref on a case-sensitive one.
+    let out = git_out(dir.path(), &["update-ref", "ref\u{17f}/heads/main", &first]);
+    assert_eq!(out.status.success(), !insensitive, "ref\u{17f}/heads/main");
     assert_eq!(
         rev(dir.path(), "main"),
         main,
-        "re\u{17f}s/heads/main moved main"
+        "ref\u{17f}/heads/main moved main"
     );
     let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/y", &first]);
     assert!(
@@ -1987,6 +1988,59 @@ fn reference_transaction_blocks_folded_ref_prefixes() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// TSK-381 Codex round 2 F2: `git pack-refs --all` keeps every value, so the
+/// wired hook lets it pack an existing Unicode branch; where the git
+/// directory folds names, a move and a deletion of that branch, and a move
+/// through an alias of a protected branch, are still refused.
+#[test]
+fn reference_transaction_lets_pack_refs_keep_a_unicode_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (main, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
+    git(dir.path(), &["branch", "master", &main]);
+    git(dir.path(), &["branch", "feat/caf\u{e9}", &main]);
+    wire_reference_transaction_hook(dir.path());
+    let out = git_out(dir.path(), &["pack-refs", "--all"]);
+    assert!(
+        out.status.success(),
+        "pack-refs: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(dir.path(), "refs/heads/feat/caf\u{e9}"), main);
+    let packed = std::fs::read_to_string(dir.path().join(".git/packed-refs")).unwrap();
+    assert!(packed.contains("refs/heads/feat/caf\u{e9}"), "{packed}");
+    let out = git_out(
+        dir.path(),
+        &["update-ref", "refs/heads/feat/caf\u{e9}", &first],
+    );
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "a move of feat/caf\u{e9}"
+    );
+    let out = git_out(
+        dir.path(),
+        &["update-ref", "refs/heads/ma\u{17f}ter", &first],
+    );
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "a move through ma\u{17f}ter"
+    );
+    assert_eq!(rev(dir.path(), "master"), main, "master moved");
+    if insensitive {
+        let out = git_out(
+            dir.path(),
+            &["update-ref", "-d", "refs/heads/feat/caf\u{e9}"],
+        );
+        assert!(
+            !out.status.success(),
+            "a deletion of feat/caf\u{e9} must block"
+        );
+        assert_eq!(rev(dir.path(), "refs/heads/feat/caf\u{e9}"), main);
+    }
 }
 
 /// TSK-381 Codex F1: with `master` protected, the wired reference-transaction

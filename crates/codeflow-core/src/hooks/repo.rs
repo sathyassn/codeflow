@@ -59,10 +59,11 @@ pub fn listed_ref_commit(repo: &Repository, name: &str) -> Result<Option<git2::O
             exact = Some(reference.peel_to_commit()?.id());
             continue;
         }
-        // A listed name that is not text cannot be ruled out as an alias.
-        match GitName::from_bytes(listed).rule_text() {
-            Ok(text) if folded_ref_name(text) != folded => {}
-            _ => alias = true,
+        // A name that is not valid UTF-8 is no fold of a text name: a
+        // filesystem that folds names holds only Unicode names, and
+        // packed-refs compares bytes.
+        if let Ok(text) = GitName::from_bytes(listed).rule_text() {
+            alias |= folded_ref_name(text) == folded;
         }
     }
     Ok(exact.filter(|_| !alias))

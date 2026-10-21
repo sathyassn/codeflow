@@ -804,7 +804,10 @@ pub fn reference_transaction(
         // On a case-insensitive git directory, a ref written under a
         // spelling that folds onto another ref is that ref's file, so the
         // transaction is refused (TSK-381 SF-4).
-        if collisions.contains(refname) {
+        // Storage housekeeping that keeps the value (`git pack-refs`, `git
+        // gc`) moves nothing, so the spelling checks below let it pass.
+        let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
+        if collisions.contains(refname) && !unchanged() {
             if policy.local_ref_protection.is_active() && !sanctioned {
                 report.violations.push(Violation::new(
                     "git.local_ref_protection",
@@ -820,7 +823,7 @@ pub fn reference_transaction(
         }
         // A spelling a case-insensitive filesystem may store as a guarded ref
         // is refused outright, failing closed (TSK-381 SF-3).
-        if super::git_guard::transaction_ref_aliases(refname) {
+        if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
             if policy.local_ref_protection.is_active() && !sanctioned {
                 report.violations.push(Violation::new(
                     "git.local_ref_protection",
@@ -903,14 +906,14 @@ fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeS
     };
     let mut listed = Vec::new();
     for reference in references {
-        // A ref that cannot be read, or whose name is not text, cannot be
-        // ruled out as an alias.
+        // A ref that cannot be read cannot be ruled out as an alias. A name
+        // that is not valid UTF-8 is no fold of a text name: a filesystem
+        // that folds names holds only Unicode names.
         let Ok(reference) = reference else {
             return every();
         };
-        match crate::git::GitName::from_bytes(reference.name_bytes()).rule_text() {
-            Ok(text) => listed.push(text.to_string()),
-            Err(_) => return every(),
+        if let Ok(text) = crate::git::GitName::from_bytes(reference.name_bytes()).rule_text() {
+            listed.push(text.to_string());
         }
     }
     for name in listed
@@ -2825,8 +2828,8 @@ mod tests {
         };
         for name in [
             "refs/heads/ma\u{17f}ter",
-            "re\u{17f}s/heads/main",
-            "re\u{17f}s/remotes/origin/main",
+            "ref\u{17f}/heads/main",
+            "ref\u{17f}/remotes/origin/main",
             "REFS/remotes/origin/main",
             "refs/heads/feat/caf\u{e9}",
             // SF-4: a fetch may write a non-ASCII alias over a tracking ref.
@@ -2855,10 +2858,12 @@ mod tests {
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &base);
+        // A new value: a line that keeps a ref's value passes as housekeeping.
+        let ahead = commit_ahead_of_main(dir.path());
         let run = |lines: &[&str]| {
             let stdin = lines
                 .iter()
-                .map(|name| format!("{ZERO40} {base} {name}\n"))
+                .map(|name| format!("{ZERO40} {ahead} {name}\n"))
                 .collect::<Vec<_>>()
                 .concat();
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)

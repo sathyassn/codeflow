@@ -1064,7 +1064,7 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
         "Refs/remotes/origin/evil",
         // Codex F1 and SF-3: the `ſ` spellings, which APFS folds to `s`.
         "ref\u{17f}/remotes/origin/evil",
-        "re\u{17f}s/remotes/origin/evil",
+        "ref\u{17f}/remotes/origin/evil",
     ] {
         let payload = format!(
             r#"{{"tool_name":"Bash","tool_input":{{"command":"git update-ref {name} {pin}"}},"cwd":"{}"}}"#,
