@@ -293,10 +293,17 @@ fn run_reference_transaction_with_reader(
         }
     };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
-    // only moved remote-tracking refs) — allow without loading policy.
-    if !stdin
-        .split('\n')
-        .any(git_hook::ref_line_touches_local_branch)
+    // only moved remote-tracking refs) — allow without loading policy. On a
+    // case-insensitive git directory any written name may fold onto another
+    // ref, so every transaction is judged there (TSK-381 SF-4).
+    let folds = codeflow_core::hooks::RepoInfo::discover(root)
+        .ok()
+        .flatten()
+        .is_none_or(|info| codeflow_core::hooks::repo::case_insensitive_git_dir(&info.common_dir));
+    if !folds
+        && !stdin
+            .split('\n')
+            .any(git_hook::ref_line_touches_local_branch)
     {
         return 0;
     }

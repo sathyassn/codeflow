@@ -2007,6 +2007,24 @@ mod tests {
         assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
     }
 
+    /// TSK-381 SF-4: a loose `refs/remotes/origin/MAIN` holding the forged pin
+    /// is the same file as `.../main` on a case-insensitive filesystem; only
+    /// the spelling git lists counts, so `origin/main` reads as unfetched.
+    #[test]
+    fn a_tracking_ref_listed_under_another_spelling_is_unfetched() {
+        let dir = repo();
+        let root = dir.path();
+        let (_origin, pin) = forged_producer(root, "main", "side");
+        run(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let remotes = root.join(".git/refs/remotes/origin");
+        fs::create_dir_all(&remotes).unwrap();
+        fs::write(remotes.join("MAIN"), format!("{pin}\n")).unwrap();
+        assert_eq!(
+            verdict(root, "TSK-002").unwrap_err().to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: 'main' is not fetched here")
+        );
+    }
+
     /// Grok F1 demonstration 3: with `origin` configured but its tracking ref
     /// deleted, the local `main` does not stand in for it.
     #[test]

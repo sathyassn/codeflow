@@ -7464,6 +7464,11 @@ fn check_git(
     depth: usize,
     cwd: &Path,
 ) {
+    // A command that runs in another repository is judged as if its
+    // filesystem folds names: the session's probe does not describe it
+    // (TSK-381 SF-5).
+    let _aliasing =
+        runs_elsewhere(args, moved).then(|| super::policy::NonAsciiAliasingScope::set(true));
     check_authority(args, moved, cwd, out);
     let policy = ctx.policy;
 
@@ -8398,6 +8403,15 @@ struct TargetSpec {
 /// (`--git-dir`, else a `GIT_DIR` in the op's launcher environment), which git
 /// reads relative to the `-C` directory. `None` in the result is the session's
 /// own working directory. `Err` names what could not be resolved.
+/// `true` when the command may run in a repository other than the
+/// session's: `-C`, `--git-dir`, `GIT_DIR` or a `cd`, or a location the
+/// guard cannot resolve.
+fn runs_elsewhere(args: &[String], moved: &Moves<'_>) -> bool {
+    inherited_locations(|name| std::env::var(name))
+        .and_then(|inherited| compose_targets_with(args, moved, &inherited))
+        .map_or(true, |specs| specs.iter().any(Option::is_some))
+}
+
 fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
     compose_targets_with(args, moved, &[])
 }
@@ -10267,10 +10281,11 @@ pub(crate) fn ref_name_aliases(name: &str) -> bool {
 }
 
 /// [`ref_name_aliases`] for a reference-transaction line: a non-ASCII name
-/// under exactly `refs/remotes/` or `refs/tags/` is what `git fetch` writes
-/// for such a remote branch or tag, and stays free.
+/// under exactly `refs/tags/` is what `git fetch` writes for such a tag, and
+/// stays free. A remote-tracking name is judged like any other, since a
+/// fetch can write one over a guarded tracking ref (TSK-381 SF-4).
 pub(crate) fn transaction_ref_aliases(name: &str) -> bool {
-    ref_name_aliases(name) && !(name.starts_with("refs/remotes/") || name.starts_with("refs/tags/"))
+    ref_name_aliases(name) && !name.starts_with("refs/tags/")
 }
 
 /// The `update-ref` or `symbolic-ref` write in `args` names a ref by a
@@ -16705,6 +16720,28 @@ mod tests {
             ),
             "git.policy_authority"
         ));
+    }
+
+    /// TSK-381 SF-5: the session's case probe does not describe another
+    /// repository, so a command retargeted with `-C` is judged as if that
+    /// repository's filesystem folds names.
+    #[test]
+    fn test_a_retargeted_command_is_judged_as_case_insensitive() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let p = default_policy();
+        let here = evaluate(
+            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(here.is_empty(), "{here:?}");
+        let there = evaluate(
+            "git -C ../other update-ref refs/heads/ma\u{17f}ter deadbeef",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(
+            there.iter().any(|v| v.message.contains("non-ASCII")),
+            "{there:?}"
+        );
     }
 
     #[test]

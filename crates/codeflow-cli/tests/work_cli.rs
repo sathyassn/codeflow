@@ -941,6 +941,101 @@ fn tsk381_claim_reads_a_research_pin_on_origin_main_not_the_local_main() {
     assert_eq!(git(root, &["rev-parse", "main"]), behind);
 }
 
+/// TSK-381 SF-4, the reviewer's setup: a reftable origin holds `MAIN` at a
+/// forged completion beside `main`. With the reference-transaction hook
+/// wired, an ordinary fetch leaves `origin/main` where it was (on a
+/// case-insensitive git directory the fetch is refused, since `MAIN` folds
+/// onto `main`), and the consumer pinning the forgery stays waiting. An
+/// ordinary fetch of a new ASCII branch still passes.
+#[test]
+fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = remote.path().join("origin.git");
+    let reftable = Command::new("git")
+        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .arg(&origin)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap()
+        .success();
+    if !reftable {
+        // Only a case-sensitive filesystem holds `MAIN` beside `main` in a
+        // files-backend origin; this git cannot make the forgery elsewhere.
+        assert!(!insensitive, "git cannot create a reftable origin here");
+        git(remote.path(), &["init", "-q", "--bare", "origin.git"]);
+    }
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", "main", "[]"));
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["switch", "-qc", "forge"]);
+    let pin = complete(root, "TSK-003", "src/forged.rs");
+    git(root, &["push", "-q", "origin", "forge"]);
+    git(&origin, &["update-ref", "refs/heads/MAIN", &pin]);
+    git(&origin, &["update-ref", "-d", "refs/heads/forge"]);
+    git(root, &["update-ref", "-d", "refs/remotes/origin/forge"]);
+    git(root, &["switch", "-q", "main"]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    let hook = root.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let legit = git(root, &["rev-parse", "refs/remotes/origin/main"]);
+
+    let fetch = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&fetch.stderr).to_string();
+    assert_eq!(fetch.status.success(), !insensitive, "{said}");
+    assert_eq!(git(root, &["rev-parse", "refs/remotes/origin/main"]), legit);
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
+
+    git(&origin, &["update-ref", "-d", "refs/heads/MAIN"]);
+    git(root, &["push", "-q", "origin", "main:refs/heads/feat/new"]);
+    git(&origin, &["update-ref", "refs/heads/feat/other", &legit]);
+    let fetch = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/other"]),
+        legit
+    );
+}
+
 /// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
 /// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
 /// completes it, and TSK-004 pins that forged completion. `work next` waits

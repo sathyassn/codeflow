@@ -29,6 +29,45 @@ pub fn case_insensitive_git_dir(dir: &Path) -> bool {
     }
 }
 
+/// The name a filesystem that folds case may store as the same entry: an
+/// approximation of Unicode case folding (`ſ` and `K` fold to `s` and `k`).
+#[must_use]
+pub fn folded_ref_name(name: &str) -> String {
+    name.to_uppercase().to_lowercase()
+}
+
+/// The commit `name` points to, read only when git lists a ref by exactly
+/// that spelling and no other listed spelling folds to it (TSK-381 SF-4). On
+/// a case-insensitive filesystem a loose `refs/remotes/origin/MAIN` also
+/// opens as `refs/remotes/origin/main`, so a lookup by name can return a
+/// ref fetched under another spelling; the listing gives the spelling git
+/// stored, and a folded alias reads as absent.
+///
+/// # Errors
+///
+/// Returns the git error when the references cannot be listed or peeled.
+pub fn listed_ref_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, git2::Error> {
+    let glob = name
+        .rsplit_once('/')
+        .map_or_else(|| name.to_string(), |(dir, _)| format!("{dir}/*"));
+    let folded = folded_ref_name(name);
+    let (mut exact, mut alias) = (None, false);
+    for reference in repo.references_glob(&glob)? {
+        let reference = reference?;
+        let listed = reference.name_bytes();
+        if listed == name.as_bytes() {
+            exact = Some(reference.peel_to_commit()?.id());
+            continue;
+        }
+        // A listed name that is not text cannot be ruled out as an alias.
+        match GitName::from_bytes(listed).rule_text() {
+            Ok(text) if folded_ref_name(text) != folded => {}
+            _ => alias = true,
+        }
+    }
+    Ok(exact.filter(|_| !alias))
+}
+
 #[cfg(unix)]
 fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -595,6 +634,30 @@ pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Re
 mod tests {
     /// TSK-381 SF-3: the probe reports the filesystem the git directory is
     /// on, and one that cannot decide counts as case-insensitive.
+    /// TSK-381 SF-4: a ref is read only under the spelling git lists, and
+    /// not at all when another listed spelling folds to it.
+    #[test]
+    fn a_ref_is_read_only_under_its_listed_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let commit = repo.commit(None, &sig, &sig, "one", &tree, &[]).unwrap();
+        let remotes = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&remotes).unwrap();
+        std::fs::write(remotes.join("MAIN"), format!("{commit}\n")).unwrap();
+        let listed = |name: &str| super::listed_ref_commit(&repo, name).unwrap();
+        assert_eq!(listed("refs/remotes/origin/MAIN"), Some(commit));
+        assert_eq!(listed("refs/remotes/origin/main"), None);
+        if !dir.path().join(".git/head").exists() {
+            // A case-sensitive filesystem holds both spellings: neither counts.
+            std::fs::write(remotes.join("main"), format!("{commit}\n")).unwrap();
+            assert_eq!(listed("refs/remotes/origin/main"), None);
+            assert_eq!(listed("refs/remotes/origin/MAIN"), None);
+        }
+    }
+
     #[test]
     fn the_case_probe_reads_the_git_directory_and_fails_closed() {
         let dir = tempfile::tempdir().unwrap();

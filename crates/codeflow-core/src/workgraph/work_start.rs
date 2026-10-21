@@ -2663,8 +2663,12 @@ fn tracking_reference(
         return Ok(None);
     };
     let exact = &candidates[0];
+    // A landing ref counts only under the exact spelling git lists
+    // (TSK-381 SF-4).
     let read = |reference: &str| {
-        Ok(reference_commit(repo, reference)?.map(|tip| (reference_display_name(reference), tip)))
+        crate::hooks::repo::listed_ref_commit(repo, reference)
+            .map(|tip| tip.map(|tip| (reference_display_name(reference), tip)))
+            .map_err(|error| WorkStartError::Repository(error.to_string()))
     };
     let remotes = repo
         .remotes()
