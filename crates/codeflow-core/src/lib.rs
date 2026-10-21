@@ -12,6 +12,14 @@
 // can hold a line break also passes [`git::display_message`] where it is
 // printed. Not covered: `write!` and `writeln!` to a terminal writer, and
 // the standard library's panic message.
+// One test-gate progress line on stderr: a single line by design, so the
+// whole line passes [`git::display_line`], which also escapes a line break
+// that a target name or reason holds (TSK-388).
+macro_rules! progress {
+    ($($arg:tt)*) => {
+        ::std::eprintln!("{}", $crate::git::display_line(&::std::format!($($arg)*)))
+    };
+}
 macro_rules! println {
     () => {
         ::std::println!()

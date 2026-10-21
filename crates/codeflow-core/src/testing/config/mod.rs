@@ -475,7 +475,10 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
     if let Some(object) = raw.as_object() {
         for key in object.keys() {
             if !known_top_level.contains(&key.as_str()) {
-                eprintln!("warning: unknown top-level field '{key}' in test config (ignored)");
+                eprintln!(
+                    "warning: unknown top-level field '{}' in test config (ignored)",
+                    crate::git::display_text(key)
+                );
             }
         }
     }

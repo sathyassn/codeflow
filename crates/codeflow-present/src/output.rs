@@ -64,3 +64,10 @@ pub fn display_output(text: &str) -> String {
     }
     shown
 }
+
+/// A message field: [`display_output`], with each further line indented,
+/// as in `codeflow_core::git::display_message`.
+#[must_use]
+pub fn display_message(text: &str) -> String {
+    display_output(text).replace('\n', "\n  ")
+}

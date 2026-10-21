@@ -61,7 +61,11 @@ pub fn run_interactive(
         eprintln!("Doctor found errors:");
         for check in &checks {
             if check.status == doctor::CheckStatus::Fail {
-                eprintln!("  FAIL: {} — {}", check.name, check.message);
+                eprintln!(
+                    "  FAIL: {} — {}",
+                    check.name,
+                    crate::git::display_message(&check.message)
+                );
             }
         }
         eprintln!("Fix the issues above and re-run setup.");

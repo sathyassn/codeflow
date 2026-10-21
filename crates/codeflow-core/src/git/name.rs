@@ -458,6 +458,16 @@ pub fn display_json(json: &str) -> String {
     shown
 }
 
+/// One line as a terminal may show it: [`display_output`] with the line
+/// break escaped too (`\x0a`), for output that is a single line by design,
+/// such as the test gate's progress lines. A name or reason it quotes,
+/// which a checkout can fill with a line break, cannot start a line of its
+/// own (TSK-388).
+#[must_use]
+pub fn display_line(text: &str) -> String {
+    display_output(text).replace('\n', "\\x0a")
+}
+
 /// A message field as a refusal or note shows it: [`display_output`], with
 /// each further line of the field indented under its first, so text the
 /// message quotes cannot start a line that reads as one of `CodeFlow`'s own

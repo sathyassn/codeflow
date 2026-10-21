@@ -145,9 +145,12 @@ pub fn run(args: &TestArgs) -> i32 {
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
+                // A target name is checkout text, shown as one line (TSK-388).
                 println!(
                     "{}: {verdict} (exit {}, {} ms)",
-                    r.name, r.exit_code, r.duration_ms
+                    codeflow_core::git::display_text(&r.name),
+                    r.exit_code,
+                    r.duration_ms
                 );
                 if !r.passed() {
                     if let Some(err) = &r.error {
@@ -229,11 +232,15 @@ fn print_failure_report(report: &FailureReport) {
     );
     for f in &report.failures {
         match &f.location {
-            Some(loc) => eprintln!("  FAILED {} ({loc})", f.id),
-            None => eprintln!("  FAILED {}", f.id),
+            Some(loc) => eprintln!(
+                "  FAILED {} ({})",
+                codeflow_core::git::display_text(&f.id),
+                crate::cmd::shown(loc)
+            ),
+            None => eprintln!("  FAILED {}", codeflow_core::git::display_text(&f.id)),
         }
         if let Some(msg) = &f.message {
-            eprintln!("         {msg}");
+            eprintln!("         {}", crate::cmd::shown(msg));
         }
     }
 }

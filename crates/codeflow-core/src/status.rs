@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
+use crate::git::GitName;
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
 use crate::workgraph::readiness::{self, Backlog, State};
 use crate::workgraph::{durable_work_tracking_enabled, MarkdownStore, RecordStore};
@@ -28,7 +29,9 @@ pub struct WorktreeInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupInfo {
     pub kind: String,
-    pub name: String,
+    /// The branch or worktree name as git holds it; status escapes it once,
+    /// where it prints it (TSK-388).
+    pub name: GitName,
     pub path: Option<String>,
     pub disposition: CleanupDisposition,
     pub proof: String,
@@ -285,7 +288,7 @@ fn collect_cleanup(
             Err(error) => {
                 out.push(CleanupInfo {
                     kind: "worktree".into(),
-                    name: "unproven inventory".into(),
+                    name: GitName::from_text("unproven inventory"),
                     path: None,
                     disposition: CleanupDisposition::RetainUnproven,
                     proof: format!("cannot read linked worktrees: {error}"),
@@ -294,14 +297,12 @@ fn collect_cleanup(
             }
         };
         for linked in linked {
-            // Stored exact, escaped once where status prints it (TSK-388).
-            let name = exact_text(&linked.name);
-            let name = name.as_str();
+            let name = &linked.name;
             let path = linked.path.as_path();
             let Ok(worktree_repo) = git2::Repository::open(path) else {
                 out.push(CleanupInfo {
                     kind: "worktree".to_string(),
-                    name: name.to_string(),
+                    name: name.clone(),
                     path: Some(path.display().to_string()),
                     disposition: CleanupDisposition::RetainUnproven,
                     proof: "worktree state unavailable".to_string(),
@@ -326,7 +327,7 @@ fn collect_cleanup(
             );
             out.push(CleanupInfo {
                 kind: "worktree".to_string(),
-                name: branch.map_or_else(|| format!("{name} (detached)"), |b| exact_text(&b)),
+                name: branch.unwrap_or_else(|| name.joined(b" (detached)")),
                 path: Some(path.display().to_string()),
                 disposition,
                 proof,
@@ -357,7 +358,7 @@ fn collect_cleanup(
                 classify_cleanup(repo_root, repo, oid, Some(name), target, Some(false));
             out.push(CleanupInfo {
                 kind: "branch".to_string(),
-                name: name.to_string(),
+                name: exact.clone(),
                 path: None,
                 disposition,
                 proof,
@@ -446,13 +447,6 @@ fn classify_cleanup(
         CleanupDisposition::RetainUnproven,
         format!("not proven landed in {shown}"),
     )
-}
-
-/// `name` as status stores it: the exact text, or the display form for a
-/// name that is not valid UTF-8. Status escapes it once where it prints it.
-fn exact_text(name: &crate::git::GitName) -> String {
-    name.rule_text()
-        .map_or_else(|_| name.display().to_string(), str::to_owned)
 }
 
 fn repository_dirty(path: &Path) -> Option<bool> {
@@ -838,7 +832,7 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                     item.disposition.label(),
                     item.kind,
                     // A branch name can hold any character git accepts.
-                    crate::git::display_text(&item.name),
+                    item.name.display(),
                     path,
                     item.proof
                 );
@@ -857,7 +851,7 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                     item.disposition.label(),
                     item.kind,
                     // A branch name can hold any character git accepts.
-                    crate::git::display_text(&item.name),
+                    item.name.display(),
                     item.proof
                 );
             }
@@ -1010,7 +1004,7 @@ mod tests {
             let landed = view
                 .cleanup
                 .iter()
-                .find(|item| item.name == "feat/landed")
+                .find(|item| item.name == GitName::from_text("feat/landed"))
                 .unwrap();
             assert_eq!(
                 landed.proof,
@@ -1474,7 +1468,7 @@ mod tests {
         let dirty = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/dirty")
+            .find(|item| item.name == GitName::from_text("feat/dirty"))
             .unwrap();
         assert_eq!(
             dirty.disposition,
@@ -1485,7 +1479,7 @@ mod tests {
         let pending = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/pending")
+            .find(|item| item.name == GitName::from_text("feat/pending"))
             .unwrap();
         assert_eq!(
             pending.disposition,
@@ -1521,7 +1515,7 @@ mod tests {
         let squashed = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/squashed")
+            .find(|item| item.name == GitName::from_text("feat/squashed"))
             .unwrap();
         assert_eq!(
             squashed.disposition,
@@ -1563,7 +1557,7 @@ mod tests {
         let branch = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/already-landed")
+            .find(|item| item.name == GitName::from_text("feat/already-landed"))
             .unwrap();
         assert_eq!(
             branch.disposition,

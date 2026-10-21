@@ -121,7 +121,8 @@ pub fn run_target(
                 "{}\n[codeflow test] TIMEOUT: target '{}' exceeded its {timeout_secs}s wall-clock \
                  limit and was killed. Raise the `timeout_seconds` field for this target if the \
                  command legitimately needs longer.\n",
-                outcome.stderr, target.name,
+                outcome.stderr,
+                crate::git::display_text(&target.name),
             ),
         )
     } else {
@@ -205,7 +206,7 @@ fn run_all_targets_with_ci(
             // so reviewers see the decision in job output; returning false
             // removes the target from execution entirely.
             if in_ci && t.ci_skip == Some(true) {
-                eprintln!(
+                progress!(
                     "[codeflow test] Skipping target '{}' in CI: {}",
                     t.name,
                     t.ci_skip_reason.as_deref().unwrap_or("ci_skip=true"),
@@ -275,7 +276,7 @@ pub fn start_line(target: &str, mode: &str) -> String {
 }
 
 fn announce_start(target: &TargetConfig, mode: &str) {
-    eprintln!("{}", start_line(&target.name, mode));
+    progress!("{}", start_line(&target.name, mode));
 }
 
 fn run_sequential(
@@ -375,7 +376,7 @@ pub fn run_dependency_targets(
                 } else {
                     "not run: fail_fast"
                 };
-                eprintln!("[codeflow test] {}: {reason}", target.name);
+                progress!("[codeflow test] {}: {reason}", target.name);
                 let result = not_run(target, reason);
                 completed.insert(target.name.clone(), false);
                 results.insert(index, Ok(result));
@@ -437,7 +438,7 @@ pub fn run_dependency_targets(
             exclusive_running = false;
         }
         let passed = result.as_ref().is_ok_and(|r| r.exit_code == 0);
-        eprintln!(
+        progress!(
             "[codeflow test] completed target '{}': {}",
             targets[index].name,
             if passed { "passed" } else { "FAILED" }
@@ -815,12 +816,8 @@ fn spawn_reader_with_progress<R: Read + Send + 'static>(
                         || line.contains(" PASS ")
                         || line.contains(" FAIL ")
                     {
-                        // A target's own output: shown escaped (TSK-388).
-                        eprintln!(
-                            "[codeflow test] {}: {}",
-                            crate::git::display_output(name),
-                            crate::git::display_output(line)
-                        );
+                        // A target's own output, one line (TSK-388).
+                        progress!("[codeflow test] {name}: {line}");
                     }
                 }
             }
