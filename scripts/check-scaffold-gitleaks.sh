@@ -181,6 +181,30 @@ echo "gitleaks archive: OK"
 SH
 chmod +x "$TMP/fake-bin/curl" "$TMP/fake-bin/sha256sum"
 FAKE_PATH="$TMP/fake-bin:$PATH"
+# The same gitleaks, keeping a copy of the ignore file it is given at
+# $IGNORE_SEEN: the step removes its own folders when it ends (TSK-386), so
+# a case that checks the file the scan read keeps this copy instead.
+mkdir "$TMP/recording" "$TMP/recording-bin"
+cat >"$TMP/recording/gitleaks" <<SH
+#!/bin/sh
+previous=
+for arg in "\$@"; do
+  if [ "\$previous" = --gitleaks-ignore-path ]; then cp "\$arg" "\$IGNORE_SEEN"; fi
+  previous=\$arg
+done
+exec "$GITLEAKS" "\$@"
+SH
+chmod +x "$TMP/recording/gitleaks"
+tar -czf "$TMP/gitleaks-recording.tar.gz" -C "$TMP/recording" gitleaks
+cat >"$TMP/recording-bin/curl" <<SH
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+  case \$1 in -o) out=\$2; shift ;; esac
+  shift
+done
+cp "$TMP/gitleaks-recording.tar.gz" "\$out"
+SH
+chmod +x "$TMP/recording-bin/curl"
 
 PROSE=$(printf 'Cover secret/PII exposure, authz gaps, %s%s, general vuln classes' \
   'vulnerable/' 'malicious deps')
@@ -226,7 +250,9 @@ expect() {
   status=$2
   shift 2
   runner="$TMP/runner-$name"
-  mkdir "$runner"
+  # A directory the runner already had, which the step did not create.
+  mkdir -p "$runner/kept"
+  echo kept >"$runner/kept/note"
   set +e
   (cd "$REPO" && env PATH="$FAKE_PATH" RUNNER_TEMP="$runner" \
     TRUSTED_SHA="${TRUSTED-$(tip)}" SCAN_FROM="${SCAN_FROM-${TRUSTED-}}" \
@@ -266,6 +292,17 @@ PY
   fi
   if [ -n "${NO_SCAN:-}" ] && [ -e "$runner/gitleaks.log" ]; then
     failed "$name" "gitleaks ran"
+  fi
+  # The step removes the directories it made in the runner temp directory,
+  # whether it passed or failed, and keeps the rest: the report and log stay
+  # there by design (TSK-386).
+  left=$(ls -A "$runner" | grep -vx -e kept -e gitleaks.log -e gitleaks-report.json \
+    -e gitleaks-findings.json || true)
+  if [ -n "$left" ]; then
+    failed "$name" "the step left these in the runner temp directory: $(printf '%s' "$left" | tr '\n' ' ')"
+  fi
+  if [ "$(cat "$runner/kept/note" 2>/dev/null)" != kept ]; then
+    failed "$name" "the step removed a directory it did not create"
   fi
   if ! problem=$(after_step 2>&1); then
     failed "$name" "$problem"
@@ -946,11 +983,11 @@ after_step() {
   grep -qF "existing b/ path for $REAL; keep this fingerprint unchanged" "$TMP/legacy-fingerprint.out" &&
   grep -qF "unreadable commit $MISSING" "$TMP/legacy-fingerprint.out" &&
   grep -qF "neither path exists for $ABSENT; no replacement inferred" "$TMP/legacy-fingerprint.out" || return 1
-  for ignore in "$runner"/gitleaks-trusted.*/ignore; do
-    cmp "$ignore" "$TMP/legacy-ignore" || return 1
-  done
+  cmp "$TMP/legacy-seen-ignore" "$TMP/legacy-ignore"
 }
+STEP_ENV="PATH=$TMP/recording-bin:$FAKE_PATH IGNORE_SEEN=$TMP/legacy-seen-ignore"
 expect legacy-fingerprint 1 f.txt:1
+STEP_ENV=
 after_step() { :; }
 MESSAGE=
 # Reviewing and committing the exact replacement exempts only the old finding.
@@ -1005,11 +1042,11 @@ after_step() {
     printf 'one-parent diagnostic classifies a legacy entry or suggests a replacement\n'
     return 1
   fi
-  for ignore in "$runner"/gitleaks-trusted.*/ignore; do
-    cmp "$ignore" "$TMP/one-parent-ignore" || return 1
-  done
+  cmp "$TMP/one-parent-seen-ignore" "$TMP/one-parent-ignore"
 }
+STEP_ENV="PATH=$TMP/recording-bin:$FAKE_PATH IGNORE_SEEN=$TMP/one-parent-seen-ignore"
 expect one-parent-fingerprint 1 f.txt:1
+STEP_ENV=
 after_step() { :; }
 MESSAGE=
 
