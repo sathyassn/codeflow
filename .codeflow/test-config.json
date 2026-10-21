@@ -142,13 +142,18 @@
       "runner": "cargo",
       "modes": {
         "essential": {
-          "command": "cargo test --workspace --quiet"
+          "command": "run_tmp=$(mktemp -d \"${TMPDIR:-/tmp}/cf.XXXXXX\") || exit; trap 'status=$?; rm -rf -- \"$run_tmp\" || exit 1; exit \"$status\"' EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; export TMPDIR=\"$run_tmp\"; cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc"
         }
       },
       "timeout_seconds": 3600,
       "requires": [
         "rust-build"
-      ]
+      ],
+      "report": {
+        "format": "junit",
+        "path": "target/nextest/essential/junit.xml"
+      },
+      "shell": "sh"
     },
     {
       "name": "repository-update-noop",
