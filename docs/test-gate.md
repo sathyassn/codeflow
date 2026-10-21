@@ -40,7 +40,12 @@ selection grants no credit. Setting `CODEFLOW_HOME` also disables selection
 credit. On Unix the credit store is resolved from the effective user's account
 database entry (`getpwuid_r(geteuid())`, the reentrant account lookup), and a
 `HOME` different from that account home also disables credit with a printed
-reason. A MAC under a sandbox `denyRead` key was considered and deferred;
+reason. Windows and other non-Unix platforms currently have neither the trusted
+account-home lookup nor the record-ownership check: selection grants no credit,
+prints `selection credit denied: account home unavailable`, and executes the
+checks. `USERPROFILE` alone is mutable environment input and cannot establish
+that boundary. A native profile lookup would also need a trusted record-owner
+and write-permission check before credit could be enabled. A MAC under a sandbox `denyRead` key was considered and deferred;
 these checks do not authenticate the record's contents.
 
 The default full gate and both `codeflow integrate` modes execute every target.

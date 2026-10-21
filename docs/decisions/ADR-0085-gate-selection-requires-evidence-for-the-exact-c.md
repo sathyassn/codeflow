@@ -38,7 +38,13 @@ group or everyone, and grants no credit when `CODEFLOW_HOME` is overridden.
 On Unix the credit home comes from the effective account's database entry
 (`getpwuid_r(geteuid())`, the reentrant lookup). A `HOME` different from that
 account home receives no credit, and the selection reason names the mismatch.
-Where ownership protection is unavailable, records receive no selection credit.
+Windows and other non-Unix platforms currently lack both the trusted account-home
+lookup and record-ownership protection. They grant no selection credit, print
+`selection credit denied: account home unavailable`, and execute the checks.
+Keep this fail-closed behavior: `USERPROFILE` alone is mutable environment input.
+A native profile lookup would also need a trusted record-owner and write-permission
+check before enabling credit. Where ownership protection is unavailable, records
+receive no selection credit.
 A record MAC under a sandbox `denyRead` key was considered and is deferred in
 this repair. It would require a separate protected writer and key boundary.
 The backstop is a non-selective landing gate: default full runs execute every

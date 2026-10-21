@@ -993,7 +993,12 @@ mod tests {
             .reason
             .contains("TSK-001 integration target integration/checks"));
         assert!(selected.reason.contains(&id.to_string()));
-        assert!(selected.reason.contains("no qualifying run"));
+        let reason = if cfg!(unix) {
+            "no qualifying run"
+        } else {
+            "selection credit denied: account home unavailable"
+        };
+        assert!(selected.reason.contains(reason), "{}", selected.reason);
     }
 
     /// A repository whose index and first commit hold `caf\xe9.txt`, a name

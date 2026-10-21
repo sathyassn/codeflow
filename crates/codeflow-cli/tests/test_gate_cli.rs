@@ -38,6 +38,8 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo(config: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
+    git(dir.path(), &["config", "user.name", "Test"]);
+    git(dir.path(), &["config", "user.email", "test@example.com"]);
     std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
     git(dir.path(), &["add", "README.md"]);
     git(dir.path(), &["commit", "-q", "-m", "chore: initial commit"]);

@@ -50,6 +50,10 @@ impl Fixture {
         );
         let dir = root.path();
         git(dir, &["init", "-q", "-b", "integration/checks"]);
+        // Integration creates commits in its own process, without the git helper
+        // environment or a runner-wide identity. Linked worktrees share this config.
+        git(dir, &["config", "user.name", "Test"]);
+        git(dir, &["config", "user.email", "test@example.com"]);
         for path in [".codeflow", "src", "project-management/tasks"] {
             std::fs::create_dir_all(dir.join(path)).unwrap();
         }
@@ -672,6 +676,8 @@ fn push_destination(root: &Path) -> PathBuf {
             destination.to_str().unwrap(),
         ],
     );
+    git(&destination, &["config", "user.name", "Test"]);
+    git(&destination, &["config", "user.email", "test@example.com"]);
     git(
         root,
         &["remote", "add", "origin", destination.to_str().unwrap()],
@@ -1072,7 +1078,8 @@ fn repair_sensitive_encoded_values_are_redacted_without_rewriting_source() {
         c["targets"][0]["evidence"]["environment"]["ENCODED_MARKER"] = json!("sensitive");
     });
     let root = fixture.root.path();
-    let script = r#"import os,json,urllib.parse,html,pathlib,base64
+    let script = r#"import os,json,urllib.parse,html,pathlib,base64,sys
+sys.stdout.reconfigure(encoding="utf-8")
 v=os.environ['ENCODED_MARKER']
 forms=[v,json.dumps(v,ensure_ascii=False)[1:-1],json.dumps(v,ensure_ascii=True)[1:-1],html.escape(v),html.escape(v,quote=False),html.escape(v,quote=False).replace('"','&quot;')]
 for ascii in [False,True]:
@@ -1094,8 +1101,8 @@ urlsafe=base64.urlsafe_b64encode(v.encode()).decode()
 assert standard != urlsafe
 forms.extend([standard,urlsafe])
 print('Summary '+ '|'.join(forms))
-pathlib.Path('target/encoded-forms.json').write_text(json.dumps(forms))
-pathlib.Path('target/encoded.xml').write_text('<testsuites><testsuite><testcase name="'+html.escape(v)+'"/></testsuite></testsuites>')
+pathlib.Path('target/encoded-forms.json').write_text(json.dumps(forms),encoding='utf-8')
+pathlib.Path('target/encoded.xml').write_text('<testsuites><testsuite><testcase name="'+html.escape(v)+'"/></testsuite></testsuites>',encoding='utf-8')
 "#;
     std::fs::write(root.join("encoded.py"), script).unwrap();
     let path = root.join(".codeflow/test-config.json");
@@ -1210,6 +1217,8 @@ fn repair_fingerprint_reason_names_repository_home() {
     });
     let home = tempfile::tempdir().unwrap();
     git(home.path(), &["init", "-q"]);
+    git(home.path(), &["config", "user.name", "Test"]);
+    git(home.path(), &["config", "user.email", "test@example.com"]);
     assert_unavailable_fingerprint(&fixture, home.path());
 }
 
@@ -1354,10 +1363,12 @@ fn repair_redirected_home_forgery_grants_no_credit() {
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stderr(&output);
-    assert!(
-        text.contains("HOME differs from the effective user's account home"),
-        "{text}"
-    );
+    let reason = if cfg!(unix) {
+        "HOME differs from the effective user's account home"
+    } else {
+        "selection credit denied: account home unavailable"
+    };
+    assert!(text.contains(reason), "{text}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
 }
 
