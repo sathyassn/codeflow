@@ -547,14 +547,24 @@ checked, so a symlink does not remove the target owner's protection.
   diff tools, pagers and transport programs. Saved rebase exec instructions
   and clone-local callback settings use the same reader. Filter consumers
   include plumbing commands such as `cat-file` and `hash-object`. Callback
-  checks also cover pull, commit replay and interactive patch editors. Saved
-  instructions are read before continuation, bounded to a regular UTF-8 file
-  of 1 MiB.
+  checks also cover pull, commit replay and interactive patch editors.
+  Filesystem monitor, filter and merge-driver command settings are checked
+  for every Git verb. Multi-argument foreach bodies retain argument
+  boundaries. Option bodies are checked from the starting directory after
+  `-C` changes and from the work tree; a bare runner has no proven work tree.
+  Saved instructions are read before continuation, bounded to a regular
+  UTF-8 file of 1 MiB.
   For-each-repo bodies use the configured repositories. The reader follows
   Git option arity, short bundles and unambiguous long-option prefixes.
   Aliases, dashed Git programs and the submodule helper use the same reader.
-  An unclassified Git command, runner option or unresolved checkout refuses under active hook
-  integrity. This includes an unresolved target for `git status`, which can
+  Ordinary flags and literal Git revision expressions remain available.
+  Command-valued options still require a readable body; a missing value or
+  ambiguous spelling names the option and its readable route. External Git
+  commands resolve as `git-<name>` on PATH or Git's exec path and receive the
+  same checks as other programs. A config read outside a repository checks
+  its pager at the known starting directory. A name found nowhere, an unread command
+  value or an unresolved checkout refuses under active hook integrity.
+  This includes an unresolved target for `git status`, which can
   run a configured filesystem monitor. Each body is judged from the checkout
   or submodule where Git runs it, including Git commands nested in the body.
   A body that only names a script path remains unread; these checks do not inspect that
@@ -565,6 +575,10 @@ checked, so a symlink does not remove the target owner's protection.
   A preceding config write that could change command settings or a saved-instruction rewrite
   makes the next Git command's runner state unknown; run those commands
   separately so the guard can read the resulting state.
+  Push and fetch operands can use preceding literal assignments on the same
+  line, for example `BRANCH=task/topic; git push origin "$BRANCH"` and
+  `REMOTE=origin; git fetch "$REMOTE"`. An inherited shell variable whose
+  value the reader cannot prove remains unresolved.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.

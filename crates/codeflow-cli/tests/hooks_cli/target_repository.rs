@@ -1057,7 +1057,7 @@ fn target_installed_adopter_journey() {
 fn repair3_runner_options() {
     let f = Fixture::new();
     let findings = codeflow_core::hooks::exec_guard::evaluate_in(
-        "git rebase --unknown-runner-option 'cargo test' HEAD~1",
+        "git rebase --exec",
         true,
         &codeflow_core::hooks::policy::SecuritySection::default(),
         codeflow_core::hooks::policy::PolicyLevel::Warn,
@@ -1085,7 +1085,7 @@ fn repair3_runner_options() {
             "git rebase -x'rm -rf .claude' HEAD~1",
             "git rebase -x 'true' -x 'rm -rf .claude' HEAD~1",
             "git rebase {--exec,'rm -rf .claude'} HEAD~1",
-            "git rebase --unknown-runner-option 'cargo test' HEAD~1",
+            "git rebase --exec",
             "git rebase -x",
             "git rebase --exec",
         ] {
@@ -1666,6 +1666,334 @@ fn repair3_runner_transitive_callbacks() {
         ] {
             let command = format!("git -c 'core.editor=rm -rf .claude' {verb}");
             let out = f.command(&f.linked, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair4_revision_words_with_editor_and_pager() {
+    let f = Fixture::new();
+    git(&f.root, &["config", "core.editor", "true"]);
+    git(&f.root, &["config", "core.pager", "cat"]);
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "diff HEAD~1",
+            "diff HEAD^ -- README.md",
+            "log HEAD~2..HEAD",
+            "log -1 HEAD~1",
+            "show HEAD^",
+            "show HEAD~1:README.md",
+            "show feature/café~1",
+            "grep HEAD~1",
+            "log @{u}..",
+            "log HEAD@{1}...HEAD",
+            "log HEAD@{yesterday}",
+            "log @{upstream}",
+            "cherry-pick HEAD~1",
+            "cherry-pick abc^..def",
+            "revert HEAD~1",
+            "merge HEAD~1",
+            "commit --fixup HEAD~1",
+            "tag -a v1 -m msg HEAD~1",
+            "notes add -m x HEAD~1",
+        ] {
+            let out = run_with_stdin(
+                codeflow()
+                    .args(["hook", hook, "--contract", "3"])
+                    .current_dir(&f.linked)
+                    .env("HOME", f.temp.path())
+                    .env("USERPROFILE", f.temp.path())
+                    .env("GIT_EDITOR", "true"),
+                &guard_payload(&format!("git {command}"), &f.linked),
+            );
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair4_foreach_preserves_argument_boundaries() {
+    let f = Fixture::new();
+    target_journey_in(&f, "submodule", "native");
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git submodule foreach sh -c 'rm -rf .claude'",
+            "git submodule--helper foreach sh -c 'git config core.bare true'",
+            "git submodule foreach 'rm -rf \"$toplevel/.claude\"'",
+            "git submodule foreach 'rm -rf \"$sm_path/.claude\"'",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git submodule foreach printf '%s' '; rm -rf .claude'",
+            "git submodule foreach sh -c 'printf hello'",
+            "git submodule foreach 'git status --short'",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair4_index_callbacks_apply_to_every_verb() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for key in [
+            "core.fsmonitor",
+            "filter.fixture.clean",
+            "filter.fixture.smudge",
+            "filter.fixture.process",
+            "merge.fixture.driver",
+        ] {
+            for verb in [
+                "ls-files",
+                "describe --dirty",
+                "grep pattern",
+                "rm README.md",
+                "mv README.md moved.md",
+                "diff-files",
+                "clean -n",
+            ] {
+                let command = format!("git -c '{key}=rm -rf .claude' {verb}");
+                let out = f.command(&f.linked, hook, &command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+            let out = f.command(&f.linked, hook, &format!("git -c {key}=true ls-files"));
+            assert_eq!(out.status.code(), Some(0), "{hook} {key}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair4_option_bodies_use_starting_directory() {
+    let f = Fixture::new();
+    let subdir = f.linked.join("src");
+    std::fs::create_dir(&subdir).unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for verb in [
+            "grep -O'rm -rf ../.claude' pattern",
+            "send-email --to-cmd='rm -rf ../.claude' patch",
+            "difftool -x 'rm -rf ../.claude' HEAD~1 HEAD",
+        ] {
+            for (cwd, command) in [
+                (&subdir, format!("git {verb}")),
+                (&f.linked, format!("git -C src {verb}")),
+            ] {
+                let out = f.command(cwd, hook, &command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+        }
+        let out = f.command(&subdir, hook, "git grep -Ocat pattern");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair4_bare_runner_has_unknown_work_tree() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        let command = "git --bare rebase -x true HEAD~1";
+        let out = f.command(&f.linked, hook, command);
+        assert!(refused(&out), "{hook} {command}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("bare"),
+            "{out:?}"
+        );
+        let out = f.command(&f.linked, hook, "git rebase -x true HEAD~1");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair4_pager_abbreviations() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for verb in [
+            "config --lis",
+            "config --get-reg remote",
+            "rebase --show-current-p",
+            "am --show-current-p=diff",
+        ] {
+            let command = format!("git -c 'core.pager=rm -rf .claude' {verb}");
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn repair4_ordinary_flags_keep_command_values_checked() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "git pull -r",
+            "git pull --no-edit",
+            "git pull --squash",
+            "git pull --no-commit",
+            "git pull -S",
+            "git pull --gpg-sign",
+            "git pull --signoff",
+            "git pull --stat",
+            "git pull --verify-signatures",
+            "git pull --allow-unrelated-histories",
+            "git fetch -k",
+            "git fetch --porcelain",
+            "git fetch --no-auto-maintenance",
+            "git fetch --refetch",
+            "git ls-remote -h",
+            "git ls-remote --sort=refname",
+            "git clone --reject-shallow /source scratch/clone",
+            "git clone -4 /source scratch/clone",
+            "git clone --ipv4 --no-remote-submodules /source scratch/clone",
+            "git grep -rn pattern",
+            "git grep -p -W --column --null --full-name pattern",
+            "git grep --no-color --max-count=1 --only-matching pattern",
+            "git grep --show-function --function-context --files-without-match pattern",
+            "git grep --extended-regexp pattern",
+            "git difftool -O orderfile",
+            "git mergetool -O orderfile",
+            "git rebase --unknown-runner-option HEAD~1",
+            "git rebase -zx true HEAD~1",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git rebase --unknown-runner-option -x 'rm -rf .claude' HEAD~1",
+            "git grep -rnO'rm -rf .claude' pattern",
+            "git rebase --exec",
+            "git rebase --exec=$UNKNOWN HEAD~1",
+            "git fetch --porcelain --upload-pack='rm -rf .claude'",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        let out = f.command(&f.linked, hook, "git rebase --exec");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            message.contains("--exec") && message.contains("command"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn repair4_external_git_program_resolution() {
+    let f = Fixture::new();
+    let programs = f.temp.path().join("programs");
+    std::fs::create_dir(&programs).unwrap();
+    // Install a real executable in this disposable fixture. The guard must
+    // resolve it without executing it or treating its bytes as inline shell.
+    let name = format!("git-codeflow-extension{}", std::env::consts::EXE_SUFFIX);
+    std::fs::copy(env!("CARGO_BIN_EXE_codeflow"), programs.join(&name)).unwrap();
+    let search = std::env::join_paths(
+        std::iter::once(programs.clone())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    for hook in ["git-guard", "exec-guard"] {
+        for source in ["PATH", "GIT_EXEC_PATH"] {
+            let mut process = codeflow();
+            process
+                .args(["hook", hook, "--contract", "3"])
+                .current_dir(&f.linked)
+                .env("HOME", f.temp.path());
+            if source == "PATH" {
+                process.env("PATH", &search);
+            } else {
+                process.env("GIT_EXEC_PATH", &programs);
+            }
+            let out = run_with_stdin(
+                &mut process,
+                &guard_payload("git codeflow-extension --version", &f.linked),
+            );
+            assert_eq!(out.status.code(), Some(0), "{hook} {source}: {out:?}");
+        }
+        for command in [
+            format!(
+                "git --exec-path='{}' codeflow-extension --version",
+                shell_path(&programs)
+            ),
+            format!(
+                "GIT_EXEC_PATH='{}' git codeflow-extension --version",
+                shell_path(&programs)
+            ),
+        ] {
+            let out = f.command(&f.linked, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        let out = f.command(&f.linked, hook, "git nosuchcmd");
+        assert!(refused(&out), "{out:?}");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            message.contains("git-nosuchcmd")
+                && message.contains("PATH")
+                && message.contains("exec-path"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn repair4_pager_configuration_and_environment_routes() {
+    let f = Fixture::new();
+    for hook in ["git-guard", "exec-guard"] {
+        for command in [
+            "GIT_PAGER=cat git config --list",
+            "PAGER=cat git config --get-regexp remote",
+        ] {
+            let out = f.command(f.temp.path(), hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        let command = "GIT_PAGER='rm -rf repo/.claude' git config --list";
+        let out = f.command(f.temp.path(), hook, command);
+        assert!(refused(&out), "{hook} {command}: {out:?}");
+        let command = "GIT_PAGER=cat git --git-dir=missing config --list";
+        let out = f.command(f.temp.path(), hook, command);
+        assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+        assert!(
+            refused(&out) || String::from_utf8_lossy(&out.stderr).contains("git.policy_authority"),
+            "{hook} {command}: {out:?}"
+        );
+        for verb in [
+            "stash list",
+            "stash show",
+            "config --list",
+            "config --get-regexp remote",
+            "config list",
+            "config get --regexp remote",
+            "config get user.name",
+            "config --get-all remote.origin.url",
+            "config --get-urlmatch http https://example.test",
+            "format-patch --stdout HEAD~1",
+            "whatchanged",
+            "annotate README.md",
+            "range-diff HEAD~2 HEAD~1 HEAD",
+            "am --show-current-patch",
+            "rebase --show-current-patch",
+            "submodule summary",
+        ] {
+            for source in [
+                "git -c 'core.pager=rm -rf .claude'",
+                "GIT_PAGER='rm -rf .claude' git",
+                "PAGER='rm -rf .claude' git",
+            ] {
+                let command = format!("{source} {verb}");
+                let out = f.command(&f.linked, hook, &command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+            let out = f.command(&f.linked, hook, &format!("git -c core.pager=cat {verb}"));
+            assert_eq!(out.status.code(), Some(0), "{hook} {verb}: {out:?}");
+        }
+        for command in [
+            "git -c 'core.pager=rm -rf .claude' status",
+            "git -c 'core.pager=rm -rf .claude' config --get user.name",
+            "git -c 'core.pager=rm -rf .claude' --no-pager stash list",
+        ] {
+            let out = f.command(&f.linked, hook, command);
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }

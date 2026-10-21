@@ -50,3 +50,6 @@ crates/codeflow-core/src/hooks/git_guard/runners.rs	"clone"	1	Selects the option
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	ConfigOption("clone",'c',"--config")	1	Catalog entry for clone-local configuration inspection; never starts Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -c 'filter.fixture.smudge=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local filter configuration; never executes Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --config='core.sshCommand=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local transport configuration; never executes Git.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --reject-shallow /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -4 /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --ipv4 --no-remote-submodules /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.

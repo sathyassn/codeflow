@@ -335,7 +335,7 @@ fn include_path(
         .join(path))
 }
 
-fn bounded_output(
+pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {

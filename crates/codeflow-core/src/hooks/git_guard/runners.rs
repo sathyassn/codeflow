@@ -86,11 +86,25 @@ fn checked_mode<'a>(
     stop: bool,
 ) -> Result<ParsedOptions<'a>, String> {
     let parsed = super::parse_options_mode(words, spec, stop);
-    if let Some(word) = parsed.unread.first() {
-        return Err(format!(
-            "unclassified or incomplete option `{}`",
-            shown_word(word)
-        ));
+    for word in &parsed.unread {
+        // Unknown flags do not carry a command. Keep scanning the remaining
+        // argv, including short bundles, for the command options we do know.
+        let spelling = word.split('=').next().unwrap_or(word);
+        let candidates: Vec<_> = spec
+            .long
+            .iter()
+            .filter(|(name, _)| name.starts_with(spelling))
+            .map(|(name, _)| *name)
+            .collect();
+        let known =
+            parsed.missing.contains(word) || (word.starts_with("--") && !candidates.is_empty());
+        if known {
+            return Err(format!(
+                "incomplete or ambiguous option `{}`; use {} with an explicit readable value or command",
+                shown_word(word),
+                if candidates.is_empty() { shown_word(word) } else { candidates.join(" or ") }
+            ));
+        }
     }
     Ok(parsed)
 }
@@ -99,21 +113,38 @@ fn checked_mode<'a>(
 // Their literal non-option prefix cannot expand into a Git option. Other
 // patterns remain unread, including patterns in an exec command's value.
 fn revision_operand(word: &str) -> bool {
-    if let Some(number) = word.strip_prefix("@{-").and_then(|s| s.strip_suffix('}')) {
-        return !number.is_empty() && number.bytes().all(|c| c.is_ascii_digit());
-    }
-    let Some(at) = word.find(['~', '^']) else {
+    if word.is_empty() || word.starts_with(['-', '~', '^', ':']) {
         return false;
-    };
-    let (name, suffix) = word.split_at(at);
-    !name.is_empty()
-        && !name.starts_with('-')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_./@-".contains(c))
-        && suffix
-            .chars()
-            .all(|c| c.is_ascii_digit() || matches!(c, '~' | '^'))
+    }
+    // These are Git revision operators, not arbitrary shell patterns. Keep
+    // command substitution, globbing and brace lists out of this exception.
+    let mut chars = word.chars().peekable();
+    let mut operator = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '@' if chars.peek() == Some(&'{') => {
+                chars.next();
+                let mut closed = false;
+                for selector in chars.by_ref() {
+                    if selector == '}' {
+                        closed = true;
+                        break;
+                    }
+                    if !(selector.is_alphanumeric() || "_./@- :+".contains(selector)) {
+                        return false;
+                    }
+                }
+                if !closed {
+                    return false;
+                }
+                operator = true;
+            }
+            '~' | '^' | ':' => operator = true,
+            ch if ch.is_alphanumeric() || "_./@-".contains(ch) => {}
+            _ => return false,
+        }
+    }
+    operator || word.contains("..")
 }
 
 fn patterns(
@@ -125,15 +156,9 @@ fn patterns(
     if let Some(("grep", rest)) = git_subcommand(args) {
         return grep_syntax(rest, segment);
     }
-    let operands = match git_subcommand(args) {
-        Some((verb, rest)) if option_spec(verb).is_some() => {
-            checked_mode(rest, option_spec(verb).unwrap(), verb == "grep")?.operands
-        }
-        Some(("branch", rest)) => parse_options(rest, &super::GIT_BRANCH_OPTIONS).operands,
-        _ => Vec::new(),
-    };
+    let command_values = commands(args)?;
     if words.iter().zip(patterns).any(|(word, pattern)| {
-        *pattern && !(operands.contains(&word.as_str()) && revision_operand(word))
+        *pattern && (!revision_operand(word) || command_values.contains(word))
     }) {
         return Err("a Git runner word requires brace or filename expansion".into());
     }
@@ -182,7 +207,12 @@ pub(super) fn commands(args: &[String]) -> Result<Vec<String>, String> {
             if end == words.len() {
                 return Err("submodule foreach has no command".into());
             }
-            Ok(vec![words[end..].join(" ")])
+            let body = &words[end..];
+            Ok(vec![if body.len() == 1 {
+                body[0].clone()
+            } else {
+                quote_words(body)
+            }])
         }
         _ => {
             let Some(spec) = option_spec(verb) else {
@@ -215,7 +245,7 @@ fn option_commands(verb: &str, parsed: &ParsedOptions<'_>) -> Vec<String> {
 }
 
 /// Independent policy checks retain readable literal bodies even when an
-/// unknown surrounding option makes the integrity reader refuse the runner.
+/// incomplete command option makes the integrity reader refuse the runner.
 pub(super) fn carried(args: &[String]) -> Vec<String> {
     if let Ok(commands) = commands(args) {
         return commands;
@@ -265,6 +295,9 @@ fn grep_syntax(rest: &[String], segment: &str) -> Result<(), String> {
         if !word.expands && !word.pattern {
             continue;
         }
+        if revision_operand(&word.text) && parsed.operands.contains(&word.text.as_str()) {
+            continue;
+        }
         if parsed
             .operands
             .first()
@@ -300,7 +333,7 @@ fn config_environment(
     env: &crate::security::git_config::Environment,
 ) -> crate::security::git_config::Environment {
     env.iter()
-        .filter(|(name, _)| !catalog::environment(name))
+        .filter(|(name, _)| !catalog::environment(name) && !program_environment(name))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
@@ -333,7 +366,8 @@ fn configured_commands(
             _ => choice,
         });
     let selected_pager = format!("pager.{verb}");
-    let paging = pagination == Some(true)
+    let paging = catalog::pages_by_default(verb, rest)
+        || pagination == Some(true)
         || config
             .get(&selected_pager)?
             .is_some_and(|value| crate::security::git::config_boolean(value) != Some(false));
@@ -343,7 +377,9 @@ fn configured_commands(
         }
         let pager = key == "core.pager" || key.starts_with("pager.");
         if pager
-            && (pagination == Some(false) || (key.starts_with("pager.") && key != selected_pager))
+            && (pagination == Some(false)
+                || !paging
+                || (key.starts_with("pager.") && key != selected_pager))
         {
             continue;
         }
@@ -372,9 +408,12 @@ fn configured_commands(
                 continue;
             }
             let pager = matches!(*name, "PAGER" | "GIT_PAGER");
-            if (pager && pagination == Some(false))
-                || !(catalog::active(verbs, verb) || (pager && paging))
-            {
+            let active = if pager {
+                pagination != Some(false) && paging
+            } else {
+                catalog::active(verbs, verb)
+            };
+            if !active {
                 continue;
             }
             let value = match env.get(*name) {
@@ -642,10 +681,13 @@ fn aliases(
             return Ok(args);
         }
         let global = globals(&args)?;
+        if external_program(verb, global, &starting_directory(&args, cwd)?, env)?.is_some() {
+            return Ok(args);
+        }
         let config = crate::security::git_config::read(cwd, global, &config_environment(env))?;
         let Some(value) = config.get(&format!("alias.{verb}"))? else {
             return Err(format!(
-                "cannot classify Git command `{}`",
+                "cannot resolve external Git program `git-{}` on PATH or git --exec-path; install that program or use a builtin or configured alias",
                 shown_word(verb)
             ));
         };
@@ -666,6 +708,132 @@ fn aliases(
     Err("an alias chain deeper than the guard follows".into())
 }
 
+fn external_body(
+    args: &[String],
+    cwd: &Path,
+    env: &crate::security::git_config::Environment,
+) -> Result<Option<Body>, String> {
+    let Some((verb, rest)) = git_subcommand(args) else {
+        return Ok(None);
+    };
+    if known_program(verb) {
+        return Ok(None);
+    }
+    let global = globals(args)?;
+    let at = starting_directory(args, cwd)?;
+    let path = external_program(verb, global, &at, env)?
+        .ok_or("external Git program disappeared during resolution")?;
+    let name = crate::git::GitName::from_os_str(path.as_os_str());
+    let path = name
+        .rule_text()
+        .map_err(|_| "external Git program path is not UTF-8")?;
+    let words: Vec<_> = std::iter::once(path.to_string())
+        .chain(rest.iter().cloned())
+        .collect();
+    Ok(Some(Body {
+        command: quote_words(&words),
+        directory: at,
+    }))
+}
+
+fn starting_directory(args: &[String], cwd: &Path) -> Result<PathBuf, String> {
+    let parsed = checked(globals(args)?, &GLOBAL_OPTIONS)?;
+    Ok(parsed
+        .values_of('C', "-C")
+        .iter()
+        .fold(cwd.to_path_buf(), |at, change| {
+            integrity_shell_path(change, &at)
+        }))
+}
+
+fn program_environment(name: &str) -> bool {
+    matches!(name, "PATH" | "GIT_EXEC_PATH")
+}
+
+// Resolve the same external spelling Git dispatches. Merely locating a
+// program does not execute or read its script; it gets ordinary argv checks.
+fn external_program(
+    verb: &str,
+    global: &[String],
+    cwd: &Path,
+    env: &crate::security::git_config::Environment,
+) -> Result<Option<PathBuf>, String> {
+    if verb.is_empty()
+        || verb.starts_with('-')
+        || verb.contains(['/', '\\'])
+        || unresolved_word(verb)
+    {
+        return Err("an external Git command needs a literal program name".into());
+    }
+    let program = format!("git-{verb}");
+    let exec = global
+        .iter()
+        .rev()
+        .find_map(|word| word.strip_prefix("--exec-path="))
+        .map(std::ffi::OsString::from)
+        .or_else(|| env.get("GIT_EXEC_PATH").map(std::ffi::OsString::from))
+        .or_else(|| std::env::var_os("GIT_EXEC_PATH"));
+    let exec = if let Some(exec) = exec {
+        exec
+    } else {
+        let mut command = crate::git::command();
+        command.current_dir(cwd).arg("--exec-path");
+        let bytes = crate::security::git_config::bounded_output(
+            &mut command,
+            std::time::Instant::now() + std::time::Duration::from_secs(3),
+        )?;
+        let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+        crate::git::GitName::from_bytes(bytes)
+            .os_path()
+            .map_err(|error| error.to_string())?
+            .into_os_string()
+    };
+    let path = env
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    let paths =
+        std::env::join_paths(std::iter::once(cwd.join(exec)).chain(std::env::split_paths(&path)))
+            .map_err(|_| "cannot read Git program search path")?;
+    Ok(which::which_in(program, Some(paths), cwd).ok())
+}
+
+// PATH extensions use the inherited value when this line has not replaced
+// it. Substitute only inside assignment tokens, never back into shell syntax.
+fn note_literals(literals: &mut Literals, tokens: &mut [String]) -> Result<(), String> {
+    let mut inherited = Vec::new();
+    if tokens.iter().any(|word| {
+        word.split_once('=')
+            .is_some_and(|(name, value)| program_environment(name) && expands(value))
+    }) {
+        for name in ["PATH", "GIT_EXEC_PATH"] {
+            if literals.0.contains_key(name) {
+                continue;
+            }
+            match std::env::var(name) {
+                Ok(value) => inherited.push((name.to_string(), value)),
+                Err(std::env::VarError::NotPresent) => {}
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(format!("Git program environment {name} is not UTF-8"));
+                }
+            }
+        }
+    }
+    for word in tokens.iter_mut() {
+        if let Some((name, value)) = word.split_once('=') {
+            if program_environment(name) {
+                *word = format!(
+                    "{name}={}",
+                    crate::security::startup::substitute_with(value, &inherited)
+                );
+            }
+        }
+    }
+    literals.note(tokens);
+    Ok(())
+}
+
 fn environment(
     tokens: &[String],
     literals: &Literals,
@@ -673,6 +841,7 @@ fn environment(
     let mut env = BTreeMap::new();
     for (name, value) in &literals.0 {
         if GIT_LOCATION_VARS.contains(&name.as_str())
+            || program_environment(name)
             || catalog::environment(name)
             || configuration_variable(name)
         {
@@ -686,6 +855,7 @@ fn environment(
     }
     for (name, value) in launcher_env(tokens)? {
         if GIT_LOCATION_VARS.contains(&name.as_str())
+            || program_environment(&name)
             || configuration_variable(&name)
             || catalog::environment(&name)
         {
@@ -704,10 +874,10 @@ fn checkout(
     env: &crate::security::git_config::Environment,
 ) -> Result<git2::Repository, String> {
     let parsed = checked(globals(args)?, &GLOBAL_OPTIONS)?;
-    let mut at = cwd.to_path_buf();
-    for change in parsed.values_of('C', "-C") {
-        at = integrity_shell_path(change, &at);
+    if parsed.has_long("--bare") {
+        return Err("a bare Git runner has no proven work tree".into());
     }
+    let at = starting_directory(args, cwd)?;
     let inherited = inherited_locations(|name| std::env::var(name))?;
     let location = |name: &str, option: &str| {
         parsed
@@ -813,15 +983,19 @@ fn directories(
             return Err("an unread filter-branch temporary directory".into());
         }
         return Ok(vec![
+            starting_directory(args, cwd)?,
             root.to_path_buf(),
             integrity_shell_path(temporary, root).join("t"),
         ]);
     }
     if !matches!(verb, "submodule" | "submodule--helper") {
-        return Ok(vec![repo
-            .workdir()
-            .ok_or("no runner work tree")?
-            .to_path_buf()]);
+        let mut dirs = vec![
+            starting_directory(args, cwd)?,
+            repo.workdir().ok_or("no runner work tree")?.to_path_buf(),
+        ];
+        dirs.sort();
+        dirs.dedup();
+        return Ok(dirs);
     }
     let recursive = parse_options(rest, &SUBMODULE_OPTIONS).has_long("--recursive");
     let mut pending = vec![repo];
@@ -897,15 +1071,44 @@ fn note_writes(segment: &str, args: &[String], dirs: &[PathBuf], earlier: &mut V
     }
 }
 
+// A config read also runs outside repositories. Its pager starts at the
+// invocation directory; an explicit or unread Git location is not this case.
+fn config_without_checkout(
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+) -> Result<bool, String> {
+    if !git_subcommand(args).is_some_and(|(verb, rest)| verb == "config" && config_only_reads(rest))
+    {
+        return Ok(false);
+    }
+    let parsed = checked(globals(args)?, &GLOBAL_OPTIONS)?;
+    if ["--bare", "--git-dir", "--work-tree", "--namespace"]
+        .iter()
+        .any(|name| parsed.has_long(name))
+        || env
+            .keys()
+            .any(|name| GIT_LOCATION_VARS.contains(&name.as_str()))
+        || !inherited_locations(|name| std::env::var(name))?.is_empty()
+    {
+        return Ok(false);
+    }
+    Ok(super::super::repo::open(at)?.is_none())
+}
+
 fn callback_directories(
     args: &[String],
     at: &Path,
     env: &crate::security::git_config::Environment,
 ) -> Result<Vec<PathBuf>, String> {
+    let start = starting_directory(args, at)?;
+    if config_without_checkout(args, &start, env)? {
+        return Ok(vec![start]);
+    }
     let repo = checkout(args, at, env)?;
     // Callbacks can run before setup, in the checkout, or from metadata.
     let mut dirs = vec![
-        at.to_path_buf(),
+        start,
         repo.workdir().ok_or("no callback work tree")?.to_path_buf(),
         repo.path().to_path_buf(),
         repo.commondir().to_path_buf(),
@@ -1101,7 +1304,7 @@ fn collect(
         let before = tokens.len();
         strip_reserved_words(&mut tokens);
         patterns.drain(..before - tokens.len());
-        literals.note(&tokens);
+        note_literals(&mut literals, &mut tokens)?;
         let Some((program, args)) = strip_launchers(&tokens) else {
             continue;
         };
@@ -1135,6 +1338,7 @@ fn collect(
                     directory: at.clone(),
                 });
             }
+            bodies.extend(external_body(&args, &at, &env)?);
             note_config_write(&args, &mut changed_sources, &mut changed_aliases);
             let mut commands = commands(&args)?;
             let configured = configured_commands(&args, &at, &env, &earlier)?;

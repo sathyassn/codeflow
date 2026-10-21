@@ -1,6 +1,6 @@
 //! Command sources documented by git(1), git-config(1) and each verb's manual.
 //! Keep command-valued options, configuration and environment in one inventory.
-use super::super::{Arity, OptionSpec};
+use super::super::{parse_options, Arity, OptionSpec, GIT_CONFIG_OPTIONS, GIT_REBASE_OPTIONS};
 
 pub(super) enum Source {
     Option(&'static str, char, &'static str),
@@ -19,12 +19,47 @@ use Source::{
 
 pub(super) const REMOTE: &str =
     "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential";
-const WORKTREE: &str = "pull add am checkout switch restore reset status diff difftool commit merge rebase cherry-pick revert stash read-tree update-index checkout-index submodule clone cat-file hash-object sparse-checkout worktree";
 const DIFF: &str = "diff difftool log show grep blame diff-files diff-index diff-tree format-patch range-diff stash cat-file";
 const EDITOR: &str = "commit tag merge rebase notes branch am config cherry-pick revert add reset checkout restore stash replace send-email pull";
 const SIGNING: &str =
     "commit tag push log show merge verify-commit verify-tag rebase cherry-pick revert am pull";
-const PAGER: &str = "log show diff difftool grep blame branch tag help reflog shortlog";
+// Git 2.53 git.c USE_PAGER plus builtin setup_pager/setup_auto_pager,
+// diff pagination and commands delegating to log/show. Narrow conditional
+// forms before consulting their configuration and environment sources.
+const PAGER: &str = "log show diff difftool grep blame annotate branch tag help reflog shortlog range-diff whatchanged config stash am rebase submodule submodule--helper format-patch add reset checkout restore";
+
+pub(super) fn pages_by_default(verb: &str, rest: &[String]) -> bool {
+    let has = |names: &[&str]| rest.iter().any(|word| names.contains(&word.as_str()));
+    match verb {
+        "config" => {
+            let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+            parsed.has_short(&['l'])
+                || ["--list", "--get-all", "--get-regexp", "--get-urlmatch"]
+                    .iter()
+                    .any(|name| parsed.has_long(name))
+                || parsed
+                    .operands
+                    .first()
+                    .is_some_and(|word| matches!(*word, "list" | "get"))
+        }
+        "stash" => {
+            rest.first()
+                .is_some_and(|word| matches!(word.as_str(), "list" | "show"))
+                || super::uses_editor(verb, rest)
+        }
+        "am" => {
+            rest.iter().any(|word| {
+                let name = word.split('=').next().unwrap_or(word);
+                name.starts_with("--") && name.len() > 2 && "--show-current-patch".starts_with(name)
+            }) || has(&["-i", "--interactive"])
+        }
+        "rebase" => parse_options(rest, &GIT_REBASE_OPTIONS).has_long("--show-current-patch"),
+        "submodule" | "submodule--helper" => has(&["summary"]),
+        "format-patch" => has(&["--stdout"]),
+        "add" | "reset" | "checkout" | "restore" => super::uses_editor(verb, rest),
+        _ => active(PAGER, verb),
+    }
+}
 
 pub(super) fn active(verbs: &str, verb: &str) -> bool {
     verbs
@@ -72,7 +107,7 @@ pub(super) const SOURCES: &[Source] = &[
     Config("pager.*", "*"),
     Config("core.editor", EDITOR),
     Config("sequence.editor", "rebase pull"),
-    Config("core.fsmonitor", WORKTREE),
+    Config("core.fsmonitor", "*"),
     Config("core.sshcommand", REMOTE),
     Config("core.askpass", REMOTE),
     Config("core.gitproxy", REMOTE),
@@ -86,10 +121,10 @@ pub(super) const SOURCES: &[Source] = &[
     Config("difftool.*.cmd", "difftool"),
     Config("mergetool.*.path", "mergetool"),
     Config("mergetool.*.cmd", "mergetool"),
-    Config("merge.*.driver", WORKTREE),
-    Config("filter.*.clean", WORKTREE),
-    Config("filter.*.smudge", WORKTREE),
-    Config("filter.*.process", WORKTREE),
+    Config("merge.*.driver", "*"),
+    Config("filter.*.clean", "*"),
+    Config("filter.*.smudge", "*"),
+    Config("filter.*.process", "*"),
     Config("gpg.program", SIGNING),
     Config("gpg.*.program", SIGNING),
     Config("gpg.ssh.defaultkeycommand", SIGNING),

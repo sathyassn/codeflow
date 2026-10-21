@@ -11404,6 +11404,8 @@ enum Seen<'a> {
 struct ParsedOptions<'a> {
     /// Unclassified options and missing required values, for strict readers.
     unread: Vec<&'a str>,
+    /// Known options whose required value is absent.
+    missing: Vec<&'a str>,
     ended: bool,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
@@ -11454,6 +11456,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
 ) -> ParsedOptions<'a> {
     let mut parsed = ParsedOptions {
         unread: Vec::new(),
+        missing: Vec::new(),
         ended: false,
         short: Vec::new(),
         long: Vec::new(),
@@ -11499,6 +11502,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
                     parsed.values.push((Seen::Long(name, None), value.as_ref()));
                 } else {
                     parsed.unread.push(token);
+                    parsed.missing.push(token);
                 }
                 index += 1;
             }
@@ -11535,6 +11539,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
                             parsed.values.push((Seen::Short(letter), value.as_ref()));
                         } else {
                             parsed.unread.push(token);
+                            parsed.missing.push(token);
                         }
                         index += 1;
                     } else {
