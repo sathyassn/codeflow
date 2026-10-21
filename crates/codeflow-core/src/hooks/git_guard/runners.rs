@@ -77,7 +77,15 @@ pub(super) fn arguments(program: &str, args: &[String]) -> Option<Vec<String>> {
 }
 
 fn checked<'a>(words: &'a [String], spec: &OptionSpec) -> Result<ParsedOptions<'a>, String> {
-    let parsed = parse_options(words, spec);
+    checked_mode(words, spec, false)
+}
+
+fn checked_mode<'a>(
+    words: &'a [String],
+    spec: &OptionSpec,
+    stop: bool,
+) -> Result<ParsedOptions<'a>, String> {
+    let parsed = super::parse_options_mode(words, spec, stop);
     if let Some(word) = parsed.unread.first() {
         return Err(format!(
             "unclassified or incomplete option `{}`",
@@ -91,6 +99,9 @@ fn checked<'a>(words: &'a [String], spec: &OptionSpec) -> Result<ParsedOptions<'
 // Their literal non-option prefix cannot expand into a Git option. Other
 // patterns remain unread, including patterns in an exec command's value.
 fn revision_operand(word: &str) -> bool {
+    if let Some(number) = word.strip_prefix("@{-").and_then(|s| s.strip_suffix('}')) {
+        return !number.is_empty() && number.bytes().all(|c| c.is_ascii_digit());
+    }
     let Some(at) = word.find(['~', '^']) else {
         return false;
     };
@@ -105,10 +116,18 @@ fn revision_operand(word: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '~' | '^'))
 }
 
-fn patterns(args: &[String], words: &[String], patterns: &[bool]) -> Result<(), String> {
+fn patterns(
+    args: &[String],
+    words: &[String],
+    patterns: &[bool],
+    segment: &str,
+) -> Result<(), String> {
+    if let Some(("grep", rest)) = git_subcommand(args) {
+        return grep_syntax(rest, segment);
+    }
     let operands = match git_subcommand(args) {
         Some((verb, rest)) if option_spec(verb).is_some() => {
-            checked(rest, option_spec(verb).unwrap())?.operands
+            checked_mode(rest, option_spec(verb).unwrap(), verb == "grep")?.operands
         }
         Some(("branch", rest)) => parse_options(rest, &super::GIT_BRANCH_OPTIONS).operands,
         _ => Vec::new(),
@@ -169,8 +188,8 @@ pub(super) fn commands(args: &[String]) -> Result<Vec<String>, String> {
             let Some(spec) = option_spec(verb) else {
                 return Ok(Vec::new());
             };
-            let parsed = checked(rest, spec)?;
-            if parsed.operands.iter().any(|word| unresolved_word(word)) {
+            let parsed = checked_mode(rest, spec, verb == "grep")?;
+            if verb != "grep" && parsed.operands.iter().any(|word| unresolved_word(word)) {
                 return Err("a Git runner operand expands at run time".into());
             }
             Ok(option_commands(verb, &parsed))
@@ -231,6 +250,46 @@ fn option_spec(verb: &str) -> Option<&'static OptionSpec> {
 
 pub(super) fn command_options(verb: &str) -> bool {
     option_spec(verb).is_some() || matches!(verb, "for-each-repo" | "submodule--helper")
+}
+
+// Git grep stops parsing options at its first non-option or `--`.
+// After that boundary, xargs cannot append a pager option from stdin.
+pub(super) fn closed_grep_options(rest: &[String]) -> bool {
+    checked_mode(rest, &catalog::GREP_OPTIONS, true)
+        .is_ok_and(|parsed| parsed.ended || !parsed.operands.is_empty())
+}
+
+fn grep_syntax(rest: &[String], segment: &str) -> Result<(), String> {
+    let parsed = checked_mode(rest, &catalog::GREP_OPTIONS, true)?;
+    for word in super::argv_words(segment) {
+        if !word.expands && !word.pattern {
+            continue;
+        }
+        if parsed
+            .operands
+            .first()
+            .is_some_and(|first| *first == word.text)
+            && !parsed.ended
+        {
+            let home = (word.text.starts_with("$HOME/") || word.text.starts_with("${HOME}/"))
+                && word.literal()
+                && crate::portable_path::user_home().is_some_and(|p| p.is_absolute());
+            let prefix = word.text.split(['$', '`']).next().unwrap_or("");
+            if !word.pattern
+                && ((!prefix.is_empty() && !prefix.starts_with(['-', '~', '='])) || home)
+            {
+                continue;
+            }
+        } else if parsed.operands.contains(&word.text.as_str())
+            || (parsed.values_of('e', "").contains(&word.text.as_str()) && word.literal())
+        {
+            continue;
+        }
+        return Err(
+            "a Git grep option or its first operand requires unclassified expansion".into(),
+        );
+    }
+    Ok(())
 }
 
 fn known_program(verb: &str) -> bool {
@@ -361,6 +420,25 @@ fn uses_editor(verb: &str, rest: &[String]) -> bool {
                 || options.operands.first() == Some(&"edit")
         }
         "branch" => parse_options(rest, &super::GIT_BRANCH_OPTIONS).has_long("--edit-description"),
+        "add" | "reset" | "checkout" | "restore" | "stash" | "replace" => {
+            let spec = if matches!(verb, "checkout" | "restore") {
+                &catalog::CHECKOUT_EDITOR_OPTIONS
+            } else {
+                &catalog::EDITOR_MODE_OPTIONS
+            };
+            let options = parse_options(rest, spec);
+            !options.unread.is_empty()
+                || options.has_short(&['p', 'e', 'i'])
+                || ["--patch", "--edit", "--interactive"]
+                    .iter()
+                    .any(|name| options.has_long(name))
+        }
+        "send-email" => {
+            let options = parse_options(rest, &catalog::EMAIL_OPTIONS);
+            !options.unread.is_empty()
+                || options.has_long("--annotate")
+                || options.has_long("--compose")
+        }
         _ => true,
     }
 }
@@ -934,6 +1012,62 @@ fn normalized_command(args: &[String], env: &crate::security::git_config::Enviro
     quote_words(&words)
 }
 
+fn segment_directories(
+    command: &str,
+    segments: &[String],
+    cwd: &Path,
+    fallback: &[PathBuf],
+) -> Vec<Vec<PathBuf>> {
+    let top = super::flat_top_level(command);
+    let roles = top
+        .as_ref()
+        .and_then(|top| super::map_top_level(segments, top));
+    let facts = super::LineFacts::read(segments, roles.as_deref(), command);
+    let mut shell = super::ShellState::new(top.is_some());
+    segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            let tracked = if let Some(Some(join)) = roles.as_ref().map(|roles| roles[index]) {
+                shell.begin(join);
+                true
+            } else {
+                false
+            };
+            let mut tokens = super::shell_tokens(segment);
+            strip_reserved_words(&mut tokens);
+            let dirs = match facts.moves_for(&shell, tracked, &tokens).cwd {
+                super::Cwd::Paths(paths) => paths
+                    .iter()
+                    .map(|path| integrity_shell_path(path, cwd))
+                    .collect(),
+                super::Cwd::Unknown(_) => fallback.to_vec(),
+            };
+            if tracked {
+                if let Some(dir) = super::cd_target(&tokens) {
+                    if tokens[0] == "cd" || super::plain_pushd(segment) {
+                        shell.cd(&dir);
+                    } else {
+                        shell.observe(&tokens[0], &tokens[1..]);
+                    }
+                } else {
+                    let words = super::command_argv(segment);
+                    let launched = super::configuration_launch(&words);
+                    shell.assign(
+                        &tokens,
+                        launched.map(|(program, _)| program),
+                        words.len() != tokens.len(),
+                    );
+                    if let Some((program, args)) = launched {
+                        shell.observe(program, args);
+                    }
+                }
+            }
+            dirs
+        })
+        .collect()
+}
+
 fn collect(
     command: &str,
     cwd: &Path,
@@ -956,11 +1090,12 @@ fn collect(
     }
     let segments = literal_segments(&expanded.segments);
     let run = run_dirs(&segments, cwd);
+    let locations = segment_directories(command, &expanded.segments, cwd, &run.dirs);
     let mut literals = Literals::default();
     let mut changed_sources = false;
     let mut changed_aliases = false;
     let mut earlier = Vec::new();
-    for segment in segments {
+    for (index, segment) in segments.into_iter().enumerate() {
         let filled = literals.fill(&segment);
         let (mut tokens, mut patterns) = command_argv_patterns(&filled);
         let before = tokens.len();
@@ -971,7 +1106,7 @@ fn collect(
             continue;
         };
         let Some(args) = arguments(program, args) else {
-            note_writes(&filled, args, &run.dirs, &mut earlier);
+            note_writes(&filled, args, &locations[index], &mut earlier);
             continue;
         };
         if matches!(args.as_slice(), [flag] if flag == "--version" || flag == "-v") {
@@ -988,7 +1123,7 @@ fn collect(
         let args = config_env(&args, &literals, &tokens)?;
         let mut env = inputs.environment.clone();
         env.extend(environment(&tokens, &literals)?);
-        for start in &run.dirs {
+        for start in &locations[index] {
             let (changes, uncertain) = launcher_effects(&tokens);
             let at = changes.iter().fold(start.clone(), |at, change| {
                 integrity_shell_path(change, &at)
@@ -1008,7 +1143,7 @@ fn collect(
                 || !commands.is_empty()
                 || !configured.is_empty()
             {
-                self::patterns(&args, &tokens, &patterns)?;
+                self::patterns(&args, &tokens, &patterns, &filled)?;
             }
             if commands.is_empty() && configured.is_empty() {
                 continue;

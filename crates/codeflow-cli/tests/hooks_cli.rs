@@ -1548,11 +1548,10 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
         );
     }
     // Controls: the same alias on a feature branch, a read-only alias, a
-    // name that is no alias, and a rebase of the current branch.
+    // rebase of the current branch.
     for (command, from) in [
         ("git x --allow-empty -m x", &feat),
         ("git st", &main),
-        ("git frobnicate", &main),
         ("git rebase main", &feat),
     ] {
         let out = guard_run(command, from);
@@ -1563,6 +1562,9 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    let unknown = guard_run("git frobnicate", &main);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&unknown.stderr).contains("git.hook_integrity"));
 }
 
 // TSK-112 round 5: every row of Codex's boundary script
@@ -1594,11 +1596,11 @@ fn git_guard_round_5_boundaries() {
             "main",
             2,
         ),
-        // Git rejects an attached `-c`, so nothing runs.
+        // An invalid global-option spelling is unclassified under integrity.
         (
             "git -calias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
             "main",
-            0,
+            2,
         ),
         (
             "git checkout main && git x --allow-empty -m \"fix: probe\"".to_string(),
@@ -6396,6 +6398,7 @@ fn hook_shims_refuse_when_the_binary_is_older() {
                 .arg(shims.join(stage))
                 .arg("ARG")
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env_remove("CODEFLOW_HOOK_BINARY")
                 .env("CODEFLOW_HOME", isolated_home())
                 .current_dir(dir.path())
                 .stdin(std::process::Stdio::null())
@@ -9669,7 +9672,7 @@ fn guards_read_a_search_pattern_as_text() {
         "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
         // A wrapped `git grep` reads its pattern as plain `git grep` does.
         "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
-        "rg --files | xargs git grep -e '/CHANGELOG.md$'".to_string(),
+        "rg --files | xargs git grep -e '/CHANGELOG.md$' --".to_string(),
         "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),

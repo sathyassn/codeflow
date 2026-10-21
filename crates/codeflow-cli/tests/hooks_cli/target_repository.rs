@@ -1305,6 +1305,8 @@ fn repair3_runner_filter_and_option_sources() {
             "printf payload | xargs git difftool",
             "printf payload | xargs git-filter-branch",
             "printf payload | xargs git for-each-repo",
+            "printf payload | xargs git grep -e pattern",
+            "git grep \"$UNKNOWN\" docs",
             "git ls-remote 'ext::sh -c rm% -rf% .claude'",
             "git remote-ext fixture 'sh -c rm% -rf% .claude'",
             "git-remote-ext fixture 'sh -c rm% -rf% .claude'",
@@ -1314,12 +1316,29 @@ fn repair3_runner_filter_and_option_sources() {
             let out = f.command(&f.linked, hook, command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
+        // The exec floor owns unread xargs replacement before integrity runs.
+        let replacement = f.command(
+            &f.linked,
+            hook,
+            "printf payload | xargs -I{} git grep -O{} pattern",
+        );
+        assert_eq!(replacement.status.code(), Some(2), "{replacement:?}");
+        let rule = if hook == "exec-guard" {
+            "security.dangerous_commands"
+        } else {
+            "git.hook_integrity"
+        };
+        assert!(String::from_utf8_lossy(&replacement.stderr).contains(rule));
         for command in [
             "git filter-branch -f --index-filter 'true' HEAD",
             "git difftool -y -x 'diff' HEAD~1 HEAD",
             "git grep -Oless needle",
+            "git grep needle --literal-filename",
             "git rebase -x ./test.sh HEAD~3",
             "git filter-branch --tree-filter ./test.sh HEAD",
+            "printf README.md | xargs git grep pattern",
+            "printf README.md | xargs git grep -e pattern --",
+            "git grep '$UNKNOWN' README.md",
         ] {
             let out = f.command(&f.linked, hook, command);
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
@@ -1592,5 +1611,62 @@ fn repair3_runner_rejects_non_unicode_transport() {
     for hook in ["exec-guard", "git-guard"] {
         let out = f.command(&f.linked, hook, "git ls-remote fixture");
         assert!(refused(&out), "{hook}: {out:?}");
+    }
+}
+
+#[test]
+fn repair3_runner_transitive_callbacks() {
+    let f = Fixture::new();
+    let mut missed = Vec::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for (key, verb) in [
+            ("core.editor", "cherry-pick -e HEAD"),
+            ("core.editor", "revert HEAD"),
+            ("core.editor", "add -e README.md"),
+            ("core.editor", "reset -p"),
+            ("core.editor", "checkout -p"),
+            ("core.editor", "checkout -mp"),
+            ("core.editor", "restore -mp README.md"),
+            ("core.editor", "restore -p README.md"),
+            ("core.editor", "stash -p"),
+            ("core.editor", "replace -e HEAD"),
+            ("core.editor", "send-email --annotate patch"),
+            ("core.editor", "pull origin main"),
+            ("core.fsmonitor", "pull origin main"),
+            ("filter.fixture.clean", "pull origin main"),
+            ("gpg.program", "rebase --gpg-sign HEAD~1"),
+            ("gpg.program", "cherry-pick -S HEAD"),
+            ("gpg.program", "revert -S HEAD"),
+            ("gpg.program", "am -S patch"),
+        ] {
+            let command = format!("git -c '{key}=rm -rf .claude' {verb}");
+            let out = f.command(&f.linked, hook, &command);
+            if !refused(&out) {
+                missed.push(format!("{hook} {command}: {out:?}"));
+            }
+        }
+        let out = f.command(
+            &f.linked,
+            hook,
+            "GIT_EDITOR='rm -rf .claude' git add -e README.md",
+        );
+        if !refused(&out) {
+            missed.push(format!("{hook} inherited editor: {out:?}"));
+        }
+    }
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
+    for hook in ["exec-guard", "git-guard"] {
+        for verb in [
+            "reset --soft HEAD",
+            "reset --hard HEAD",
+            "checkout HEAD",
+            "add README.md",
+            "stash list",
+            "replace -l",
+        ] {
+            let command = format!("git -c 'core.editor=rm -rf .claude' {verb}");
+            let out = f.command(&f.linked, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
     }
 }

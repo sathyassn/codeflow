@@ -9235,11 +9235,20 @@ pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) ->
         return None;
     }
     let tail = xargs_command(args)?;
+    let replaced = args[..args.len() - tail.len()].iter().any(|word| {
+        if word.starts_with("--") {
+            let name = word.split('=').next().unwrap_or(word);
+            name.len() > 2 && "--replace".starts_with(name)
+        } else {
+            word.starts_with('-') && word.contains(['I', 'J', 'i'])
+        }
+    });
     let (program, args) = strip_launchers(tail)?;
     let args = runners::arguments(program, args)?;
     // Appended stdin words can also be options, such as branch -D or reset
     // --hard. These verbs remain guarded even with an existing path operand.
-    let guarded = git_subcommand(&args).is_none_or(|(verb, _)| match verb {
+    let guarded = git_subcommand(&args).is_none_or(|(verb, rest)| match verb {
+        "grep" => replaced || !runners::closed_grep_options(rest),
         "branch" | "reset" | "config" | "worktree" | "update-ref" | "symbolic-ref" | "push"
         | "clean" | "checkout" | "switch" | "restore" | "rm" | "mv" | "commit" | "merge"
         | "cherry-pick" | "rebase" | "bisect" | "submodule" | "fast-import" | "clone" | "init"
@@ -10941,6 +10950,7 @@ const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
         ("--branches", Arity::Flag),
         ("--tags", Arity::Flag),
         ("--follow-tags", Arity::Flag),
+        ("--no-follow-tags", Arity::Flag),
         ("--prune", Arity::Flag),
         ("--atomic", Arity::Flag),
         ("--dry-run", Arity::Flag),
@@ -11394,6 +11404,7 @@ enum Seen<'a> {
 struct ParsedOptions<'a> {
     /// Unclassified options and missing required values, for strict readers.
     unread: Vec<&'a str>,
+    ended: bool,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -11433,8 +11444,17 @@ impl<'a> ParsedOptions<'a> {
 /// option ends the options; every token after it is an operand, including one
 /// that begins with `-`.
 fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedOptions<'a> {
+    parse_options_mode(args, spec, false)
+}
+
+fn parse_options_mode<'a, S: AsRef<str>>(
+    args: &'a [S],
+    spec: &OptionSpec,
+    stop_at_operand: bool,
+) -> ParsedOptions<'a> {
     let mut parsed = ParsedOptions {
         unread: Vec::new(),
+        ended: false,
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -11447,6 +11467,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         index += 1;
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
+                parsed.ended = true;
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
@@ -11459,6 +11480,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             let written = &token[..name.len() + 2];
             let canonical = spec.resolve_long(written);
             if canonical == Some(END_OF_OPTIONS) {
+                parsed.ended = true;
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
@@ -11484,6 +11506,12 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         }
         let Some(cluster) = token.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
             parsed.operands.push(token);
+            if stop_at_operand {
+                parsed
+                    .operands
+                    .extend(args[index..].iter().map(AsRef::as_ref));
+                return parsed;
+            }
             continue;
         };
         for (offset, letter) in cluster.char_indices() {

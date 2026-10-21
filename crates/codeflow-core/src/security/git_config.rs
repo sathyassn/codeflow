@@ -144,6 +144,10 @@ pub(crate) fn read(
             }
             command.args([arg, value]);
             at += 2;
+        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
+            // Configuration and rev-parse are builtins. Do not select an
+            // external program or start a pager while inspecting their data.
+            at += 1;
         } else if arg.starts_with("-c")
             || arg.starts_with("-C")
             || [

@@ -19,10 +19,11 @@ use Source::{
 
 pub(super) const REMOTE: &str =
     "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential";
-const WORKTREE: &str = "add am checkout switch restore reset status diff difftool commit merge rebase cherry-pick revert stash read-tree update-index checkout-index submodule clone cat-file hash-object sparse-checkout worktree";
+const WORKTREE: &str = "pull add am checkout switch restore reset status diff difftool commit merge rebase cherry-pick revert stash read-tree update-index checkout-index submodule clone cat-file hash-object sparse-checkout worktree";
 const DIFF: &str = "diff difftool log show grep blame diff-files diff-index diff-tree format-patch range-diff stash cat-file";
-const EDITOR: &str = "commit tag merge rebase notes branch am config";
-const SIGNING: &str = "commit tag push log show merge verify-commit verify-tag";
+const EDITOR: &str = "commit tag merge rebase notes branch am config cherry-pick revert add reset checkout restore stash replace send-email pull";
+const SIGNING: &str =
+    "commit tag push log show merge verify-commit verify-tag rebase cherry-pick revert am pull";
 const PAGER: &str = "log show diff difftool grep blame branch tag help reflog shortlog";
 
 pub(super) fn active(verbs: &str, verb: &str) -> bool {
@@ -70,7 +71,7 @@ pub(super) const SOURCES: &[Source] = &[
     Config("core.pager", PAGER),
     Config("pager.*", "*"),
     Config("core.editor", EDITOR),
-    Config("sequence.editor", "rebase"),
+    Config("sequence.editor", "rebase pull"),
     Config("core.fsmonitor", WORKTREE),
     Config("core.sshcommand", REMOTE),
     Config("core.askpass", REMOTE),
@@ -131,7 +132,7 @@ pub(super) const SOURCES: &[Source] = &[
     Environment("GIT_PAGER", PAGER),
     Environment("PAGER", PAGER),
     Environment("GIT_EDITOR", EDITOR),
-    Environment("GIT_SEQUENCE_EDITOR", "rebase"),
+    Environment("GIT_SEQUENCE_EDITOR", "rebase pull"),
     Environment("EDITOR", EDITOR),
     Environment("VISUAL", EDITOR),
     Environment("GIT_ASKPASS", REMOTE),
@@ -293,6 +294,8 @@ pub(super) const TRANSPORT_OPTIONS: OptionSpec = OptionSpec {
         ('6', Arity::Flag),
         ('j', Arity::Value),
         ('o', Arity::Value),
+        ('s', Arity::Value),
+        ('X', Arity::Value),
     ],
     long: &[
         ("--upload-pack", Arity::Value),
@@ -328,6 +331,8 @@ pub(super) const TRANSPORT_OPTIONS: OptionSpec = OptionSpec {
         ("--recurse-submodules", Arity::AttachedValue),
         ("--no-recurse-submodules", Arity::Flag),
         ("--rebase", Arity::AttachedValue),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
         ("--no-rebase", Arity::Flag),
         ("--ff-only", Arity::Flag),
         ("--ff", Arity::Flag),
@@ -517,4 +522,66 @@ pub(super) const INSTAWEB_OPTIONS: OptionSpec = OptionSpec {
         ("--help", Arity::Flag),
     ],
     git_style: false,
+};
+
+// Modes that can open an editor while editing a patch or replacement object.
+// Unlisted options keep editor activation unknown and therefore active.
+pub(super) const EDITOR_MODE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('p', Arity::Flag),
+        ('e', Arity::Flag),
+        ('i', Arity::Flag),
+        ('q', Arity::Flag),
+        ('f', Arity::Flag),
+        ('l', Arity::Flag),
+        ('N', Arity::Flag),
+        ('A', Arity::Flag),
+        ('u', Arity::Flag),
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('s', Arity::Value),
+        ('m', Arity::Value),
+    ],
+    long: &[
+        ("--patch", Arity::Flag),
+        ("--edit", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--hard", Arity::Flag),
+        ("--soft", Arity::Flag),
+        ("--mixed", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--keep", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--force", Arity::Flag),
+        ("--list", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--update", Arity::Flag),
+        ("--intent-to-add", Arity::Flag),
+        ("--pathspec-from-file", Arity::Value),
+        ("--source", Arity::Value),
+        ("--message", Arity::Value),
+        ("--format", Arity::Value),
+    ],
+    git_style: true,
+};
+
+// Checkout and restore use -m as a flag, while stash uses it for a message.
+pub(super) const CHECKOUT_EDITOR_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('p', Arity::Flag),
+        ('e', Arity::Flag),
+        ('i', Arity::Flag),
+        ('q', Arity::Flag),
+        ('f', Arity::Flag),
+        ('l', Arity::Flag),
+        ('N', Arity::Flag),
+        ('A', Arity::Flag),
+        ('u', Arity::Flag),
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('s', Arity::Value),
+        ('m', Arity::Flag),
+    ],
+    long: EDITOR_MODE_OPTIONS.long,
+    git_style: true,
 };
