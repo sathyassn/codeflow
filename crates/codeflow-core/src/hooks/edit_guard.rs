@@ -1777,8 +1777,16 @@ mod tests {
         };
         let target = admin.join("config.worktree");
         assert!(repository_authority_target(&target, dir.path(), false));
-        assert!(!repository_authority_target(
+        // TSK-381 SF-3: every path under a git-directory component with a
+        // non-ASCII byte is refused, failing closed; an ordinary ASCII file
+        // of the git directory stays outside the authority paths.
+        assert!(repository_authority_target(
             &admin.join("other"),
+            dir.path(),
+            false
+        ));
+        assert!(!repository_authority_target(
+            &dir.path().join(".git/description"),
             dir.path(),
             false
         ));
