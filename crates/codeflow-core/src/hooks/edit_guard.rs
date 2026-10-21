@@ -500,7 +500,21 @@ pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditErro
                 result.pop();
             }
             Component::Normal(part) => {
-                result.push(part);
+                // A normal component can look like a drive prefix when read
+                // alone (`quoted/C:/tail` on Windows). Pushing it directly
+                // would discard the preceding path. Keep it relative, even
+                // when the platform cannot create that filename.
+                if matches!(
+                    Path::new(part).components().next(),
+                    Some(Component::Prefix(_))
+                ) {
+                    let mut relative = std::ffi::OsString::from(".");
+                    relative.push(std::path::MAIN_SEPARATOR_STR);
+                    relative.push(part);
+                    result.push(relative);
+                } else {
+                    result.push(part);
+                }
                 if resolve {
                     if crate::absence::cannot_exist(&result).map_err(|e| {
                         EditError(format!("cannot inspect {}: {e}", result.display()))
@@ -1891,5 +1905,21 @@ mod r22_tests {
     fn r22_normalized_missing_optional_path_is_allowed() {
         let dir = tempfile::tempdir().unwrap();
         assert!(normalized(&dir.path().join("missing/new.txt"), true).is_ok());
+    }
+
+    #[test]
+    fn normalized_interior_drive_text_keeps_its_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::portable_path::canonicalize(dir.path()).unwrap();
+        git2::Repository::init(&root).unwrap();
+        for suffix in ["quoted/C:/tail", "quoted/c:/tail", "quoted/C:/../ordinary"] {
+            let path = root.join(suffix);
+            for resolve in [false, true] {
+                let result = normalized(&path, resolve).unwrap();
+                assert!(result.starts_with(&root), "{path:?}: {result:?}");
+                assert!(super::repository_enforcement_target(&path, &root, false)
+                    .is_ok_and(|protected| !protected));
+            }
+        }
     }
 }

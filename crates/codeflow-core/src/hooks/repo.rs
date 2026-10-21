@@ -228,7 +228,7 @@ fn discovery_error(start: &Path, error: &git2::Error) -> String {
     };
     let message = format!(
         "Cannot read repository marker {}: {}.",
-        marker.display(),
+        crate::git::display_key(&crate::portable_path::slashed(&marker)),
         error.message().trim_end_matches('.')
     );
     let registration = std::fs::read(&marker)
@@ -446,7 +446,7 @@ fn read_target_roots(target: &Path, session: &Path) -> Result<Vec<PathBuf>, Stri
                 };
                 return Err(format!(
                     "cannot judge repository marker {}: {error}",
-                    marker.display()
+                    crate::git::display_key(&crate::portable_path::slashed(&marker))
                 ));
             }
             Err(_) => continue,

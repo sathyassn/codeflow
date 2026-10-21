@@ -1536,6 +1536,22 @@ fn repair3_runner_sources_changed_earlier_on_the_line() {
 }
 
 #[test]
+fn empty_removal_operand_does_not_name_a_git_directory_container() {
+    let f = Fixture::new();
+    let container = f.temp.path().join("scratch");
+    std::fs::create_dir(&container).unwrap();
+    git2::Repository::init_bare(container.join("store.git")).unwrap();
+    for command in ["rm -f '' notes.txt", "rmdir ''"] {
+        let out = f.command(&container, "git-guard", command);
+        assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
+    }
+    for command in ["rm -rf .", "rm -rf store.git", "find . -delete"] {
+        let out = f.command(&container, "git-guard", command);
+        assert!(refused(&out), "{command}: {out:?}");
+    }
+}
+
+#[test]
 fn runner_sources_preserve_spaces_and_case_in_redirects() {
     let temp = tempfile::Builder::new()
         .prefix("Mixed Case ")

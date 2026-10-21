@@ -5839,6 +5839,10 @@ fn contained_git_directory_violation(
     cwd: &Path,
     level: PolicyLevel,
 ) -> Option<Violation> {
+    // An empty filename cannot remove the current directory.
+    if path.is_empty() {
+        return None;
+    }
     let target = integrity_shell_path(path, cwd);
     match super::repo::contains_git_directory(&target) {
         Ok(false) => None,
