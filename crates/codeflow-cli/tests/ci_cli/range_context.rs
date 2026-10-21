@@ -1195,12 +1195,12 @@ fn malformed_main_beside_a_target() -> (Line, String, String) {
     (f, target, malformed)
 }
 
-/// Codex review F2: `release@2026` and `deadbeef` are valid branch names, so
+/// Codex review F2: `release@2026`, `deadbeef` and `@` are valid branch names, so
 /// CI metadata naming them selects that target's tip and acceptance target,
 /// and the malformed commit between the target and `main` is judged.
 #[test]
 fn valid_branch_names_with_at_or_hex_select_their_own_target() {
-    for name in ["release@2026", "deadbeef"] {
+    for name in ["release@2026", "deadbeef", "@"] {
         for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
             let (f, target, malformed) = malformed_main_beside_a_target();
             f.git(&[

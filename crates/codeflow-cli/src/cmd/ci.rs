@@ -2392,12 +2392,14 @@ fn env_branch(key: &str, value: &str) -> Option<String> {
 
 /// Git's branch-name rules, as `git check-ref-format --branch` applies them:
 /// no control character, space, `~`, `^`, `:`, `?`, `*`, `[` or `\`; no `..`,
-/// `@{` or `//`; not `@`; no leading `-` or `/`, no trailing `/` or `.`; and
-/// no path component that starts with `.` or ends with `.lock`. A literal
-/// `@` (`release@2026`) and a hexadecimal name (`deadbeef`) are valid.
+/// `@{` or `//`; not `HEAD`; no leading `-` or `/`, no trailing `/` or `.`;
+/// and no path component that starts with `.` or ends with `.lock`. `@`,
+/// `release@2026` and a hexadecimal name (`deadbeef`) are valid. Git also
+/// accepts `@{-N}` by expanding it to an earlier checkout's branch; a base
+/// name is never rewritten, so that form is refused.
 fn is_branch_name(name: &str) -> bool {
     !name.is_empty()
-        && name != "@"
+        && name != "HEAD"
         && !name.starts_with(['-', '/'])
         && !name.ends_with(['/', '.'])
         && !name.contains("..")
@@ -4623,7 +4625,7 @@ mod tests {
                 "ma*in",
                 "ma[in",
                 "ma\\in",
-                "@",
+                "HEAD",
                 ".main",
                 "a//b",
             ] {
@@ -4646,6 +4648,7 @@ mod tests {
                 ("main", both("main")),
                 ("release@2026", both("release@2026")),
                 ("deadbeef", both("deadbeef")),
+                ("@", both("@")),
                 ("Origin/main", both("Origin/main")),
                 ("origin/main", exact("refs/remotes/origin/main")),
                 ("refs/heads/main", exact("refs/heads/main")),
@@ -4672,18 +4675,91 @@ mod tests {
                 assert_eq!(r.base_candidates, expected, "{key}={value}");
             }
         }
-        for (value, expected) in [
-            ("main~1", None),
-            ("main", Some("main")),
-            ("release@2026", Some("release@2026")),
-            ("deadbeef", Some("deadbeef")),
+        // Codex review 02: GitHub, GitLab and Bitbucket keep every valid
+        // target name, `@` included.
+        for key in [
+            "GITHUB_BASE_REF",
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+            "BITBUCKET_PR_DESTINATION_BRANCH",
         ] {
-            assert_eq!(
-                detect_target(env_from(&[("GITHUB_BASE_REF", value)])).as_deref(),
-                expected,
-                "{value}"
-            );
+            for (value, expected) in [
+                ("main~1", None),
+                ("main", Some("main")),
+                ("release@2026", Some("release@2026")),
+                ("deadbeef", Some("deadbeef")),
+                ("@", Some("@")),
+            ] {
+                assert_eq!(
+                    detect_target(env_from(&[(key, value)])).as_deref(),
+                    expected,
+                    "{key}={value}"
+                );
+            }
         }
+    }
+
+    /// Codex review 02: the predicate agrees with Git's own verdict, asked of
+    /// `git check-ref-format --branch`, on every case of this corpus. The one
+    /// intended difference is `@{-N}`, which Git expands to the name of an
+    /// earlier checkout: codeflow never rewrites a base name, so it is refused.
+    #[test]
+    fn branch_name_rules_agree_with_git_check_ref_format() {
+        let corpus = [
+            "main",
+            "@",
+            "@@",
+            "a@b",
+            "a@",
+            "x/@",
+            "release@2026",
+            "deadbeef",
+            "HEAD",
+            "x/HEAD",
+            "refs/heads/HEAD",
+            "-x",
+            "a.lock",
+            "a.lock/b",
+            ".lock",
+            "lock",
+            "a/.b",
+            "a/b.",
+            "a.",
+            ".a",
+            "a//b",
+            "/a",
+            "a/",
+            "a..b",
+            "foo..",
+            "a@{b",
+            "a b",
+            "a\tb",
+            "a:b",
+            "a~b",
+            "a^b",
+            "a?b",
+            "a*b",
+            "a[b",
+            "a\\b",
+            "a{b",
+            "a}b",
+            "\u{e9}",
+            "Origin/main",
+            "origin/main",
+            "refs/remotes/upstream/main",
+            "a.lock.",
+        ];
+        let mut disagree = Vec::new();
+        for value in corpus {
+            let out = codeflow_core::git::command()
+                .args(["check-ref-format", "--branch", value])
+                .output()
+                .unwrap();
+            if out.status.success() != is_branch_name(value) {
+                disagree.push(format!("{value:?}: git {}", out.status.success()));
+            }
+        }
+        assert!(disagree.is_empty(), "{}", disagree.join("\n"));
+        assert!(!is_branch_name("@{-1}"));
     }
 
     #[test]
