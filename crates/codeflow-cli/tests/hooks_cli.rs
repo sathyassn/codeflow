@@ -8143,7 +8143,13 @@ fn root_branch_with_unicode_whitespace_is_compared_exactly_by_the_hook() {
     assert_eq!(wrong.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&wrong.stderr).contains("git.root_checkout_commits"));
     git(dir.path(), &["checkout", "release\u{a0}"]);
-    assert_eq!(run().status.code(), Some(0));
+    // The root checkout rule still compares the name exactly and is met.
+    // TSK-381 SF-3: git-guard now treats a branch name with a non-ASCII byte
+    // as protected, failing closed, so the commit is refused on that ground.
+    let right = run();
+    let err = String::from_utf8_lossy(&right.stderr);
+    assert!(!err.contains("git.root_checkout_commits"), "{err}");
+    assert!(err.contains("git.commit_to_protected"), "{err}");
 }
 
 #[test]
