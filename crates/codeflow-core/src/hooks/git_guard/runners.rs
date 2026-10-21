@@ -147,6 +147,20 @@ fn revision_operand(word: &str) -> bool {
     operator || word.contains("..")
 }
 
+// Only the current user's home has a proven expansion. The remaining path
+// must be literal; named-user homes and glob/brace suffixes stay unread.
+fn home_operand(word: &str) -> bool {
+    let Some(tail) = word
+        .strip_prefix("~/")
+        .or_else(|| (word == "~").then_some(""))
+    else {
+        return false;
+    };
+    !expands(tail)
+        && !tail.chars().any(super::pattern_character)
+        && crate::portable_path::user_home().is_some_and(|home| home.is_absolute())
+}
+
 fn patterns(
     args: &[String],
     words: &[String],
@@ -158,7 +172,8 @@ fn patterns(
     }
     let command_values = commands(args)?;
     if words.iter().zip(patterns).any(|(word, pattern)| {
-        *pattern && (!revision_operand(word) || command_values.contains(word))
+        *pattern
+            && ((!revision_operand(word) && !home_operand(word)) || command_values.contains(word))
     }) {
         return Err("a Git runner word requires brace or filename expansion".into());
     }
@@ -807,7 +822,7 @@ fn note_literals(literals: &mut Literals, tokens: &mut [String]) -> Result<(), S
         word.split_once('=')
             .is_some_and(|(name, value)| program_environment(name) && expands(value))
     }) {
-        for name in ["PATH", "GIT_EXEC_PATH"] {
+        for name in ["HOME", "PATH", "GIT_EXEC_PATH"] {
             if literals.0.contains_key(name) {
                 continue;
             }

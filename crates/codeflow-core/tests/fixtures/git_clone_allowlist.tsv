@@ -53,3 +53,9 @@ crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --config='co
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --reject-shallow /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -4 /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --ipv4 --no-remote-submodules /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~someone/scratch/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/*"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/{scratch,repo}/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.claude/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.git/hooks/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.

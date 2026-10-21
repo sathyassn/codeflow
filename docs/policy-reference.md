@@ -577,10 +577,13 @@ checked, so a symlink does not remove the target owner's protection.
   A preceding config write that could change command settings or a saved-instruction rewrite
   makes the next Git command's runner state unknown; run those commands
   separately so the guard can read the resulting state.
-  Push and fetch operands can use preceding literal assignments on the same
-  line, for example `BRANCH=task/topic; git push origin "$BRANCH"` and
-  `REMOTE=origin; git fetch "$REMOTE"`. An inherited shell variable whose
-  value the reader cannot prove remains unresolved.
+  Push operands can use preceding literal assignments on the same line,
+  for example `BRANCH=task/topic; git push origin "$BRANCH"`. Git-guard's
+  fetch-source check requires a literal configured remote name or its URL.
+  An inherited shell variable whose value the reader cannot prove remains
+  unresolved. PATH assignments can extend the inherited PATH using `$HOME`,
+  and ordinary path operands can start with `~/` or be `~`. Named-user homes
+  and remaining brace or filename patterns still require a literal path.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.

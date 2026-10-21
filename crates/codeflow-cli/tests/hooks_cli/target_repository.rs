@@ -1552,6 +1552,54 @@ fn empty_removal_operand_does_not_name_a_git_directory_container() {
 }
 
 #[test]
+fn runner_home_in_program_path_assignments() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "PATH=\"$HOME/bin:$PATH\" git status",
+            "PATH=\"${HOME}/bin:${PATH}\" git status",
+            "export PATH=\"$HOME/bin:$PATH\"; git status",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "PATH=\"$UNPROVEN/bin:$PATH\" git status",
+            "HOME=$UNPROVEN; PATH=\"$HOME/bin:$PATH\" git status",
+            "PATH=\"$HOME/bin:$PATH\" git config core.bare true",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn runner_home_tilde_operands() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git clone https://example.test/x/y.git ~/scratch/y",
+            "git -c core.pager=true diff ~",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git clone https://example.test/x/y.git ~someone/scratch/y",
+            "git clone https://example.test/x/y.git ~/scratch/*",
+            "git clone https://example.test/x/y.git ~/{scratch,repo}/y",
+            "git clone https://example.test/x/y.git ~/repo/.claude/y",
+            "git clone https://example.test/x/y.git ~/repo/.git/hooks/y",
+            "git rebase -x ~/bin/* HEAD~1",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+#[test]
 fn runner_sources_preserve_spaces_and_case_in_redirects() {
     let temp = tempfile::Builder::new()
         .prefix("Mixed Case ")
