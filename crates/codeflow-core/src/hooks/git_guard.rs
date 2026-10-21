@@ -10255,12 +10255,15 @@ pub(crate) fn strip_ref_prefix<'a>(name: &'a str, prefix: &str) -> Option<&'a st
 }
 
 /// `true` when `name` may be stored as another, guarded ref, so it is
-/// refused, failing closed (TSK-381 SF-3): it holds a non-ASCII byte, which
-/// a filesystem such as APFS may fold to an ASCII letter (`ſ` names the
-/// same file as `s`), or its `refs/` prefix matches only without regard to
-/// case. A name the agent types is judged this way in git-guard.
+/// refused, failing closed (TSK-381 SF-3): its `refs/` prefix matches only
+/// without regard to case, or, where the git directory is on a
+/// case-insensitive filesystem ([`super::policy::non_ascii_aliasing`]), it
+/// holds a non-ASCII byte, which such a filesystem may fold to an ASCII
+/// letter (`ſ` names the same file as `s`). A name the agent types is judged
+/// this way in git-guard.
 pub(crate) fn ref_name_aliases(name: &str) -> bool {
-    !name.is_ascii() || (!name.starts_with("refs/") && strip_ref_prefix(name, "refs/").is_some())
+    (!name.is_ascii() && super::policy::non_ascii_aliasing())
+        || (!name.starts_with("refs/") && strip_ref_prefix(name, "refs/").is_some())
 }
 
 /// [`ref_name_aliases`] for a reference-transaction line: a non-ASCII name
@@ -16659,6 +16662,7 @@ mod tests {
     /// ref; git-guard refuses each, and an ordinary feature ref stays free.
     #[test]
     fn test_update_ref_non_ascii_and_folded_prefix_names_are_refused() {
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
         let p = default_policy();
         for cmd in [
             "git update-ref refs/heads/ma\u{17f}ter deadbeef",
@@ -16679,6 +16683,28 @@ mod tests {
             &ctx(&p, "feat/x")
         )
         .is_empty());
+    }
+
+    /// TSK-381 SF-3: on a case-sensitive git directory a non-ASCII name is
+    /// an ordinary name, while a case-different `refs/` prefix is still
+    /// refused.
+    #[test]
+    fn test_update_ref_non_ascii_names_are_ordinary_on_a_case_sensitive_git_dir() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
+            "git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+        assert!(has_rule(
+            &evaluate(
+                "git update-ref REFS/heads/feat/y deadbeef",
+                &ctx(&p, "feat/x")
+            ),
+            "git.policy_authority"
+        ));
     }
 
     #[test]

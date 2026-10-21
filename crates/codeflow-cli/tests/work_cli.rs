@@ -987,9 +987,13 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
             .unwrap();
         std::io::Write::write_all(guard.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
         let out = guard.wait_with_output().unwrap();
+        // The `ſ` spellings alias only on a case-insensitive git directory
+        // (TSK-381 SF-3); elsewhere they are ordinary names.
+        let aliases = name.is_ascii()
+            || codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
         assert_eq!(
             out.status.code(),
-            Some(2),
+            Some(if aliases { 2 } else { 0 }),
             "{name}: {}",
             String::from_utf8_lossy(&out.stderr)
         );

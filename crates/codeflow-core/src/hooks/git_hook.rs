@@ -783,6 +783,11 @@ pub fn reference_transaction(
 
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    // Whether non-ASCII names may alias here: probed once per invocation
+    // unless a caller has decided it (TSK-381 SF-3).
+    let _aliasing = super::policy::NonAsciiAliasingScope::decide(|| {
+        super::repo::case_insensitive_git_dir(repo.commondir())
+    });
     // The integrate token and a human's override sanction the transaction
     // (git layer only — the git-guard never trusts the human override).
     let sanctioned = integrate_token || human_override;
@@ -2713,6 +2718,7 @@ mod tests {
     /// a non-ASCII remote branch or tag, and an ordinary branch, stay free.
     #[test]
     fn test_reference_transaction_blocks_non_ascii_and_folded_prefix_names() {
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
@@ -2751,6 +2757,33 @@ mod tests {
         ] {
             assert!(run(name).is_empty(), "{name}");
         }
+    }
+
+    /// TSK-381 SF-3: on a case-sensitive git directory a non-ASCII name is an
+    /// ordinary branch, while a case-different `refs/` prefix still blocks.
+    #[test]
+    fn test_reference_transaction_reads_non_ascii_names_as_ordinary_on_a_case_sensitive_git_dir() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in ["refs/heads/ma\u{17f}ter", "refs/heads/feat/caf\u{e9}"] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        assert_eq!(run("REFS/remotes/origin/main").len(), 1);
     }
 
     #[test]

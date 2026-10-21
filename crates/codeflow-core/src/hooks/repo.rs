@@ -12,6 +12,36 @@ use git2::Repository;
 use crate::git::GitName;
 use crate::hooks::policy::NON_UTF8_BRANCH;
 
+/// Whether the git directory `dir` is on a case-insensitive filesystem, so
+/// ref names that differ there may name one loose ref (TSK-381 SF-3). The
+/// probe reads `HEAD` and a lower-case spelling of it: the same file means
+/// case-insensitive, a missing one case-sensitive. A probe that cannot decide
+/// counts as case-insensitive, failing closed.
+#[must_use]
+pub fn case_insensitive_git_dir(dir: &Path) -> bool {
+    let Ok(upper) = std::fs::symlink_metadata(dir.join("HEAD")) else {
+        return true;
+    };
+    match crate::absence::symlink_metadata_optional(&dir.join("head")) {
+        Ok(None) => false,
+        Err(_) => true,
+        Ok(Some(lower)) => same_file(&upper, &lower),
+    }
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Without a file identity to compare, a `head` beside `HEAD` is taken as
+/// the same entry, failing closed.
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
+}
+
 /// Resolved repository context for a hook invocation.
 pub struct RepoInfo {
     /// Working-tree root (the worktree's own root when in a worktree).
@@ -563,6 +593,21 @@ pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Re
 
 #[cfg(test)]
 mod tests {
+    /// TSK-381 SF-3: the probe reports the filesystem the git directory is
+    /// on, and one that cannot decide counts as case-insensitive.
+    #[test]
+    fn the_case_probe_reads_the_git_directory_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let insensitive = dir.path().join("head").exists();
+        assert_eq!(super::case_insensitive_git_dir(dir.path()), insensitive);
+        if !insensitive {
+            std::fs::write(dir.path().join("head"), "other\n").unwrap();
+            assert!(!super::case_insensitive_git_dir(dir.path()));
+        }
+        let empty = tempfile::tempdir().unwrap();
+        assert!(super::case_insensitive_git_dir(empty.path()));
+    }
 
     #[cfg(unix)]
     #[test]

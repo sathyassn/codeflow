@@ -1896,6 +1896,12 @@ fn case_different_protected_branch_names_are_refused_by_both_guards() {
     );
 }
 
+/// Whether the test repository's git directory is on a case-insensitive
+/// filesystem, where the guards refuse non-ASCII ref names (TSK-381 SF-3).
+fn case_insensitive_git_dir(dir: &Path) -> bool {
+    codeflow_core::hooks::repo::case_insensitive_git_dir(&dir.join(".git"))
+}
+
 /// A repository on `feat/x` whose `main` has two commits; returns the tip
 /// and the first commit.
 fn two_commit_main(dir: &Path) -> (String, String) {
@@ -1908,13 +1914,16 @@ fn two_commit_main(dir: &Path) -> (String, String) {
     (rev(dir, "main"), rev(dir, "main~1"))
 }
 
-/// TSK-381 SF-3: APFS folds `ſ` to `s`, so a non-ASCII or case-folded ref
-/// name can name a protected or remote-tracking ref; git-guard refuses the
-/// three spellings with exit 2, and an ordinary feature ref stays free.
+/// TSK-381 SF-3: APFS folds `ſ` to `s`, so on a case-insensitive git
+/// directory a non-ASCII ref name can name a protected or remote-tracking
+/// ref, and git-guard refuses the three spellings with exit 2; on a
+/// case-sensitive one they are ordinary names. A case-different `refs/`
+/// prefix is refused on both, and an ordinary feature ref stays free.
 #[test]
 fn git_guard_refuses_non_ascii_ref_names_with_exit_2() {
     let dir = tempfile::tempdir().unwrap();
     let (_, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
     for name in [
         "refs/heads/ma\u{17f}n",
         "re\u{17f}s/heads/main",
@@ -1923,9 +1932,23 @@ fn git_guard_refuses_non_ascii_ref_names_with_exit_2() {
         let cmd = format!("git update-ref {name} {first}");
         let out = guard_run(&cmd, dir.path());
         let err = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(2), "{cmd}: {err}");
-        assert!(err.contains("git.policy_authority"), "{cmd}: {err}");
+        if insensitive {
+            assert_eq!(out.status.code(), Some(2), "{cmd}: {err}");
+            assert!(err.contains("git.policy_authority"), "{cmd}: {err}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "{cmd}: {err}");
+        }
     }
+    let out = guard_run(
+        &format!("git update-ref REFS/heads/feat/y {first}"),
+        dir.path(),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let out = guard_run(
         &format!("git update-ref refs/heads/feat/y {first}"),
         dir.path(),
@@ -1945,12 +1968,19 @@ fn git_guard_refuses_non_ascii_ref_names_with_exit_2() {
 fn reference_transaction_blocks_folded_ref_prefixes() {
     let dir = tempfile::tempdir().unwrap();
     let (main, first) = two_commit_main(dir.path());
+    let insensitive = case_insensitive_git_dir(dir.path());
     wire_reference_transaction_hook(dir.path());
-    for name in ["re\u{17f}s/heads/main", "REFS/heads/main"] {
-        let out = git_out(dir.path(), &["update-ref", name, &first]);
-        assert!(!out.status.success(), "{name} must block");
-        assert_eq!(rev(dir.path(), "main"), main, "{name} moved main");
-    }
+    let out = git_out(dir.path(), &["update-ref", "REFS/heads/main", &first]);
+    assert!(!out.status.success(), "a case-different prefix must block");
+    assert_eq!(rev(dir.path(), "main"), main, "REFS/heads/main moved main");
+    // On a case-sensitive git directory `reſs/heads/main` is another ref.
+    let out = git_out(dir.path(), &["update-ref", "re\u{17f}s/heads/main", &first]);
+    assert_eq!(out.status.success(), !insensitive, "re\u{17f}s/heads/main");
+    assert_eq!(
+        rev(dir.path(), "main"),
+        main,
+        "re\u{17f}s/heads/main moved main"
+    );
     let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/y", &first]);
     assert!(
         out.status.success(),
@@ -1967,12 +1997,18 @@ fn reference_transaction_blocks_a_non_ascii_spelling_of_a_protected_branch() {
     let dir = tempfile::tempdir().unwrap();
     let (main, first) = two_commit_main(dir.path());
     git(dir.path(), &["branch", "master", &main]);
+    let insensitive = case_insensitive_git_dir(dir.path());
     wire_reference_transaction_hook(dir.path());
     let out = git_out(
         dir.path(),
         &["update-ref", "refs/heads/ma\u{17f}ter", &first],
     );
-    assert!(!out.status.success(), "the folded spelling must block");
+    // Blocked where it aliases `master`; elsewhere an ordinary branch.
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "refs/heads/ma\u{17f}ter"
+    );
     assert_eq!(rev(dir.path(), "master"), main, "master moved");
     let out = git_out(dir.path(), &["update-ref", "refs/heads/feat/y", &first]);
     assert!(
@@ -8143,13 +8179,17 @@ fn root_branch_with_unicode_whitespace_is_compared_exactly_by_the_hook() {
     assert_eq!(wrong.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&wrong.stderr).contains("git.root_checkout_commits"));
     git(dir.path(), &["checkout", "release\u{a0}"]);
-    // The root checkout rule still compares the name exactly and is met.
-    // TSK-381 SF-3: git-guard now treats a branch name with a non-ASCII byte
-    // as protected, failing closed, so the commit is refused on that ground.
     let right = run();
-    let err = String::from_utf8_lossy(&right.stderr);
-    assert!(!err.contains("git.root_checkout_commits"), "{err}");
-    assert!(err.contains("git.commit_to_protected"), "{err}");
+    if case_insensitive_git_dir(dir.path()) {
+        // TSK-381 SF-3: on a case-insensitive git directory git-guard treats
+        // a branch name with a non-ASCII byte as protected, failing closed;
+        // the root checkout rule still compares the name exactly and is met.
+        let err = String::from_utf8_lossy(&right.stderr);
+        assert!(!err.contains("git.root_checkout_commits"), "{err}");
+        assert!(err.contains("git.commit_to_protected"), "{err}");
+    } else {
+        assert_eq!(right.status.code(), Some(0));
+    }
 }
 
 #[test]
