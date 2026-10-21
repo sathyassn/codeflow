@@ -742,9 +742,10 @@ pub fn pre_merge_commit(
 pub fn ref_line_touches_local_branch(line: &str) -> bool {
     // Git's protocol separates the fields with a single space, and a ref name
     // holds none: other whitespace (a no-break space) is part of the name.
-    line.splitn(3, ' ')
-        .nth(2)
-        .is_some_and(|r| super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some())
+    line.splitn(3, ' ').nth(2).is_some_and(|r| {
+        super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some()
+            || super::git_guard::transaction_ref_aliases(r)
+    })
 }
 
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
@@ -790,6 +791,22 @@ pub fn reference_transaction(
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
+        // A spelling a case-insensitive filesystem may store as a guarded ref
+        // is refused outright, failing closed (TSK-381 SF-3).
+        if super::git_guard::transaction_ref_aliases(refname) {
+            if policy.local_ref_protection.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    format!(
+                        "ref update of '{refname}': a non-ASCII character or a case-different \
+                         `refs/` prefix can name a protected ref on a case-insensitive filesystem"
+                    ),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            continue;
+        }
         let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
             continue;
         };
@@ -2689,6 +2706,51 @@ mod tests {
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    /// TSK-381 SF-3: a non-ASCII or case-folded spelling may be stored as a
+    /// protected ref, so the backstop blocks it; what `git fetch` writes for
+    /// a non-ASCII remote branch or tag, and an ordinary branch, stay free.
+    #[test]
+    fn test_reference_transaction_blocks_non_ascii_and_folded_prefix_names() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in [
+            "refs/heads/ma\u{17f}ter",
+            "re\u{17f}s/heads/main",
+            "re\u{17f}s/remotes/origin/main",
+            "REFS/remotes/origin/main",
+            "refs/heads/feat/caf\u{e9}",
+        ] {
+            assert!(
+                ref_line_touches_local_branch(&format!("{ZERO40} {ahead} {name}")),
+                "{name}"
+            );
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/caf\u{e9}",
+            "refs/tags/caf\u{e9}",
+            "refs/heads/feat/y",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
     }
 
     #[test]

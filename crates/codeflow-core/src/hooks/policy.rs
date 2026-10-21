@@ -595,10 +595,12 @@ impl GitPolicy {
     /// On a case-insensitive filesystem `refs/heads/MAIN` is the same loose
     /// ref as `refs/heads/main`, so those guards fail closed: on a
     /// case-sensitive filesystem a distinct `Main` is refused too while
-    /// `main` is protected.
+    /// `main` is protected. A name with a non-ASCII byte is protected too,
+    /// since such a filesystem may fold it to an ASCII letter (`ſ` names the
+    /// same file as `s`).
     #[must_use]
     pub fn branch_is_protected_any_case(&self, branch: &str) -> bool {
-        if self.branch_is_protected(branch) {
+        if self.branch_is_protected(branch) || !branch.is_ascii() {
             return true;
         }
         let sec = SecurityPolicy {
@@ -1372,6 +1374,9 @@ mod tests {
         );
         assert!(!g.branch_is_protected_any_case("feat/Main"));
         assert!(!g.branch_is_protected_any_case("mainline"));
+        // SF-3: APFS folds `ſ` to `s`; any non-ASCII name fails closed.
+        assert!(g.branch_is_protected_any_case("ma\u{17f}ter"));
+        assert!(g.branch_is_protected_any_case("feat/caf\u{e9}"));
     }
 
     #[test]

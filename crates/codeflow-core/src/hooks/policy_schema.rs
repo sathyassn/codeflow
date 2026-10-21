@@ -153,7 +153,7 @@ pub const SCHEMA: [KeySpec; 70] = [
         kind: KeyKind::StringList,
         valid: "an array of branch names or glob patterns (e.g. release/*)",
         purpose: "Branches every enforcement plane treats as protected.",
-        notes: "Globs use the `glob` crate's syntax; read by all four planes. git-guard and the reference-transaction hook match a name and the list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so on a case-sensitive filesystem a distinct branch such as `Main` is refused there too while `main` is protected.",
+        notes: "Globs use the `glob` crate's syntax; read by all four planes. git-guard and the reference-transaction hook match a name and the list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so on a case-sensitive filesystem a distinct branch such as `Main` is refused there too while `main` is protected. Because a filesystem such as APFS also folds some non-ASCII characters to ASCII letters (`ſ` names the same file as `s`), those guards treat a branch name with a non-ASCII byte as protected and refuse an `update-ref` or `symbolic-ref` name with a non-ASCII byte or a `refs/` prefix that matches only without regard to case; the hook lets a fetch write such names under exactly `refs/remotes/` and `refs/tags/`. The edit guard refuses direct writes under `.git/refs/heads` and any path under the git directory with a non-ASCII component.",
     },
     KeySpec {
         path: "git.commit_to_protected",

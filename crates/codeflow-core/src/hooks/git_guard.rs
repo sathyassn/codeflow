@@ -10254,13 +10254,40 @@ pub(crate) fn strip_ref_prefix<'a>(name: &'a str, prefix: &str) -> Option<&'a st
         .then(|| &name[prefix.len()..])
 }
 
-pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
+/// `true` when `name` may be stored as another, guarded ref, so it is
+/// refused, failing closed (TSK-381 SF-3): it holds a non-ASCII byte, which
+/// a filesystem such as APFS may fold to an ASCII letter (`ſ` names the
+/// same file as `s`), or its `refs/` prefix matches only without regard to
+/// case. A name the agent types is judged this way in git-guard.
+pub(crate) fn ref_name_aliases(name: &str) -> bool {
+    !name.is_ascii() || (!name.starts_with("refs/") && strip_ref_prefix(name, "refs/").is_some())
+}
+
+/// [`ref_name_aliases`] for a reference-transaction line: a non-ASCII name
+/// under exactly `refs/remotes/` or `refs/tags/` is what `git fetch` writes
+/// for such a remote branch or tag, and stays free.
+pub(crate) fn transaction_ref_aliases(name: &str) -> bool {
+    ref_name_aliases(name) && !(name.starts_with("refs/remotes/") || name.starts_with("refs/tags/"))
+}
+
+/// The `update-ref` or `symbolic-ref` write in `args` names a ref by a
+/// spelling that [`ref_name_aliases`] refuses.
+pub(super) fn ref_plumbing_aliases(sub: &str, args: &[String]) -> bool {
     let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
-    let writing = sub == "update-ref"
+    ref_plumbing_writes(sub, args, &parsed)
+        && parsed.operands.iter().any(|name| ref_name_aliases(name))
+}
+
+fn ref_plumbing_writes(sub: &str, args: &[String], parsed: &ParsedOptions<'_>) -> bool {
+    sub == "update-ref"
         || parsed.has_short(&['d'])
         || args.iter().any(|arg| arg == "--delete")
-        || parsed.operands.len() >= 2;
-    writing
+        || parsed.operands.len() >= 2
+}
+
+pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
+    let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
+    ref_plumbing_writes(sub, args, &parsed)
         && (parsed.has_long("--stdin")
             || parsed
                 .operands
@@ -16622,6 +16649,33 @@ mod tests {
         ));
         assert!(evaluate(
             "git update-ref refs/heads/feat/Main deadbeef",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
+    }
+
+    /// TSK-381 SF-3: APFS folds `ſ` to `s`, so a non-ASCII ref name or a
+    /// case-different `refs/` prefix can name a protected or remote-tracking
+    /// ref; git-guard refuses each, and an ordinary feature ref stays free.
+    #[test]
+    fn test_update_ref_non_ascii_and_folded_prefix_names_are_refused() {
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
+            "git update-ref re\u{17f}s/heads/master deadbeef",
+            "git update-ref re\u{17f}s/remotes/origin/evil deadbeef",
+            "git update-ref REFS/heads/feat/y deadbeef",
+            "git symbolic-ref HEAD refs/heads/ma\u{17f}ter",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.policy_authority"), "{cmd}: {v:?}");
+        }
+        assert!(has_rule(
+            &evaluate("git branch -f ma\u{17f}ter HEAD~1", &ctx(&p, "feat/x")),
+            "git.local_ref_protection"
+        ));
+        assert!(evaluate(
+            "git update-ref refs/heads/feat/y deadbeef",
             &ctx(&p, "feat/x")
         )
         .is_empty());

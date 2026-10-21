@@ -615,6 +615,19 @@ fn under_ignoring_case(path: &Path, prefix: &Path) -> bool {
     })
 }
 
+/// `path` lies under `dir` and a component below it holds a non-ASCII byte.
+/// A filesystem such as APFS may fold it onto a protected git name
+/// (`remoteſ` names the same entry as `remotes`), and a component that does
+/// not exist yet cannot be checked against the disk, so the path is judged
+/// protected, failing closed (TSK-381 SF-3).
+fn non_ascii_below(path: &Path, dir: &Path) -> bool {
+    under_ignoring_case(path, dir)
+        && path
+            .components()
+            .skip(dir.components().count())
+            .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
+}
+
 /// `a` and `b` name one path, components compared as [`under_ignoring_case`]
 /// compares them.
 fn same_ignoring_case(a: &Path, b: &Path) -> bool {
@@ -661,6 +674,9 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         };
         if !under_ignoring_case(&target, &common) {
             continue;
+        }
+        if non_ascii_below(&target, &common) {
+            return true;
         }
         for (name, directory) in &paths {
             let Ok(protected) = normalized(&common.join(name), resolve) else {
@@ -797,6 +813,9 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("HEAD", false),
         ("hooks", true),
         ("refs/remotes", true),
+        // A direct write of a loose branch ref moves it without a ref
+        // transaction, so no hook sees it (TSK-381 review).
+        ("refs/heads", true),
         ("packed-refs", false),
         ("config", false),
     ] {
@@ -1014,6 +1033,17 @@ pub(crate) fn repository_enforcement_target(
             } else {
                 target == *path
             };
+            let base = || {
+                entry.resolved_base[reading]
+                    .get_or_init(|| {
+                        normalized(&entry.base, resolve).map_err(|error| error.to_string())
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)
+            };
+            if entry.git_owned && non_ascii_below(&target, base()?) {
+                return Ok(true);
+            }
             if same
                 || (entry.directory && under(&target, path))
                 || (ancestors
