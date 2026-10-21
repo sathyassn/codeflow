@@ -43,10 +43,13 @@ A record MAC under a sandbox `denyRead` key was considered and is deferred in
 this repair. It would require a separate protected writer and key boundary.
 The backstop is a non-selective landing gate: default full runs execute every
 target, and both integration modes request all targets and refuse incomplete
-runs. The existing no-target exception remains: both integration modes land
-with a loud warning that no tests ran and the merge is not test-verified. An
-empty gate has nothing to skip, so forged selection evidence cannot conceal a
-failing target there. This preserves the 3.1 workspace landing behavior.
+runs. The existing exception applies when no target is eligible to run in full
+mode: no config and no detectable stack, an empty target list, or declared
+targets that are all disabled or have no full mode. Both integration modes then
+land with the loud warning
+`WARNING: no tests ran; this merge is NOT test-verified`. No target was skipped
+using candidate evidence in this case.
+This preserves the 3.1 workspace landing behavior.
 
 ## Consequences
 

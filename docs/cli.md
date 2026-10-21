@@ -480,9 +480,10 @@ already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
 Both modes advance the local target only after the gate and the adopted
-release structure check pass. They refuse incomplete or empty gates and refuse
-if the source or target moved while testing. A conflict or failed gate leaves the target unchanged and
-restores the original checkout. The command does not push; the operator or
+release structure check pass. They refuse failed, skipped or incomplete gates; a
+repository with no gate targets lands with the loud not-test-verified warning.
+They also refuse if the source or target moved while testing. A conflict or
+failed gate leaves the target unchanged and restores the original checkout. The command does not push; the operator or
 primary handles the remote landing through the project's PR flow.
 
 - It runs under a gate-context token that the git hooks and git-guard verify,

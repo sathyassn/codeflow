@@ -47,9 +47,11 @@ The default full gate and both `codeflow integrate` modes execute every target.
 An explicit `--since` can select a local full run; any skip leaves that run
 incomplete and unusable as landing evidence.
 Integration refuses failures, skips and incomplete runs. Its existing exception
-is a repository with no gate targets: both modes land with the loud warning
-`WARNING: no tests ran; this merge is NOT test-verified`. An empty gate has no
-target whose execution could be skipped using a forged record. For an explicit landing
+applies when no target is eligible to run in full mode: no config and no
+detectable stack, an empty target list, or declared targets that are all disabled
+or have no full mode. Both integration modes then land with the loud warning
+`WARNING: no tests ran; this merge is NOT test-verified`. No target was skipped
+using candidate evidence in this case. For an explicit landing
 command, use `codeflow test --mode full --all` and require a complete run.
 `--only` remains a partial run for split CI jobs and cannot be landing evidence
 on its own. Summaries show executed and skipped counts and say "not complete"
