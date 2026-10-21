@@ -7631,7 +7631,7 @@ fn check_git(
             || judged
                 .cases
                 .iter()
-                .any(|(branch, rules, _)| rules.branch_is_protected(branch));
+                .any(|(branch, rules, _)| rules.branch_is_protected_any_case(branch));
         if exposed {
             let strictest = judged
                 .cases
@@ -8383,7 +8383,7 @@ fn assumed_protected_branch(policy: &GitPolicy) -> Option<String> {
         .protected_branches
         .iter()
         .map(|p| p.replace(['*', '?'], "x"))
-        .find(|b| policy.branch_is_protected(b))
+        .find(|b| policy.branch_is_protected_any_case(b))
 }
 
 /// An owned [`Retarget`].
@@ -8584,7 +8584,7 @@ fn judge_git_sub(
     match sub {
         "commit" => {
             if policy.commit_to_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && !ctx.integrate_token
             {
                 out.push(Violation::new(
@@ -8602,7 +8602,7 @@ fn judge_git_sub(
             // one sanctioned local path; the human override is NOT honored here
             // (the Claude layer never trusts a claim of humanity).
             if policy.merge_to_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && !ctx.integrate_token
             {
                 out.push(Violation::new(
@@ -8618,7 +8618,9 @@ fn judge_git_sub(
             // `git rebase <upstream> <branch>` checks `<branch>` out first and
             // rewrites it, not the branch the command starts on.
             let branch = rebase_branch(rest).unwrap_or(branch);
-            if policy.hard_reset_protected.is_active() && policy.branch_is_protected(branch) {
+            if policy.hard_reset_protected.is_active()
+                && policy.branch_is_protected_any_case(branch)
+            {
                 out.push(Violation::new(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
@@ -8629,7 +8631,7 @@ fn judge_git_sub(
         }
         "reset" => {
             if policy.hard_reset_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && parse_options(rest, &GIT_RESET_OPTIONS).has_long("--hard")
             {
                 out.push(Violation::new(
@@ -8644,7 +8646,7 @@ fn judge_git_sub(
             if requests_branch_delete(rest) && policy.delete_protected.is_active() {
                 for target in branch_operands(rest)
                     .into_iter()
-                    .filter(|t| policy.branch_is_protected(t))
+                    .filter(|t| policy.branch_is_protected_any_case(t))
                 {
                     out.push(Violation::new(
                         "git.delete_protected",
@@ -8654,14 +8656,14 @@ fn judge_git_sub(
                     ));
                 }
             } else if let Some(target) = forced_branch_target(sub, rest) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     push_protected_move(sub, target, ctx, out);
                 }
             }
         }
         "checkout" | "switch" | "worktree" => {
             if let Some(target) = forced_branch_target(sub, rest) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     push_protected_move(sub, target, ctx, out);
                 }
             }
@@ -9393,7 +9395,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
     }
 
     if let Some(branch) = strip_ref_prefix(refname, "refs/heads/") {
-        if !policy.branch_is_protected(branch) {
+        if !policy.branch_is_protected_any_case(branch) {
             return;
         }
         if deleting {
@@ -9423,7 +9425,9 @@ fn protected_component_of_remote_ref<'a>(refname: &'a str, policy: &GitPolicy) -
     // rest is `<remote>/<branch...>`; the branch is everything after the first
     // path component.
     let (_remote, branch) = rest.split_once('/')?;
-    policy.branch_is_protected(branch).then_some(branch)
+    policy
+        .branch_is_protected_any_case(branch)
+        .then_some(branch)
 }
 
 /// Guard `git symbolic-ref` writes (`git symbolic-ref <name> <target>`) that
@@ -9444,7 +9448,7 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
     if positionals.len() >= 2 {
         let touches_protected = positionals.iter().any(|p| {
             let name = strip_ref_prefix(p, "refs/heads/").unwrap_or(p);
-            policy.branch_is_protected(name)
+            policy.branch_is_protected_any_case(name)
         });
         if touches_protected {
             out.push(Violation::new(
@@ -9761,7 +9765,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
             out.push(no_verify_violation("push", "all branches"));
         } else {
             for target in push.updates.iter().chain(push.deletions.iter()) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     out.push(no_verify_violation("push", target));
                     break;
                 }
@@ -9808,7 +9812,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     }
 
     for target in &push.deletions {
-        if policy.delete_protected.is_active() && policy.branch_is_protected(target) {
+        if policy.delete_protected.is_active() && policy.branch_is_protected_any_case(target) {
             out.push(Violation::new(
                 "git.delete_protected",
                 policy.delete_protected,
@@ -9819,7 +9823,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     }
 
     for target in &push.updates {
-        let protected = policy.branch_is_protected(target);
+        let protected = policy.branch_is_protected_any_case(target);
         if push.force {
             if protected {
                 if policy.force_push_protected.is_active() {
@@ -9957,7 +9961,7 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
     let base = ctx.pr_base_lookup.and_then(|lookup| lookup(target));
     let provably_unprotected = base
         .as_deref()
-        .is_some_and(|b| !policy.branch_is_protected(b));
+        .is_some_and(|b| !policy.branch_is_protected_any_case(b));
     if !provably_unprotected {
         out.push(Violation::new(
             "git.pr_merge_to_protected",
@@ -10954,7 +10958,7 @@ fn maybe_no_verify(
     policy: &GitPolicy,
     out: &mut Vec<Violation>,
 ) {
-    if has_no_verify(sub, args) && policy.branch_is_protected(branch) {
+    if has_no_verify(sub, args) && policy.branch_is_protected_any_case(branch) {
         out.push(no_verify_violation(sub, branch));
     }
 }
@@ -16594,6 +16598,33 @@ mod tests {
         assert_eq!(strip_ref_prefix("REFS/heads/x", "refs/heads/"), Some("x"));
         assert_eq!(strip_ref_prefix("refs/head", "refs/heads/"), None);
         assert_eq!(strip_ref_prefix("ref\u{e9}/heads/x", "refs/heads/"), None);
+    }
+
+    /// TSK-381 round 3: on a case-insensitive filesystem `refs/heads/MAIN`
+    /// is the loose ref of `main`, so a case-different protected branch
+    /// name is refused, in a local and in a remote-tracking ref; an
+    /// unrelated branch stays allowed.
+    #[test]
+    fn test_update_ref_case_different_protected_branch_is_refused() {
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/MAIN deadbeef",
+            "git update-ref refs/heads/Main deadbeef",
+            "git update-ref refs/remotes/origin/MAIN deadbeef",
+            "git branch -f MAIN HEAD~1",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
+        }
+        assert!(has_rule(
+            &evaluate("git update-ref -d refs/heads/Main", &ctx(&p, "feat/x")),
+            "git.delete_protected"
+        ));
+        assert!(evaluate(
+            "git update-ref refs/heads/feat/Main deadbeef",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     #[test]

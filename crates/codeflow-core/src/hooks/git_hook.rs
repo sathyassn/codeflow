@@ -793,7 +793,7 @@ pub fn reference_transaction(
         let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
             continue;
         };
-        if !policy.branch_is_protected(branch) {
+        if !policy.branch_is_protected_any_case(branch) {
             continue; // feature branches stay fully free (rebase, force, etc.)
         }
         // Storage housekeeping (`git pack-refs`, run by `git gc`) rewrites
@@ -2655,6 +2655,33 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// TSK-381 round 3: a case-different protected branch name is the same
+    /// loose ref on a case-insensitive filesystem, so the backstop blocks
+    /// it; an unrelated branch stays free.
+    #[test]
+    fn test_reference_transaction_blocks_a_case_different_protected_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["refs/heads/MAIN", "refs/heads/Main"] {
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
+        let stdin = format!("{ZERO40} {ahead} refs/heads/feat/Main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
     #[test]

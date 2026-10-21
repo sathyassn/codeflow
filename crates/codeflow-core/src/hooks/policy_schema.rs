@@ -153,7 +153,7 @@ pub const SCHEMA: [KeySpec; 70] = [
         kind: KeyKind::StringList,
         valid: "an array of branch names or glob patterns (e.g. release/*)",
         purpose: "Branches every enforcement plane treats as protected.",
-        notes: "Globs use the `glob` crate's syntax; read by all four planes.",
+        notes: "Globs use the `glob` crate's syntax; read by all four planes. git-guard and the reference-transaction hook match a name and the list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so on a case-sensitive filesystem a distinct branch such as `Main` is refused there too while `main` is protected.",
     },
     KeySpec {
         path: "git.commit_to_protected",

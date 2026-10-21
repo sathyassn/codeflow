@@ -589,6 +589,29 @@ impl GitPolicy {
         is_on_protected_branch(branch, &sec)
     }
 
+    /// [`GitPolicy::branch_is_protected`] with ASCII case folded on both the
+    /// name and the protected list, for git-guard and the
+    /// reference-transaction hook, which judge names that become local refs.
+    /// On a case-insensitive filesystem `refs/heads/MAIN` is the same loose
+    /// ref as `refs/heads/main`, so those guards fail closed: on a
+    /// case-sensitive filesystem a distinct `Main` is refused too while
+    /// `main` is protected.
+    #[must_use]
+    pub fn branch_is_protected_any_case(&self, branch: &str) -> bool {
+        if self.branch_is_protected(branch) {
+            return true;
+        }
+        let sec = SecurityPolicy {
+            protected_branches: self
+                .protected_branches
+                .iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect(),
+            ..SecurityPolicy::defaults()
+        };
+        is_on_protected_branch(&branch.to_ascii_lowercase(), &sec)
+    }
+
     /// [`GitPolicy::branch_is_protected`] for an exact name. A name that is
     /// not valid UTF-8 cannot be matched against a glob, so it is protected.
     #[must_use]
@@ -1330,6 +1353,25 @@ mod tests {
         assert!(g.branch_is_protected("main"));
         assert!(g.branch_is_protected("release/v2.0"));
         assert!(!g.branch_is_protected("feat/release-notes"));
+    }
+
+    /// TSK-381 round 3: the guards fold ASCII case on both sides and fail
+    /// closed; an unrelated branch stays free.
+    #[test]
+    fn test_branch_is_protected_any_case_folds_names_and_globs() {
+        let g = GitPolicy {
+            protected_branches: vec!["main".into(), "Release/*".into()],
+            ..GitPolicy::default()
+        };
+        for name in ["main", "MAIN", "Main", "release/v2", "RELEASE/v2"] {
+            assert!(g.branch_is_protected_any_case(name), "{name}");
+        }
+        assert!(
+            !g.branch_is_protected("MAIN"),
+            "the exact check is unchanged"
+        );
+        assert!(!g.branch_is_protected_any_case("feat/Main"));
+        assert!(!g.branch_is_protected_any_case("mainline"));
     }
 
     #[test]

@@ -16,7 +16,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
-| `git.protected_branches` | string list | `["main","master"]` | an array of branch names or glob patterns (e.g. release/*) | Branches every enforcement plane treats as protected. | Globs use the `glob` crate's syntax; read by all four planes. |
+| `git.protected_branches` | string list | `["main","master"]` | an array of branch names or glob patterns (e.g. release/*) | Branches every enforcement plane treats as protected. | Globs use the `glob` crate's syntax; read by all four planes. git-guard and the reference-transaction hook match a name and the list with ASCII case folded, because a case-insensitive filesystem stores `refs/heads/MAIN` as the loose ref of `main`; this fails closed, so on a case-sensitive filesystem a distinct branch such as `Main` is refused there too while `main` is protected. |
 | `git.commit_to_protected` | Level | `block` | off \| warn \| allow \| block | A commit made directly on a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.push_to_protected` | Level | `block` | off \| warn \| allow \| block | A push to a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1 for a fast-forward push; force pushes and deletions stay refused. |
 | `git.force_push_protected` | Level | `block` | off \| warn \| allow \| block | A force-push to a protected branch. |  |

@@ -599,6 +599,28 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
     })
 }
 
+/// `path` is `prefix` or lies below it, each component compared without
+/// regard to ASCII case. Git's administrative names are lower case, and on a
+/// case-insensitive filesystem a spelling such as `.git/Refs/Remotes` that
+/// does not exist yet, which [`normalize_case`] cannot correct, still
+/// creates the protected directory.
+fn under_ignoring_case(path: &Path, prefix: &Path) -> bool {
+    let mut parts = path.components();
+    prefix.components().all(|want| {
+        parts.next().is_some_and(|got| {
+            got.as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(want.as_os_str().as_encoded_bytes())
+        })
+    })
+}
+
+/// `a` and `b` name one path, components compared as [`under_ignoring_case`]
+/// compares them.
+fn same_ignoring_case(a: &Path, b: &Path) -> bool {
+    a.components().count() == b.components().count() && under_ignoring_case(a, b)
+}
+
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
     if global_git_config_target(target, root) {
@@ -637,16 +659,16 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         ) else {
             continue;
         };
-        if !target.starts_with(&common) {
+        if !under_ignoring_case(&target, &common) {
             continue;
         }
         for (name, directory) in &paths {
             let Ok(protected) = normalized(&common.join(name), resolve) else {
                 continue;
             };
-            if target == protected
-                || (*directory && target.starts_with(&protected))
-                || (ancestors && protected.starts_with(&target))
+            if same_ignoring_case(&target, &protected)
+                || (*directory && under_ignoring_case(&target, &protected))
+                || (ancestors && under_ignoring_case(&protected, &target))
             {
                 return true;
             }
@@ -794,6 +816,9 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
     directory: bool,
+    /// Under the git administrative directory, so compared without ASCII
+    /// case ([`under_ignoring_case`]).
+    git_owned: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
@@ -947,6 +972,7 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
             .map(|(path, directory, base)| ProtectedPath {
                 path: both(path),
                 directory: *directory,
+                git_owned: path.starts_with(repo.commondir()),
                 base: base.clone(),
                 resolved_base: Default::default(),
             })
@@ -976,11 +1002,24 @@ pub(crate) fn repository_enforcement_target(
         let target = normalized(target, resolve).map_err(|error| error.to_string())?;
         for entry in protected.iter() {
             let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
-            if target == *path
-                || (entry.directory && target.starts_with(path))
+            let under = |inner: &Path, outer: &Path| {
+                if entry.git_owned {
+                    under_ignoring_case(inner, outer)
+                } else {
+                    inner.starts_with(outer)
+                }
+            };
+            let same = if entry.git_owned {
+                same_ignoring_case(&target, path)
+            } else {
+                target == *path
+            };
+            if same
+                || (entry.directory && under(&target, path))
                 || (ancestors
-                    && path.starts_with(&target)
-                    && target.starts_with(
+                    && under(path, &target)
+                    && under(
+                        &target,
                         entry.resolved_base[reading]
                             .get_or_init(|| {
                                 normalized(&entry.base, resolve).map_err(|error| error.to_string())
