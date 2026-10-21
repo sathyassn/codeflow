@@ -561,10 +561,12 @@ checked, so a symlink does not remove the target owner's protection.
   Command-valued options still require a readable body; a missing value or
   ambiguous spelling names the option and its readable route. External Git
   commands resolve as `git-<name>` on PATH or Git's exec path and receive the
-  same checks as other programs. A config read outside a repository checks
-  its pager at the known starting directory. A name found nowhere, an unread command
+  same checks as other programs. When discovery proves the starting directory
+  is outside any repository, configured callbacks are checked there. Ordinary
+  status, config writes and cleanup do not require a checkout merely because
+  global filters are configured. A name found nowhere, an unread command
   value or an unresolved checkout refuses under active hook integrity.
-  This includes an unresolved target for `git status`, which can
+  This includes an explicitly unresolved target for `git status`, which can
   run a configured filesystem monitor. Each body is judged from the checkout
   or submodule where Git runs it, including Git commands nested in the body.
   A body that only names a script path remains unread; these checks do not inspect that

@@ -1536,6 +1536,81 @@ fn repair3_runner_sources_changed_earlier_on_the_line() {
 }
 
 #[test]
+fn runner_sources_preserve_spaces_and_case_in_redirects() {
+    let temp = tempfile::Builder::new()
+        .prefix("Mixed Case ")
+        .tempdir()
+        .unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    enforced_repo(&root);
+    let f = Fixture {
+        temp,
+        linked: root.join(".worktrees/w"),
+        root,
+    };
+    let linked = f.root.join(".worktrees/Mixed Case");
+    git(
+        &f.root,
+        &["worktree", "add", "-b", "task/spaced", &shell_path(&linked)],
+    );
+    let repo = git2::Repository::open(&linked).unwrap();
+    let state = repo.path().join("rebase-merge");
+    std::fs::create_dir(&state).unwrap();
+    let todo = state.join("git-rebase-todo");
+    std::fs::write(&todo, "exec true\n").unwrap();
+    for hook in ["exec-guard", "git-guard"] {
+        let command = format!(
+            "printf 'exec rm -rf .claude\\n' > '{}'; git rebase --continue",
+            shell_path(&todo)
+        );
+        let out = f.command(&linked, hook, &command);
+        assert!(refused(&out), "{hook}: {out:?}");
+        let ordinary = f.command(
+            &linked,
+            hook,
+            "printf note > 'Mixed Notes'; git rebase --continue",
+        );
+        assert_eq!(ordinary.status.code(), Some(0), "{hook}: {ordinary:?}");
+    }
+}
+
+#[test]
+fn runner_callbacks_outside_checkout_keep_known_starting_directory() {
+    let f = Fixture::new();
+    let global = f.temp.path().join("global.conf");
+    std::fs::write(&global, "[filter \"lfs\"]\n clean = git-lfs clean -- %f\n smudge = git-lfs smudge -- %f\n process = git-lfs filter-process\n").unwrap();
+    for hook in ["exec-guard", "git-guard"] {
+        let run = |command: &str| {
+            run_with_stdin(
+                codeflow()
+                    .args(["hook", hook, "--contract", "3"])
+                    .current_dir(f.temp.path())
+                    .env("HOME", f.temp.path())
+                    .env("GIT_CONFIG_GLOBAL", &global),
+                &guard_payload(command, f.temp.path()),
+            )
+        };
+        for command in ["git -C . status", "git config --file config user.name x"] {
+            let out = run(command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        if hook == "exec-guard" {
+            let out = run("git clean -fdx -- build/");
+            assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+        }
+        let out = run("git --git-dir=missing status");
+        assert_eq!(out.status.code(), Some(2), "{hook}: {out:?}");
+        let command = format!(
+            "git -c core.fsmonitor='rm -rf {}' status",
+            shell_path(&f.root.join(".claude"))
+        );
+        let out = run(&command);
+        assert!(refused(&out), "{hook}: {out:?}");
+    }
+}
+
+#[test]
 fn repair3_runner_inherits_command_configuration() {
     let f = Fixture::new();
     git(&f.root, &["config", "alias.hidden", "status"]);

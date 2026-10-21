@@ -1055,11 +1055,13 @@ fn note_writes(segment: &str, args: &[String], dirs: &[PathBuf], earlier: &mut V
         return;
     }
     let redirects = redirect_writes(segment);
-    let redirected = super::words_of(&redirects.targets);
-    let targets = if redirected.is_empty() {
+    // redirect_writes already removes shell quoting. These are filesystem
+    // paths, not case-insensitive enforcement names or whitespace-delimited
+    // words: folding either loses writes on case-sensitive filesystems.
+    let targets = if redirects.targets.is_empty() {
         args
     } else {
-        &redirected
+        &redirects.targets
     };
     for target in targets
         .iter()
@@ -1071,17 +1073,15 @@ fn note_writes(segment: &str, args: &[String], dirs: &[PathBuf], earlier: &mut V
     }
 }
 
-// A config read also runs outside repositories. Its pager starts at the
-// invocation directory; an explicit or unread Git location is not this case.
-fn config_without_checkout(
+// A known directory with no enclosing repository is distinct from unreadable
+// discovery or an explicit unresolved Git location. Global callbacks still
+// get checked from that directory; their mere presence does not require a
+// checkout (for example an installed LFS filter during a config write).
+fn callbacks_without_checkout(
     args: &[String],
     at: &Path,
     env: &crate::security::git_config::Environment,
 ) -> Result<bool, String> {
-    if !git_subcommand(args).is_some_and(|(verb, rest)| verb == "config" && config_only_reads(rest))
-    {
-        return Ok(false);
-    }
     let parsed = checked(globals(args)?, &GLOBAL_OPTIONS)?;
     if ["--bare", "--git-dir", "--work-tree", "--namespace"]
         .iter()
@@ -1102,7 +1102,7 @@ fn callback_directories(
     env: &crate::security::git_config::Environment,
 ) -> Result<Vec<PathBuf>, String> {
     let start = starting_directory(args, at)?;
-    if config_without_checkout(args, &start, env)? {
+    if callbacks_without_checkout(args, &start, env)? {
         return Ok(vec![start]);
     }
     let repo = checkout(args, at, env)?;
