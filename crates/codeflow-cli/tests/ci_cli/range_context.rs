@@ -27,6 +27,8 @@ fn ci(f: &Line, args: &[&str], env: Option<(&str, &str)>) -> Output {
             "CI_MERGE_REQUEST_DIFF_BASE_SHA" => {
                 command.env("CI_MERGE_REQUEST_DIFF_BASE_SHA", value)
             }
+            "GITHUB_BASE_REF" => command.env("GITHUB_BASE_REF", value),
+            "CODEFLOW_DEFAULT_BRANCH" => command.env("CODEFLOW_DEFAULT_BRANCH", value),
             _ => panic!("unsupported fixture CI variable: {key}"),
         };
     }
@@ -1055,4 +1057,199 @@ fn standalone_task_does_not_trust_decoy_lines_or_another_epic() {
         let fallback_range = format!("range {}..", &main[..8]);
         assert!(text.contains(&fallback_range), "{case}: {text}");
     }
+}
+
+/// TSK-398: a local branch named `origin/main` (`refs/heads/origin/main`)
+/// at an author commit never stands in for the remote-tracking
+/// `refs/remotes/origin/main`, whichever source names the base branch. The
+/// shadowed run gets the clean run's verdict: the same range base, and a
+/// local-only line still never binds.
+#[test]
+fn local_origin_main_branch_never_replaces_the_remote_tracking_base() {
+    for source in [
+        None,
+        Some(("GITHUB_BASE_REF", "main")),
+        Some(("CODEFLOW_DEFAULT_BRANCH", "main")),
+    ] {
+        let (f, tip) = Line::standalone_on_remote_line();
+        f.git(&["push", "-q", "origin", &format!(":{LINE}")]);
+        let main = f.git(&["rev-parse", "refs/remotes/origin/main"]);
+        let range = format!("range {}..", &main[..8]);
+        let clean = ci(&f, &[], source);
+        f.git(&["branch", "origin/main", &tip]);
+        assert_eq!(f.git(&["rev-parse", "refs/heads/origin/main"]), tip);
+        let shadowed = ci(&f, &[], source);
+        let (clean_text, text) = (output(&clean), output(&shadowed));
+        assert!(clean_text.contains(&range), "{source:?}: {clean_text}");
+        assert!(text.contains(&range), "{source:?}: {text}");
+        assert!(
+            !text.contains(&format!("range {}..", &tip[..8])),
+            "{source:?}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("acceptance target '{LINE}'")),
+            "{source:?}: {text}"
+        );
+        if source.is_none() {
+            assert!(
+                text.contains("local-only line never counts"),
+                "{source:?}: {text}"
+            );
+        }
+        assert_eq!(
+            shadowed.status.code(),
+            clean.status.code(),
+            "{source:?}: clean {clean_text}\nshadowed {text}"
+        );
+    }
+}
+
+/// A pushed `main` with later work, and an undeclared branch with one
+/// commit on it. Returns the fixture and the protected tip.
+fn feature_on_pushed_main() -> (Line, String) {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.write("later.md", "Later main work.\n");
+    f.commit("docs: later main work");
+    f.git(&["push", "-q", "origin", "main"]);
+    let main = f.git(&["rev-parse", "refs/heads/main"]);
+    f.git(&["switch", "-qc", "fix/feature"]);
+    f.write("src/lib.rs", "pub fn feature() {}\n");
+    f.commit("fix: add the feature");
+    (f, main)
+}
+
+/// TSK-398 review F2: with the exact `refs/remotes/origin/main` absent, a
+/// local branch or tag whose full name is `refs/remotes/origin/main` never
+/// answers for it; the base stays the local `refs/heads/main`.
+#[test]
+fn a_ref_named_like_the_tracking_ref_never_answers_for_an_absent_one() {
+    for shadow in ["branch", "tag"] {
+        let (f, main) = feature_on_pushed_main();
+        f.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        let tip = f.git(&["rev-parse", "HEAD"]);
+        if shadow == "branch" {
+            f.git(&["branch", "refs/remotes/origin/main", &tip]);
+            assert_eq!(
+                f.git(&["rev-parse", "refs/heads/refs/remotes/origin/main"]),
+                tip
+            );
+        } else {
+            f.git(&["tag", "refs/remotes/origin/main", &tip]);
+            assert_eq!(
+                f.git(&["rev-parse", "refs/tags/refs/remotes/origin/main"]),
+                tip
+            );
+        }
+        let text = output(&ci(&f, &[], None));
+        assert!(
+            text.contains(&format!("range {}..", &main[..8])),
+            "{shadow}: {text}"
+        );
+        assert!(
+            !text.contains(&format!("range {}..", &tip[..8])),
+            "{shadow}: {text}"
+        );
+    }
+}
+
+/// TSK-398 review N3: a base variable carrying revision syntax is ignored
+/// with a warning, so the base is the protected tip, never a walk from it.
+#[test]
+fn base_variables_with_revision_syntax_are_ignored() {
+    for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
+        for value in ["main~1", "main@{0}"] {
+            let (f, main) = feature_on_pushed_main();
+            let text = output(&ci(&f, &[], Some((key, value))));
+            assert!(
+                text.contains(&format!("{key} '{value}' is not a valid branch name")),
+                "{key}={value}: {text}"
+            );
+            assert!(
+                text.contains(&format!("range {}..", &main[..8])),
+                "{key}={value}: {text}"
+            );
+            assert!(
+                !text.contains(&format!("acceptance target '{value}'")),
+                "{key}={value}: {text}"
+            );
+        }
+    }
+}
+
+/// Codex review F2 and F3 fixture: target tip A on its own line, a malformed
+/// commit B on `origin/main`, and the change C on B. Returns (f, A, B).
+fn malformed_main_beside_a_target() -> (Line, String, String) {
+    let f = Line::new();
+    f.git(&["switch", "-q", "main"]);
+    f.git(&["switch", "-qc", "release-line"]);
+    f.write("release.md", "Release work.\n");
+    let target = f.commit("docs: add release work");
+    f.git(&["switch", "-q", "main"]);
+    f.write("main.md", "Main work.\n");
+    let malformed = f.commit("invalid message");
+    f.git(&["update-ref", "refs/remotes/origin/main", &malformed]);
+    f.git(&["switch", "-qc", "fix/review"]);
+    f.write("src/lib.rs", "pub fn review() {}\n");
+    f.commit("fix: add the review change");
+    (f, target, malformed)
+}
+
+/// Codex review F2: `release@2026`, `deadbeef` and `@` are valid branch names, so
+/// CI metadata naming them selects that target's tip and acceptance target,
+/// and the malformed commit between the target and `main` is judged.
+#[test]
+fn valid_branch_names_with_at_or_hex_select_their_own_target() {
+    for name in ["release@2026", "deadbeef", "@"] {
+        for key in ["GITHUB_BASE_REF", "CODEFLOW_DEFAULT_BRANCH"] {
+            let (f, target, malformed) = malformed_main_beside_a_target();
+            f.git(&[
+                "update-ref",
+                &format!("refs/remotes/origin/{name}"),
+                &target,
+            ]);
+            let out = ci(&f, &[], Some((key, name)));
+            let text = output(&out);
+            assert!(
+                text.contains(&format!("range {}..", &target[..8])),
+                "{key}={name}: {text}"
+            );
+            assert!(
+                text.contains(&format!("commit {}", &malformed[..8]))
+                    && text.contains("git.commit_format"),
+                "{key}={name}: {text}"
+            );
+            assert!(!text.contains("is not a valid branch name"), "{text}");
+            if key == "GITHUB_BASE_REF" {
+                assert!(
+                    text.contains(&format!("acceptance target '{name}' (CI target metadata)")),
+                    "{key}={name}: {text}"
+                );
+            }
+            assert_eq!(out.status.code(), Some(1), "{key}={name}: {text}");
+        }
+    }
+}
+
+/// Codex review F3: a full `refs/remotes/upstream/main` is read exactly as
+/// written, never rewritten to origin, so the fork's own tip bounds the range.
+#[test]
+fn a_full_upstream_ref_is_read_exactly_as_written() {
+    let (f, upstream, malformed) = malformed_main_beside_a_target();
+    f.git(&["update-ref", "refs/remotes/upstream/main", &upstream]);
+    let out = ci(
+        &f,
+        &[],
+        Some(("CODEFLOW_DEFAULT_BRANCH", "refs/remotes/upstream/main")),
+    );
+    let text = output(&out);
+    assert!(
+        text.contains(&format!("range {}..", &upstream[..8])),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("commit {}", &malformed[..8])) && text.contains("git.commit_format"),
+        "{text}"
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
 }

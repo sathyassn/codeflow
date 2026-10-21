@@ -1118,7 +1118,9 @@ fn epic_line_push(
         ));
     };
     // A default target that cannot be read is reported, never read as none.
-    let default_target = crate::workgraph::default_work_target(root)
+    // Its full ref is read: a short `origin/main` peels a local branch or
+    // tag of that name before the remote-tracking ref.
+    let default_target = crate::workgraph::default_work_target_ref(root)
         .map_err(|error| format!("the default target cannot be read: {error}"));
     let target_revision = match &default_target {
         Ok(target) => target.as_deref(),
@@ -1150,7 +1152,12 @@ fn epic_line_push(
                     .map(|commit| commit.id())
                     .map_err(|e| format!("{revision}: {e}"))
             };
-            history::merge_base(repo, commit(&target)?, commit(&pushed.local_sha)?)
+            let target_tip = repo
+                .find_reference(&target)
+                .and_then(|reference| reference.peel_to_commit())
+                .map(|commit| commit.id())
+                .map_err(|e| format!("{target}: {e}"))?;
+            history::merge_base(repo, target_tip, commit(&pushed.local_sha)?)
                 .map_err(|e| e.to_string())?
                 .to_string()
         } else {
@@ -1185,7 +1192,7 @@ fn epic_line_push(
     let reset = if first_push {
         target
     } else {
-        format!("origin/{branch}")
+        format!("refs/remotes/origin/{branch}")
     };
     report.violations.push(Violation::always_blocking(
         "work.epic_line",

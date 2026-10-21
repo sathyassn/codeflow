@@ -1498,8 +1498,10 @@ fn range_base(
             if any {
                 known.push(format!("--glob={reference}"));
             }
-        } else if is_commit(root, &reference)? {
-            known.push(reference);
+        } else if let Some(tip) = rev_parse(root, &reference)? {
+            // The verified commit, never the name: a missing tracking ref
+            // would let `refs/heads/<reference>` answer for it.
+            known.push(tip);
         }
     }
     if known.is_empty() {
@@ -1999,7 +2001,12 @@ fn missing_git_answer(args: &[&str]) -> bool {
     }
 }
 
+/// The commit `rev` names. A full ref must exist exactly: when it does not,
+/// Git would match `refs/heads/<rev>` or `refs/tags/<rev>` instead.
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    if super::ci::is_full_ref(rev) && !super::ci::exact_ref_exists(root, rev)? {
+        return Ok(None);
+    }
     Ok(git(
         root,
         &[
