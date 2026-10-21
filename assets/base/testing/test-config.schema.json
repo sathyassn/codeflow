@@ -211,6 +211,74 @@
           "type": "boolean",
           "default": false,
           "description": "Run alone."
+        },
+        "input_class": {
+          "type": "string",
+          "enum": [
+            "content",
+            "history",
+            "remote",
+            "time",
+            "external"
+          ],
+          "description": "Only content targets with complete dependency evidence can be skipped; omitted or other classes always run."
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tools",
+            "environment",
+            "environment_complete",
+            "membership"
+          ],
+          "properties": {
+            "tools": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "description": "Tool identity probes as executable and arguments. Output is stored only as a digest."
+            },
+            "environment": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "audited_non_secret",
+                  "fingerprint",
+                  "sensitive",
+                  "unclassified"
+                ]
+              }
+            },
+            "environment_complete": {
+              "type": "boolean",
+              "description": "An audit confirms these are all relevant inherited and configured environment dependencies."
+            },
+            "membership": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Membership probe as executable and arguments, or an empty array when no test membership applies."
+            },
+            "covers_modes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "quick",
+                  "essential"
+                ]
+              },
+              "description": "The full execution covers these modes only when the exact command and all dependency evidence match."
+            }
+          }
         }
       },
       "additionalProperties": false

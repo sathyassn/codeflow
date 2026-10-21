@@ -5443,7 +5443,7 @@ fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
     );
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("quick targets passed on the working checkout (1 target(s)"),
+        err.contains("quick targets passed on the working checkout (executed 1; skipped 0;"),
         "{err}"
     );
     assert!(

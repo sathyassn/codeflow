@@ -12,6 +12,8 @@ use std::time::Instant;
 
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
+#[path = "test_gate_cli/evidence.rs"]
+mod evidence;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 use drain_pipe::{drain_lines, drain_pipe};
@@ -36,6 +38,8 @@ fn git(dir: &Path, args: &[&str]) {
 fn repo(config: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q", "-b", "main"]);
+    git(dir.path(), &["config", "user.name", "Test"]);
+    git(dir.path(), &["config", "user.email", "test@example.com"]);
     std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
     git(dir.path(), &["add", "README.md"]);
     git(dir.path(), &["commit", "-q", "-m", "chore: initial commit"]);
@@ -63,6 +67,59 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> Output {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).to_string()
+}
+
+#[test]
+fn default_comparison_names_the_task_line_and_explicit_controls_override_it() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[{"name":"check","runner":"custom","modes":{"quick":{"command":"echo checked"}}}]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        dir.path().join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nintegration_target: integration/test-line\n---\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: declare task line"]);
+    git(dir.path(), &["branch", "integration/test-line"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-selection"]);
+    let base = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let base = String::from_utf8(base.stdout).unwrap();
+    let output = run(dir.path(), home.path(), &["test", "--mode", "quick"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains(base.trim()), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("TSK-001 integration target integration/test-line"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--since", "HEAD"],
+    );
+    assert!(
+        stderr(&output).contains("explicit --since HEAD"),
+        "{}",
+        stderr(&output)
+    );
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--all"],
+    );
+    assert!(
+        stderr(&output).contains("--all: every target"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 /// What a spawned gate has written to stdout, read to the end on its own
@@ -160,7 +217,7 @@ fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
     assert_eq!(lines.len(), 3, "stdout: {stdout}");
     assert!(lines[0].starts_with("first: ok (exit 0, "), "{stdout}");
     assert!(lines[1].starts_with("second: ok (exit 0, "), "{stdout}");
-    assert_eq!(lines[2], "test gate: passed (2 target(s))");
+    assert_eq!(lines[2], "test gate: passed (executed 2; skipped 0)");
     assert!(
         !stdout.contains("[codeflow test]"),
         "start lines stay off stdout"
@@ -622,7 +679,27 @@ fn unavailable_gate_lock_refuses_before_start() {
 }
 
 #[cfg(unix)]
-fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
+struct SelectionHome {
+    path: std::path::PathBuf,
+    evidence: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl SelectionHome {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SelectionHome {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.evidence).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn selection_repo() -> (tempfile::TempDir, SelectionHome, String) {
     let dir = repo(
         r#"{"schema_version":"1.0","execution":{"parallel":true,"max_parallel":2,"run_everything":["crates/**","assets/**","Cargo.*",".codeflow/**"]},"targets":[
       {"name":"producer","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo producer >> runs"}}},
@@ -630,6 +707,24 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
       {"name":"present","runner":"custom","narrow":["crates/**"],"modes":{"full":{"command":"echo present >> runs"}}},
       {"name":"release","runner":"custom","narrow":["scripts/**"],"modes":{"full":{"command":"echo release >> runs"}}}] }"#,
     );
+    let path = dir.path().join(".codeflow/test-config.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for target in config["targets"].as_array_mut().unwrap() {
+        target["input_class"] = serde_json::json!("content");
+        target["evidence"] = serde_json::json!({"tools":{},"environment":{},"environment_complete":true,"membership":[],"covers_modes":["quick"]});
+    }
+    config["targets"][0]["outputs"] = serde_json::json!(["target/producer"]);
+    config["targets"][0]["modes"]["full"]["command"] =
+        serde_json::json!("echo producer >> runs; echo produced > target/producer");
+    for target in config["targets"].as_array_mut().unwrap() {
+        target["modes"]["quick"] = target["modes"]["full"].clone();
+    }
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    for folder in ["crates", "scripts"] {
+        std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+        std::fs::write(dir.path().join(folder).join("input"), "base").unwrap();
+    }
     std::fs::create_dir_all(dir.path().join("docs")).unwrap();
     std::fs::write(dir.path().join("docs/guide.md"), "base\n").unwrap();
     std::fs::write(dir.path().join(".gitignore"), "target/\nruns\n").unwrap();
@@ -641,8 +736,13 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
         .output()
         .unwrap();
     let base = String::from_utf8(base.stdout).unwrap().trim().to_owned();
-    let home = tempfile::tempdir().unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    git(dir.path(), &["branch", "fixture-base"]);
+    let output = evidence::run(
+        dir.path(),
+        &home,
+        &["integrate", "main", "--into", "fixture-base"],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     let artifact = err
@@ -653,7 +753,20 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
     assert_eq!(raw["clean"], true, "{raw}");
     assert_eq!(raw["complete"], true, "{raw}");
     std::fs::remove_file(dir.path().join("runs")).unwrap();
-    (dir, home, base)
+    let evidence = Path::new(artifact)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    (
+        dir,
+        SelectionHome {
+            path: home,
+            evidence,
+        },
+        base,
+    )
 }
 
 #[cfg(unix)]
@@ -661,12 +774,17 @@ fn selection_repo() -> (tempfile::TempDir, tempfile::TempDir, String) {
 fn selection_narrows_only_with_green_base_and_keeps_prerequisite_closure() {
     let (dir, home, base) = selection_repo();
     std::fs::write(dir.path().join("docs/guide.md"), "changed\n").unwrap();
-    let output = run(dir.path(), home.path(), &["test", "--since", &base]);
+    let output = evidence::run(
+        dir.path(),
+        home.path(),
+        &["test", "--mode", "quick", "--since", &base],
+    );
     assert!(output.status.success(), "{}", stderr(&output));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     assert_eq!(runs, "producer\ndocs\n", "{}", stderr(&output));
     assert!(stderr(&output).contains("skipped present"));
-    let output = run(dir.path(), home.path(), &["test", "--all"]);
+    let isolated = tempfile::tempdir().unwrap();
+    let output = evidence::run(dir.path(), isolated.path(), &["test", "--all"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("selected present"));
 }
@@ -708,11 +826,18 @@ fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_b
                 let mut config: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
                 config["execution"]["max_parallel"] = 1.into();
+                for target in config["targets"].as_array_mut().unwrap() {
+                    target["modes"]["quick"] = target["modes"]["full"].clone();
+                }
                 std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
             }
             _ => unreachable!(),
         }
-        let output = run(dir.path(), home.path(), &["test", "--since", &comparison]);
+        let output = evidence::run(
+            dir.path(),
+            home.path(),
+            &["test", "--mode", "quick", "--since", &comparison],
+        );
         assert!(output.status.success(), "{case}: {}", stderr(&output));
         let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
         for target in ["producer", "docs", "present", "release"] {
@@ -913,12 +1038,14 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
     );
     let err = stderr(&output);
     assert!(output.status.success(), "{err}");
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("executed 3; skipped 0; not full-gate evidence"));
     let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
     let mut ran: Vec<&str> = runs.lines().collect();
     ran.sort_unstable();
     assert_eq!(ran, ["docs", "producer", "release"], "{err}");
     assert!(
-        err.contains("skipped present: --only: the named targets and their prerequisites"),
+        err.contains("excluded present: --only: the named targets and their prerequisites"),
         "{err}"
     );
     let artifact = err
@@ -927,6 +1054,7 @@ fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
         .unwrap();
     let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
     assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(raw["selection"]["skipped"], serde_json::json!([]));
     assert_eq!(raw["passed"], true, "{raw}");
 
     // A limited run is never complete evidence, even when its names cover

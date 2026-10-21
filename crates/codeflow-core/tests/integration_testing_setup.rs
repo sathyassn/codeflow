@@ -344,6 +344,7 @@ fn representative_stack_templates_execute_and_produce_declared_artifacts() {
                 passed,
                 coverage,
                 results,
+                ..
             } => {
                 // The Rust and Go templates also carry a lint target, which
                 // calls the same fixture binary; the log is appended to.
@@ -397,6 +398,7 @@ fn single_target_templates_execute_their_full_commands() {
                 passed,
                 coverage,
                 results,
+                ..
             } => {
                 assert!(passed, "{template}: {results:?} {coverage:?}");
                 assert_eq!(coverage.is_empty(), !expected_coverage, "{template}");
@@ -444,6 +446,7 @@ fn monorepo_template_executes_each_target_in_its_declared_cwd() {
             passed,
             coverage,
             results,
+            ..
         } => {
             assert!(passed, "{results:?} {coverage:?}");
             assert_eq!(results.len(), 3);
