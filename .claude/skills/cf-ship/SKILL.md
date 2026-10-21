@@ -79,9 +79,9 @@ description: Land finished work (docs and capability updates, then a PR through 
    green, reviewed PR into an `integration/` branch no protected-branch policy
    covers (`main`, `master`, `.codeflow/policy.json` globs) without fast
    forward or with `codeflow integrate <branch> --into <target>`, once the
-   full gate is green on that exact candidate (a batch, or a standalone PR
-   as its own). A protected target, including a protected `integration/`
-   glob, is reported ready (on local evidence only as `pr-evidence.md`
+   non-selective `codeflow test --mode full --all` gate is complete and green
+   on that exact candidate (a batch, or a standalone PR as its own). A protected
+   target, including a protected `integration/` glob, is reported ready (on local evidence only as `pr-evidence.md`
    allows) and **merged by a human**, through the PR or
    `codeflow integrate`. An agent never merges into a protected target: no
    `gh pr merge` or by-hand merge there, never `gh pr merge --delete-branch`

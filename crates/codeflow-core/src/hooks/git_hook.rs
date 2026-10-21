@@ -1303,7 +1303,7 @@ pub fn run_push_targets(
     let outcome = match crate::absence::proven_absent(&cfg_path) {
         Ok(true) => {
             report.notes.push(crate::remedy::Finding::new(
-                "quick targets skipped: no .codeflow/test-config.json",
+                "quick targets skipped: no .codeflow/test-config.json (executed 0; skipped 0; not complete)",
                 crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
             ));
             return Vec::new();
@@ -1315,7 +1315,7 @@ pub fn run_push_targets(
         Ok(GateOutcome::NoTargets { reason }) => {
             report.notes.push(crate::remedy::Finding::new(
                 format!(
-                    "quick targets skipped: {reason} (the push set runs the targets with a \
+                    "quick targets skipped: {reason} (executed 0; skipped 0; not complete; the push set runs the targets with a \
                      `quick` mode)"
                 ),
                 crate::remedy::PUSH_TARGETS_NONE.remedy(),
@@ -1323,13 +1323,17 @@ pub fn run_push_targets(
             Vec::new()
         }
         Ok(GateOutcome::Completed {
-            results, passed, ..
+            results,
+            passed,
+            skipped,
+            ..
         }) => {
             if passed {
                 report.status.push(format!(
-                    "quick targets passed on the working checkout ({} target(s); untracked \
+                    "quick targets {} on the working checkout (executed {}; skipped {}{}; untracked \
                      files there can influence them, CI checks the pushed commit)",
-                    results.len()
+                    if results.is_empty() || !skipped.is_empty() { "not complete" } else { "passed" },
+                    results.len(), skipped.len(), if skipped.is_empty() && !results.is_empty() { "" } else { "; not complete" }
                 ));
             } else {
                 let failed: Vec<String> = results
@@ -1340,7 +1344,17 @@ pub fn run_push_targets(
                 report.violations.push(Violation::new(
                     "git.test_gate_on_push",
                     policy.test_gate_on_push,
-                    format!("push set failed for: {}", failed.join(", ")),
+                    format!(
+                        "push set failed for: {} (executed {}; skipped {}{})",
+                        failed.join(", "),
+                        results.len(),
+                        skipped.len(),
+                        if skipped.is_empty() {
+                            ""
+                        } else {
+                            "; not complete"
+                        }
+                    ),
                     crate::remedy::PUSH_SET_FAILED.remedy(),
                 ));
             }

@@ -22,16 +22,15 @@ pub struct TestArgs {
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
-    /// Treat "nothing to run" as a failure (exit non-zero) instead of a loud
-    /// no-op. For scripted/unattended callers — CI, the pipeline verify gate —
-    /// where a run that executed zero tests must NOT read as green. The default
-    /// (no `--strict`) keeps the loud-no-op-exit-0 behavior so the
-    /// bootstrap/early-setup path of a brand-new repo without tests is not
-    /// broken.
+    /// Exit non-zero when no targets executed or candidate evidence skipped a target.
+    /// Explicit --only and mode exclusions are not skips.
+    /// Use for scripted callers that require execution evidence.
     #[arg(long)]
     pub strict: bool,
 
     /// Compare the entire candidate delta with a recorded green base.
+    /// Without --since, full mode executes every target.
+    /// Default: the merge base of HEAD and the task's declared integration target.
     /// An unproven base conservatively runs every target.
     #[arg(long, conflicts_with = "all")]
     pub since: Option<String>,
@@ -124,6 +123,7 @@ pub fn run(args: &TestArgs) -> i32 {
                 "WARNING: codeflow test had nothing to run — {reason}.",
                 reason = crate::cmd::shown(&reason)
             );
+            eprintln!("test gate: executed 0; skipped 0; not complete");
             eprintln!("         No tests were executed. This is NOT a green test run.");
             eprintln!("         Configure .codeflow/test-config.json or add a");
             eprintln!("         supported stack (cargo, vitest/jest, go, pytest).");
@@ -142,6 +142,9 @@ pub fn run(args: &TestArgs) -> i32 {
             results,
             passed,
             coverage,
+            skipped,
+            evidence_skipped,
+            complete,
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
@@ -153,40 +156,43 @@ pub fn run(args: &TestArgs) -> i32 {
                     r.duration_ms
                 );
                 if !r.passed() {
-                    if let Some(err) = &r.error {
-                        eprintln!("  error: {err}", err = crate::cmd::shown(&err));
-                    }
-                    // Parsed failure summary FIRST — failing test IDs + file:line
-                    // + counts — so the signal sits above the raw scrollback.
-                    // Absent when no report artifact exists (raw output is then
-                    // the only detail).
-                    if let Some(report) = &r.report {
-                        print_failure_report(report);
-                    }
-                    let stdout = r.stdout.trim();
-                    if !stdout.is_empty() {
-                        // Relayed output: every line indented (TSK-388).
-                        eprintln!("  stdout:\n{}", codeflow_core::git::display_relay(stdout));
-                    }
-                    let stderr = r.stderr.trim();
-                    if !stderr.is_empty() {
-                        eprintln!("  stderr:\n{}", codeflow_core::git::display_relay(stderr));
-                    }
+                    print_failure(r);
                 }
             }
             print_coverage_report(&coverage);
-            if passed {
-                println!("test gate: passed ({} target(s))", results.len());
-                0
+            let verdict = if !passed {
+                "FAILED"
+            } else if results.is_empty() || !skipped.is_empty() {
+                "not complete"
             } else {
-                eprintln!("test gate: FAILED");
-                1
+                "passed"
+            };
+            println!(
+                "test gate: {verdict} (executed {}; skipped {}{})",
+                results.len(),
+                skipped.len(),
+                evidence_suffix(results.len(), skipped.len(), complete)
+            );
+            if passed && args.strict && (results.is_empty() || evidence_skipped > 0) {
+                2
+            } else {
+                i32::from(!passed)
             }
         }
         Err(e) => {
             eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
             1
         }
+    }
+}
+
+fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static str {
+    if executed == 0 || skipped != 0 {
+        "; not complete"
+    } else if complete {
+        ""
+    } else {
+        "; not full-gate evidence"
     }
 }
 
@@ -222,6 +228,31 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
         eprintln!("codeflow test: {note}");
     }
     Ok(Some(lock))
+}
+
+/// A failed target's detail: its error, the parsed failure summary FIRST
+/// (failing test IDs, `file:line`, counts) so the signal sits above the raw
+/// scrollback, then its captured output, every line indented (TSK-388).
+fn print_failure(r: &codeflow_core::testing::gate::GateTargetResult) {
+    if let Some(err) = &r.error {
+        eprintln!("  error: {err}", err = crate::cmd::shown(&err));
+    }
+    // Parsed failure summary FIRST — failing test IDs + file:line
+    // + counts — so the signal sits above the raw scrollback.
+    // Absent when no report artifact exists (raw output is then
+    // the only detail).
+    if let Some(report) = &r.report {
+        print_failure_report(report);
+    }
+    let stdout = r.stdout.trim();
+    if !stdout.is_empty() {
+        // Relayed output: every line indented (TSK-388).
+        eprintln!("  stdout:\n{}", codeflow_core::git::display_relay(stdout));
+    }
+    let stderr = r.stderr.trim();
+    if !stderr.is_empty() {
+        eprintln!("  stderr:\n{}", codeflow_core::git::display_relay(stderr));
+    }
 }
 
 /// Print the parsed failure summary (counts + failing test IDs + `file:line`)

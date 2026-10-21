@@ -105,6 +105,11 @@ fn clears_protected_branch() {
     let landing = step
         .replace("<branch>", "feat/x")
         .replace("<target>", "main");
+    write(
+        root,
+        ".codeflow/test-config.json",
+        r#"{"schema_version":"1.0","targets":[{"name":"landed-feature","runner":"custom","modes":{"full":{"command":"git ls-files --error-unmatch x.txt"}}}]}"#,
+    );
     assert_passes(root, "git-guard", &landing);
     run_printed(root, &landing, &[], &[]);
     assert_eq!(head(root, "main"), head(root, "feat/x"), "the work landed");
