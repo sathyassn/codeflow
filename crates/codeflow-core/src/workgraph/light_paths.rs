@@ -249,7 +249,9 @@ pub fn create_integration_branch(
     epic_id: &str,
     title: &str,
 ) -> Result<IntegrationBranch, String> {
-    let from = crate::workgraph::default_work_target(repo_root)
+    // The full ref: `git branch <name> origin/main` would start from a local
+    // branch or tag named `origin/main` before the remote-tracking ref.
+    let from = crate::workgraph::default_work_target_ref(repo_root)
         .map_err(|error| error.to_string())?
         .ok_or("no main or master branch (local or origin) to cut the integration branch from")?;
     let name = format!("integration/{epic_id}-{}", slug(title));

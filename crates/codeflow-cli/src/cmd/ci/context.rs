@@ -5,7 +5,9 @@ use std::path::Path;
 use codeflow_core::hooks::repo;
 use codeflow_core::workgraph::{declared_work_target_at_revision, default_work_target, history};
 
-use super::{detect_range, detect_target, named_branch, resolve_base, rev_parse, CiArgs};
+use super::{
+    base_refs, detect_range, detect_target, named_branch, resolve_base, rev_parse, CiArgs,
+};
 
 pub(super) struct Context {
     pub head: String,
@@ -349,11 +351,7 @@ fn normalize(name: &str) -> String {
 }
 
 fn target_candidates(target: &str) -> Vec<String> {
-    let name = normalize(target);
-    vec![
-        format!("refs/remotes/origin/{name}"),
-        format!("refs/heads/{name}"),
-    ]
+    base_refs(target)
 }
 
 fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<String>, String> {

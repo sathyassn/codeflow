@@ -253,6 +253,22 @@ pub(crate) struct AnchoredTask {
 ///
 /// Returns an error if an existing conventional target or its repository cannot be read.
 pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
+    Ok(default_target(repo_root)?.map(|(target, _)| target.to_string()))
+}
+
+/// The full ref of the target [`default_work_target`] picks, such as
+/// `refs/remotes/origin/main`. Read the default target's commit through this
+/// ref, never through the short name: Git resolves a short `origin/main` to a
+/// local branch or tag of that name before the remote-tracking ref.
+///
+/// # Errors
+///
+/// Returns an error if an existing conventional target or its repository cannot be read.
+pub fn default_work_target_ref(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
+    Ok(default_target(repo_root)?.map(|(_, reference)| reference))
+}
+
+fn default_target(repo_root: &Path) -> Result<Option<(&'static str, String)>, WorkStartError> {
     let Some(repo) = crate::hooks::repo::open(repo_root).map_err(WorkStartError::Repository)?
     else {
         return Ok(None);
@@ -264,7 +280,7 @@ pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStart
             format!("refs/heads/{target}")
         };
         if reference_commit(&repo, &reference)?.is_some() {
-            return Ok(Some(target.to_string()));
+            return Ok(Some((target, reference)));
         }
     }
     Ok(None)
