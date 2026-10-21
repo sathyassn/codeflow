@@ -2301,18 +2301,24 @@ pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<St
         Ok(_) => {}
     }
     let paths = changed_paths(&repo, "HEAD", None)?;
-    let base = match super::work_start::default_work_target(repo_root)
+    // The target's full ref: a short `origin/main` peels a local branch or
+    // tag of that name before the remote-tracking ref.
+    let base = match super::work_start::default_work_target_ref(repo_root)
         .map_err(|error| error.to_string())?
     {
         Some(target) => {
-            let resolve = |name: &str| {
-                repo.revparse_single(name)
-                    .and_then(|object| object.peel_to_commit())
+            let peel = |reference: Result<git2::Reference<'_>, git2::Error>| {
+                reference
+                    .and_then(|reference| reference.peel_to_commit())
                     .map(|commit| commit.id())
                     .map_err(|error| error.to_string())
             };
-            let anchor = history::merge_base(&repo, resolve("HEAD")?, resolve(&target)?)
-                .map_err(|error| error.to_string())?;
+            let anchor = history::merge_base(
+                &repo,
+                peel(repo.head())?,
+                peel(repo.find_reference(&target))?,
+            )
+            .map_err(|error| error.to_string())?;
             Some(Graph::from_revision(&repo, &anchor.to_string())?)
         }
         None => None,

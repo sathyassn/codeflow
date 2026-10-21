@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
 import unittest
 
@@ -229,6 +230,31 @@ class GateContracts(unittest.TestCase):
             self.assertTrue(proof in real, proof)
         self.assertIn('cleanup', cleanup)
         self.assertIn('check:real-browser-cleanup', read('.codeflow/test-config.json'))
+
+    def test_essential_rust_keeps_doctests_and_full_gate_membership(self):
+        targets = {t['name']: t for t in json.loads(read('.codeflow/test-config.json'))['targets']}
+        workspace = targets['rust-workspace']
+        self.assertEqual(set(workspace['modes']), {'essential'})
+        command = workspace['modes']['essential']['command']
+        self.assertEqual(workspace.get('shell'), 'sh')
+        self.assertTrue(command.startswith('run_tmp=$(mktemp -d "${TMPDIR:-/tmp}/cf.XXXXXX") || exit; '))
+        self.assertIn('trap \'status=$?; rm -rf -- "$run_tmp" || exit 1; exit "$status"\' EXIT;', command)
+        self.assertIn('export TMPDIR="$run_tmp";', command)
+        self.assertTrue(command.endswith('cargo nextest run --workspace --no-fail-fast --profile essential && cargo test --workspace --doc'))
+        self.assertEqual(workspace['report'], {'format': 'junit', 'path': 'target/nextest/essential/junit.xml'})
+        self.assertEqual(targets['rust-coverage']['modes'], {'full': {'command':
+            'cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow'}})
+        self.assertEqual(targets['rust-doctest']['modes'], {'full': {'command': 'cargo test --workspace --doc'}})
+        nextest = tomllib.loads(read('.config/nextest.toml'))
+        profiles = nextest['profile']
+        self.assertEqual(nextest['test-groups']['serial']['max-threads'], 1)
+        self.assertEqual(profiles['essential']['test-threads'], 8)
+        self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
+        self.assertFalse(profiles['essential']['fail-fast'])
+        self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
+        self.assertNotIn('default-filter', profiles['essential'])
+        for name in ('read-benchmark', 'prose-exhaustive'):
+            self.assertEqual(set(targets[name]['modes']), {'full'})
 
     def test_own_config_publishes_the_producer_graph_and_quality_floors(self):
         cfg = json.loads(read('.codeflow/test-config.json'))
