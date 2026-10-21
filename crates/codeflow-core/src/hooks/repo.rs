@@ -59,9 +59,9 @@ pub fn listed_ref_commit(repo: &Repository, name: &str) -> Result<Option<git2::O
             exact = Some(reference.peel_to_commit()?.id());
             continue;
         }
-        // A name that is not valid UTF-8 is no fold of a text name: a
-        // filesystem that folds names holds only Unicode names, and
-        // packed-refs compares bytes.
+        // A name that is not valid UTF-8 is compared byte for byte: packed-refs
+        // matches names exactly, ext4 casefold treats such a name as opaque
+        // bytes and does not fold it, and APFS refuses to store it.
         if let Ok(text) = GitName::from_bytes(listed).rule_text() {
             alias |= folded_ref_name(text) == folded;
         }

@@ -10302,11 +10302,12 @@ pub(crate) fn ref_name_aliases(name: &str) -> bool {
 }
 
 /// [`ref_name_aliases`] for a reference-transaction line: a non-ASCII name
-/// under exactly `refs/tags/` is what `git fetch` writes for such a tag, and
-/// stays free. A remote-tracking name is judged like any other, since a
-/// fetch can write one over a guarded tracking ref (TSK-381 SF-4).
+/// under exactly `refs/remotes/` or `refs/tags/` is what `git fetch` writes
+/// for such a remote branch or tag. A remote-tracking name is guarded instead
+/// by the hook's folded-collision check and its protected-name check, which
+/// refuse one that lands on another ref (TSK-381 SF-4, Codex F3).
 pub(crate) fn transaction_ref_aliases(name: &str) -> bool {
-    ref_name_aliases(name) && !name.starts_with("refs/tags/")
+    ref_name_aliases(name) && !(name.starts_with("refs/remotes/") || name.starts_with("refs/tags/"))
 }
 
 /// The `update-ref` or `symbolic-ref` write in `args` names a ref by a

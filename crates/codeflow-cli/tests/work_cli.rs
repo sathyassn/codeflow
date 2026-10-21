@@ -1036,6 +1036,124 @@ fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
     );
 }
 
+/// A bare origin under `remote` that holds refs case-sensitively on any
+/// filesystem: reftable where this git supports it. Without reftable only a
+/// case-sensitive filesystem can hold two spellings, so the fallback is
+/// refused where the git directory folds names.
+fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf {
+    let origin = remote.join("origin.git");
+    let reftable = Command::new("git")
+        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .arg(&origin)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap()
+        .success();
+    if !reftable {
+        assert!(!insensitive, "git cannot create a reftable origin here");
+        git(remote, &["init", "-q", "--bare", "origin.git"]);
+    }
+    origin
+}
+
+/// Wire this binary as the clone's reference-transaction hook.
+fn wire_transaction_hook(root: &Path) {
+    let hook = root.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+fn fetch_origin(root: &Path) -> Output {
+    Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap()
+}
+
+/// TSK-381 Codex F3 and the folded directory finding, beside the
+/// `MAIN`/`main` test above. With the hook wired, an ordinary fetch of an
+/// unrelated Unicode remote branch passes. A remote branch whose directory
+/// folds onto an existing tracking directory spelled differently
+/// (`INTEGRATION/producer-line` beside `integration/consumer-line`) is
+/// refused where the git directory folds names, since it would land in that
+/// directory as `integration/producer-line`.
+#[test]
+fn tsk381_a_unicode_remote_branch_fetches_and_a_folded_directory_does_not() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = case_sensitive_origin(remote.path(), insensitive);
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(
+        &origin,
+        &["update-ref", "refs/heads/integration/consumer-line", &tip],
+    );
+    wire_transaction_hook(root);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    git(&origin, &["update-ref", "refs/heads/feat/na\u{ef}ve", &tip]);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/na\u{ef}ve"]),
+        tip
+    );
+
+    git(
+        &origin,
+        &["update-ref", "refs/heads/INTEGRATION/producer-line", &tip],
+    );
+    let out = fetch_origin(root);
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if insensitive {
+        let landed = Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "-q",
+                "refs/remotes/origin/integration/producer-line",
+            ])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(!landed.status.success(), "the folded directory landed");
+    }
+}
+
 /// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
 /// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
 /// completes it, and TSK-004 pins that forged completion. `work next` waits

@@ -821,6 +821,26 @@ pub fn reference_transaction(
             }
             continue;
         }
+        // A fetched remote-tracking name that folds onto a protected branch
+        // without naming it exactly (`origin/MAIN` beside a protected `main`)
+        // would land on that tracking ref once it exists (Codex F3).
+        if super::policy::non_ascii_aliasing()
+            && tracking_name_folds_onto_protected(policy, refname)
+            && !unchanged()
+        {
+            if policy.local_ref_protection.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    format!(
+                        "ref update of '{refname}': its name folds onto a protected branch's \
+                         tracking ref on a case-insensitive filesystem"
+                    ),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            continue;
+        }
         // A spelling a case-insensitive filesystem may store as a guarded ref
         // is refused outright, failing closed (TSK-381 SF-3).
         if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
@@ -887,10 +907,24 @@ pub fn reference_transaction(
     Ok(report)
 }
 
+/// Whether a remote-tracking `refname` folds onto a protected branch it does
+/// not name exactly ([`GitPolicy::branch_folds_onto_protected`]). The remote
+/// name may hold `/`, so every branch the name could end in is judged.
+fn tracking_name_folds_onto_protected(policy: &GitPolicy, refname: &str) -> bool {
+    refname.strip_prefix("refs/remotes/").is_some_and(|rest| {
+        rest.match_indices('/')
+            .any(|(at, _)| policy.branch_folds_onto_protected(&rest[at + 1..]))
+    })
+}
+
 /// The ref names this transaction writes (a new value that is not zero)
-/// whose folded spelling ([`super::repo::folded_ref_name`]) equals that of
-/// another ref, existing or written in the same transaction. A listing that
-/// cannot be read leaves every written name a collision, failing closed.
+/// whose folded spelling ([`super::repo::folded_ref_name`]), or that of a
+/// directory along its path, equals that of another spelling among the
+/// existing refs and the names written in the same transaction. Such a name
+/// lands in the other ref's file or directory on a case-insensitive
+/// filesystem (`origin/INTEGRATION/x` under an existing `origin/integration/`).
+/// A listing that cannot be read leaves every written name a collision,
+/// failing closed.
 fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeSet<String> {
     let written: Vec<&str> = stdin
         .split('\n')
@@ -907,8 +941,9 @@ fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeS
     let mut listed = Vec::new();
     for reference in references {
         // A ref that cannot be read cannot be ruled out as an alias. A name
-        // that is not valid UTF-8 is no fold of a text name: a filesystem
-        // that folds names holds only Unicode names.
+        // that is not valid UTF-8 is compared byte for byte: packed-refs
+        // matches names exactly, ext4 casefold treats such a name as opaque
+        // bytes and does not fold it, and APFS refuses to store it.
         let Ok(reference) = reference else {
             return every();
         };
@@ -916,22 +951,34 @@ fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeS
             listed.push(text.to_string());
         }
     }
+    // Each ref name and each directory along it ("refs/", "refs/remotes/",
+    // ...), keyed by its folded spelling.
+    let paths = |name: &str| {
+        name.match_indices('/')
+            .map(|(at, _)| name[..=at].to_string())
+            .chain(std::iter::once(name.to_string()))
+            .collect::<Vec<_>>()
+    };
     for name in listed
         .iter()
         .map(String::as_str)
         .chain(written.iter().copied())
     {
-        spellings
-            .entry(super::repo::folded_ref_name(name))
-            .or_default()
-            .insert(name.to_string());
+        for path in paths(name) {
+            spellings
+                .entry(super::repo::folded_ref_name(&path))
+                .or_default()
+                .insert(path);
+        }
     }
     written
         .into_iter()
         .filter(|name| {
-            spellings
-                .get(&super::repo::folded_ref_name(name))
-                .is_some_and(|names| names.len() > 1)
+            paths(name).iter().any(|path| {
+                spellings
+                    .get(&super::repo::folded_ref_name(path))
+                    .is_some_and(|names| names.len() > 1)
+            })
         })
         .map(str::to_string)
         .collect()
@@ -2832,8 +2879,6 @@ mod tests {
             "ref\u{17f}/remotes/origin/main",
             "REFS/remotes/origin/main",
             "refs/heads/feat/caf\u{e9}",
-            // SF-4: a fetch may write a non-ASCII alias over a tracking ref.
-            "refs/remotes/origin/caf\u{e9}",
         ] {
             assert!(
                 ref_line_touches_local_branch(&format!("{ZERO40} {ahead} {name}")),
@@ -2843,7 +2888,13 @@ mod tests {
             assert_eq!(v.len(), 1, "{name}: {v:?}");
             assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
         }
-        for name in ["refs/tags/caf\u{e9}", "refs/heads/feat/y"] {
+        // Codex F3: a fetched non-ASCII tracking name that lands on no other
+        // ref is judged by the collision checks, not refused for its bytes.
+        for name in [
+            "refs/remotes/origin/caf\u{e9}",
+            "refs/tags/caf\u{e9}",
+            "refs/heads/feat/y",
+        ] {
             assert!(run(name).is_empty(), "{name}");
         }
     }
@@ -2881,6 +2932,55 @@ mod tests {
         }
         let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
         assert!(run(&["refs/remotes/origin/MAIN"]).is_empty());
+    }
+
+    /// TSK-381 Codex F3 and the folded directory finding: where the git
+    /// directory folds names, a fetched tracking name is refused only when it
+    /// lands on another ref, folds onto a protected branch it does not name,
+    /// or folds onto an existing directory spelled differently; an unrelated
+    /// Unicode or ASCII tracking name passes.
+    #[test]
+    fn test_reference_transaction_judges_tracking_names_by_where_they_land() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/consumer-line",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/na\u{ef}ve",
+            "refs/remotes/origin/feat/new",
+            "refs/remotes/origin/integration/producer-line",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/origin/INTEGRATION/producer-line",
+        ] {
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
     }
 
     /// TSK-381 SF-4: the sync allowance trusts only the tracking ref git lists

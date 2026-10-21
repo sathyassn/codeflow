@@ -661,6 +661,24 @@ impl GitPolicy {
         is_on_protected_branch(&branch.to_ascii_lowercase(), &sec)
     }
 
+    /// Whether `branch`, written under another spelling, folds onto a
+    /// protected branch it does not name exactly (`MAIN` or `maſter` beside a
+    /// protected `main` or `master`): the name and the protected list are
+    /// compared after Unicode case folding (upper case, then lower case).
+    #[must_use]
+    pub fn branch_folds_onto_protected(&self, branch: &str) -> bool {
+        let fold = |name: &str| name.to_uppercase().to_lowercase();
+        let sec = SecurityPolicy {
+            protected_branches: self
+                .protected_branches
+                .iter()
+                .map(|name| fold(name))
+                .collect(),
+            ..SecurityPolicy::defaults()
+        };
+        !self.branch_is_protected(branch) && is_on_protected_branch(&fold(branch), &sec)
+    }
+
     /// [`GitPolicy::branch_is_protected`] for an exact name. A name that is
     /// not valid UTF-8 cannot be matched against a glob, so it is protected.
     #[must_use]
