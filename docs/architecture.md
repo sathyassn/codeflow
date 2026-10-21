@@ -186,7 +186,7 @@ enters (git2 `*_bytes` accessors, NUL-separated git output, `OsStr` bytes).
 | `bytes()`, `starts_with`, `joined`, a map keyed by `GitName` | comparing, keying, prefix tests, building a path | exact, never lossy |
 | `rule_text()` | a rule that needs text (a glob, a task prefix, a config key, a record path) | returns an error that carries the display form, so the read refuses |
 | `display()` | output: messages, logs, advice; `display_text()` for a name held as text | escapes invalid bytes and controls as `\xNN`, Default_Ignorable and separator characters as `\u{NNNN}` (not combining marks), and `\` as `\\`; not comparable |
-| `display_output()`, `display_json()`, `display_message()` | printed lines, JSON, message fields | the same escapes, keeping line breaks, tabs and backslashes; JSON writes `\uXXXX`; a message indents its further lines; a writer outside the print macros escapes its own fields |
+| `display_output()`, `display_json()`, `display_message()`, `display_line()` | printed lines, JSON, message fields, one-line progress | the same escapes, keeping line breaks, tabs and backslashes; JSON writes `\uXXXX`; a message indents its further lines; a one-line output escapes its line breaks too; a writer outside the print macros escapes its own fields |
 | `os_path()` | a file system path | exact on Unix; refuses where the name cannot be one |
 | `storage_key()` | a key that is persisted or put in a map of text | valid text as is, else a lossy form, a NUL and hex: no two names share a key |
 
