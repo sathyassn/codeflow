@@ -37,7 +37,7 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
       token: randomBytes(24).toString("hex"),
       created_at_ms: now,
       heartbeat_at_ms: now,
-      owner: { pid: process.pid, host: os.hostname(), writers: [] },
+      owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0 },
     };
     const candidate = path.join(portalDirectory, `.workflow-lock-candidate-${lease.token}`);
     try {
@@ -65,13 +65,19 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
         if (readError?.code === "ENOENT" || (seen !== undefined && now !== undefined && now !== seen)) continue;
         throw readError;
       }
-      const owner = await judgeWorkflowOwner(existing.lease, testHooks.probeProcess ?? probeProcess);
+      const owner = await workflowOwnerVerdict(portalDirectory, existing.lease, testHooks.probeProcess ?? probeProcess);
+      if (owner.state === "gone") continue;
       if (owner.state === "dead") {
         const age = Math.max(0, Math.round((Date.now() - existing.lease.created_at_ms) / 1000));
         process.stderr.write(`portal workflow lease owner (process ${existing.lease.owner.pid} on ${existing.lease.owner.host}) has exited with no writer running; reclaiming its ${age}s old lease\n`);
+      } else if (owner.state === "live") {
+        // Proven liveness blocks whatever the lease age.
+        throw new Error(`portal build/check workflow already in progress (live process ids: ${owner.live.join(", ")})`);
       } else if (Date.now() - existing.lease.heartbeat_at_ms <= WORKFLOW_LEASE_MAX_AGE_MS) {
-        const live = owner.state === "live" ? ` (live process ids: ${owner.live.join(", ")})` : "";
-        throw new Error(`portal build/check workflow already in progress${live}`);
+        const starting = owner.starting
+          ? ` (its owner exited while starting a writer, so a running writer cannot be ruled out; wait for the lease to expire, or remove .portal/workflow.lock once no portal process runs)`
+          : "";
+        throw new Error(`portal build/check workflow already in progress${starting}`);
       }
       const stale = await retireWorkflowClaim(portalDirectory, claim, existing.claim, "reclaim", testHooks);
       if (stale === null) continue;
@@ -101,16 +107,29 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
     return write;
   };
   const heartbeat = setInterval(() => {
-    lease.heartbeat_at_ms = Date.now();
+    // A wall clock that moved back must not write a heartbeat older than the
+    // lease itself, which the lease reader would reject.
+    lease.heartbeat_at_ms = Math.max(Date.now(), lease.created_at_ms);
     persist().catch((error) => { heartbeatError = error; });
   }, 30_000);
   heartbeat.unref();
   // The coordinator records each writer it starts, so a contender can tell a
   // coordinator that died from a workflow that has stopped writing.
   const writers = {
+    // Recorded and durable before a writer is spawned: a coordinator killed
+    // between the spawn and the record leaves a marker, not a silent gap.
+    beginWriter() {
+      lease.owner.starting += 1;
+      return persist().catch((error) => { lease.owner.starting -= 1; throw error; });
+    },
+    abandonWriter() {
+      lease.owner.starting = Math.max(0, lease.owner.starting - 1);
+      return persist();
+    },
     recordWriter(pid) {
-      if (!Number.isSafeInteger(pid) || pid < 1) return Promise.resolve();
+      if (!Number.isSafeInteger(pid) || pid < 1) return writers.abandonWriter();
       if (!lease.owner.writers.includes(pid)) lease.owner.writers.push(pid);
+      lease.owner.starting = Math.max(0, lease.owner.starting - 1);
       return persist();
     },
     forgetWriter(pid) {
@@ -130,22 +149,45 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
 }
 
 // Decides whether the workflow that holds a lease has stopped: its coordinator
-// and every writer it recorded. "dead" means all are gone, "live" means one
-// runs, and "unknown" covers a lease with no owner, another host, or a check
-// that cannot answer, where the age rule applies. A reused process id reads as
-// live, which blocks.
+// and every writer it recorded, each writer with the process group it leads
+// (so workers a writer leaves behind count). "dead" means all are gone, "live"
+// means one runs, and "unknown" covers a lease with no owner, another host, a
+// writer that was being started, or a check that cannot answer. A reused
+// process id reads as live, which blocks.
 async function judgeWorkflowOwner(lease, probe) {
-  const owner = lease.owner;
-  if (owner === undefined || owner.host !== os.hostname()) return { state: "unknown", live: [] };
+  const owner = { ...lease.owner, starting: lease.owner?.starting ?? 0 };
+  if (lease.owner === undefined || owner.host !== os.hostname()) return { state: "unknown", live: [], starting: false };
   const live = [];
   let undecided = false;
-  for (const pid of [owner.pid, ...owner.writers]) {
-    const state = pid === process.pid ? "live" : await probe(pid);
-    if (state === "live") live.push(pid);
-    else if (state !== "dead") undecided = true;
+  const check = async (pid, withGroup) => {
+    const states = [pid === process.pid ? "live" : await probe(pid)];
+    if (withGroup && process.platform !== "win32") states.push(await probe(-pid));
+    if (states.includes("live")) live.push(pid);
+    else if (states.some((state) => state !== "dead")) undecided = true;
+  };
+  await check(owner.pid, false);
+  for (const pid of owner.writers) await check(pid, true);
+  if (live.length > 0) return { state: "live", live, starting: false };
+  const starting = owner.starting > 0;
+  return { state: undecided || starting ? "unknown" : "dead", live, starting };
+}
+
+// A dead verdict is final only against the owner's last record: a coordinator
+// can record a writer after the contender read the lease and die before it
+// probes. Once nothing of the owner runs its record cannot change, so the
+// record is read again and judged again until it stops changing.
+async function workflowOwnerVerdict(portalDirectory, lease, probe) {
+  let judged = lease;
+  for (let round = 0; round < 5; round += 1) {
+    const verdict = await judgeWorkflowOwner(judged, probe);
+    if (verdict.state !== "dead") return verdict;
+    let final;
+    try { final = await readWorkflowLeaseDirectory(workflowCandidate(portalDirectory, judged.token)); }
+    catch (error) { if (error?.code === "ENOENT") return { state: "gone", live: [], starting: false }; throw error; }
+    if (final.token === judged.token && JSON.stringify(final.owner) === JSON.stringify(judged.owner)) return verdict;
+    judged = final;
   }
-  if (live.length > 0) return { state: "live", live };
-  return { state: undecided ? "unknown" : "dead", live };
+  return { state: "unknown", live: [], starting: false };
 }
 
 function probeProcess(pid) {
@@ -493,7 +535,8 @@ async function readPublicationLease(lockDirectory) {
 function validateWorkflowLease(lease) {
   if (lease && typeof lease === "object" && !Array.isArray(lease) && Object.hasOwn(lease, "owner")) {
     const { owner, ...rest } = lease;
-    const shape = owner && typeof owner === "object" && !Array.isArray(owner) && Object.keys(owner).sort().join(",") === "host,pid,writers"
+    const shape = owner && typeof owner === "object" && !Array.isArray(owner) && ["host,pid,writers", "host,pid,starting,writers"].includes(Object.keys(owner).sort().join(","))
+      && (owner.starting === undefined || (Number.isSafeInteger(owner.starting) && owner.starting >= 0 && owner.starting <= 64))
       && Number.isSafeInteger(owner.pid) && owner.pid > 0
       && typeof owner.host === "string" && owner.host.length > 0 && owner.host.length <= 255
       && Array.isArray(owner.writers) && owner.writers.length <= 64

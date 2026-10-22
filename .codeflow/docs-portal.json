@@ -114,7 +114,7 @@
     },
     "scripts/publication.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6874342c7cfc9e33ebc81500e3ea494801f6a70a561636bcb83058014f691a8f"
+      "pristine_sha256": "37434c3de331b7e242ad55fb80510b662e820e86f15335bc23736d3f4cbc44f3"
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
@@ -130,7 +130,7 @@
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "bf0fc0a6d73ece4a392bc47ee8a3b28b69e27cbf9156802ddcdbeb0d61886bb8"
+      "pristine_sha256": "79c8c782a51be2aa5ad7535aaa64617c8cf72600418eb9ef9c796914efa36a18"
     },
     "src/components/PortalColumns.astro": {
       "ownership": "managed",
@@ -214,7 +214,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "86754a3afc360af42387206b7fdc6dd168659450c16952e497546aa74a1a5408"
+      "pristine_sha256": "edee7bfdb2a2d268930433370ab883f002b2972d219d5466cec8c8b9d81979bf"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",

@@ -1348,7 +1348,7 @@ test("a workflow lease records its owner and a lease without one is still read",
   try {
     await withWorkflowLease(root, async (writers) => {
       const claim = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
-      assert.deepEqual(claim.owner, { pid: process.pid, host: os.hostname(), writers: [] });
+      assert.deepEqual(claim.owner, { pid: process.pid, host: os.hostname(), writers: [], starting: 0 });
       await writers.recordWriter(4_000_001);
       const candidate = path.join(root, `.portal/.workflow-lock-candidate-${claim.token}/owner.json`);
       assert.deepEqual(JSON.parse(await readFile(candidate, "utf8")).owner.writers, [4_000_001]);
@@ -1443,6 +1443,180 @@ test("two contenders that find the same dead owner leave one holder", async () =
       assert.equal(most, 1);
     }
     assert.equal(await withWorkflowLease(root, async () => "future"), "future");
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a live owner blocks whatever the age of its lease", async () => {
+  const old = { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000 };
+  const dead = await exitedProcessId();
+  const cases = {
+    "live coordinator": { owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0 }, live: process.pid },
+    "live writer of a dead coordinator": { owner: { pid: dead, host: os.hostname(), writers: [process.pid], starting: 0 }, live: process.pid },
+  };
+  for (const [name, { owner, live }] of Object.entries(cases)) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-old-live-"));
+    try {
+      await plantWorkflowLease(root, { ...old, owner });
+      const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+      assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${live}\\)`), name);
+    } finally { await rm(root, treeRemoval); }
+  }
+});
+
+test("an owner that exited while starting a writer is not reclaimed on its word alone", async () => {
+  const dead = await exitedProcessId();
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-starting-"));
+  try {
+    await plantWorkflowLease(root, { owner: { pid: dead, host: os.hostname(), writers: [], starting: 1 } });
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(its owner exited while starting a writer.*remove \.portal\/workflow\.lock/);
+    await rm(root, treeRemoval);
+    await mkdir(root, { recursive: true });
+    await plantWorkflowLease(root, { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000, owner: { pid: dead, host: os.hostname(), writers: [], starting: 1 } });
+    assert.equal(await withWorkflowLease(root, async () => "expired"), "expired");
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a coordinator killed right after it spawned a writer leaves the lease held", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-spawn-gap-"));
+  let writer = null;
+  try {
+    await mkdir(path.join(root, "node_modules/astro/bin"), { recursive: true });
+    await writeFile(path.join(root, "node_modules/astro/bin/astro.mjs"), "import { writeFileSync } from 'node:fs'; setInterval(() => writeFileSync('writer-tick', String(Date.now())), 25);");
+    const preload = path.join(root, "freeze-spawn.mjs");
+    await writeFile(preload, `
+      import cp from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      import { writeFileSync } from "node:fs";
+      const spawn = cp.spawn;
+      cp.spawn = function (...args) {
+        const child = spawn(...args);
+        writeFileSync("spawned-pid", String(child.pid));
+        process.kill(process.pid, "SIGSTOP");
+        return child;
+      };
+      syncBuiltinESMExports();
+    `);
+    const coordinator = spawn(process.execPath, ["--import", preload, path.join(import.meta.dirname, "../scripts/workflow.mjs"), "preview"], { cwd: root, stdio: "ignore" });
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    await waitUntil(async () => readFile(path.join(root, "writer-tick")).then(() => true, () => false));
+    writer = Number(await readFile(path.join(root, "spawned-pid"), "utf8"));
+    coordinator.kill("SIGKILL");
+    await exited;
+    assert.equal(processAlive(writer), true);
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    const before = await readFile(path.join(root, "writer-tick"), "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.notEqual(await readFile(path.join(root, "writer-tick"), "utf8"), before);
+  } finally {
+    if (writer !== null) { try { process.kill(-writer, "SIGKILL"); } catch { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a writer recorded after the contender read the lease still blocks it", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-snapshot-"));
+  let writer = null;
+  const coordinatorScript = path.join(root, "snapshot-owner.mjs");
+  try {
+    await writeFile(coordinatorScript, `
+      import { spawn } from "node:child_process";
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        process.send("ready");
+        await new Promise((resolve) => process.once("message", resolve));
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        await writers.recordWriter(child.pid);
+        process.send({ writer: child.pid });
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    const coordinator = spawn(process.execPath, [coordinatorScript, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    let first = true;
+    const result = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async (pid) => {
+        if (first) {
+          first = false;
+          const recorded = new Promise((resolve) => coordinator.once("message", resolve));
+          coordinator.send("record");
+          ({ writer } = await recorded);
+          const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+          coordinator.kill("SIGKILL");
+          await exited;
+        }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    assert.match(String(result), new RegExp(`workflow already in progress \\(live process ids: ${writer}\\)`));
+  } finally {
+    if (writer !== null) { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("the check workflow's test workers keep the lease held after the runner is killed", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-tree-"));
+  let worker = null;
+  try {
+    await mkdir(path.join(root, "scripts"), { recursive: true });
+    await mkdir(path.join(root, "tests"));
+    for (const file of ["package-lock.json", "scripts/runtime-scripts.json"]) await cp(path.join(import.meta.dirname, "..", file), path.join(root, file));
+    for (const file of ["composition", "chrome", "site-server"]) await writeFile(path.join(root, "tests", `${file}.test.mjs`), "");
+    await writeFile(path.join(root, "tests/adapter.test.mjs"), "import { writeFileSync } from 'node:fs'; writeFileSync('worker-pid', String(process.pid)); setInterval(() => writeFileSync('worker-tick', String(Date.now())), 25);");
+    const coordinator = spawn(process.execPath, [path.join(import.meta.dirname, "../scripts/workflow.mjs"), "check"], { cwd: root, stdio: "ignore" });
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    await waitUntil(async () => readFile(path.join(root, "worker-tick")).then(() => true, () => false));
+    worker = Number(await readFile(path.join(root, "worker-pid"), "utf8"));
+    const claim = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
+    const record = JSON.parse(await readFile(path.join(root, `.portal/.workflow-lock-candidate-${claim.token}/owner.json`), "utf8"));
+    const [runner] = record.owner.writers;
+    coordinator.kill("SIGKILL");
+    await exited;
+    process.kill(runner, "SIGKILL");
+    await waitUntil(() => !processAlive(runner));
+    assert.equal(processAlive(worker), true);
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), /workflow already in progress \(live process ids: /);
+    process.kill(worker, "SIGKILL");
+    await waitUntil(() => !processAlive(worker));
+    worker = null;
+    assert.equal(await withWorkflowLease(root, async () => "reclaimed"), "reclaimed");
+  } finally {
+    if (worker !== null) { try { process.kill(worker, "SIGKILL"); } catch { /* gone */ } }
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a dead owner stays reclaimable after the clock moved behind its lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-clock-"));
+  try {
+    const script = path.join(root, "clock-owner.mjs");
+    await writeFile(script, `
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        const now = Date.now;
+        Date.now = () => now() - 3_600_000;
+        beat();
+        Date.now = now;
+        await writers.forgetWriter(0);
+        process.send("clock-written");
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    const coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    const exited = new Promise((resolve) => coordinator.once("exit", resolve));
+    coordinator.kill("SIGKILL");
+    await exited;
+    const { result } = await captureStderr(() => withWorkflowLease(root, async () => "reclaimed"));
+    assert.equal(result, "reclaimed");
   } finally { await rm(root, treeRemoval); }
 });
 

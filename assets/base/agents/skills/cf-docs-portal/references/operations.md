@@ -203,15 +203,22 @@ canary claim rather than an inference from Unix tests.
 
 The locked `check`, `build`, `dev`, and `preview` scripts hold one top-level
 workflow lease, so another process cannot bind `dist` to the wrong snapshot.
-The lease records its owner: the coordinator's process id and host, and the
-process id of each writer (adapter, Astro, evidence) while it runs. A contender
-on the same host reclaims the lease at once, with one line naming the dead
-owner, when the coordinator and every recorded writer have exited, which covers
-a run killed with `SIGKILL`. A live coordinator or writer still blocks and its
-process ids are named. When liveness cannot be decided (another host, a lease
-without owner fields, a permission error), the four-hour age rule applies. A
-reused process id reads as live and blocks. A writer started in the instant
-before it is recorded, or a grandchild of a writer, is not tracked.
+The lease records its owner: the coordinator's process id and host, the
+process id of each writer (adapter, Astro, evidence, test runner), and a count
+of writers being started. Each writer leads its own process group on POSIX, so
+workers it leaves behind count as live. A contender on the same host reclaims
+the lease at once, with one line naming the dead owner, only when the
+coordinator and every recorded writer group have exited, which covers a run
+killed with `SIGKILL`. Proven liveness of any of them blocks whatever the lease
+age, and the refusal names the live process ids. The contender judges the
+owner's last record, so a writer recorded just before the coordinator died is
+seen. A writer is marked as starting before it is spawned; if the coordinator
+dies in that window no running writer can be ruled out, so the lease is kept
+until the four-hour age rule or until you remove `.portal/workflow.lock` after
+confirming no portal process runs. The same age rule applies when liveness
+cannot be decided (another host, a lease without owner fields, a permission
+error). A reused process id reads as live and blocks. On Windows a writer is
+tracked by its own process id only, not its descendants.
 Before Astro starts, the workflow rejects symlinks and non-regular entries in
 tool-controlled `dist`, `.astro`, and Node cache roots; it never follows an
 output link while cleaning. Run only one task-owned dev server per portal, stop
