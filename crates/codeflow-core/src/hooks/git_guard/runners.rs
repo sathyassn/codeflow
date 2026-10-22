@@ -1535,15 +1535,22 @@ fn new_worktree_configuration(
     }
     let environment = config_environment(env);
     let config = crate::security::git_config::read(at, globals(args)?, &environment)?;
-    let mut pending: Vec<PathBuf> = config
+    // Each file is read by the spelling Git reads it by, so a relative
+    // include inside a linked file resolves as Git resolves it (TSK-379
+    // review round 12); the canonical path only identifies a file once.
+    let mut pending: Vec<(PathBuf, PathBuf)> = config
         .includes
         .iter()
         .filter(|include| !include.missing)
         .filter(|include| include.condition.as_deref().is_some_and(may_apply))
-        .map(|include| include.path.clone())
+        .map(|include| (include.logical.clone(), include.path.clone()))
         .collect();
+    let mut seen = std::collections::BTreeSet::new();
     let mut read = 0;
-    while let Some(path) = pending.pop() {
+    while let Some((path, canonical)) = pending.pop() {
+        if !seen.insert((path.clone(), canonical)) {
+            continue;
+        }
         read += 1;
         if read > 128 {
             return Err("more than 128 conditional configuration files to read".into());
@@ -1578,7 +1585,7 @@ fn new_worktree_configuration(
             file.includes
                 .iter()
                 .filter(|include| !include.missing)
-                .map(|include| include.path.clone()),
+                .map(|include| (include.logical.clone(), include.path.clone())),
         );
     }
     Ok(())

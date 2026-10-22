@@ -656,7 +656,9 @@ a counter when it is taken, so the guard does not predict that name: every
 literal `gitdir` condition naming a directory under `worktrees`, and every
 condition ending in `/`, a glob, a relative pattern, `onbranch` and
 `hasconfig`, is read for every add. An include keyed on the main Git
-directory is not read, and benign includes pass; the new checkout then
+directory is not read, and benign includes pass. Each include is read by the
+path Git reads it by, so a relative include inside a linked file resolves
+from the link's directory; the new checkout then
 counts as an earlier write for later commands on the line. Ordinary outputs such as
 `git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
 and `git diff --output=out.diff` remain available.

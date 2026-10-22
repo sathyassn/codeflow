@@ -2575,3 +2575,75 @@ fn worktree_add_reads_includes_of_every_admin_name() {
         }
     }
 }
+
+// Codex round 12, R11-1: Git reads an include by the spelling it was given,
+// so a relative include inside a linked configuration file resolves from
+// the link's directory, not the target's. The guard reads each include the
+// same way; a benign child there still passes.
+#[cfg(unix)]
+#[test]
+fn worktree_add_reads_linked_includes_by_their_logical_path() {
+    for callback_logical in [true, false] {
+        let f = Fixture::new();
+        let root = shell_path(&f.root);
+        let marker = f.temp.path().join("callback-marker");
+        let physical = f.temp.path().join("physical");
+        let logical = f.temp.path().join("logical");
+        std::fs::create_dir_all(&physical).unwrap();
+        std::fs::create_dir_all(&logical).unwrap();
+        std::fs::write(
+            physical.join("parent.conf"),
+            "[include]\n\tpath = child.conf\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(physical.join("parent.conf"), logical.join("parent.conf"))
+            .unwrap();
+        let callback = format!(
+            "[core]\n\tfsmonitor = printf ran > {}\n",
+            shell_path(&marker)
+        );
+        let benign = "[user]\n\temail = work@example.com\n".to_string();
+        let (at_logical, at_physical) = if callback_logical {
+            (callback, benign)
+        } else {
+            (benign, callback)
+        };
+        std::fs::write(logical.join("child.conf"), at_logical).unwrap();
+        std::fs::write(physical.join("child.conf"), at_physical).unwrap();
+        git(
+            &f.root,
+            &[
+                "config",
+                &format!("includeIf.gitdir:{root}/.git/worktrees/linkedwt.path"),
+                &shell_path(&logical.join("parent.conf")),
+            ],
+        );
+        let stage = f.temp.path().join("stage");
+        std::fs::create_dir_all(stage.join("linkedwt")).unwrap();
+        let dest = shell_path(&stage.join("linkedwt"));
+        let command = format!("git -C {root} worktree add --detach {dest}");
+        for hook in ["exec-guard", "git-guard"] {
+            let out = f.command(&stage, hook, &command);
+            if callback_logical {
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            } else {
+                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+            }
+        }
+        // Real Git takes the logical child, and runs it during the add.
+        git(&f.root, &["worktree", "add", "--detach", &dest]);
+        let out = Command::new("git")
+            .args(["config", "--get", "core.fsmonitor"])
+            .current_dir(stage.join("linkedwt"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert_eq!(out.status.success(), callback_logical, "{out:?}");
+        assert_eq!(
+            marker.exists(),
+            callback_logical,
+            "marker for {callback_logical}"
+        );
+    }
+}

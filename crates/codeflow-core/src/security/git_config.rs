@@ -21,7 +21,12 @@ struct Entry {
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct Include {
+    /// The canonical file, for inventory and deduplication.
     pub(crate) path: PathBuf,
+    /// The spelling Git reads the file by: the include value resolved
+    /// against the including file's own spelling. Relative includes inside
+    /// it resolve from this path's directory, not the canonical one.
+    pub(crate) logical: PathBuf,
     pub(crate) missing: bool,
     /// The `includeIf` condition, or `None` for a plain `include.path`.
     pub(crate) condition: Option<String>,
@@ -280,6 +285,7 @@ fn parse(
                     ))
                 }
             };
+            let logical = path.clone();
             let path = path.canonicalize().unwrap_or(path);
             let condition = match key
                 .strip_prefix(b"includeif.")
@@ -296,6 +302,7 @@ fn parse(
             };
             includes.push(Include {
                 path,
+                logical,
                 missing,
                 condition,
             });
