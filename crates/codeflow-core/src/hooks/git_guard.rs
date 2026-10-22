@@ -5478,13 +5478,17 @@ fn git_output_violation(
     None
 }
 
-/// `config` or `config.worktree` inside a `.git` directory.
+/// `config` or `config.worktree` in a Git directory: under a `.git`
+/// component, or in a bare or separate directory holding HEAD.
 fn git_configuration_file(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name == "config" || name == "config.worktree")
         && path.parent().is_some_and(|dir| {
+            // A checkout's `.git`, or a bare or separate Git directory,
+            // which holds HEAD.
             dir.components()
                 .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+                || crate::absence::cannot_exist(&dir.join("HEAD")).is_ok_and(|absent| !absent)
         })
 }
 

@@ -369,7 +369,9 @@ pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, S
             paths.extend(read(&super::GIT_CONFIG_OPTIONS, false, &[('f', "--file")])?.1);
         }
         "merge-file" => {
-            let (parsed, _) = read(&catalog::MERGE_FILE_OPTIONS, true, &[])?;
+            // Git reads merge-file options anywhere before `--`; the first
+            // operand is the file it rewrites.
+            let (parsed, _) = read(&catalog::MERGE_FILE_OPTIONS, false, &[])?;
             if !parsed.unread.is_empty() {
                 return Err(
                     "an option the guard does not read could name the `git merge-file` output"
@@ -1537,17 +1539,22 @@ fn new_worktree_configuration(
     // component, adding digits when that name is taken.
     let start = starting_directory(args, at)?;
     let parsed = checked_mode(&rest[1..], &catalog::WORKTREE_ADD_OPTIONS, true)?;
-    let admin = parsed
+    let name = parsed
         .operands
         .first()
         .filter(|_| parsed.unread.is_empty())
         .and_then(|path| {
             integrity_shell_path(path, &start)
                 .file_name()
-                .map(PathBuf::from)
+                .and_then(|name| name.to_str().map(str::to_string))
         })
-        .zip(super::super::repo::open(&start)?)
-        .map(|(name, repo)| repo.commondir().join("worktrees").join(name));
+        // Git sanitizes a name with other characters; then it is unknown.
+        .filter(|name| {
+            !name.starts_with('.')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+        });
     let mut pending: Vec<PathBuf> = config
         .includes
         .iter()
@@ -1556,7 +1563,7 @@ fn new_worktree_configuration(
             include
                 .condition
                 .as_deref()
-                .is_some_and(|condition| may_apply(condition, admin.as_deref()))
+                .is_some_and(|condition| may_apply(condition, name.as_deref()))
         })
         .map(|include| include.path.clone())
         .collect();
@@ -1603,11 +1610,15 @@ fn new_worktree_configuration(
 }
 
 /// Whether an `includeIf` condition could hold in a new worktree whose
-/// administrative directory is `admin` (`None` when unknown). Only a
-/// `gitdir` condition with a literal pattern is decided; Git then matches
-/// the directory, a trailing `/` matching everything below it and a
-/// relative pattern matching at any depth. Any other condition may apply.
-fn may_apply(condition: &str, admin: Option<&Path>) -> bool {
+/// administrative directory Git names `name` (`None` when unknown). Git
+/// appends a counter to a taken name (`work1` becomes `work11`), so a
+/// literal `gitdir` or `gitdir/i` pattern can hold only when its last
+/// component is that name followed by zero or more digits; digits that
+/// belong to the name are never removed. The directory part is not
+/// compared, because a path can be spelled several ways (links, Windows
+/// short names). A pattern ending in `/`, a glob, a `./` pattern and any
+/// other condition may apply.
+fn may_apply(condition: &str, name: Option<&str>) -> bool {
     let (pattern, fold) = if let Some(pattern) = condition.strip_prefix("gitdir:") {
         (pattern, false)
     } else if let Some(pattern) = condition.strip_prefix("gitdir/i:") {
@@ -1615,61 +1626,23 @@ fn may_apply(condition: &str, admin: Option<&Path>) -> bool {
     } else {
         return true;
     };
-    let Some(admin) = admin else {
+    let Some(name) = name else {
         return true;
     };
-    if pattern.contains(['*', '?', '[', '\\']) || pattern.starts_with("./") {
+    if pattern.contains(['*', '?', '[', '\\'])
+        || pattern.starts_with("./")
+        || pattern.ends_with('/')
+    {
         return true;
     }
-    let pattern = match pattern.strip_prefix("~/") {
-        Some(rest) => match super::line_home::home() {
-            Some(home) => format!("{}/{rest}", crate::portable_path::slashed(&home)),
-            None => return true,
-        },
-        None => pattern.to_string(),
+    let last = pattern.rsplit('/').next().unwrap_or(pattern);
+    let (last, name) = if fold {
+        (last.to_lowercase(), name.to_lowercase())
+    } else {
+        (last.to_string(), name.to_string())
     };
-    let fold = |text: &str| {
-        if fold {
-            text.to_lowercase()
-        } else {
-            text.to_string()
-        }
-    };
-    let pattern = fold(&pattern);
-    let candidates = [
-        admin.to_path_buf(),
-        admin.canonicalize().unwrap_or_else(|_| admin.to_path_buf()),
-        admin
-            .parent()
-            .and_then(|parent| parent.canonicalize().ok())
-            .zip(admin.file_name())
-            .map_or_else(|| admin.to_path_buf(), |(parent, name)| parent.join(name)),
-    ];
-    // Git adds digits to a taken name, so `<name>` may become `<name>2`.
-    let digits = |text: &str| {
-        let end = text
-            .char_indices()
-            .rev()
-            .find(|(_, c)| !c.is_ascii_digit())
-            .map_or(0, |(at, c)| at + c.len_utf8());
-        text[..end].to_string()
-    };
-    candidates.iter().any(|candidate| {
-        let dir = fold(&crate::portable_path::slashed(candidate));
-        let below = format!("{dir}/");
-        match (pattern.starts_with('/'), pattern.strip_suffix('/')) {
-            (true, Some(_)) => below.starts_with(&pattern),
-            (true, None) => dir == pattern || dir == digits(&pattern),
-            (false, Some(inner)) => {
-                below.contains(&format!("/{inner}/"))
-                    || below.contains(&format!("/{}/", digits(inner)))
-            }
-            (false, None) => {
-                dir.ends_with(&format!("/{pattern}"))
-                    || dir.ends_with(&format!("/{}", digits(&pattern)))
-            }
-        }
-    })
+    last.strip_prefix(name.as_str())
+        .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// What a non-Git segment writes, from each directory it can run in.

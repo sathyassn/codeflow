@@ -2410,12 +2410,17 @@ fn git_outputs_follow_option_arity_and_abbreviations() {
             "git config --file .claude/settings.local.json user.name x",
             "git -c alias.x='config --fil .claude/settings.local.json user.name x' x",
             "git format-patch -ko .git/hooks HEAD~1",
+            "git merge-file -- .claude/settings.json base.json replacement.json",
+            "git merge-file .claude/settings.json base.json replacement.json -- -p",
         ] {
             let out = f.command(&f.root, hook, command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
         for command in [
             "git merge-file -p .claude/settings.json base.json replacement.json",
+            "git merge-file .claude/settings.json base.json replacement.json -p",
+            "git merge-file .claude/settings.json base.json replacement.json --stdout",
+            "git merge-file -p -- .claude/settings.json base.json replacement.json",
             "git merge-file --marker-size 7 out.txt base.json replacement.json",
             "git bundle create --version 2 ../repo.bundle HEAD",
             "git checkout-index -f --pref=build/ -- settings.json",
@@ -2480,5 +2485,79 @@ fn worktree_add_reads_the_new_worktree_configuration() {
         }
         let out = f.command(&f.root, hook, "git worktree add .worktrees/n -b task/n");
         assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}
+
+// Codex confirm round 10, R9-1: Git appends a counter to a taken
+// administrative name (`work1` becomes `work11`), so an include keyed on
+// the suffixed name applies to the new worktree. Its callback runs during
+// the add; an unrelated include and an ordinary add keep passing.
+#[test]
+fn worktree_add_matches_counter_suffixed_admin_names() {
+    let f = Fixture::new();
+    let root = shell_path(&f.root);
+    let stage = f.temp.path().join("stage");
+    for name in ["work1", "plainwt"] {
+        std::fs::create_dir_all(stage.join(name)).unwrap();
+    }
+    let old = f.temp.path().join("old/work1");
+    git(&f.root, &["worktree", "add", "--detach", &shell_path(&old)]);
+    let marker = f.temp.path().join("callback-marker");
+    let callback = f.temp.path().join("callback.conf");
+    std::fs::write(
+        &callback,
+        format!(
+            "[core]\n\tfsmonitor = printf ran > {}\n",
+            shell_path(&marker)
+        ),
+    )
+    .unwrap();
+    let unrelated = f.temp.path().join("unrelated.conf");
+    std::fs::write(
+        &unrelated,
+        "[core]\n\tfsmonitor = printf no > unrelated-marker\n",
+    )
+    .unwrap();
+    for (key, file) in [
+        (
+            format!("includeIf.gitdir:{root}/.git/worktrees/work11.path"),
+            &callback,
+        ),
+        (
+            format!("includeIf.gitdir/i:{root}/.git/worktrees/WORK12.path"),
+            &callback,
+        ),
+        (
+            format!("includeIf.gitdir:{root}/.git/worktrees/other.path"),
+            &unrelated,
+        ),
+    ] {
+        git(&f.root, &["config", &key, &shell_path(file)]);
+    }
+    let dest = shell_path(&stage.join("work1"));
+    for hook in ["exec-guard", "git-guard"] {
+        for options in [
+            "--detach",
+            "-b task/new",
+            "--lock --reason test -b task/new",
+            "--orphan -b task/new",
+        ] {
+            let command = format!("git -C {root} worktree add {options} {dest}");
+            let out = f.command(&stage, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        let command = format!(
+            "git -C {root} worktree add --detach {}",
+            shell_path(&stage.join("plainwt"))
+        );
+        let out = f.command(&stage, hook, &command);
+        assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+    }
+    // Real Git uses the suffixed name and runs the callback during the add.
+    #[cfg(unix)]
+    {
+        git(&f.root, &["worktree", "add", "--detach", &dest]);
+        assert!(f.root.join(".git/worktrees/work11").is_dir());
+        assert!(marker.exists(), "the include did not apply");
     }
 }

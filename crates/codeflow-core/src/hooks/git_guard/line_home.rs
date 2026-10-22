@@ -331,6 +331,18 @@ pub(crate) fn named_enforcement(
 mod tests {
     use super::*;
 
+    /// An absolute path on this platform, spelled as the tests write `/r`.
+    fn abs(line: &str) -> String {
+        if cfg!(windows) {
+            line.replace("=/r", "=C:/r")
+                .replace("=/a", "=C:/a")
+                .replace("=/b", "=C:/b")
+                .replace("=/zz", "=C:/zz")
+        } else {
+            line.to_string()
+        }
+    }
+
     #[test]
     fn literal_statement_and_export_forms_name_the_line_home() {
         for line in [
@@ -343,7 +355,13 @@ mod tests {
             "command -p declare -x HOME=/r; git init ~/.claude/x",
             "builtin command export HOME=/r; rm -rf ~/.claude",
         ] {
-            assert_eq!(read(line), LineHome::Literal(PathBuf::from("/r")), "{line}");
+            let line = abs(line);
+            let root = if cfg!(windows) { "C:/r" } else { "/r" };
+            assert_eq!(
+                read(&line),
+                LineHome::Literal(PathBuf::from(root)),
+                "{line}"
+            );
         }
     }
 
@@ -359,7 +377,8 @@ mod tests {
             "export -n HOME; ls ~",
             "command -v git && git clone u ~/scratch/y",
         ] {
-            assert_eq!(read(line), LineHome::Inherited, "{line}");
+            let line = abs(line);
+            assert_eq!(read(&line), LineHome::Inherited, "{line}");
         }
     }
 
@@ -384,7 +403,8 @@ mod tests {
             "command -x export HOME=/r; rm -rf ~/.claude",
             "$WRAP export HOME=/r; rm -rf ~/.claude",
         ] {
-            assert!(matches!(read(line), LineHome::Unread(_)), "{line}");
+            let line = abs(line);
+            assert!(matches!(read(&line), LineHome::Unread(_)), "{line}");
         }
     }
 
