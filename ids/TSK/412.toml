@@ -1,0 +1,11 @@
+id = "TSK-412"
+uid = "26d9d589-bffd-42de-9863-05acdb05c908"
+kind = "TSK"
+title = "The commit-time secret scan can run the pinned gitleaks rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:02:52Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
