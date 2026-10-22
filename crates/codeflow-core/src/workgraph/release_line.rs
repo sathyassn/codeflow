@@ -42,7 +42,7 @@ use std::path::Path;
 
 use git2::{Oid, Repository};
 
-use crate::git::GitName;
+use crate::git::{display_text, GitName};
 
 use super::acceptance::{
     active_block, bind_completion, blob_at, commit_of, finding, introduced_at, is_clean_remerge,
@@ -135,7 +135,11 @@ pub fn pattern_problem(pattern: &str, protected: &[String]) -> Option<String> {
         .filter(|branch| !branch.contains(['*', '?', '[']))
         .find(|branch| parsed.matches(branch))
         .map(|branch| {
-            format!("it matches the protected branch '{branch}'; the default target is never a release branch")
+            // The default target is among them, and a remote names it.
+            format!(
+                "it matches the protected branch '{}'; the default target is never a release branch",
+                display_text(branch)
+            )
         })
 }
 
@@ -238,7 +242,8 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
             None if heads.is_empty() => None,
             None => {
                 return Err(format!(
-                    "the destination {shown} names '{name}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)"
+                    "the destination {shown} names '{}' as its default branch, which it does not have; point its HEAD at the default branch (in a bare repository: `git symbolic-ref HEAD refs/heads/<branch>`)",
+                    display_text(&name)
                 ))
             }
         },
@@ -272,8 +277,12 @@ pub fn default_tracks_work(repo_root: &Path, destination: &Destination) -> Resul
     };
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     ensure_objects(repo_root, &repo, destination, &[(name.as_str(), *tip)])?;
-    crate::workgraph::durable_work_tracking_enabled_at(repo_root, &tip.to_string())
-        .map_err(|why| format!("durable work tracking at the default target {name}: {why}"))
+    crate::workgraph::durable_work_tracking_enabled_at(repo_root, &tip.to_string()).map_err(|why| {
+        format!(
+            "durable work tracking at the default target {}: {why}",
+            display_text(name)
+        )
+    })
 }
 
 /// Whether a range is a release range, and under which pattern.
@@ -321,14 +330,16 @@ pub fn scope(
         Some((name, tip)) => {
             let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
             ensure_objects(repo_root, &repo, destination, &[(name.as_str(), *tip)])?;
-            let pattern = pattern_at(&repo, *tip, name)
-                .map_err(|why| format!("the policy at the default target {name} ({tip}): {why}"))?;
+            let shown = display_text(name);
+            let pattern = pattern_at(&repo, *tip, name).map_err(|why| {
+                format!("the policy at the default target {shown} ({tip}): {why}")
+            })?;
             let short = &tip.to_string()[..9];
             match pattern {
-                Some(pattern) => (pattern, format!("{name} at {short}")),
+                Some(pattern) => (pattern, format!("{shown} at {short}")),
                 None => (
                     BUILTIN_PATTERN.to_string(),
-                    format!("built in (no release_branch_pattern at {name} {short})"),
+                    format!("built in (no release_branch_pattern at {shown} {short})"),
                 ),
             }
         }
@@ -483,7 +494,9 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<Strin
     protected.push(default.to_string());
     match pattern_problem(&pattern, &protected) {
         Some(problem) => Err(format!(
-            "git.release_branch_pattern '{pattern}' is refused: {problem}"
+            "git.release_branch_pattern '{}' is refused: {problem}",
+            // The policy at the default target is remote content (TSK-388).
+            display_text(&pattern)
         )),
         None => Ok(Some(pattern)),
     }
@@ -507,7 +520,12 @@ pub fn advertised_tip_here(
         .chain(destination.default.iter())
         .find(|(name, _)| name == branch)
         .map(|(_, tip)| *tip)
-        .ok_or_else(|| format!("the destination advertises no branch '{branch}'"))?;
+        .ok_or_else(|| {
+            format!(
+                "the destination advertises no branch '{}'",
+                display_text(branch)
+            )
+        })?;
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     ensure_objects(repo_root, &repo, destination, &[(branch, tip)])?;
     Ok(tip)
@@ -548,7 +566,7 @@ fn ensure_objects(
     }
     let named: Vec<String> = still
         .iter()
-        .map(|(name, tip)| format!("{name} at {tip}"))
+        .map(|(name, tip)| format!("{} at {tip}", display_text(name)))
         .collect();
     Err(format!(
         "the judge needs {}, which is not in this clone and could not be fetched{}",
@@ -813,15 +831,17 @@ impl<'a> Lines<'a> {
             .map(|(_, tip)| *tip)
         else {
             return Some(format!(
-                "{line} is not an epic line the destination advertises"
+                "{} is not an epic line the destination advertises",
+                display_text(line)
             ));
         };
         if !self.verified(line, tip) {
-            return Some(format!("{line} fails the epic-line check"));
+            return Some(format!("{} fails the epic-line check", display_text(line)));
         }
         if !self.chain(tip).contains(&cutoff) {
             return Some(format!(
-                "{line}'s cutoff {} is not on its first-parent chain",
+                "{}'s cutoff {} is not on its first-parent chain",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -839,7 +859,8 @@ impl<'a> Lines<'a> {
         }
         if !self.chain(cutoff).contains(&landing) {
             return Some(format!(
-                "the landing is not on {line}'s first-parent chain at or before its release-rule cutoff {}",
+                "the landing is not on {}'s first-parent chain at or before its release-rule cutoff {}",
+                display_text(line),
                 short(cutoff)
             ));
         }
@@ -1201,9 +1222,17 @@ fn judge(
     let default_tip = destination.default.as_ref().map(|(_, tip)| *tip);
     let path = first_parent_path(&repo, head_oid, anchor, default_tip)?;
     let mut lines = Lines::new(repo_root, &repo, destination);
-    // Read at the default target's tip, never from the range.
+    // Read at the default target's tip, never from the range. The bridge
+    // only names the default target in its messages.
     let bridge = match &destination.default {
-        Some((name, tip)) => bridge(&repo, name, *tip, &path, &mut lines, approved)?,
+        Some((name, tip)) => bridge(
+            &repo,
+            &display_text(name),
+            *tip,
+            &path,
+            &mut lines,
+            approved,
+        )?,
         None => Bridge::default(),
     };
     let cutoffs = &bridge.rules;
@@ -1218,7 +1247,7 @@ fn judge(
     let policy_at = destination
         .default
         .as_ref()
-        .map(|(name, tip)| format!("{name} at {}", short(*tip)))
+        .map(|(name, tip)| format!("{} at {}", display_text(name), short(*tip)))
         .unwrap_or_default();
     let mut notes = Vec::new();
     let mut findings = Vec::new();
@@ -2075,8 +2104,11 @@ impl Marker {
         match self {
             Self::Absent => "removed".to_string(),
             Self::Adopted => format!("{MARKER_KEY} = 1"),
-            Self::Changed(value) => format!("changed to `{MARKER_KEY} = {value}`"),
-            Self::Invalid(why) => format!("unreadable ({why})"),
+            // Project config at the default target is remote content.
+            Self::Changed(value) => {
+                format!("changed to `{MARKER_KEY} = {}`", display_text(value))
+            }
+            Self::Invalid(why) => format!("unreadable ({})", display_text(why)),
         }
     }
 }
@@ -2293,6 +2325,7 @@ struct History<'r> {
     repo: &'r Repository,
     odb: git2::Odb<'r>,
     boundary: HashSet<Oid>,
+    /// The default target's name as messages show it.
     default: &'r str,
     blobs: HashMap<Oid, Config>,
 }
@@ -2375,7 +2408,8 @@ struct Bridge {
 /// finding uses the entry; and, once every entry meets those, each entry
 /// one of the `approved` cutoffs, which [`release_findings`] fixes to
 /// [`APPROVED_CUTOFFS`]. `lines` fetches the advertised lines, whose
-/// history holds the cutoffs, before they are read.
+/// history holds the cutoffs, before they are read. `default` is the
+/// default target's name as messages show it, and only messages use it.
 ///
 /// # Errors
 ///
@@ -2409,8 +2443,9 @@ fn bridge(
             (None, Marker::Adopted) => adopted = Some(at),
             (None, Marker::Changed(value)) => {
                 return Err(format!(
-                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {value}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
-                    short(chain[at])
+                    "the adoption marker on {default} first appears at {} as `{MARKER_KEY} = {}`; its one value is 1, so every release check refuses (SPC-013 R-120)",
+                    short(chain[at]),
+                    display_text(value)
                 ))
             }
             (Some(first), Marker::Absent | Marker::Changed(_) | Marker::Invalid(_)) => {
@@ -2461,11 +2496,7 @@ fn bridge(
                     .map(|why| format!("but {why}")),
             };
             if let Some(why) = why {
-                return Err(bridge_refusal(
-                    key,
-                    default,
-                    &format!("names {} as the cutoff of {line}, {why}", short(*cutoff)),
-                ));
+                return Err(cutoff_refusal(key, default, &short(*cutoff), line, &why));
             }
         }
     }
@@ -2473,13 +2504,12 @@ fn bridge(
         for (line, cutoff) in table {
             let cutoff = cutoff.to_string();
             if !approved.contains(&(line.as_str(), cutoff.as_str())) {
-                return Err(bridge_refusal(
+                return Err(cutoff_refusal(
                     key,
                     default,
-                    &format!(
-                        "names {} as the cutoff of {line}, which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
-                        &cutoff[..9]
-                    ),
+                    &cutoff[..9],
+                    line,
+                    "which is not one of CodeFlow's approved cutoffs: the tables bridge only CodeFlow's own 2.x to 3.0 history, and no consuming project can use one",
                 ));
             }
         }
@@ -2487,6 +2517,20 @@ fn bridge(
     let records = tables.pop().unwrap_or_default();
     let rules = tables.pop().unwrap_or_default();
     Ok(Bridge { rules, records })
+}
+
+/// The refusal of a transition-table entry: `key` on `default` names
+/// `cutoff` as the cutoff of `line`, then `why`. The line is a key of
+/// project config at the default target, so it is shown escaped (TSK-388).
+fn cutoff_refusal(key: &str, default: &str, cutoff: &str, line: &str, why: &str) -> String {
+    bridge_refusal(
+        key,
+        default,
+        &format!(
+            "names {cutoff} as the cutoff of {}, {why}",
+            display_text(line)
+        ),
+    )
 }
 
 fn bridge_refusal(key: &str, default: &str, condition: &str) -> String {
@@ -2598,7 +2642,7 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
     for (line, value) in table {
         let entry = value
             .as_str()
-            .ok_or_else(|| format!("{key} entry for {line} is not a string"))?;
+            .ok_or_else(|| format!("{key} entry for {} is not a string", display_text(line)))?;
         let full = entry.len() == 40
             && entry
                 .bytes()
@@ -2608,7 +2652,9 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
             .flatten()
             .ok_or_else(|| {
                 format!(
-                    "{key} entry for {line} at the default target (`{entry}`) is not a full 40-character lowercase commit id"
+                    "{key} entry for {} at the default target (`{}`) is not a full 40-character lowercase commit id",
+                    display_text(line),
+                    display_text(entry)
                 )
             })?;
         cutoffs.insert(line.clone(), oid);

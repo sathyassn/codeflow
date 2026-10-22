@@ -117,6 +117,22 @@ impl Report {
 
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl Report {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
         writeln!(f, "{}", self.title)?;
         for file in &self.files {
             writeln!(f, "  {:<22} {}", file.action.label(), file.dest)?;

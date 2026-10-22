@@ -211,9 +211,12 @@ impl std::fmt::Display for RangeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Platform(source) => f.write_str(source),
-            Self::DefaultBranch(branch) => {
-                write!(f, "CODEFLOW_DEFAULT_BRANCH '{branch}' (fallback)")
-            }
+            // An environment value naming a branch: shown escaped (TSK-388).
+            Self::DefaultBranch(branch) => write!(
+                f,
+                "CODEFLOW_DEFAULT_BRANCH '{}' (fallback)",
+                codeflow_core::git::display_text(branch)
+            ),
             Self::ProtectedBranches => f.write_str("policy protected branches (fallback)"),
         }
     }
@@ -300,14 +303,17 @@ pub fn run(args: &CiArgs) -> i32 {
     let environment = match ci_environment(|key| std::env::var_os(key)) {
         Ok(environment) => environment,
         Err(error) => {
-            eprintln!("codeflow ci: {error}");
+            eprintln!(
+                "codeflow ci: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -326,7 +332,10 @@ pub fn run(args: &CiArgs) -> i32 {
     let (working, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow: cannot read policy: {error}");
+            eprintln!(
+                "codeflow: cannot read policy: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
@@ -336,7 +345,10 @@ pub fn run(args: &CiArgs) -> i32 {
     {
         Ok(context) => context,
         Err(error) => {
-            eprintln!("codeflow ci: {error}");
+            eprintln!(
+                "codeflow ci: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
@@ -359,7 +371,7 @@ pub fn run(args: &CiArgs) -> i32 {
         Err(e) => {
             // The flag explicitly requested the check — failing open would
             // silently skip what the caller asked to verify.
-            eprintln!("codeflow ci: error: {e}");
+            eprintln!("codeflow ci: error: {e}", e = crate::cmd::shown(&e));
             return 2;
         }
     };
@@ -367,13 +379,19 @@ pub fn run(args: &CiArgs) -> i32 {
     // Every range reader below, including body-less, task-less CI, shares
     // this refusal. A history error is never a skipped check or clean range.
     if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
-        eprintln!("codeflow ci: {error}");
+        eprintln!(
+            "codeflow ci: {}",
+            codeflow_core::git::display_message(&error)
+        );
         return 2;
     }
     let split = match split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow ci: {error}");
+            eprintln!(
+                "codeflow ci: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
@@ -382,7 +400,10 @@ pub fn run(args: &CiArgs) -> i32 {
             let resolved = match rev_parse(&root, rev) {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("codeflow ci: {error}");
+                    eprintln!(
+                        "codeflow ci: {}",
+                        codeflow_core::git::display_message(&error)
+                    );
                     return 2;
                 }
             };
@@ -422,7 +443,10 @@ pub fn run(args: &CiArgs) -> i32 {
     ) {
         Ok(adoption) => adoption,
         Err(error) => {
-            eprintln!("codeflow ci: {error}");
+            eprintln!(
+                "codeflow ci: {}",
+                codeflow_core::git::display_message(&error)
+            );
             return 2;
         }
     };
@@ -452,7 +476,10 @@ pub fn run(args: &CiArgs) -> i32 {
         let from = match rev_parse(&root, from) {
             Ok(value) => value.unwrap_or_else(|| from.to_string()),
             Err(error) => {
-                eprintln!("codeflow ci: {error}");
+                eprintln!(
+                    "codeflow ci: {}",
+                    codeflow_core::git::display_message(&error)
+                );
                 return 2;
             }
         };
@@ -495,7 +522,10 @@ pub fn run(args: &CiArgs) -> i32 {
         None => match origin_url(&root) {
             Ok(url) => url,
             Err(error) => {
-                eprintln!("codeflow ci: {error}");
+                eprintln!(
+                    "codeflow ci: {}",
+                    codeflow_core::git::display_message(&error)
+                );
                 return 2;
             }
         },
@@ -504,7 +534,8 @@ pub fn run(args: &CiArgs) -> i32 {
         let mut listed = String::new();
         if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
             eprintln!(
-                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
+                "codeflow ci: cannot read the destination's advertisement from stdin: {error}",
+                error = crate::cmd::shown(&error)
             );
             return 2;
         }
@@ -551,7 +582,10 @@ pub fn run(args: &CiArgs) -> i32 {
             match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("codeflow ci: {error}");
+                    eprintln!(
+                        "codeflow ci: {}",
+                        codeflow_core::git::display_message(&error)
+                    );
                     return 2;
                 }
             },
@@ -571,7 +605,10 @@ pub fn run(args: &CiArgs) -> i32 {
         println!("{}", finding.line("codeflow ci", "note"));
         skipped.push("branch-naming");
     } else {
-        println!("codeflow ci: branch '{branch}'");
+        println!(
+            "codeflow ci: branch '{}'",
+            codeflow_core::git::display_text(&branch)
+        );
         if let Some(v) = evaluate_branch(git, &branch) {
             tagged.push(v);
         }
@@ -602,7 +639,10 @@ pub fn run(args: &CiArgs) -> i32 {
             let inventory = match change_class::range_inventory(&root, base, &head) {
                 Ok(inventory) => inventory,
                 Err(error) => {
-                    eprintln!("codeflow ci: {error}");
+                    eprintln!(
+                        "codeflow ci: {}",
+                        codeflow_core::git::display_message(&error)
+                    );
                     return 2;
                 }
             };
@@ -613,7 +653,10 @@ pub fn run(args: &CiArgs) -> i32 {
             ) {
                 Ok(project) => project,
                 Err(error) => {
-                    eprintln!("codeflow ci: {error}");
+                    eprintln!(
+                        "codeflow ci: {}",
+                        codeflow_core::git::display_message(&error)
+                    );
                     return 2;
                 }
             };
@@ -688,7 +731,10 @@ pub fn run(args: &CiArgs) -> i32 {
         }) {
             Ok(protected) => protected,
             Err(error) => {
-                eprintln!("codeflow ci: {error}");
+                eprintln!(
+                    "codeflow ci: {}",
+                    codeflow_core::git::display_message(&error)
+                );
                 return 2;
             }
         } || git.branch_is_protected(&line_target);
@@ -1156,7 +1202,7 @@ fn verified_epic_line(
 /// the two-step upgrade order (SPC-013 R-113).
 fn report_invalid_policy(errors: &[policy_schema::PolicyError]) {
     for e in errors {
-        eprintln!("codeflow ci: policy error: {e}");
+        eprintln!("codeflow ci: policy error: {e}", e = crate::cmd::shown(&e));
     }
     eprintln!(
         "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
@@ -1705,7 +1751,7 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         Err(error) => {
             eprintln!(
                 "codeflow ci: error: cannot read .codeflow/policy.json at {}: {error} — nothing was verified",
-                short(base)
+                short(base), error = crate::cmd::shown(&error)
             );
             return None;
         }
@@ -1726,7 +1772,7 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         Err(error) => {
             eprintln!(
                 "codeflow ci: error: .codeflow/policy.json at {} cannot be read: {error} — nothing was verified",
-                short(base)
+                short(base), error = crate::cmd::shown(&error)
             );
             return None;
         }
@@ -1875,7 +1921,12 @@ fn setup_hook_note(root: &Path, base: &str, head: &str) -> Option<String> {
 /// those cases can appear here only if the file changes after loading.
 fn print_source_banner(root: &Path) {
     match Policy::source(root) {
-        PolicySource::UnreadableFile(error) => println!("codeflow ci: cannot read policy: {error}"),
+        PolicySource::UnreadableFile(error) => {
+            println!(
+                "codeflow ci: cannot read policy: {}",
+                codeflow_core::git::display_message(&error)
+            );
+        }
         PolicySource::ProjectFile => {
             println!("codeflow ci: verifying against .codeflow/policy.json");
         }
@@ -3120,14 +3171,17 @@ const READ_PROTOCOL: u32 = 1;
 fn read_release_impact() -> i32 {
     let mut input = String::new();
     if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input) {
-        eprintln!("codeflow ci --read-release-impact: cannot read stdin: {error}");
+        eprintln!(
+            "codeflow ci --read-release-impact: cannot read stdin: {error}",
+            error = crate::cmd::shown(&error)
+        );
         return 2;
     }
     let bodies: Vec<String> = match serde_json::from_str(&input) {
         Ok(bodies) => bodies,
         Err(error) => {
             eprintln!(
-                "codeflow ci --read-release-impact: stdin must be a JSON array of PR body strings: {error}"
+                "codeflow ci --read-release-impact: stdin must be a JSON array of PR body strings: {error}", error = crate::cmd::shown(&error)
             );
             return 2;
         }
@@ -3135,10 +3189,15 @@ fn read_release_impact() -> i32 {
     let readings: Vec<serde_json::Value> =
         bodies.iter().map(|body| pr_body::reading(body)).collect();
     let answer = serde_json::json!({ "protocol": READ_PROTOCOL, "readings": readings });
-    match serde_json::to_writer(std::io::stdout().lock(), &answer) {
+    // Values exact, no hidden character in the bytes (TSK-388).
+    let text = codeflow_core::git::display_json(&answer.to_string());
+    match std::io::Write::write_all(&mut std::io::stdout().lock(), text.as_bytes()) {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("codeflow ci --read-release-impact: cannot write stdout: {error}");
+            eprintln!(
+                "codeflow ci --read-release-impact: cannot write stdout: {error}",
+                error = crate::cmd::shown(&error)
+            );
             2
         }
     }

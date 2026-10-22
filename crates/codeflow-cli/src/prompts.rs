@@ -36,6 +36,7 @@ pub fn decide_pr_template(
     input: &mut impl BufRead,
     path: &str,
 ) -> std::io::Result<Option<MappingState>> {
+    let path = codeflow_core::git::display_line(path);
     loop {
         print!(
             "Kept PR template {path}: accept the proposed heading mapping, refuse it (append the required headings to the template), or keep a custom section list set in policy? [accept | refuse | custom]: "

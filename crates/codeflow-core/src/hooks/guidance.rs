@@ -21,7 +21,6 @@
 //! information; one reminder line aims for [`REMINDER_LINE_GUIDELINE_BYTES`]
 //! because it recurs on every prompt, and the block has no number (TSK-267).
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::scaffold::rule_map::{is_skill_pointer, Kernel, Moment, KERNEL};
@@ -300,12 +299,14 @@ pub fn installed_inventory(manifest: &str, tier: Tier) -> Inventory {
 /// The guidance block for `tier`: always rules by title, the moment table
 /// by its first pointer, and the tier's installed skills and agents.
 #[must_use]
-pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> String {
-    let mut out = String::new();
+pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> crate::git::TextBlock {
+    // Rule titles and moments come from the checkout's AGENTS.md: each
+    // `writeln!` is one line under the block rule (TSK-388).
+    let mut out = crate::git::TextBlock::new();
+    let _ = writeln!(out, "## Rules after compaction or resume ({tier} tier)");
     let _ = writeln!(
         out,
-        "## Rules after compaction or resume ({tier} tier)\n\
-         Full rules: the AGENTS.md managed block; re-read it before acting."
+        "Full rules: the AGENTS.md managed block; re-read it before acting."
     );
     let titles: Vec<&str> = kernel
         .rules_for(tier)
@@ -402,14 +403,22 @@ pub fn payload_source(payload: &str) -> Option<String> {
 /// kernel source `kernel`; `None` for any other source, or when the tier or
 /// the kernel cannot be read.
 #[must_use]
-pub fn session_guidance_with(root: &Path, source: &str, kernel: &str) -> Option<String> {
+pub fn session_guidance_with(
+    root: &Path,
+    source: &str,
+    kernel: &str,
+) -> Option<crate::git::TextBlock> {
     if !source_needs_guidance(source) {
         return None;
     }
     let tier = match project_tier(root) {
         Ok(Some(tier)) => tier,
         Ok(None) => return None,
-        Err(error) => return Some(error),
+        Err(error) => {
+            let mut shown = crate::git::TextBlock::new();
+            shown.push_str(&error);
+            return Some(shown);
+        }
     };
     let kernel = Kernel::parse(kernel).ok()?;
     Some(guidance_block(
@@ -421,7 +430,7 @@ pub fn session_guidance_with(root: &Path, source: &str, kernel: &str) -> Option<
 
 /// [`session_guidance_with`] over the shipped kernel.
 #[must_use]
-pub fn session_guidance(root: &Path, source: &str) -> Option<String> {
+pub fn session_guidance(root: &Path, source: &str) -> Option<crate::git::TextBlock> {
     session_guidance_with(root, source, KERNEL)
 }
 

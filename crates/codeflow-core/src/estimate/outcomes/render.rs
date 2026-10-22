@@ -1,12 +1,12 @@
 //! The plain-text outcomes report: durations in hours, or days past 48
 //! hours, never in seconds or an undefined session unit.
 
-use std::fmt::Write as _;
-
 use super::{OutcomeReport, Point, Started};
 
-pub(super) fn text(report: &OutcomeReport) -> String {
-    let mut out = String::new();
+pub(super) fn text(report: &OutcomeReport) -> crate::git::TextBlock {
+    // Record titles and paths are quoted: each `writeln!` is one line
+    // under the block rule (TSK-388).
+    let mut out = crate::git::TextBlock::new();
     let _ = writeln!(out, "estimate outcomes: {}", report.adoption);
     let t = &report.thresholds;
     let _ = writeln!(
@@ -15,11 +15,11 @@ pub(super) fn text(report: &OutcomeReport) -> String {
         t.minimum, t.low, t.high, t.note
     );
     for forecast in &report.forecasts {
-        let _ = writeln!(
-            out,
-            "forecast: {} ({} task(s) joined)",
-            forecast.path, forecast.joined_tasks
+        let (path, joined) = (
+            crate::git::display_line(&forecast.path),
+            forecast.joined_tasks,
         );
+        let _ = writeln!(out, "forecast: {path} ({joined} task(s) joined)");
     }
     if report.tasks.is_empty() {
         let _ = writeln!(out, "tasks: no complete or cancelled task record matches");
@@ -108,7 +108,7 @@ pub(super) fn text(report: &OutcomeReport) -> String {
     out
 }
 
-fn line(out: &mut String, label: &str, point: Option<&Point>) {
+fn line(out: &mut crate::git::TextBlock, label: &str, point: Option<&Point>) {
     let text = point.map_or_else(|| "not found in history".to_string(), describe);
     let _ = writeln!(out, "  {label:<10} {text}");
 }

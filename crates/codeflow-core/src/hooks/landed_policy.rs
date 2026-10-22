@@ -11,6 +11,7 @@ use super::{policy_schema, Policy, PolicyLevel};
 pub struct LandedPolicy {
     pub policy: Policy,
     pub project: Option<toml::Value>,
+    /// Where the policy was read, as messages show it.
     pub source: String,
     pub local_differs: bool,
     remote_head_advice: Option<String>,
@@ -20,8 +21,16 @@ pub struct LandedPolicy {
 ///
 /// # Errors
 /// Repository metadata or policy authority cannot be read. A populated
-/// tracking namespace must contain every required authority ref.
+/// tracking namespace must contain every required authority ref. The error
+/// is in display form ([`crate::git::display_message`]): it can quote the
+/// branch the remote's `HEAD` names, git's error about it, or a policy
+/// value from the remote, and the guards, orient and doctor print it
+/// (TSK-388).
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
+    load_raw(root).map_err(|error| crate::git::display_message(&error))
+}
+
+fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
     let Some(repo) = super::repo::open(root)? else {
         return working(root, "working copy (unborn HEAD; no remote)");
     };
@@ -89,13 +98,15 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
         }
         project = project.or(candidate_project);
     }
+    // The remote names its default branch: the source is shown escaped.
     let mut sources = defaults
         .iter()
         .map(|source| {
+            let source = crate::git::display_text(source);
             if fallback {
                 format!("{source} (remote HEAD not set)")
             } else {
-                source.clone()
+                source
             }
         })
         .collect::<Vec<_>>()
@@ -107,7 +118,11 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
                 .map_err(|error| format!("{error}; run git fetch {remote}"))?;
             policy = stricter(policy, &line)?;
             project = line_project.or(project);
-            let _ = write!(sources, " + {target_ref} (stricter policy levels)");
+            let _ = write!(
+                sources,
+                " + {} (stricter policy levels)",
+                crate::git::display_text(&target_ref)
+            );
         }
     }
     let mut authority = finish(root, policy, project, sources)?;
@@ -203,7 +218,12 @@ fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<Stri
     let tree = repo
         .revparse_single(reference)
         .and_then(|o| o.peel_to_tree())
-        .map_err(|e| format!("cannot read policy source {reference}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "cannot read policy source {}: {e}",
+                crate::git::display_text(reference)
+            )
+        })?;
     match tree.get_path(Path::new(path)) {
         Ok(entry) => {
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
@@ -220,11 +240,21 @@ fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>
     let read = |path: &str| read_at(repo, reference, path);
     let policy = read(".codeflow/policy.json")?
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
-        .map_err(|e| format!("invalid policy at {reference}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "invalid policy at {}: {e}",
+                crate::git::display_text(reference)
+            )
+        })?;
     let project = read(".codeflow/project.toml")?
         .map(|s| toml::from_str(&s))
         .transpose()
-        .map_err(|e| format!("invalid project settings at {reference}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "invalid project settings at {}: {e}",
+                crate::git::display_text(reference)
+            )
+        })?;
     Ok((policy, project))
 }
 
@@ -468,6 +498,108 @@ mod tests {
         std::fs::write(git.join("packed-refs"), packed).unwrap();
         let error = load(dir.path()).err().expect("the read is refused");
         assert!(error.contains("cannot read policy source"), "{error}");
+    }
+
+    /// TSK-388: the remote names its default branch, which can hold a
+    /// control character that git accepts (the C1 CSI here). The policy
+    /// source shows it escaped; an ordinary name is shown unchanged.
+    #[test]
+    fn the_policy_source_shows_the_remote_default_branch_escaped() {
+        for (name, shown) in [("ev\u{9b}31mil", "ev\\x9b31mil"), ("trunk", "trunk")] {
+            let (dir, commit) = repository(b"");
+            let repo = Repository::open(dir.path()).unwrap();
+            let tracking = format!("refs/remotes/origin/{name}");
+            repo.reference(&tracking, commit, true, "test").unwrap();
+            repo.reference_symbolic("refs/remotes/origin/HEAD", &tracking, true, "test")
+                .unwrap();
+            let authority = load(dir.path()).unwrap();
+            assert_eq!(authority.source, format!("refs/remotes/origin/{shown}"));
+        }
+    }
+
+    /// TSK-388 round 1 (security F4): a policy value at the remote's
+    /// default branch reaches the guard's refusal through the parser's
+    /// error. Its escape sequence is escaped, and its line break cannot
+    /// start a line of its own, so it cannot forge a guard line.
+    #[test]
+    fn a_remote_policy_value_cannot_forge_a_guard_line() {
+        let (dir, _) = repository(b"");
+        let repo = Repository::open(dir.path()).unwrap();
+        let policy = "{\"schema_version\": 1, \"git\": {\"push_to_protected\": \"\\u001b]0;owned\\u0007\\ncodeflow git-guard: allowed\"}}\n";
+        let blob = repo.blob(policy.as_bytes()).unwrap();
+        let mut inner = repo.treebuilder(None).unwrap();
+        inner.insert("policy.json", blob, 0o100_644).unwrap();
+        let inner = inner.write().unwrap();
+        let mut outer = repo.treebuilder(None).unwrap();
+        outer.insert(".codeflow", inner, 0o040_000).unwrap();
+        let tree = repo.find_tree(outer.write().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = repo
+            .commit(None, &sig, &sig, "chore: remote policy", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", commit, true, "test")
+            .unwrap();
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test",
+        )
+        .unwrap();
+        let error = load(dir.path()).err().expect("the policy is refused");
+        assert!(error.contains("owned"), "{error:?}");
+        // As the git-guard prints it (`hook.rs`), and as a refusal renders it.
+        for printed in [
+            format!("codeflow git-guard: {error}"),
+            super::super::Violation::always_blocking("git.policy", error.clone(), "fix it")
+                .render("git-guard"),
+        ] {
+            assert!(!printed.contains(['\u{1b}', '\u{7}']), "{printed:?}");
+            assert!(
+                !printed
+                    .lines()
+                    .any(|line| line.starts_with("codeflow git-guard: allowed")),
+                "{printed:?}"
+            );
+        }
+    }
+
+    /// TSK-388 round 2 (security N1): the task branch's declared target, a
+    /// line the remote holds, joins the policy source; its name is shown
+    /// escaped there.
+    #[test]
+    fn the_stricter_policy_target_is_shown_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(
+                b"project-management/tasks/TSK-007.md",
+                b"---\nid: TSK-007\nintegration_target: \"integration/ev\\u009b31mil\"\n---\n",
+            )],
+        );
+        repo.remote("origin", "https://example.invalid/origin.git")
+            .unwrap();
+        for name in ["main", "integration/ev\u{9b}31mil"] {
+            repo.reference(&format!("refs/remotes/origin/{name}"), commit, true, "test")
+                .unwrap();
+        }
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            true,
+            "test",
+        )
+        .unwrap();
+        repo.reference("refs/heads/task/TSK-007-late", commit, true, "test")
+            .unwrap();
+        repo.set_head("refs/heads/task/TSK-007-late").unwrap();
+        let source = load(dir.path()).unwrap().source;
+        assert!(
+            source
+                .contains("refs/remotes/origin/integration/ev\\x9b31mil (stricter policy levels)"),
+            "{source:?}"
+        );
+        assert!(!source.contains('\u{9b}'), "{source:?}");
     }
 
     /// Issue 79: git2's `Tree::walk` stops with an error at a directory whose

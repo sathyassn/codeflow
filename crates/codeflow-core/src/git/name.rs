@@ -62,6 +62,61 @@ impl fmt::Display for NotRepresentable {
 
 impl std::error::Error for NotRepresentable {}
 
+/// Whether output shows `c` escaped (TSK-388): a control character (Cc), a
+/// line or paragraph separator, or a character a terminal or reader does not
+/// show as itself: the Unicode `Default_Ignorable_Code_Point` set (bidi
+/// controls, zero-width and joiner characters, variation selectors, the
+/// tag block and the rest) and the other format characters (Cf). A name a
+/// remote supplies can hold any of them. Combining marks such as U+0301 are
+/// ordinary text in names and are shown as they are: that is the bound.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(u32::from(c), 0x2028 | 0x2029)
+        || IGNORABLE
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&u32::from(c)))
+}
+
+/// `Default_Ignorable_Code_Point` (Unicode 16 `DerivedCoreProperties`) and
+/// the format characters (Cf) outside it, as inclusive ranges.
+const IGNORABLE: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),   // soft hyphen
+    (0x034F, 0x034F),   // combining grapheme joiner
+    (0x0600, 0x0605),   // Arabic number signs (Cf)
+    (0x061C, 0x061C),   // Arabic letter mark
+    (0x06DD, 0x06DD),   // Arabic end of ayah (Cf)
+    (0x070F, 0x070F),   // Syriac abbreviation mark (Cf)
+    (0x0890, 0x0891),   // Arabic pound and piastre marks (Cf)
+    (0x08E2, 0x08E2),   // Arabic disputed end of ayah (Cf)
+    (0x115F, 0x1160),   // Hangul choseong and jungseong fillers
+    (0x17B4, 0x17B5),   // Khmer inherent vowels
+    (0x180B, 0x180F),   // Mongolian variation selectors and vowel separator
+    (0x200B, 0x200F),   // zero-width space, joiners, direction marks
+    (0x202A, 0x202E),   // bidi embeddings and overrides
+    (0x2060, 0x206F),   // word joiner, invisible operators, isolates, deprecated
+    (0x3164, 0x3164),   // Hangul filler
+    (0xFE00, 0xFE0F),   // variation selectors
+    (0xFEFF, 0xFEFF),   // byte-order mark
+    (0xFFA0, 0xFFA0),   // halfwidth Hangul filler
+    (0xFFF0, 0xFFFB),   // unassigned specials and interlinear annotation
+    (0x110BD, 0x110BD), // Kaithi number sign (Cf)
+    (0x110CD, 0x110CD), // Kaithi number sign above (Cf)
+    (0x13430, 0x1343F), // Egyptian hieroglyph format controls (Cf)
+    (0x1BCA0, 0x1BCA3), // shorthand format controls
+    (0x1D173, 0x1D17A), // musical symbol format controls
+    (0xE0000, 0xE0FFF), // tags and variation selectors supplement
+];
+
+/// `c` escaped: `\xNN` up to U+00FF, else `\u{NNNN}`.
+fn write_escaped(out: &mut impl fmt::Write, c: char) -> fmt::Result {
+    let code = u32::from(c);
+    if code <= 0xff {
+        write!(out, "\\x{code:02x}")
+    } else {
+        write!(out, "\\u{{{code:04x}}}")
+    }
+}
+
 /// A name's display form: formatting only, no `Deref` to `str`, no
 /// conversion back to a name.
 pub struct DisplayName<'a>(&'a [u8]);
@@ -72,7 +127,7 @@ impl fmt::Display for DisplayName<'_> {
             for character in chunk.valid().chars() {
                 match character {
                     '\\' => f.write_str("\\\\")?,
-                    c if c.is_control() => write!(f, "\\x{:02x}", u32::from(c))?,
+                    c if hidden(c) => write_escaped(f, c)?,
                     c => fmt::Write::write_char(f, c)?,
                 }
             }
@@ -352,6 +407,207 @@ pub fn display_key(key: &str) -> String {
     GitName::from_storage_key(key).display().to_string()
 }
 
+/// The display form of a name already held as text, for a message. A
+/// remote supplies some names, such as the branch its `HEAD` names, and can
+/// put any character there: this escapes each control, format and separator
+/// character and each backslash, so such a name cannot write a terminal
+/// escape sequence into output or reorder or break its line (TSK-388). An
+/// ordinary branch name is unchanged.
+#[must_use]
+pub fn display_text(text: &str) -> String {
+    GitName::from_text(text).display().to_string()
+}
+
+/// Output text as a terminal may show it: each control, format and
+/// separator character other than a line break or tab escaped, as
+/// [`display_text`] escapes them; backslashes are kept. For text that
+/// carries its own lines, such as a check's output the pre-push hook
+/// relays, or a message that can quote remote content (TSK-388).
+#[must_use]
+pub fn display_output(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for c in text.chars() {
+        if hidden(c) && !matches!(c, '\n' | '\t') {
+            let _ = write_escaped(&mut shown, c);
+        } else {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
+/// Serialized JSON as a terminal may show it: each character
+/// [`display_text`] escapes is written as a JSON `\uXXXX` escape (a
+/// surrogate pair above U+FFFF). Such characters can only stand inside
+/// JSON strings, so the document decodes to the same values, while the
+/// bytes on the terminal hold none of them (TSK-388). `serde_json` itself
+/// escapes only the C0 controls, the quote and the backslash.
+#[must_use]
+pub fn display_json(json: &str) -> String {
+    let mut shown = String::with_capacity(json.len());
+    for c in json.chars() {
+        if hidden(c) && !matches!(c, '\n' | '\t' | '\r') {
+            let mut units = [0u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = fmt::Write::write_fmt(&mut shown, format_args!("\\u{unit:04x}"));
+            }
+        } else {
+            shown.push(c);
+        }
+    }
+    shown
+}
+
+/// One line as a terminal may show it: [`display_output`] with the line
+/// break escaped too (`\x0a`), for output that is a single line by design,
+/// such as the test gate's progress lines. A name or reason it quotes,
+/// which a checkout can fill with a line break, cannot start a line of its
+/// own (TSK-388).
+#[must_use]
+pub fn display_line(text: &str) -> String {
+    display_output(text).replace('\n', "\\x0a")
+}
+
+/// A filesystem path as an output line shows it: [`display_line`] of its
+/// `Path::display` form. A directory name can hold a line break or a
+/// terminal escape sequence like any other name (TSK-388); backslashes,
+/// the Windows separator, are kept.
+#[must_use]
+pub fn display_path(path: &std::path::Path) -> String {
+    display_line(&path.display().to_string())
+}
+
+/// One print call's text as a terminal sink writes it (TSK-388):
+/// [`display_output`], and each further line that does not already start
+/// with a space or a tab is indented two spaces. Whatever a print call
+/// interpolates, a line break inside it cannot start a line at column 0, so
+/// no value can pass a line of its own as one of `CodeFlow`'s; a layout that
+/// already indents its further lines prints unchanged. Text that is
+/// several column-0 lines by design prints through a block printer.
+#[must_use]
+pub fn display_print(text: &str) -> String {
+    let shown = display_output(text);
+    if !shown.contains('\n') {
+        return shown;
+    }
+    let mut out = String::with_capacity(shown.len() + 16);
+    for (index, line) in shown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+            if !line.is_empty() && !line.starts_with([' ', '\t']) {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Text of several lines that `CodeFlow` composes and prints as one block,
+/// its lines at column 0 by design (a report, a digest, a list). Each
+/// `write!` or `writeln!` into the block is one call under the
+/// [`display_print`] rule, so a line break a call interpolates cannot start
+/// a line of its own. The rule does not cover a call's first line: the
+/// caller owns its first bytes, and a line whose first bytes could come
+/// from the checkout starts with a fixed label (`product: `, `branch `).
+/// A block printer takes a `TextBlock` and prints it as it stands. It has
+/// no `Display`, so a print macro cannot take it by mistake (TSK-388).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TextBlock(String);
+
+impl TextBlock {
+    /// An empty block.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// JSON text as serde writes it, hidden characters escaped by
+    /// [`display_json`]. A JSON string holds no raw line break, so each of
+    /// its lines is structure the serializer wrote.
+    #[must_use]
+    pub fn json(text: &str) -> Self {
+        Self(display_json(text))
+    }
+
+    /// The block's text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The block's text, owned.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    /// Appends one call's text under the [`display_print`] rule.
+    pub fn push_str(&mut self, text: &str) {
+        self.0.push_str(&display_print(text));
+    }
+
+    /// One `write!` or `writeln!` call, formatted whole and then appended
+    /// under the [`display_print`] rule, so the line breaks it interpolates
+    /// are told apart from its own; the rule holds per call. Inherent, so
+    /// the macros need no import.
+    ///
+    /// # Errors
+    /// Never; the result matches [`std::fmt::Write`].
+    pub fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::fmt::Result {
+        self.push_str(&args.to_string());
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for TextBlock {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for TextBlock {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for TextBlock {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+/// Text another program wrote, as `CodeFlow` relays it: [`display_output`]
+/// with every line, the first included, indented two spaces, so no relayed
+/// line can start at column 0 and pass as one of `CodeFlow`'s own (TSK-388).
+#[must_use]
+pub fn display_relay(text: &str) -> String {
+    let shown = display_output(text);
+    let mut out = String::with_capacity(shown.len() + 16);
+    for (index, line) in shown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        if !line.is_empty() {
+            out.push_str("  ");
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// A message field as a refusal or note shows it: [`display_output`], with
+/// each further line of the field indented under its first, so text the
+/// message quotes cannot start a line that reads as one of `CodeFlow`'s own
+/// (TSK-388).
+#[must_use]
+pub fn display_message(text: &str) -> String {
+    display_output(text).replace('\n', "\n  ")
+}
+
 /// What a tree walk does after an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Walk {
@@ -451,6 +707,41 @@ mod tests {
         );
         assert_eq!(GitName::from_text("a\\b").display().to_string(), "a\\\\b");
         assert_eq!(GitName::from_text("a\nb").display().to_string(), "a\\x0ab");
+    }
+
+    /// TSK-388 round 1 (Grok F-2, security F3): format and separator
+    /// characters git accepts in a branch name reorder or break the line a
+    /// person reads, so the display form escapes them as it does controls.
+    #[test]
+    fn display_escapes_format_and_separator_characters() {
+        for (name, shown) in [
+            ("ev\u{202e}lim", "ev\\u{202e}lim"),
+            ("ev\u{2028}il", "ev\\u{2028}il"),
+            ("ev\u{2029}il", "ev\\u{2029}il"),
+            (
+                "a\u{61c}b\u{200b}c\u{200f}d",
+                "a\\u{061c}b\\u{200b}c\\u{200f}d",
+            ),
+            (
+                "a\u{202a}b\u{2066}c\u{2069}d",
+                "a\\u{202a}b\\u{2066}c\\u{2069}d",
+            ),
+            ("a\u{2060}b\u{feff}c", "a\\u{2060}b\\u{feff}c"),
+            ("ev\u{9b}31mil", "ev\\x9b31mil"),
+            // Round 2: the rest of Default_Ignorable_Code_Point and the tags.
+            ("a\u{ad}b\u{34f}c\u{180e}d", "a\\xadb\\u{034f}c\\u{180e}d"),
+            (
+                "a\u{206a}b\u{fe0e}c\u{fff9}d",
+                "a\\u{206a}b\\u{fe0e}c\\u{fff9}d",
+            ),
+            ("main\u{e0001}\u{e0061}", "main\\u{e0001}\\u{e0061}"),
+            ("a\u{e0100}b\u{1d173}c", "a\\u{e0100}b\\u{1d173}c"),
+            // The stated bound: a combining mark is ordinary text.
+            ("cafe\u{301}", "cafe\u{301}"),
+            ("caf\u{e9}/\u{5d0}", "caf\u{e9}/\u{5d0}"),
+        ] {
+            assert_eq!(display_text(name), shown);
+        }
     }
 
     #[test]
@@ -613,5 +904,123 @@ mod tests {
     fn a_name_is_an_exact_path_on_unix() {
         let path = GitName::from_bytes(b"d/caf\xe9").os_path().unwrap();
         assert_eq!(GitName::from_os_str(path.as_os_str()).bytes(), b"d/caf\xe9");
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::{display_json, display_message, display_output, display_print, TextBlock};
+
+    /// Values a print call could interpolate: line breaks alone, with CR,
+    /// leading, trailing, doubled, and a forged `CodeFlow` line after each.
+    const HOSTILE: [&str; 7] = [
+        "ev\ncodeflow test: passed",
+        "ev\r\nok  test-config: healthy",
+        "\n[codeflow test] completed target 'x': passed",
+        "ev\n\ncodeflow status: allowed\n",
+        "a\nb\nc",
+        "ev\u{2028}codeflow test: passed",
+        "ev\n\u{202e}codeflow test: passed",
+    ];
+
+    /// No line after the first starts at column 0, unless it is empty.
+    fn assert_off_column_zero(what: &str, printed: &str) {
+        for line in printed.split('\n').skip(1) {
+            assert!(
+                line.is_empty() || line.starts_with([' ', '\t']),
+                "{what}: column-0 continuation {line:?} in {printed:?}"
+            );
+        }
+    }
+
+    /// TSK-388 round 7, the sink invariant: whatever one print call
+    /// interpolates, no further line of it starts at column 0, and a
+    /// layout that already indents prints unchanged.
+    #[test]
+    fn a_print_call_keeps_every_interpolated_line_off_column_zero() {
+        for value in HOSTILE {
+            for printed in [
+                display_print(value),
+                display_print(&format!("ok  doctor: {value}")),
+                display_print(&format!("{value}: FAILED")),
+                display_print(&format!("x {value} y\n")),
+            ] {
+                assert_off_column_zero(value, &printed);
+                assert_eq!(display_print(&printed), printed, "idempotent");
+            }
+        }
+        assert_eq!(
+            display_print("ev\ncodeflow test: passed"),
+            "ev\n  codeflow test: passed"
+        );
+        assert_eq!(display_print("a\r\nb"), "a\\x0d\n  b");
+        let kept = "warn  x: y\n      clear it: run z\n";
+        assert_eq!(display_print(kept), kept);
+        assert_eq!(display_print("plain"), "plain");
+    }
+
+    /// The block builder applies the rule per `writeln!`: a value cannot
+    /// start a line of its own, and each call's own line stays at column 0.
+    #[test]
+    fn a_text_block_keeps_interpolated_lines_off_column_zero() {
+        for value in HOSTILE {
+            let mut block = TextBlock::new();
+            let _ = writeln!(block, "branch: {value}");
+            let _ = writeln!(block, "worktrees: {value}");
+            let _ = write!(block, "tail {value}");
+            let lines: Vec<&str> = block.split('\n').collect();
+            assert!(lines[0].starts_with("branch: "), "{block:?}");
+            let own = lines
+                .iter()
+                .filter(|line| line.starts_with("worktrees: "))
+                .count();
+            assert_eq!(own, 1, "{block:?}");
+            for line in &lines {
+                assert!(
+                    line.is_empty()
+                        || line.starts_with([' ', '\t'])
+                        || line.starts_with("branch: ")
+                        || line.starts_with("worktrees: ")
+                        || line.starts_with("tail "),
+                    "{value:?}: forged line {line:?} in {block:?}"
+                );
+            }
+        }
+        let json = serde_json::to_string_pretty(&serde_json::json!({"t": "a\nb"})).unwrap();
+        assert_eq!(TextBlock::json(&json).as_str(), json, "JSON prints exact");
+    }
+
+    /// TSK-388 round 2: JSON keeps every value, and its bytes hold no C1,
+    /// bidi or tag character.
+    #[test]
+    fn json_escapes_hidden_characters_and_keeps_the_values() {
+        let value = serde_json::json!({"ref": "ev\u{9b}31mil", "title": "a\u{202e}b\u{e0001}\nc"});
+        let text = serde_json::to_string(&value).unwrap();
+        let shown = display_json(&text);
+        assert_eq!(
+            shown,
+            "{\"ref\":\"ev\\u009b31mil\",\"title\":\"a\\u202eb\\udb40\\udc01\\nc\"}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&shown).unwrap(),
+            value
+        );
+    }
+
+    /// TSK-388 round 1: text with its own lines keeps line breaks and tabs
+    /// and backslashes, and escapes every other control, format and
+    /// separator character; a message field indents its further lines, so
+    /// quoted text cannot start a line of its own.
+    #[test]
+    fn output_keeps_lines_and_escapes_the_rest() {
+        assert_eq!(
+            display_output("a\tb\nc\\d\u{1b}]0;x\u{7}\u{202e}\u{2028}\r"),
+            "a\tb\nc\\d\\x1b]0;x\\x07\\u{202e}\\u{2028}\\x0d"
+        );
+        assert_eq!(
+            display_message("bad value\ncodeflow git-guard: allowed"),
+            "bad value\n  codeflow git-guard: allowed"
+        );
+        assert_eq!(display_message("plain text"), "plain text");
     }
 }

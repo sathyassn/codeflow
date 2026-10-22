@@ -123,7 +123,8 @@ pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<String>
     is_older(&state.scaffold_version, binary_version).then(|| {
         format!(
             "codeflow: scaffold {} is behind binary {} — run `codeflow update`",
-            state.scaffold_version, binary_version
+            crate::git::display_line(&state.scaffold_version),
+            binary_version
         )
     })
 }

@@ -128,7 +128,10 @@ pub fn pre_commit(
         report.violations.push(Violation::new(
             "git.commit_to_protected",
             policy.commit_to_protected,
-            format!("commit on protected branch '{branch}'"),
+            format!(
+                "commit on protected branch '{}'",
+                crate::git::display_text(&branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
@@ -715,7 +718,10 @@ pub fn pre_merge_commit(
         report.violations.push(Violation::new(
             "git.merge_to_protected",
             policy.merge_to_protected,
-            format!("merge commit on protected branch '{branch}'"),
+            format!(
+                "merge commit on protected branch '{}'",
+                crate::git::display_text(&branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
@@ -746,6 +752,28 @@ pub fn ref_line_touches_local_branch(line: &str) -> bool {
         super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some()
             || super::git_guard::transaction_ref_aliases(r)
     })
+}
+
+/// Refuses a ref update whose spelling can alias a protected ref, unless
+/// the transaction is sanctioned; the ref name is shown escaped (TSK-388).
+fn refuse_alias(
+    report: &mut StageReport,
+    policy: &GitPolicy,
+    sanctioned: bool,
+    refname: &str,
+    why: &str,
+) {
+    if policy.local_ref_protection.is_active() && !sanctioned {
+        report.violations.push(Violation::new(
+            "git.local_ref_protection",
+            policy.local_ref_protection,
+            format!(
+                "ref update of '{}': {why}",
+                crate::git::display_text(refname)
+            ),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
+        ));
+    }
 }
 
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
@@ -808,17 +836,13 @@ pub fn reference_transaction(
         // gc`) moves nothing, so the spelling checks below let it pass.
         let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
         if collisions.contains(refname) && !unchanged() {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': its name folds onto another ref's on a \
-                         case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto another ref's on a case-insensitive filesystem",
+            );
             continue;
         }
         // A fetched remote-tracking name that folds onto a protected branch
@@ -828,33 +852,27 @@ pub fn reference_transaction(
             && tracking_name_folds_onto_protected(&repo, policy, refname)
             && !unchanged()
         {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': its name folds onto a protected branch's \
-                         tracking ref on a case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto a protected branch's tracking ref on a \
+                 case-insensitive filesystem",
+            );
             continue;
         }
         // A spelling a case-insensitive filesystem may store as a guarded ref
         // is refused outright, failing closed (TSK-381 SF-3).
         if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': a non-ASCII character or a case-different \
-                         `refs/` prefix can name a protected ref on a case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "a non-ASCII character or a case-different `refs/` prefix can name a \
+                 protected ref on a case-insensitive filesystem",
+            );
             continue;
         }
         let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
@@ -876,7 +894,10 @@ pub fn reference_transaction(
                 report.violations.push(Violation::new(
                     "git.delete_protected",
                     policy.delete_protected,
-                    format!("deleting protected branch '{branch}' via a local ref update"),
+                    format!(
+                        "deleting protected branch '{}' via a local ref update",
+                        crate::git::display_text(branch)
+                    ),
                     crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
@@ -900,7 +921,10 @@ pub fn reference_transaction(
         report.violations.push(Violation::new(
             "git.local_ref_protection",
             policy.local_ref_protection,
-            format!("local update of protected branch '{branch}' that is not a sync from origin"),
+            format!(
+                "local update of protected branch '{}' that is not a sync from origin",
+                crate::git::display_text(branch)
+            ),
             crate::remedy::PROTECTED_BRANCH.remedy(),
         ));
     }
@@ -1178,7 +1202,10 @@ pub fn pre_push(
                 report.violations.push(Violation::new(
                     "git.delete_protected",
                     policy.delete_protected,
-                    format!("push would delete protected branch '{branch}'"),
+                    format!(
+                        "push would delete protected branch '{}'",
+                        crate::git::display_text(branch)
+                    ),
                     crate::remedy::PROTECTED_DELETE.remedy(),
                 ));
             }
@@ -1190,7 +1217,10 @@ pub fn pre_push(
             report.violations.push(Violation::new(
                 "git.push_to_protected",
                 policy.push_to_protected,
-                format!("direct push to protected branch '{branch}'"),
+                format!(
+                    "direct push to protected branch '{}'",
+                    crate::git::display_text(branch)
+                ),
                 crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
@@ -1213,12 +1243,12 @@ pub fn pre_push(
                 Ok(false) => {},
                 Ok(true) => report.violations.push(Violation::new(
                     force_rule, force_level,
-                    format!("non-fast-forward (force) push to {}branch '{branch}'", if protected { "protected " } else { "" }),
+                    format!("non-fast-forward (force) push to {}branch '{}'", if protected { "protected " } else { "" }, crate::git::display_text(branch)),
                     remedy,
                 )),
                 Err(reason) => report.violations.push(Violation::always_blocking(
                     force_rule,
-                    format!("push to branch '{branch}' cannot be proven a fast-forward: {reason}; fetch it first"),
+                    format!("push to branch '{}' cannot be proven a fast-forward: {reason}; fetch it first", crate::git::display_text(branch)),
                     &remedy,
                 )),
             }
@@ -1232,7 +1262,10 @@ pub fn pre_push(
             report.violations.push(Violation::new(
                 "git.branch_naming",
                 policy.branch_naming,
-                format!("branch '{branch}' does not match `{{prefix}}/{{kebab-name}}`"),
+                format!(
+                    "branch '{}' does not match `{{prefix}}/{{kebab-name}}`",
+                    crate::git::display_text(branch)
+                ),
                 crate::remedy::BRANCH_NAME.with(&[("prefixes", &policy.branch_prefixes.join(" "))]),
             ));
         }
@@ -1262,7 +1295,10 @@ fn epic_line_push(
 ) {
     let skipped = |report: &mut StageReport, error: &str| {
         report.notes.push(crate::remedy::Finding::new(
-            format!("the epic-line push check for '{branch}' was skipped: {error}"),
+            format!(
+                "the epic-line push check for '{}' was skipped: {error}",
+                crate::git::display_text(branch)
+            ),
             crate::remedy::HOOK_UNEVALUATED.remedy(),
         ));
     };
@@ -1345,7 +1381,7 @@ fn epic_line_push(
     };
     report.violations.push(Violation::always_blocking(
         "work.epic_line",
-        format!("{branch} would receive a commit made directly on the line ({ids})"),
+        format!("{} would receive a commit made directly on the line ({ids})", crate::git::display_text(branch)),
         &format!(
             "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
         ),
@@ -3382,6 +3418,55 @@ mod tests {
         let refs = [pref("refs/heads/main", "abc1", "refs/heads/main", ZERO)];
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.push_to_protected");
+    }
+
+    /// TSK-388 round 1 (Grok F-1, F-2): a pushed branch name can hold a
+    /// character git accepts that a terminal acts on: the C1 control CSI,
+    /// a line separator, a right-to-left override. The pre-push refusals
+    /// name it escaped, and the rendered refusal holds none of them; the
+    /// decision is still made on the exact name.
+    #[test]
+    fn pre_push_refusals_name_the_pushed_branch_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        for (name, shown, protected) in [
+            ("ev\u{9b}31mil", "ev\\x9b31mil", true),
+            ("ev\u{2028}il", "ev\\u{2028}il", false),
+            ("ev\u{202e}lim", "ev\\u{202e}lim", false),
+        ] {
+            let mut policy = GitPolicy::default();
+            if protected {
+                policy.protected_branches.push(name.to_string());
+            }
+            let reference = format!("refs/heads/{name}");
+            let refs = [pref(&reference, "abc1", &reference, ZERO)];
+            let report = pre_push(dir.path(), &policy, &refs, false, false).unwrap();
+            let expected = if protected {
+                format!("direct push to protected branch '{shown}'")
+            } else {
+                format!("branch '{shown}' does not match")
+            };
+            let rule = if protected {
+                "git.push_to_protected"
+            } else {
+                "git.branch_naming"
+            };
+            let violation = report
+                .violations
+                .iter()
+                .find(|v| v.rule == rule)
+                .unwrap_or_else(|| panic!("{name:?}: {:?}", report.violations));
+            assert!(
+                violation.message.contains(&expected),
+                "{:?}",
+                violation.message
+            );
+            let rendered = violation.render("pre-push");
+            assert!(
+                !rendered.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+                "{rendered:?}"
+            );
+        }
     }
 
     #[test]

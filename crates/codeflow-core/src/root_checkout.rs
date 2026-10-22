@@ -1976,6 +1976,22 @@ fn verify_ignored(root: &Path, nested: &[NestedRepo]) -> Result<(), WorkspaceErr
 
 impl fmt::Display for WorkspaceReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl WorkspaceReport {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
         writeln!(f, "workspace mode:")?;
         match &self.branch {
             BranchStep::AlreadyOn(b) => writeln!(f, "  root checkout already on '{b}'")?,
@@ -2005,7 +2021,7 @@ impl fmt::Display for WorkspaceReport {
                 f,
                 "  the {} '{}' is already in .gitignore",
                 n.kind.noun(),
-                n.path
+                crate::git::display_line(&n.path)
             )?;
         }
         writeln!(f, "next steps:")?;

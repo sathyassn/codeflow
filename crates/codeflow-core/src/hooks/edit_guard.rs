@@ -370,7 +370,8 @@ fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError>
     if !reduced.is_empty() {
         eprintln!(
             "codeflow edit-guard: reduced alias coverage; lexical enforcement remains active: {}",
-            reduced.into_iter().collect::<Vec<_>>().join("; ")
+            // The reasons quote checkout paths (TSK-388).
+            crate::git::display_message(&reduced.into_iter().collect::<Vec<_>>().join("; "))
         );
     }
     Ok(result.into_iter().collect())

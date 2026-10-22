@@ -6,7 +6,6 @@
 //! `mcp serve`. Off-switch: `orient.enabled = false` in
 //! `.codeflow/project.toml` (D21).
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::models::{EpicFilter, EpicStatus, TaskFilter, TaskStatus};
@@ -22,19 +21,22 @@ pub const MAX_LINES: usize = 30;
 ///
 /// Returns an empty string when orient is disabled in `project.toml`.
 #[must_use]
-pub fn generate(root: &Path) -> String {
+pub fn generate(root: &Path) -> crate::git::TextBlock {
     let authority = super::landed_policy::load(root);
     let project_toml = authority.as_ref().ok().and_then(|a| a.project.clone());
     if !enabled(project_toml.as_ref()) {
-        return String::new();
+        return crate::git::TextBlock::new();
     }
 
-    let mut out = String::new();
+    // Each `writeln!` is one line under the block rule (TSK-388).
+    let mut out = crate::git::TextBlock::new();
     let name = project_name(root);
     let _ = writeln!(out, "# orient — {name}");
 
+    // The description is checkout prose: a fixed label owns the line's
+    // first bytes, so it cannot read as a line of CodeFlow's (TSK-388).
     if let Some(one_liner) = product_one_liner(root, project_toml.as_ref()) {
-        let _ = writeln!(out, "{one_liner}");
+        let _ = writeln!(out, "product: {one_liner}");
     }
 
     if let Some(line) = branch_line(root) {
@@ -63,11 +65,17 @@ pub fn generate(root: &Path) -> String {
 
     let _ = writeln!(out, "{}", gates_line(root));
 
-    let _ = writeln!(
-        out,
-        "{}",
-        super::landed_policy::diagnostic(root).unwrap_or_else(|e| e)
-    );
+    // Each line above starts with its own label (`branch:`, `work:`,
+    // `tasks:`, `capabilities:`, `gates:`); the policy line does too, and
+    // its error keeps that label (TSK-388).
+    match super::landed_policy::diagnostic(root) {
+        Ok(line) => {
+            let _ = writeln!(out, "{line}");
+        }
+        Err(error) => {
+            let _ = writeln!(out, "policy source: {error}");
+        }
+    }
     let binary = std::process::Command::new("codeflow")
         .args(["git-hook", "capabilities"])
         .output();
@@ -240,7 +248,14 @@ fn tasks_line(root: &Path) -> Option<String> {
     let next = backlog
         .in_state(crate::workgraph::readiness::State::Ready)
         .next()
-        .map(|entry| format!("; next: {} {}", entry.task_id, truncate(&entry.title, 60)))
+        // A record title: a line break in it is indented (TSK-388).
+        .map(|entry| {
+            format!(
+                "; next: {} {}",
+                entry.task_id,
+                crate::git::display_message(&truncate(&entry.title, 60))
+            )
+        })
         .unwrap_or_default();
     Some(format!(
         "tasks: {}{next} (`codeflow work next`)",
@@ -481,7 +496,7 @@ mod tests {
         full_fixture(dir.path());
         let digest = generate(dir.path());
 
-        assert!(digest.lines().count() <= MAX_LINES, "{digest}");
+        assert!(digest.lines().count() <= MAX_LINES, "{digest:?}");
         // <500 token budget: chars/4 is a generous proxy.
         assert!(
             digest.len() < 2000,
@@ -656,7 +671,7 @@ mod tests {
         let digest = generate(dir.path());
         assert!(
             digest.contains("work: 1 epics (1 in progress) · 2 tasks (1 open)"),
-            "{digest}"
+            "{digest:?}"
         );
     }
 

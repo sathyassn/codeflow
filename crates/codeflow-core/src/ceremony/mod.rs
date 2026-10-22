@@ -252,6 +252,22 @@ struct Row {
 
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl Report {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
         match &self.window {
             Window::Numbers { first, last } => {
                 writeln!(f, "Ceremony report: pull requests {first} to {last}")?;
@@ -324,7 +340,7 @@ impl fmt::Display for Report {
 }
 
 impl Report {
-    fn fmt_measures(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_measures(&self, f: &mut crate::git::TextBlock) -> fmt::Result {
         write!(f, "Review rounds per pull request: ")?;
         match &self.reviews {
             Reviews::NotAsked => writeln!(f, "unknown (no pull request to ask about)")?,
@@ -374,7 +390,7 @@ impl Report {
 }
 
 fn table_row(
-    f: &mut fmt::Formatter<'_>,
+    f: &mut crate::git::TextBlock,
     kind: &str,
     prs: usize,
     changes: Option<usize>,

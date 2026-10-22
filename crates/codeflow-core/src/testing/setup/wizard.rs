@@ -53,9 +53,9 @@ pub fn run_wizard(
                 serde_json::to_string(&dt.config.runner).unwrap_or_else(|_| "unknown".to_string());
             println!(
                 "  - {} (runner: {}, cwd: {})",
-                dt.config.name,
+                crate::git::display_text(&dt.config.name),
                 runner_str.trim_matches('"'),
-                dt.config.cwd.as_deref().unwrap_or("."),
+                crate::git::display_line(dt.config.cwd.as_deref().unwrap_or(".")),
             );
         }
 
