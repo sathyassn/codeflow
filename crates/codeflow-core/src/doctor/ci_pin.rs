@@ -255,7 +255,18 @@ pub(super) fn report(root: &Path) -> PinReport {
             (&head_state, &verified),
         );
     }
-    if is_older(&head_pin, &target_pin) {
+    let lowered = match is_older(&head_pin, &target_pin) {
+        Ok(lowered) => lowered,
+        Err(error) => {
+            return PinReport {
+                status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
+                message: format!(
+                    "scaffold_version {error}, so this checkout's pin ({head_pin}) and {target}'s ({target_pin}) are not compared"
+                ),
+            }
+        }
+    };
+    if lowered {
         return PinReport {
             status: Status::Warn(
                 remedy::DOCTOR_CI_PIN_LOWERED.with(&[("pin", &target_pin), ("target", &target)]),
@@ -766,6 +777,30 @@ mod tests {
             "{}",
             report.message
         );
+    }
+
+    #[test]
+    fn an_unparseable_pin_is_named_and_never_compared() {
+        // As strings "10.0" < "9.0.0", which would call this a lowered pin.
+        let dir = project("9.0.0");
+        write(dir.path(), STATE, &state("10.0"));
+        let shown = report(dir.path());
+        assert!(shown.status.is_warn(), "{}", shown.message);
+        assert!(
+            shown
+                .message
+                .contains("\"10.0\" is not a parseable version"),
+            "{}",
+            shown.message
+        );
+        assert!(!shown.message.contains("lowers"), "{}", shown.message);
+        // An unparseable pin on the target branch is named the same way.
+        let dir = project("3.10");
+        write(dir.path(), STATE, &state("3.2.0"));
+        let shown = report(dir.path());
+        assert!(shown
+            .message
+            .contains("\"3.10\" is not a parseable version"));
     }
 
     #[test]

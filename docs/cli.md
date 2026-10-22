@@ -88,7 +88,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
 | | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. |
 | | `--force` | Replace user-modified managed files instead of merging. |
-| | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. Upgrade step one; land it before the update. |
+| | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. The version must read as `MAJOR.MINOR.PATCH` with an optional `-prerelease` and `+build` (`3.2` and `3.2.0x` are refused before any download); a pinned `scaffold_version` that does not read that way is named, never compared. Upgrade step one; land it before the update. |
 | `codeflow epic new <TITLE>` | | Allocate the next `EPC-NNN` and scaffold the epic from the template |
 | | `--integration` | Also cut `integration/EPC-NNN-<slug>` from main (or master) and push it to origin when that remote exists. |
 | | `<TITLE>` | Epic title. |
