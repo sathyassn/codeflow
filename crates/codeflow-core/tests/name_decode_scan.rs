@@ -2585,14 +2585,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // A lookup error returns false, and the caller then pushes the git.local_ref_protection violation; an unread ref never counts as a sync.
-    (
-        "crates/codeflow-core/src/hooks/git_hook.rs",
-        "new_matches_remote_head",
-        "obtain-absent:find_reference",
-        1,
-        "unproven",
-    ),
     // Owns physical text-line framing for this complete message/document reader. Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",

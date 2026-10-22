@@ -57,6 +57,10 @@ pub struct TargetRepo {
     /// The repository's root checkout when the location is one, judged by
     /// its own policy; `None` in a linked worktree (TSK-165).
     pub root: Option<RootCheckout>,
+    /// Whether its git directory is on a case-insensitive filesystem
+    /// ([`super::repo::case_insensitive_git_dir`]), so a ref name with a
+    /// non-ASCII byte may name another ref there (TSK-381 SF-5).
+    pub case_insensitive: bool,
 }
 
 /// Resolves a retargeted repository location to its branch and policy, so a
@@ -261,6 +265,7 @@ pub fn read_target(
         branch,
         policy,
         root,
+        case_insensitive: super::repo::case_insensitive_git_dir(repo.commondir()),
     })
 }
 
@@ -7402,6 +7407,7 @@ fn check_authority(
     args: &[String],
     moved: &Moves<'_>,
     cwd: &Path,
+    ctx: &GuardContext<'_>,
     violations: &mut Vec<Violation>,
 ) {
     let transport = git_subcommand(args).is_some_and(|(sub, rest)| {
@@ -7443,7 +7449,19 @@ fn check_authority(
                 ));
             }
         }
-        if let Some(reason) = super::ref_authority::check(&target, args) {
+        // Another repository is judged by its own filesystem; one the
+        // resolver cannot read may fold names (TSK-381 SF-5).
+        let folds = spec.as_ref().map(|spec| {
+            lookup(
+                &Retarget {
+                    path: &spec.path,
+                    git_dir: spec.git_dir,
+                },
+                ctx,
+            )
+            .is_none_or(|repo| repo.case_insensitive)
+        });
+        if let Some(reason) = with_folds(folds, || super::ref_authority::check(&target, args)) {
             violations.push(Violation::always_blocking(
                 "git.policy_authority",
                 reason,
@@ -7464,7 +7482,7 @@ fn check_git(
     depth: usize,
     cwd: &Path,
 ) {
-    check_authority(args, moved, cwd, out);
+    check_authority(args, moved, cwd, ctx, out);
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
@@ -7628,15 +7646,14 @@ fn check_git(
         // name a protected ref from anywhere.
         let acts_on_current = known.is_some_and(|s| CURRENT_BRANCH_SUBCOMMANDS.contains(&s));
         let exposed = !acts_on_current
-            || judged
-                .cases
-                .iter()
-                .any(|(branch, rules, _)| rules.branch_is_protected(branch));
+            || judged.cases.iter().any(|(branch, rules, _, folds)| {
+                with_folds(*folds, || rules.branch_is_protected_any_case(branch))
+            });
         if exposed {
             let strictest = judged
                 .cases
                 .iter()
-                .filter_map(|(_, rules, _)| u.violation(rules, known))
+                .filter_map(|(_, rules, _, folds)| with_folds(*folds, || u.violation(rules, known)))
                 .max_by_key(|v| severity(v.level));
             out.extend(strictest);
         }
@@ -7688,7 +7705,8 @@ fn check_git(
     };
 
     let mut found: Vec<Violation> = Vec::new();
-    for (branch, rules, root) in &judged.cases {
+    for (branch, rules, root, folds) in &judged.cases {
+        let _folds = folds.map(super::policy::NonAsciiAliasingScope::set);
         let view = GuardContext {
             policy: rules,
             current_branch: ctx.current_branch,
@@ -8296,9 +8314,23 @@ enum Track {
     Unplaced,
 }
 
-/// A branch a git op is judged on, the policy it is judged by, and the root
-/// checkout it runs in, if it runs in one.
-type Case<'p> = (String, Cow<'p, GitPolicy>, Option<RootCheckout>);
+/// A branch a git op is judged on, the policy it is judged by, the root
+/// checkout it runs in, if it runs in one, and whether that repository's git
+/// directory folds names (`None` for the session repository, whose decision
+/// is already in force; TSK-381 SF-5).
+type Case<'p> = (
+    String,
+    Cow<'p, GitPolicy>,
+    Option<RootCheckout>,
+    Option<bool>,
+);
+
+/// Run `judge` under `folds`, a repository's own non-ASCII aliasing decision
+/// (`None` keeps the decision in force).
+fn with_folds<T>(folds: Option<bool>, judge: impl FnOnce() -> T) -> T {
+    let _scope = folds.map(super::policy::NonAsciiAliasingScope::set);
+    judge()
+}
 
 /// The cases a git op is judged against.
 struct Judged<'p> {
@@ -8333,6 +8365,7 @@ fn judge_target<'p>(
                         b.clone(),
                         Cow::Borrowed(ctx.policy),
                         ctx.root_checkout.cloned(),
+                        None,
                     )
                 })),
                 Some(spec) => cases.extend(
@@ -8344,11 +8377,11 @@ fn judge_target<'p>(
         // A branch an unplaced checkout moved may be checked out here too.
         let moved: Vec<_> = cases
             .iter()
-            .flat_map(|(_, rules, root)| {
+            .flat_map(|(_, rules, root, folds)| {
                 branches
                     .anywhere()
                     .iter()
-                    .map(move |b| (b.clone(), rules.clone(), root.clone()))
+                    .map(move |b| (b.clone(), rules.clone(), root.clone(), *folds))
             })
             .collect();
         cases.extend(moved);
@@ -8370,7 +8403,8 @@ fn judge_target<'p>(
                 .unwrap_or_default();
             Judged {
                 track: Track::Unplaced,
-                cases: vec![(branch, Cow::Borrowed(ctx.policy), None)],
+                // An unresolved target may fold names: fail closed.
+                cases: vec![(branch, Cow::Borrowed(ctx.policy), None, Some(true))],
                 unresolved: Some(why),
             }
         }
@@ -8383,7 +8417,7 @@ fn assumed_protected_branch(policy: &GitPolicy) -> Option<String> {
         .protected_branches
         .iter()
         .map(|p| p.replace(['*', '?'], "x"))
-        .find(|b| policy.branch_is_protected(b))
+        .find(|b| policy.branch_is_protected_any_case(b))
 }
 
 /// An owned [`Retarget`].
@@ -8565,6 +8599,7 @@ fn resolve_target<'p>(
                     b.unwrap_or_else(|| repo.branch.clone()),
                     rules.clone(),
                     repo.root.clone(),
+                    Some(repo.case_insensitive),
                 )
             })
             .collect(),
@@ -8584,7 +8619,7 @@ fn judge_git_sub(
     match sub {
         "commit" => {
             if policy.commit_to_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && !ctx.integrate_token
             {
                 out.push(Violation::new(
@@ -8602,7 +8637,7 @@ fn judge_git_sub(
             // one sanctioned local path; the human override is NOT honored here
             // (the Claude layer never trusts a claim of humanity).
             if policy.merge_to_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && !ctx.integrate_token
             {
                 out.push(Violation::new(
@@ -8618,7 +8653,9 @@ fn judge_git_sub(
             // `git rebase <upstream> <branch>` checks `<branch>` out first and
             // rewrites it, not the branch the command starts on.
             let branch = rebase_branch(rest).unwrap_or(branch);
-            if policy.hard_reset_protected.is_active() && policy.branch_is_protected(branch) {
+            if policy.hard_reset_protected.is_active()
+                && policy.branch_is_protected_any_case(branch)
+            {
                 out.push(Violation::new(
                     "git.hard_reset_protected",
                     policy.hard_reset_protected,
@@ -8629,7 +8666,7 @@ fn judge_git_sub(
         }
         "reset" => {
             if policy.hard_reset_protected.is_active()
-                && policy.branch_is_protected(branch)
+                && policy.branch_is_protected_any_case(branch)
                 && parse_options(rest, &GIT_RESET_OPTIONS).has_long("--hard")
             {
                 out.push(Violation::new(
@@ -8644,7 +8681,7 @@ fn judge_git_sub(
             if requests_branch_delete(rest) && policy.delete_protected.is_active() {
                 for target in branch_operands(rest)
                     .into_iter()
-                    .filter(|t| policy.branch_is_protected(t))
+                    .filter(|t| policy.branch_is_protected_any_case(t))
                 {
                     out.push(Violation::new(
                         "git.delete_protected",
@@ -8654,14 +8691,14 @@ fn judge_git_sub(
                     ));
                 }
             } else if let Some(target) = forced_branch_target(sub, rest) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     push_protected_move(sub, target, ctx, out);
                 }
             }
         }
         "checkout" | "switch" | "worktree" => {
             if let Some(target) = forced_branch_target(sub, rest) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     push_protected_move(sub, target, ctx, out);
                 }
             }
@@ -9370,8 +9407,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
 
     // The fetched registry is what issue and CI verify against (R-10, R-11);
     // only a real, non-forced fetch may move it.
-    if refname
-        .strip_prefix("refs/remotes/")
+    if strip_ref_prefix(refname, "refs/remotes/")
         .and_then(|rest| rest.split_once('/'))
         .is_some_and(|(_, branch)| branch == crate::ids::REGISTRY_BRANCH)
     {
@@ -9393,8 +9429,8 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
         return;
     }
 
-    if let Some(branch) = refname.strip_prefix("refs/heads/") {
-        if !policy.branch_is_protected(branch) {
+    if let Some(branch) = strip_ref_prefix(refname, "refs/heads/") {
+        if !policy.branch_is_protected_any_case(branch) {
             return;
         }
         if deleting {
@@ -9420,11 +9456,13 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
 /// When `refname` is `refs/remotes/<remote>/<branch>` and `<branch>` is
 /// protected, return the branch; else `None`.
 fn protected_component_of_remote_ref<'a>(refname: &'a str, policy: &GitPolicy) -> Option<&'a str> {
-    let rest = refname.strip_prefix("refs/remotes/")?;
+    let rest = strip_ref_prefix(refname, "refs/remotes/")?;
     // rest is `<remote>/<branch...>`; the branch is everything after the first
     // path component.
     let (_remote, branch) = rest.split_once('/')?;
-    policy.branch_is_protected(branch).then_some(branch)
+    policy
+        .branch_is_protected_any_case(branch)
+        .then_some(branch)
 }
 
 /// Guard `git symbolic-ref` writes (`git symbolic-ref <name> <target>`) that
@@ -9444,8 +9482,8 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
     // set or its target names a protected branch.
     if positionals.len() >= 2 {
         let touches_protected = positionals.iter().any(|p| {
-            let name = p.strip_prefix("refs/heads/").unwrap_or(p);
-            policy.branch_is_protected(name)
+            let name = strip_ref_prefix(p, "refs/heads/").unwrap_or(p);
+            policy.branch_is_protected_any_case(name)
         });
         if touches_protected {
             out.push(Violation::new(
@@ -9762,7 +9800,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
             out.push(no_verify_violation("push", "all branches"));
         } else {
             for target in push.updates.iter().chain(push.deletions.iter()) {
-                if policy.branch_is_protected(target) {
+                if policy.branch_is_protected_any_case(target) {
                     out.push(no_verify_violation("push", target));
                     break;
                 }
@@ -9809,7 +9847,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     }
 
     for target in &push.deletions {
-        if policy.delete_protected.is_active() && policy.branch_is_protected(target) {
+        if policy.delete_protected.is_active() && policy.branch_is_protected_any_case(target) {
             out.push(Violation::new(
                 "git.delete_protected",
                 policy.delete_protected,
@@ -9820,7 +9858,7 @@ fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut V
     }
 
     for target in &push.updates {
-        let protected = policy.branch_is_protected(target);
+        let protected = policy.branch_is_protected_any_case(target);
         if push.force {
             if protected {
                 if policy.force_push_protected.is_active() {
@@ -9958,7 +9996,7 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
     let base = ctx.pr_base_lookup.and_then(|lookup| lookup(target));
     let provably_unprotected = base
         .as_deref()
-        .is_some_and(|b| !policy.branch_is_protected(b));
+        .is_some_and(|b| !policy.branch_is_protected_any_case(b));
     if !provably_unprotected {
         out.push(Violation::new(
             "git.pr_merge_to_protected",
@@ -10240,18 +10278,61 @@ const GIT_UPDATE_REF_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
-pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
+/// `name` after `prefix`, the prefix compared without regard to ASCII case.
+/// Git accepts a ref name such as `REFS/REMOTES/origin/main` or
+/// `Refs/Heads/main`, and on a case-insensitive filesystem stores it as the
+/// loose ref `refs/remotes/origin/main` or `refs/heads/main`, so a guard
+/// that matched only the exact bytes would let the write through.
+pub(crate) fn strip_ref_prefix<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = name.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| &name[prefix.len()..])
+}
+
+/// `true` when `name` may be stored as another, guarded ref, so it is
+/// refused, failing closed (TSK-381 SF-3): its `refs/` prefix matches only
+/// without regard to case, or, where the git directory is on a
+/// case-insensitive filesystem ([`super::policy::non_ascii_aliasing`]), it
+/// holds a non-ASCII byte, which such a filesystem may fold to an ASCII
+/// letter (`ſ` names the same file as `s`). A name the agent types is judged
+/// this way in git-guard.
+pub(crate) fn ref_name_aliases(name: &str) -> bool {
+    (!name.is_ascii() && super::policy::non_ascii_aliasing())
+        || (!name.starts_with("refs/") && strip_ref_prefix(name, "refs/").is_some())
+}
+
+/// [`ref_name_aliases`] for a reference-transaction line: a non-ASCII name
+/// under exactly `refs/remotes/` or `refs/tags/` is what `git fetch` writes
+/// for such a remote branch or tag. A remote-tracking name is guarded instead
+/// by the hook's folded-collision check and its protected-name check, which
+/// refuse one that lands on another ref (TSK-381 SF-4, Codex F3).
+pub(crate) fn transaction_ref_aliases(name: &str) -> bool {
+    ref_name_aliases(name) && !(name.starts_with("refs/remotes/") || name.starts_with("refs/tags/"))
+}
+
+/// The `update-ref` or `symbolic-ref` write in `args` names a ref by a
+/// spelling that [`ref_name_aliases`] refuses.
+pub(super) fn ref_plumbing_aliases(sub: &str, args: &[String]) -> bool {
     let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
-    let writing = sub == "update-ref"
+    ref_plumbing_writes(sub, args, &parsed)
+        && parsed.operands.iter().any(|name| ref_name_aliases(name))
+}
+
+fn ref_plumbing_writes(sub: &str, args: &[String], parsed: &ParsedOptions<'_>) -> bool {
+    sub == "update-ref"
         || parsed.has_short(&['d'])
         || args.iter().any(|arg| arg == "--delete")
-        || parsed.operands.len() >= 2;
-    writing
+        || parsed.operands.len() >= 2
+}
+
+pub(super) fn ref_plumbing_tampers(sub: &str, args: &[String]) -> bool {
+    let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
+    ref_plumbing_writes(sub, args, &parsed)
         && (parsed.has_long("--stdin")
             || parsed
                 .operands
                 .iter()
-                .any(|name| name.starts_with("refs/remotes/")))
+                .any(|name| strip_ref_prefix(name, "refs/remotes/").is_some()))
 }
 
 /// `git reset` (git-reset(1)): the mode options are booleans, and only the
@@ -10944,7 +11025,7 @@ fn maybe_no_verify(
     policy: &GitPolicy,
     out: &mut Vec<Violation>,
 ) {
-    if has_no_verify(sub, args) && policy.branch_is_protected(branch) {
+    if has_no_verify(sub, args) && policy.branch_is_protected_any_case(branch) {
         out.push(no_verify_violation(sub, branch));
     }
 }
@@ -12805,6 +12886,7 @@ mod tests {
             branch: branch.to_string(),
             policy: None,
             root: None,
+            case_insensitive: true,
         })
     }
 
@@ -16547,6 +16629,182 @@ mod tests {
         }
     }
 
+    /// TSK-381 review round 2 (Grok F1): on a case-insensitive filesystem
+    /// git stores a case-different prefix as the same ref, so each spelling
+    /// gets the refusal the exact one does.
+    #[test]
+    fn test_update_ref_case_different_prefixes_are_refused() {
+        let p = default_policy();
+        for name in [
+            "REFS/REMOTES/origin/evil",
+            "refs/Remotes/origin/evil",
+            "Refs/remotes/origin/evil",
+        ] {
+            let cmd = format!("git update-ref {name} deadbeef");
+            assert!(
+                has_rule(&evaluate(&cmd, &ctx(&p, "feat/x")), "git.policy_authority"),
+                "{cmd}"
+            );
+        }
+        for cmd in [
+            "git update-ref REFS/REMOTES/origin/main deadbeef",
+            "git update-ref Refs/Heads/main deadbeef",
+            "git update-ref REFS/HEADS/main deadbeef",
+        ] {
+            assert!(
+                has_rule(
+                    &evaluate(cmd, &ctx(&p, "feat/x")),
+                    "git.local_ref_protection"
+                ),
+                "{cmd}"
+            );
+        }
+        assert!(has_rule(
+            &evaluate("git update-ref -d refs/Heads/main", &ctx(&p, "feat/x")),
+            "git.delete_protected"
+        ));
+        assert_eq!(strip_ref_prefix("REFS/heads/x", "refs/heads/"), Some("x"));
+        assert_eq!(strip_ref_prefix("refs/head", "refs/heads/"), None);
+        assert_eq!(strip_ref_prefix("ref\u{e9}/heads/x", "refs/heads/"), None);
+    }
+
+    /// TSK-381 round 3: on a case-insensitive filesystem `refs/heads/MAIN`
+    /// is the loose ref of `main`, so a case-different protected branch
+    /// name is refused, in a local and in a remote-tracking ref; an
+    /// unrelated branch stays allowed.
+    #[test]
+    fn test_update_ref_case_different_protected_branch_is_refused() {
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/MAIN deadbeef",
+            "git update-ref refs/heads/Main deadbeef",
+            "git update-ref refs/remotes/origin/MAIN deadbeef",
+            "git branch -f MAIN HEAD~1",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
+        }
+        assert!(has_rule(
+            &evaluate("git update-ref -d refs/heads/Main", &ctx(&p, "feat/x")),
+            "git.delete_protected"
+        ));
+        assert!(evaluate(
+            "git update-ref refs/heads/feat/Main deadbeef",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
+    }
+
+    /// TSK-381 SF-3: APFS folds `ſ` to `s`, so a non-ASCII ref name or a
+    /// case-different `refs/` prefix can name a protected or remote-tracking
+    /// ref; git-guard refuses each, and an ordinary feature ref stays free.
+    #[test]
+    fn test_update_ref_non_ascii_and_folded_prefix_names_are_refused() {
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
+            "git update-ref ref\u{17f}/heads/master deadbeef",
+            "git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+            "git update-ref REFS/heads/feat/y deadbeef",
+            "git symbolic-ref HEAD refs/heads/ma\u{17f}ter",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.policy_authority"), "{cmd}: {v:?}");
+        }
+        assert!(has_rule(
+            &evaluate("git branch -f ma\u{17f}ter HEAD~1", &ctx(&p, "feat/x")),
+            "git.local_ref_protection"
+        ));
+        assert!(evaluate(
+            "git update-ref refs/heads/feat/y deadbeef",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
+    }
+
+    /// TSK-381 SF-3: on a case-sensitive git directory a non-ASCII name is
+    /// an ordinary name, while a case-different `refs/` prefix is still
+    /// refused.
+    #[test]
+    fn test_update_ref_non_ascii_names_are_ordinary_on_a_case_sensitive_git_dir() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let p = default_policy();
+        for cmd in [
+            "git update-ref refs/heads/ma\u{17f}ter deadbeef",
+            "git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+        assert!(has_rule(
+            &evaluate(
+                "git update-ref REFS/heads/feat/y deadbeef",
+                &ctx(&p, "feat/x")
+            ),
+            "git.policy_authority"
+        ));
+    }
+
+    /// TSK-381 SF-5 and Codex F1: a retargeted command is judged by the
+    /// target repository's own filesystem, read through target resolution,
+    /// in both directions and for `-C`, `--git-dir` and a composed `cd`;
+    /// the session's decision still judges the session repository.
+    #[test]
+    fn test_a_retargeted_command_is_judged_by_the_targets_filesystem() {
+        fn resolver(spec: &Retarget<'_>) -> Option<TargetRepo> {
+            let case_insensitive = match spec.path {
+                "/folds" | "/folds/.git" => true,
+                "/exact" | "/exact/.git" => false,
+                _ => return None,
+            };
+            Some(TargetRepo {
+                branch: "feat/x".to_string(),
+                policy: Some(GitPolicy::default()),
+                root: None,
+                case_insensitive,
+            })
+        }
+        let p = default_policy();
+        let mentions_alias = |cmd: &str| {
+            evaluate(cmd, &ctx_with_dir_branch(&p, "feat/s", &resolver))
+                .iter()
+                .any(|v| v.message.contains("non-ASCII"))
+        };
+        let protected = |cmd: &str| {
+            evaluate(cmd, &ctx_with_dir_branch(&p, "feat/s", &resolver))
+                .iter()
+                .any(|v| v.rule == "git.local_ref_protection")
+        };
+        {
+            // A case-sensitive session cannot vouch for a folding target.
+            let _session = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+            for cmd in [
+                "git -C /folds update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+                "git --git-dir=/folds/.git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+                "cd /folds && git update-ref ref\u{17f}/remotes/origin/evil deadbeef",
+            ] {
+                assert!(mentions_alias(cmd), "{cmd}");
+            }
+            assert!(protected("git -C /folds branch -f feat/caf\u{e9} HEAD"));
+            assert!(!mentions_alias(
+                "git update-ref ref\u{17f}/remotes/origin/evil deadbeef"
+            ));
+        }
+        // A folding session does not refuse an ordinary name in an exact target.
+        let _session = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for cmd in [
+            "git -C /exact update-ref refs/heads/feat/caf\u{e9} deadbeef",
+            "git --git-dir=/exact/.git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+            "cd /exact && git update-ref refs/heads/feat/caf\u{e9} deadbeef",
+        ] {
+            assert!(!mentions_alias(cmd), "{cmd}");
+        }
+        assert!(!protected("git -C /exact branch -f feat/caf\u{e9} HEAD"));
+        assert!(mentions_alias(
+            "git update-ref refs/heads/feat/caf\u{e9} deadbeef"
+        ));
+    }
+
     #[test]
     fn test_update_ref_remote_tracking_feature_refused() {
         let p = default_policy();
@@ -17028,6 +17286,7 @@ mod tests {
                 branch: branch.to_string(),
                 policy: Some(policy),
                 root: None,
+                case_insensitive: true,
             })
         };
         match (spec.path, spec.git_dir) {

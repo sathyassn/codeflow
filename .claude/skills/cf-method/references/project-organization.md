@@ -273,8 +273,14 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   reviewed pull request. CI still requires the predecessor complete at the
   merge base when the task lands, so the stack lands in order.
 - A **research or decision dependency** is met when the predecessor is
-  `complete` at the pinned commit on its target. The planner writes the pin
-  when it is known; an entry without a pin is unmet.
+  `complete` at the pinned commit and that commit is on a target that still
+  exists: the predecessor's target, this task's target or the default
+  branch, so a landed line can be deleted. With any remote, each target is
+  read at a remote-tracking ref: the branch's configured upstream when it is
+  a `refs/remotes/<remote>/<branch>` ref of a configured remote, else
+  `origin/<branch>`; a local branch counts only in a repository with no
+  remote. The planner writes the pin when it is known; an entry without a
+  pin is unmet.
 - **Guarded plans:** only the selected branch of a decision is written into
   `depends_on`. Until the selection is approved on the target, the join task
   carries `awaiting_selection: <plan or decision path>`, is `blocked` with the

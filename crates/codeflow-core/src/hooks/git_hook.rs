@@ -748,9 +748,10 @@ pub fn pre_merge_commit(
 pub fn ref_line_touches_local_branch(line: &str) -> bool {
     // Git's protocol separates the fields with a single space, and a ref name
     // holds none: other whitespace (a no-break space) is part of the name.
-    line.splitn(3, ' ')
-        .nth(2)
-        .is_some_and(|r| r.starts_with("refs/heads/"))
+    line.splitn(3, ' ').nth(2).is_some_and(|r| {
+        super::git_guard::strip_ref_prefix(r, "refs/heads/").is_some()
+            || super::git_guard::transaction_ref_aliases(r)
+    })
 }
 
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
@@ -788,18 +789,84 @@ pub fn reference_transaction(
 
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
+    // Whether non-ASCII names may alias here: probed once per invocation
+    // unless a caller has decided it (TSK-381 SF-3).
+    let _aliasing = super::policy::NonAsciiAliasingScope::decide(|| {
+        super::repo::case_insensitive_git_dir(repo.commondir())
+    });
     // The integrate token and a human's override sanction the transaction
     // (git layer only — the git-guard never trusts the human override).
     let sanctioned = integrate_token || human_override;
 
+    let collisions = if super::policy::non_ascii_aliasing() {
+        folded_collisions(&repo, stdin)
+    } else {
+        std::collections::BTreeSet::new()
+    };
     for line in stdin.split('\n') {
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
-        let Some(branch) = refname.strip_prefix("refs/heads/") else {
+        // On a case-insensitive git directory, a ref written under a
+        // spelling that folds onto another ref is that ref's file, so the
+        // transaction is refused (TSK-381 SF-4).
+        // Storage housekeeping that keeps the value (`git pack-refs`, `git
+        // gc`) moves nothing, so the spelling checks below let it pass.
+        let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
+        if collisions.contains(refname) && !unchanged() {
+            if policy.local_ref_protection.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    format!(
+                        "ref update of '{refname}': its name folds onto another ref's on a \
+                         case-insensitive filesystem"
+                    ),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            continue;
+        }
+        // A fetched remote-tracking name that folds onto a protected branch
+        // without naming it exactly (`origin/MAIN` beside a protected `main`)
+        // would land on that tracking ref once it exists (Codex F3).
+        if super::policy::non_ascii_aliasing()
+            && tracking_name_folds_onto_protected(&repo, policy, refname)
+            && !unchanged()
+        {
+            if policy.local_ref_protection.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    format!(
+                        "ref update of '{refname}': its name folds onto a protected branch's \
+                         tracking ref on a case-insensitive filesystem"
+                    ),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            continue;
+        }
+        // A spelling a case-insensitive filesystem may store as a guarded ref
+        // is refused outright, failing closed (TSK-381 SF-3).
+        if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
+            if policy.local_ref_protection.is_active() && !sanctioned {
+                report.violations.push(Violation::new(
+                    "git.local_ref_protection",
+                    policy.local_ref_protection,
+                    format!(
+                        "ref update of '{refname}': a non-ASCII character or a case-different \
+                         `refs/` prefix can name a protected ref on a case-insensitive filesystem"
+                    ),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            continue;
+        }
+        let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
             continue;
         };
-        if !policy.branch_is_protected(branch) {
+        if !policy.branch_is_protected_any_case(branch) {
             continue; // feature branches stay fully free (rebase, force, etc.)
         }
         // Storage housekeeping (`git pack-refs`, run by `git gc`) rewrites
@@ -850,6 +917,110 @@ pub fn reference_transaction(
         ));
     }
     Ok(report)
+}
+
+/// Whether a remote-tracking `refname` folds onto a protected branch it does
+/// not name exactly ([`GitPolicy::branch_folds_onto_protected`]). The branch
+/// is the part after the longest `refs/remotes/<remote>/` prefix of a
+/// configured remote, so `origin/feat/MAIN` is the branch `feat/MAIN`, which
+/// folds onto nothing protected. Under no configured remote, or when the
+/// remotes cannot be read, every branch the name could end in is judged,
+/// failing closed for an unconfigured destination.
+fn tracking_name_folds_onto_protected(
+    repo: &Repository,
+    policy: &GitPolicy,
+    refname: &str,
+) -> bool {
+    let Some(rest) = refname.strip_prefix("refs/remotes/") else {
+        return false;
+    };
+    // A remote name that is not valid UTF-8 names no text prefix.
+    let remote = repo.remotes().ok().and_then(|remotes| {
+        remotes
+            .iter_bytes()
+            .filter_map(|name| {
+                crate::git::GitName::from_bytes(name)
+                    .rule_text()
+                    .ok()
+                    .map(str::to_string)
+            })
+            .filter(|name| rest.starts_with(&format!("{name}/")))
+            .map(|name| name.len())
+            .max()
+    });
+    match remote {
+        Some(len) => policy.branch_folds_onto_protected(&rest[len + 1..]),
+        None => rest
+            .match_indices('/')
+            .any(|(at, _)| policy.branch_folds_onto_protected(&rest[at + 1..])),
+    }
+}
+
+/// The ref names this transaction writes (a new value that is not zero)
+/// whose folded spelling ([`super::repo::folded_ref_name`]), or that of a
+/// directory along its path, equals that of another spelling among the
+/// existing refs and the names written in the same transaction. Such a name
+/// lands in the other ref's file or directory on a case-insensitive
+/// filesystem (`origin/INTEGRATION/x` under an existing `origin/integration/`).
+/// A listing that cannot be read leaves every written name a collision,
+/// failing closed.
+fn folded_collisions(repo: &Repository, stdin: &str) -> std::collections::BTreeSet<String> {
+    let written: Vec<&str> = stdin
+        .split('\n')
+        .filter_map(parse_ref_line)
+        .filter(|(_, new_oid, _)| !is_zero_sha(new_oid))
+        .map(|(_, _, refname)| refname)
+        .collect();
+    let mut spellings: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    let every = || written.iter().map(|name| (*name).to_string()).collect();
+    let Ok(references) = repo.references() else {
+        return every();
+    };
+    let mut listed = Vec::new();
+    for reference in references {
+        // A ref that cannot be read cannot be ruled out as an alias. A name
+        // that is not valid UTF-8 is compared byte for byte: packed-refs
+        // matches names exactly, ext4 casefold treats such a name as opaque
+        // bytes and does not fold it, and APFS refuses to store it.
+        let Ok(reference) = reference else {
+            return every();
+        };
+        if let Ok(text) = crate::git::GitName::from_bytes(reference.name_bytes()).rule_text() {
+            listed.push(text.to_string());
+        }
+    }
+    // Each ref name and each directory along it ("refs/", "refs/remotes/",
+    // ...), keyed by its folded spelling.
+    let paths = |name: &str| {
+        name.match_indices('/')
+            .map(|(at, _)| name[..=at].to_string())
+            .chain(std::iter::once(name.to_string()))
+            .collect::<Vec<_>>()
+    };
+    for name in listed
+        .iter()
+        .map(String::as_str)
+        .chain(written.iter().copied())
+    {
+        for path in paths(name) {
+            spellings
+                .entry(super::repo::folded_ref_name(&path))
+                .or_default()
+                .insert(path);
+        }
+    }
+    written
+        .into_iter()
+        .filter(|name| {
+            paths(name).iter().any(|path| {
+                spellings
+                    .get(&super::repo::folded_ref_name(path))
+                    .is_some_and(|names| names.len() > 1)
+            })
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// `true` when a transaction line leaves `refname` resolving to the commit it
@@ -922,9 +1093,11 @@ fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bo
         }
         Err(_) => return false,
     };
-    repo.find_reference(&refname)
+    // Only the exact spelling git lists counts as the remote head (TSK-381
+    // SF-4): a folded alias fetched over it proves no sync.
+    super::repo::listed_ref_commit(repo, &refname)
         .ok()
-        .and_then(|reference| reference.target())
+        .flatten()
         == Some(new)
 }
 
@@ -2674,6 +2847,302 @@ mod tests {
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.local_ref_protection");
         assert_eq!(report.violations[0].level, PolicyLevel::Block);
+    }
+
+    /// TSK-381 review round 2: git passes the ref name as typed, and on a
+    /// case-insensitive filesystem `Refs/Heads/main` is the loose ref
+    /// `refs/heads/main`, so a case-different prefix is still that branch.
+    #[test]
+    fn test_reference_transaction_reads_a_case_different_prefix_as_the_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["Refs/Heads/main", "REFS/HEADS/main", "refs/Heads/main"] {
+            assert!(ref_line_touches_local_branch(&format!(
+                "{ZERO40} {ahead} {name}"
+            )));
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
+    }
+
+    /// TSK-381 round 3: a case-different protected branch name is the same
+    /// loose ref on a case-insensitive filesystem, so the backstop blocks
+    /// it; an unrelated branch stays free.
+    #[test]
+    fn test_reference_transaction_blocks_a_case_different_protected_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        for name in ["refs/heads/MAIN", "refs/heads/Main"] {
+            let stdin = format!("{ZERO40} {ahead} {name}\n");
+            let report =
+                reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                    .unwrap();
+            assert_eq!(report.violations.len(), 1, "{name}");
+            assert_eq!(
+                report.violations[0].rule, "git.local_ref_protection",
+                "{name}"
+            );
+        }
+        let stdin = format!("{ZERO40} {ahead} refs/heads/feat/Main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    /// TSK-381 SF-3: a non-ASCII or case-folded spelling may be stored as a
+    /// protected ref, so the backstop blocks it; what `git fetch` writes for
+    /// a non-ASCII remote branch or tag, and an ordinary branch, stay free.
+    #[test]
+    fn test_reference_transaction_blocks_non_ascii_and_folded_prefix_names() {
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in [
+            "refs/heads/ma\u{17f}ter",
+            "ref\u{17f}/heads/main",
+            "ref\u{17f}/remotes/origin/main",
+            "REFS/remotes/origin/main",
+            "refs/heads/feat/caf\u{e9}",
+        ] {
+            assert!(
+                ref_line_touches_local_branch(&format!("{ZERO40} {ahead} {name}")),
+                "{name}"
+            );
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
+        // Codex F3: a fetched non-ASCII tracking name that lands on no other
+        // ref is judged by the collision checks, not refused for its bytes.
+        for name in [
+            "refs/remotes/origin/caf\u{e9}",
+            "refs/tags/caf\u{e9}",
+            "refs/heads/feat/y",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+    }
+
+    /// TSK-381 SF-4: on a case-insensitive git directory a written name that
+    /// folds onto another ref, existing or in the same transaction, is
+    /// refused; an ordinary new tracking branch and a case-sensitive git
+    /// directory stay free.
+    #[test]
+    fn test_reference_transaction_refuses_folded_name_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        // A new value: a line that keeps a ref's value passes as housekeeping.
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |lines: &[&str]| {
+            let stdin = lines
+                .iter()
+                .map(|name| format!("{ZERO40} {ahead} {name}\n"))
+                .collect::<Vec<_>>()
+                .concat();
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false)
+                .unwrap()
+                .violations
+        };
+        {
+            let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+            assert_eq!(run(&["refs/remotes/origin/MAIN"]).len(), 1);
+            assert_eq!(
+                run(&["refs/remotes/origin/feat", "refs/remotes/origin/FEAT"]).len(),
+                2
+            );
+            assert!(run(&["refs/remotes/origin/feat/new"]).is_empty());
+        }
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        assert!(run(&["refs/remotes/origin/MAIN"]).is_empty());
+    }
+
+    /// TSK-381 Codex F3 and the folded directory finding: where the git
+    /// directory folds names, a fetched tracking name is refused only when it
+    /// lands on another ref, folds onto a protected branch it does not name,
+    /// or folds onto an existing directory spelled differently; an unrelated
+    /// Unicode or ASCII tracking name passes.
+    #[test]
+    fn test_reference_transaction_judges_tracking_names_by_where_they_land() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/consumer-line",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/na\u{ef}ve",
+            "refs/remotes/origin/feat/new",
+            "refs/remotes/origin/integration/producer-line",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/origin/INTEGRATION/producer-line",
+        ] {
+            let v = run(name);
+            assert_eq!(v.len(), 1, "{name}: {v:?}");
+            assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
+        }
+    }
+
+    /// TSK-381 Fable confirm item 1: with `origin` configured, only the branch
+    /// after `refs/remotes/origin/` is judged, so `feat/MAIN` and
+    /// `release/Main` fetch; `MAIN`, `maſter` and a name under no configured
+    /// remote are refused where the git directory folds names.
+    #[test]
+    fn test_reference_transaction_judges_the_branch_after_the_configured_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        git(
+            dir.path(),
+            &["remote", "add", "origin", "/nonexistent/origin.git"],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/MAIN",
+            "refs/remotes/origin/release/Main",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/nobody/MAIN",
+        ] {
+            assert_eq!(run(name).len(), 1, "{name}");
+        }
+    }
+
+    /// TSK-381 SF-8: APFS ignores Unicode normalization, so an NFD spelling of
+    /// an existing NFC tracking ref is that ref's file and is refused where
+    /// the git directory folds names.
+    #[test]
+    fn test_reference_transaction_refuses_an_nfd_write_onto_an_nfc_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/caf\u{e9}",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let stdin = format!("{ZERO40} {ahead} refs/remotes/origin/integration/cafe\u{301}\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
+    }
+
+    /// TSK-381 SF-4: the sync allowance trusts only the tracking ref git lists
+    /// under the exact spelling; a loose `refs/remotes/origin/MAIN`, which a
+    /// case-insensitive filesystem also opens as `.../main`, proves no sync.
+    #[test]
+    fn test_reference_transaction_sync_reads_only_the_exact_tracking_spelling() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
+        let remotes = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&remotes).unwrap();
+        std::fs::write(remotes.join("MAIN"), format!("{ahead}\n")).unwrap();
+        let stdin = format!("{base} {ahead} refs/heads/main\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
+        assert_eq!(report.violations[0].rule, "git.local_ref_protection");
+    }
+
+    /// TSK-381 SF-3: on a case-sensitive git directory a non-ASCII name is an
+    /// ordinary branch, while a case-different `refs/` prefix still blocks.
+    #[test]
+    fn test_reference_transaction_reads_non_ascii_names_as_ordinary_on_a_case_sensitive_git_dir() {
+        let _sensitive = crate::hooks::policy::NonAsciiAliasingScope::set(false);
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        set_origin_ref(dir.path(), "main", &base);
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        for name in ["refs/heads/ma\u{17f}ter", "refs/heads/feat/caf\u{e9}"] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        assert_eq!(run("REFS/remotes/origin/main").len(), 1);
     }
 
     #[test]

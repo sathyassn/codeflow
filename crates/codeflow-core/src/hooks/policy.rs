@@ -441,6 +441,53 @@ pub struct GitPolicy {
     pub clean_regenerable: Vec<String>,
 }
 
+thread_local! {
+    static NON_ASCII_ALIASING: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Whether a ref name with a non-ASCII byte may name another ref, decided
+/// for the scope of one invocation: whether the git directory is on a
+/// case-insensitive filesystem ([`crate::hooks::repo::case_insensitive_git_dir`]).
+/// A hook entry probes once; a test injects the result. Dropping the scope
+/// restores the previous decision.
+pub struct NonAsciiAliasingScope {
+    previous: Option<bool>,
+}
+
+impl NonAsciiAliasingScope {
+    /// Decide it as `value` until the scope ends.
+    #[must_use]
+    pub fn set(value: bool) -> Self {
+        let previous = NON_ASCII_ALIASING.with(|cell| cell.replace(Some(value)));
+        Self { previous }
+    }
+
+    /// Keep a decision already made; otherwise decide it with `probe`.
+    #[must_use]
+    pub fn decide(probe: impl FnOnce() -> bool) -> Self {
+        match NON_ASCII_ALIASING.with(std::cell::Cell::get) {
+            Some(value) => Self::set(value),
+            None => Self::set(probe()),
+        }
+    }
+}
+
+impl Drop for NonAsciiAliasingScope {
+    fn drop(&mut self) {
+        NON_ASCII_ALIASING.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Whether a ref name with a non-ASCII byte may name another ref here. An
+/// undecided invocation counts as yes, failing closed.
+#[must_use]
+pub fn non_ascii_aliasing() -> bool {
+    NON_ASCII_ALIASING
+        .with(std::cell::Cell::get)
+        .unwrap_or(true)
+}
+
 impl Default for GitPolicy {
     fn default() -> Self {
         Self {
@@ -587,6 +634,49 @@ impl GitPolicy {
             ..SecurityPolicy::defaults()
         };
         is_on_protected_branch(branch, &sec)
+    }
+
+    /// [`GitPolicy::branch_is_protected`] with ASCII case folded on both the
+    /// name and the protected list, for git-guard and the
+    /// reference-transaction hook, which judge names that become local refs.
+    /// On a case-insensitive filesystem `refs/heads/MAIN` is the same loose
+    /// ref as `refs/heads/main`, so those guards fail closed: on a
+    /// case-sensitive filesystem a distinct `Main` is refused too while
+    /// `main` is protected. Where [`non_ascii_aliasing`] holds, a name with a
+    /// non-ASCII byte is protected too, since such a filesystem may fold it to
+    /// an ASCII letter (`ſ` names the same file as `s`).
+    #[must_use]
+    pub fn branch_is_protected_any_case(&self, branch: &str) -> bool {
+        if self.branch_is_protected(branch) || (!branch.is_ascii() && non_ascii_aliasing()) {
+            return true;
+        }
+        let sec = SecurityPolicy {
+            protected_branches: self
+                .protected_branches
+                .iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect(),
+            ..SecurityPolicy::defaults()
+        };
+        is_on_protected_branch(&branch.to_ascii_lowercase(), &sec)
+    }
+
+    /// Whether `branch`, written under another spelling, folds onto a
+    /// protected branch it does not name exactly (`MAIN` or `maſter` beside a
+    /// protected `main` or `master`): the name and the protected list are
+    /// compared after Unicode case folding (upper case, then lower case).
+    #[must_use]
+    pub fn branch_folds_onto_protected(&self, branch: &str) -> bool {
+        let fold = |name: &str| name.to_uppercase().to_lowercase();
+        let sec = SecurityPolicy {
+            protected_branches: self
+                .protected_branches
+                .iter()
+                .map(|name| fold(name))
+                .collect(),
+            ..SecurityPolicy::defaults()
+        };
+        !self.branch_is_protected(branch) && is_on_protected_branch(&fold(branch), &sec)
     }
 
     /// [`GitPolicy::branch_is_protected`] for an exact name. A name that is
@@ -1330,6 +1420,41 @@ mod tests {
         assert!(g.branch_is_protected("main"));
         assert!(g.branch_is_protected("release/v2.0"));
         assert!(!g.branch_is_protected("feat/release-notes"));
+    }
+
+    /// TSK-381 round 3: the guards fold ASCII case on both sides and fail
+    /// closed; an unrelated branch stays free.
+    #[test]
+    fn test_branch_is_protected_any_case_folds_names_and_globs() {
+        let g = GitPolicy {
+            protected_branches: vec!["main".into(), "Release/*".into()],
+            ..GitPolicy::default()
+        };
+        for name in ["main", "MAIN", "Main", "release/v2", "RELEASE/v2"] {
+            assert!(g.branch_is_protected_any_case(name), "{name}");
+        }
+        assert!(
+            !g.branch_is_protected("MAIN"),
+            "the exact check is unchanged"
+        );
+        assert!(!g.branch_is_protected_any_case("feat/Main"));
+        assert!(!g.branch_is_protected_any_case("mainline"));
+        // SF-3: APFS folds `ſ` to `s`. Undecided or on a case-insensitive
+        // git directory, any non-ASCII name fails closed; on a case-sensitive
+        // one it is an ordinary name.
+        assert!(g.branch_is_protected_any_case("ma\u{17f}ter"));
+        assert!(g.branch_is_protected_any_case("feat/caf\u{e9}"));
+        {
+            let _insensitive = NonAsciiAliasingScope::set(true);
+            assert!(g.branch_is_protected_any_case("ma\u{17f}ter"));
+        }
+        let _sensitive = NonAsciiAliasingScope::set(false);
+        assert!(!g.branch_is_protected_any_case("ma\u{17f}ter"));
+        assert!(!g.branch_is_protected_any_case("feat/caf\u{e9}"));
+        assert!(
+            g.branch_is_protected_any_case("MAIN"),
+            "ASCII folding stays"
+        );
     }
 
     #[test]
