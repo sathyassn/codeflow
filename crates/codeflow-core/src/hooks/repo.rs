@@ -12,6 +12,83 @@ use git2::Repository;
 use crate::git::GitName;
 use crate::hooks::policy::NON_UTF8_BRANCH;
 
+/// Whether the git directory `dir` is on a case-insensitive filesystem, so
+/// ref names that differ there may name one loose ref (TSK-381 SF-3). The
+/// probe reads `HEAD` and a lower-case spelling of it: the same file means
+/// case-insensitive, a missing one case-sensitive. A probe that cannot decide
+/// counts as case-insensitive, failing closed.
+#[must_use]
+pub fn case_insensitive_git_dir(dir: &Path) -> bool {
+    let Ok(upper) = std::fs::symlink_metadata(dir.join("HEAD")) else {
+        return true;
+    };
+    match crate::absence::symlink_metadata_optional(&dir.join("head")) {
+        Ok(None) => false,
+        Err(_) => true,
+        Ok(Some(lower)) => same_file(&upper, &lower),
+    }
+}
+
+/// The name a filesystem that folds case may store as the same entry: an
+/// approximation of APFS name comparison, which ignores both case and
+/// Unicode normalization. The name is decomposed, case folded (upper case,
+/// then lower case: `ſ` and `K` fold to `s` and `k`) and recomposed, so an
+/// NFD `café` and an NFC `café` fold alike (TSK-381 SF-8).
+#[must_use]
+pub fn folded_ref_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    let decomposed: String = name.nfd().collect();
+    decomposed.to_uppercase().to_lowercase().nfc().collect()
+}
+
+/// The commit `name` points to, read only when git lists a ref by exactly
+/// that spelling and no other listed spelling folds to it (TSK-381 SF-4). On
+/// a case-insensitive filesystem a loose `refs/remotes/origin/MAIN` also
+/// opens as `refs/remotes/origin/main`, so a lookup by name can return a
+/// ref fetched under another spelling. Every ref is listed from `refs/` down
+/// and compared byte for byte: a listing glob that named a directory along
+/// `name` would open it under the spelling asked for and report the stored
+/// `INTEGRATION/x` as `integration/x` (SF-7), so no glob is used. This catches
+/// an alias while the genuine ref is packed or absent; once a loose alias has
+/// been written over a loose genuine ref, the stored spelling is the genuine
+/// one, and the reference-transaction hook's collision refusal is the control.
+///
+/// # Errors
+///
+/// Returns the git error when the references cannot be listed or peeled.
+pub fn listed_ref_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, git2::Error> {
+    let folded = folded_ref_name(name);
+    let (mut exact, mut alias) = (None, false);
+    for reference in repo.references()? {
+        let reference = reference?;
+        let listed = reference.name_bytes();
+        if listed == name.as_bytes() {
+            exact = Some(reference.peel_to_commit()?.id());
+            continue;
+        }
+        // A name that is not valid UTF-8 is compared byte for byte: packed-refs
+        // matches names exactly, ext4 casefold treats such a name as opaque
+        // bytes and does not fold it, and APFS refuses to store it.
+        if let Ok(text) = GitName::from_bytes(listed).rule_text() {
+            alias |= folded_ref_name(text) == folded;
+        }
+    }
+    Ok(exact.filter(|_| !alias))
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Without a file identity to compare, a `head` beside `HEAD` is taken as
+/// the same entry, failing closed.
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
+}
+
 /// Resolved repository context for a hook invocation.
 pub struct RepoInfo {
     /// Working-tree root (the worktree's own root when in a worktree).
@@ -563,6 +640,74 @@ pub(super) fn absent_registered_checkout(repo: &Repository, target: &Path) -> Re
 
 #[cfg(test)]
 mod tests {
+    /// TSK-381 SF-3: the probe reports the filesystem the git directory is
+    /// on, and one that cannot decide counts as case-insensitive.
+    /// TSK-381 SF-4: a ref is read only under the spelling git lists, and
+    /// not at all when another listed spelling folds to it.
+    #[test]
+    fn a_ref_is_read_only_under_its_listed_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let commit = repo.commit(None, &sig, &sig, "one", &tree, &[]).unwrap();
+        let remotes = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&remotes).unwrap();
+        std::fs::write(remotes.join("MAIN"), format!("{commit}\n")).unwrap();
+        let listed = |name: &str| super::listed_ref_commit(&repo, name).unwrap();
+        assert_eq!(listed("refs/remotes/origin/MAIN"), Some(commit));
+        assert_eq!(listed("refs/remotes/origin/main"), None);
+        if !dir.path().join(".git/head").exists() {
+            // A case-sensitive filesystem holds both spellings: neither counts.
+            std::fs::write(remotes.join("main"), format!("{commit}\n")).unwrap();
+            assert_eq!(listed("refs/remotes/origin/main"), None);
+            assert_eq!(listed("refs/remotes/origin/MAIN"), None);
+        }
+    }
+
+    /// TSK-381 SF-7: a tracking ref stored under `INTEGRATION/` is judged by
+    /// that stored spelling, not as `integration/` because the listing asked
+    /// for that directory. SF-8: NFD and NFC spellings fold alike.
+    #[test]
+    fn a_ref_under_a_differently_spelled_directory_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let commit = repo.commit(None, &sig, &sig, "one", &tree, &[]).unwrap();
+        let stored = dir.path().join(".git/refs/remotes/origin/INTEGRATION");
+        std::fs::create_dir_all(&stored).unwrap();
+        std::fs::write(stored.join("producer-line"), format!("{commit}\n")).unwrap();
+        let listed = |name: &str| super::listed_ref_commit(&repo, name).unwrap();
+        assert_eq!(
+            listed("refs/remotes/origin/integration/producer-line"),
+            None
+        );
+        assert_eq!(
+            listed("refs/remotes/origin/INTEGRATION/producer-line"),
+            Some(commit)
+        );
+        assert_eq!(
+            super::folded_ref_name("integration/cafe\u{301}"),
+            super::folded_ref_name("integration/caf\u{e9}")
+        );
+    }
+
+    #[test]
+    fn the_case_probe_reads_the_git_directory_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let insensitive = dir.path().join("head").exists();
+        assert_eq!(super::case_insensitive_git_dir(dir.path()), insensitive);
+        if !insensitive {
+            std::fs::write(dir.path().join("head"), "other\n").unwrap();
+            assert!(!super::case_insensitive_git_dir(dir.path()));
+        }
+        let empty = tempfile::tempdir().unwrap();
+        assert!(super::case_insensitive_git_dir(empty.path()));
+    }
 
     #[cfg(unix)]
     #[test]

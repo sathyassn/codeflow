@@ -831,6 +831,474 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
     );
 }
 
+/// A bare origin for `root`, holding `main`, which tracks it.
+fn with_origin(root: &Path) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    remote
+}
+
+/// A standalone record on `line` with `deps`.
+fn record_on(id: &str, line: &str, deps: &str) -> String {
+    record(id, deps).replace(
+        "integration_target: main",
+        &format!("integration_target: {line}"),
+    )
+}
+
+fn commit_record(root: &Path, id: &str, content: &str) -> String {
+    write(root, &format!("project-management/tasks/{id}.md"), content);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", &format!("docs: record {id}")]);
+    git(root, &["rev-parse", "HEAD"])
+}
+
+fn research_pin(id: &str, pin: &str) -> String {
+    format!("[{{id: {id}, kind: research, pin: \"{pin}\"}}]")
+}
+
+/// TSK-381 AC-1 (issue 236): the producer TSK-003 completes on its own line,
+/// which lands on the consumer's line and is then deleted locally and on
+/// origin. `work next`, `work claim` and `work start` still find the
+/// consumer's research pin met.
+#[test]
+fn tsk381_a_landed_research_pin_is_met_after_its_line_is_deleted() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let producer = "integration/producer-line";
+    let consumer = "integration/consumer-line";
+    git(root, &["switch", "-qc", producer]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", producer, "[]"));
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["push", "-q", "-u", "origin", producer]);
+    git(root, &["switch", "-qc", consumer, "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "chore: land", producer],
+    );
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", consumer, &research_pin("TSK-003", &pin)),
+    );
+    git(root, &["push", "-q", "-u", "origin", consumer]);
+    git(root, &["push", "-q", "origin", "--delete", producer]);
+    git(root, &["branch", "-q", "-d", producer]);
+
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("ready    TSK-004"), "{next}");
+    assert!(!next.contains("not fetched here"), "{next}");
+    succeeds(&cli(root, &["work", "claim", "TSK-004"], None));
+    let branch = git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "--format=%(refname:short)",
+            "task/TSK-004-*",
+        ],
+    );
+    git(root, &["switch", "-q", &branch]);
+    let start = cli(root, &["work", "start", "TSK-004"], None);
+    succeeds(&start);
+}
+
+/// TSK-381 AC-2, the issue comment's reproduction: the producer targets
+/// `main` and completed there; the pin is on `origin/main`, but the local
+/// `main` is behind it. `work claim` reads `origin/main` and leaves the
+/// local branch alone.
+#[test]
+fn tsk381_claim_reads_a_research_pin_on_origin_main_not_the_local_main() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let behind = commit_record(root, "TSK-003", &record_on("TSK-003", "main", "[]"));
+    git(root, &["push", "-q", "origin", "main"]);
+    let consumer = "integration/consumer-line";
+    git(root, &["switch", "-qc", consumer]);
+    git(root, &["push", "-q", "-u", "origin", consumer]);
+    git(root, &["switch", "-q", "main"]);
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-q", consumer]);
+    git(root, &["branch", "-q", "-f", "main", &behind]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", consumer, &research_pin("TSK-003", &pin)),
+    );
+    git(root, &["push", "-q", "origin", consumer]);
+
+    succeeds(&cli(root, &["work", "claim", "TSK-004"], None));
+    assert_eq!(git(root, &["rev-parse", "main"]), behind);
+}
+
+/// TSK-381 SF-4, the reviewer's setup: a reftable origin holds `MAIN` at a
+/// forged completion beside `main`. With the reference-transaction hook
+/// wired, an ordinary fetch leaves `origin/main` where it was (on a
+/// case-insensitive git directory the fetch is refused, since `MAIN` folds
+/// onto `main`), and the consumer pinning the forgery stays waiting. An
+/// ordinary fetch of a new ASCII branch still passes.
+#[test]
+fn tsk381_a_folded_remote_branch_cannot_forge_a_landing() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = remote.path().join("origin.git");
+    let reftable = Command::new("git")
+        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .arg(&origin)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap()
+        .success();
+    if !reftable {
+        // Only a case-sensitive filesystem holds `MAIN` beside `main` in a
+        // files-backend origin; this git cannot make the forgery elsewhere.
+        assert!(!insensitive, "git cannot create a reftable origin here");
+        git(remote.path(), &["init", "-q", "--bare", "origin.git"]);
+    }
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", "main", "[]"));
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["switch", "-qc", "forge"]);
+    let pin = complete(root, "TSK-003", "src/forged.rs");
+    git(root, &["push", "-q", "origin", "forge"]);
+    git(&origin, &["update-ref", "refs/heads/MAIN", &pin]);
+    git(&origin, &["update-ref", "-d", "refs/heads/forge"]);
+    git(root, &["update-ref", "-d", "refs/remotes/origin/forge"]);
+    git(root, &["switch", "-q", "main"]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    let hook = root.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let legit = git(root, &["rev-parse", "refs/remotes/origin/main"]);
+
+    let fetch = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&fetch.stderr).to_string();
+    assert_eq!(fetch.status.success(), !insensitive, "{said}");
+    assert_eq!(git(root, &["rev-parse", "refs/remotes/origin/main"]), legit);
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
+
+    git(&origin, &["update-ref", "-d", "refs/heads/MAIN"]);
+    git(root, &["push", "-q", "origin", "main:refs/heads/feat/new"]);
+    git(&origin, &["update-ref", "refs/heads/feat/other", &legit]);
+    let fetch = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/other"]),
+        legit
+    );
+}
+
+/// A bare origin under `remote` that holds refs case-sensitively on any
+/// filesystem: reftable where this git supports it. Without reftable only a
+/// case-sensitive filesystem can hold two spellings, so the fallback is
+/// refused where the git directory folds names.
+fn case_sensitive_origin(remote: &Path, insensitive: bool) -> std::path::PathBuf {
+    let origin = remote.join("origin.git");
+    let reftable = Command::new("git")
+        .args(["init", "-q", "--bare", "--ref-format=reftable"])
+        .arg(&origin)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap()
+        .success();
+    if !reftable {
+        assert!(!insensitive, "git cannot create a reftable origin here");
+        git(remote, &["init", "-q", "--bare", "origin.git"]);
+    }
+    origin
+}
+
+/// Wire this binary as the clone's reference-transaction hook.
+fn wire_transaction_hook(root: &Path) {
+    let hook = root.join(".git/hooks/reference-transaction");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook reference-transaction \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+fn fetch_origin(root: &Path) -> Output {
+    Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap()
+}
+
+/// TSK-381 Codex F3 and the folded directory finding, beside the
+/// `MAIN`/`main` test above. With the hook wired, an ordinary fetch of an
+/// unrelated Unicode remote branch passes. A remote branch whose directory
+/// folds onto an existing tracking directory spelled differently
+/// (`INTEGRATION/producer-line` beside `integration/consumer-line`) is
+/// refused where the git directory folds names, since it would land in that
+/// directory as `integration/producer-line`.
+#[test]
+fn tsk381_a_unicode_remote_branch_fetches_and_a_folded_directory_does_not() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = case_sensitive_origin(remote.path(), insensitive);
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(
+        &origin,
+        &["update-ref", "refs/heads/integration/consumer-line", &tip],
+    );
+    wire_transaction_hook(root);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    git(&origin, &["update-ref", "refs/heads/feat/na\u{ef}ve", &tip]);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/na\u{ef}ve"]),
+        tip
+    );
+
+    // Fable confirm item 1: only the branch after the configured remote's
+    // prefix is judged, so `feat/MAIN` is not taken for `MAIN` beside `main`.
+    git(&origin, &["update-ref", "refs/heads/feat/MAIN", &tip]);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/MAIN"]),
+        tip
+    );
+
+    git(
+        &origin,
+        &["update-ref", "refs/heads/INTEGRATION/producer-line", &tip],
+    );
+    let out = fetch_origin(root);
+    assert_eq!(
+        out.status.success(),
+        !insensitive,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if insensitive {
+        let landed = Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "-q",
+                "refs/remotes/origin/integration/producer-line",
+            ])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(!landed.status.success(), "the folded directory landed");
+    }
+}
+
+/// TSK-381 SF-7, the D1 reproduction: the producer's line is
+/// `integration/producer-line`, and origin holds the completion only as
+/// `INTEGRATION/producer-line`. With no local `integration/` directory the
+/// fetch passes, and the tracking ref is read by the spelling git stored, so
+/// the consumer pinning that completion stays waiting.
+#[test]
+fn tsk381_a_differently_spelled_line_does_not_land_a_research_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = case_sensitive_origin(remote.path(), insensitive);
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    commit_record(
+        root,
+        "TSK-003",
+        &record_on("TSK-003", "integration/producer-line", "[]"),
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["switch", "-qc", "integration/producer-line"]);
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(
+        root,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/INTEGRATION/producer-line",
+        ],
+    );
+    git(
+        root,
+        &[
+            "update-ref",
+            "-d",
+            "refs/remotes/origin/INTEGRATION/producer-line",
+        ],
+    );
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["update-ref", "-d", "refs/heads/integration/producer-line"],
+    );
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    wire_transaction_hook(root);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
+}
+
+/// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
+/// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
+/// completes it, and TSK-004 pins that forged completion. `work next` waits
+/// and `work claim` refuses, naming `origin/main` and `evil`.
+#[test]
+fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    commit_record(root, "TSK-003", &record_on("TSK-003", "evil", "[]"));
+    git(root, &["switch", "-qc", "evil"]);
+    let pin = complete(root, "TSK-003", "src/forged.rs");
+    git(root, &["switch", "-q", "main"]);
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    let reason = format!("pins TSK-003 at {pin}: not on 'origin/main'; 'evil' is not fetched here");
+    // Review round 2 (Grok F1): git-guard refuses a case-different write of
+    // the tracking ref, which a case-insensitive filesystem would store as
+    // `refs/remotes/origin/evil`.
+    for name in [
+        "REFS/REMOTES/origin/evil",
+        "refs/Remotes/origin/evil",
+        "Refs/remotes/origin/evil",
+        // Codex F1 and SF-3: the `ſ` spellings, which APFS folds to `s`.
+        "ref\u{17f}/remotes/origin/evil",
+        "ref\u{17f}/remotes/origin/evil",
+    ] {
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_input":{{"command":"git update-ref {name} {pin}"}},"cwd":"{}"}}"#,
+            root.display()
+        );
+        let mut guard = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args(["hook", "git-guard"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(guard.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+        let out = guard.wait_with_output().unwrap();
+        // The `ſ` spellings alias only on a case-insensitive git directory
+        // (TSK-381 SF-3); elsewhere they are ordinary names.
+        let aliases = name.is_ascii()
+            || codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+        assert_eq!(
+            out.status.code(),
+            Some(if aliases { 2 } else { 0 }),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
+    assert!(next.contains(&reason), "{next}");
+    let claim = cli(root, &["work", "claim", "TSK-004"], None);
+    let said = String::from_utf8_lossy(&claim.stderr).to_string();
+    assert_eq!(claim.status.code(), Some(1), "{said}");
+    assert!(said.contains(&reason), "{said}");
+    assert!(git(root, &["branch", "--list", "task/TSK-004-*"]).is_empty());
+}
+
 #[cfg(unix)]
 fn stacked_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
     let dir = fixture();

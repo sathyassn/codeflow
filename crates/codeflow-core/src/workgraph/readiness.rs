@@ -1770,6 +1770,362 @@ mod tests {
         assert!(verdict(root, "TSK-003").is_ok());
     }
 
+    /// The verdict on `id` with the records of `target`, judged for `target`.
+    fn verdict_at(root: &Path, id: &str, target: &str) -> Result<AnchoredTask, WorkStartError> {
+        let repo = Repository::open(root).unwrap();
+        let tree = super::super::work_start::target_reference(&repo, target)
+            .unwrap()
+            .unwrap()
+            .tree()
+            .unwrap();
+        let records = records_from_tree(&repo, &tree).unwrap();
+        validate_anchored_task(&repo, &records, id, target)
+    }
+
+    /// TSK-381 (issue 236): the producer TSK-001 completes on its own line,
+    /// the line lands on `main` and is deleted. Returns the open and
+    /// completing commits and a side commit, which holds the record complete
+    /// but is on no target.
+    fn landed_and_deleted_producer(root: &Path) -> (String, String, String) {
+        let line = "integration/EPC-002-carry";
+        epic(root, "EPC-002", "in_progress");
+        task_in(root, "TSK-001", Some("EPC-002"), line, "todo", "[]", "");
+        let open = commit(root, "plan");
+        run(root, &["switch", "-q", "-c", line]);
+        task_in(root, "TSK-001", Some("EPC-002"), line, "complete", "[]", "");
+        let done = commit(root, "findings");
+        run(root, &["switch", "-q", "-c", "side"]);
+        fs::write(root.join("note.md"), "side\n").unwrap();
+        let side = commit(root, "side");
+        run(root, &["switch", "-q", "main"]);
+        run(root, &["merge", "-q", "--no-ff", "-m", "land", line]);
+        run(root, &["branch", "-q", "-d", line]);
+        (open, done, side)
+    }
+
+    /// TSK-381 AC-1 and AC-3: after the producer's line is deleted, a pin on
+    /// this task's target is met; an open record at the pin, a pin on no
+    /// target, a missing object and a pin before the record still refuse.
+    #[test]
+    fn a_research_pin_stays_met_after_its_producers_line_is_deleted() {
+        let dir = repo();
+        let root = dir.path();
+        let before = commit(root, "scaffold");
+        let (open, done, side) = landed_and_deleted_producer(root);
+        pinned_consumer(root, &done);
+        verdict(root, "TSK-002").expect("the pin is on this task's target");
+        pinned_consumer(root, &open);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error.to_string().contains("the record there is 'todo'"),
+            "{error}"
+        );
+        pinned_consumer(root, &side);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "task TSK-002 pins TSK-001 at {side}: not on 'main'; \
+                 'integration/EPC-002-carry' is not fetched here"
+            )
+        );
+        assert_eq!(error.not_ready(), NotReady::Waiting);
+        let missing = "0123456789abcdef0123456789abcdef01234567";
+        pinned_consumer(root, missing);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not a commit in this repository"),
+            "{error}"
+        );
+        pinned_consumer(root, &before);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(
+            error.to_string().contains("the record is not there"),
+            "{error}"
+        );
+    }
+
+    /// TSK-381 AC-1 to AC-3 on a clone: the consumer's line was cut before
+    /// the producer landed, the producer's line is gone, and the local `main`
+    /// is behind `origin/main`. The pin is met on `origin/main`; a local
+    /// `main`, behind or ahead, changes nothing, and a refusal names the
+    /// refs it read.
+    #[test]
+    fn a_research_pin_is_read_on_origin_main_never_on_the_local_main() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-002", "todo", "[]", "");
+        let cut = commit(root, "plan the consumer");
+        let _origin = with_origin(root);
+        let line = "integration/EPC-001-line";
+        let push_line = |head: &str| {
+            run(
+                root,
+                &[
+                    "push",
+                    "-q",
+                    "-f",
+                    "origin",
+                    &format!("{head}:refs/heads/{line}"),
+                ],
+            );
+            run(root, &["fetch", "-q", "origin"]);
+        };
+        push_line(&cut);
+        let (_, done, side) = landed_and_deleted_producer(root);
+        run(root, &["push", "-q", "origin", "main"]);
+        run(root, &["switch", "-q", "--detach", &cut]);
+        run(root, &["branch", "-q", "-f", "main", &cut]);
+        let consumer = |pin: &str| {
+            run(root, &["switch", "-q", "--detach", &cut]);
+            task_in(
+                root,
+                "TSK-002",
+                Some("EPC-001"),
+                line,
+                "todo",
+                &format!("[{{id: TSK-001, kind: research, pin: \"{pin}\"}}]"),
+                "",
+            );
+            push_line(&commit(root, "pin the consumer"));
+            verdict_at(root, "TSK-002", &format!("origin/{line}"))
+        };
+        consumer(&done).expect("the pin is on origin/main");
+        let error = consumer(&side).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("task TSK-002 pins TSK-001 at {side}: not on 'origin/{line}' or 'origin/main'")
+        );
+        run(root, &["branch", "-q", "-f", "main", &side]);
+        let error = consumer(&side).unwrap_err();
+        assert!(error.to_string().contains("'origin/main'"), "{error}");
+    }
+
+    /// TSK-381 AC-2, the issue comment's reproduction: the producer targets
+    /// `main`, the pin is on `origin/main`, and the local `main` is behind.
+    #[test]
+    fn a_research_pin_on_main_is_met_while_the_local_main_is_behind() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        let behind = commit(root, "plan");
+        let _origin = with_origin(root);
+        task(root, "TSK-001", "complete", "[]", "");
+        let done = commit(root, "findings");
+        run(root, &["push", "-q", "origin", "main"]);
+        run(
+            root,
+            &["switch", "-q", "-c", "integration/EPC-001-line", &behind],
+        );
+        run(root, &["branch", "-q", "-f", "main", &behind]);
+        task_in(
+            root,
+            "TSK-002",
+            Some("EPC-001"),
+            "integration/EPC-001-line",
+            "todo",
+            &format!("[{{id: TSK-001, kind: research, pin: \"{done}\"}}]"),
+            "",
+        );
+        commit(root, "pin the consumer");
+        verdict_at(root, "TSK-002", "integration/EPC-001-line")
+            .expect("the pin is on origin/main although the local main is behind");
+    }
+
+    /// TSK-381 review round 1: a clone whose `origin/main` holds TSK-001 open
+    /// on `target`, and whose unpushed local `branch` completes it. TSK-002 on
+    /// the local `main` pins that forged completion. Returns the origin and
+    /// the pin.
+    fn forged_producer(root: &Path, target: &str, branch: &str) -> (tempfile::TempDir, String) {
+        task_in(root, "TSK-001", Some("EPC-001"), target, "todo", "[]", "");
+        commit(root, "plan");
+        let origin = with_origin(root);
+        run(root, &["switch", "-q", "-c", branch]);
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            target,
+            "complete",
+            "[]",
+            "",
+        );
+        let pin = commit(root, "forge the findings");
+        run(root, &["switch", "-q", "main"]);
+        pinned_consumer(root, &pin);
+        (origin, pin)
+    }
+
+    /// Grok F1 demonstration 1 and SF-2: with a remote present, a local
+    /// branch the author made is never a landing ref, however the producer's
+    /// target spells it.
+    #[test]
+    fn a_local_branch_is_no_landing_while_a_remote_exists() {
+        for (target, branch) in [
+            ("evil", "evil"),
+            ("refs/heads/evil", "evil"),
+            ("integration/producer-line", "integration/producer-line"),
+        ] {
+            let dir = repo();
+            let root = dir.path();
+            let (_origin, pin) = forged_producer(root, target, branch);
+            let error = verdict(root, "TSK-002").unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'; \
+                     '{target}' is not fetched here"
+                ),
+                "{target}"
+            );
+        }
+    }
+
+    /// Grok F1 demonstration 2 and SF-1: an upstream that is a local branch,
+    /// set by config (`remote = .`) or by `git branch -u`, is not honoured;
+    /// the authority remote's `origin/main` is read.
+    #[test]
+    fn a_local_upstream_is_not_honoured() {
+        let dir = repo();
+        let root = dir.path();
+        let (_origin, pin) = forged_producer(root, "main", "evil");
+        run(root, &["merge", "-q", "evil", "-m", "take the forgery"]);
+        run(root, &["branch", "-q", "-f", "evil", "main"]);
+        let refused = format!("task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'");
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["config", "branch.main.remote", "."]);
+        run(root, &["config", "branch.main.merge", "refs/heads/evil"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["branch", "-q", "side", "main"]);
+        run(root, &["branch", "-q", "-u", "side", "main"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+        run(root, &["config", "branch.main.remote", "origin"]);
+        run(root, &["config", "branch.main.merge", "refs/tags/v1"]);
+        run(root, &["tag", "v1", "main"]);
+        assert_eq!(verdict(root, "TSK-002").unwrap_err().to_string(), refused);
+    }
+
+    /// TSK-381 SF-4: a loose `refs/remotes/origin/MAIN` holding the forged pin
+    /// is the same file as `.../main` on a case-insensitive filesystem; only
+    /// the spelling git lists counts, so `origin/main` reads as unfetched.
+    #[test]
+    fn a_tracking_ref_listed_under_another_spelling_is_unfetched() {
+        let dir = repo();
+        let root = dir.path();
+        let (_origin, pin) = forged_producer(root, "main", "side");
+        run(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let remotes = root.join(".git/refs/remotes/origin");
+        fs::create_dir_all(&remotes).unwrap();
+        fs::write(remotes.join("MAIN"), format!("{pin}\n")).unwrap();
+        assert_eq!(
+            verdict(root, "TSK-002").unwrap_err().to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: 'main' is not fetched here")
+        );
+    }
+
+    /// Grok F1 demonstration 3: with `origin` configured but its tracking ref
+    /// deleted, the local `main` does not stand in for it.
+    #[test]
+    fn a_deleted_tracking_ref_leaves_the_target_unfetched() {
+        let dir = repo();
+        let root = dir.path();
+        commit(root, "scaffold");
+        let _origin = with_origin(root);
+        task(root, "TSK-001", "complete", "[]", "");
+        let pin = commit(root, "findings, unpushed");
+        pinned_consumer(root, &pin);
+        run(root, &["branch", "-q", "--unset-upstream", "main"]);
+        run(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        assert_eq!(
+            verdict(root, "TSK-002").unwrap_err().to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: 'main' is not fetched here")
+        );
+    }
+
+    /// TSK-381 review round 2 (SF-1R): `line`'s upstream is another branch,
+    /// `task/TSK-999-forge`, of the configured remote `origin`, which holds the
+    /// forged pin. Returns the pin and the verdict.
+    fn upstream_on_another_branch(root: &Path, line: &str) -> (String, WorkStartError) {
+        let (_origin, pin) = forged_producer(root, line, "side");
+        run(root, &["push", "-q", "origin", "side:task/TSK-999-forge"]);
+        run(root, &["fetch", "-q", "origin"]);
+        if line == "main" {
+            run(
+                root,
+                &["branch", "-q", "-u", "origin/task/TSK-999-forge", "main"],
+            );
+        } else {
+            run(
+                root,
+                &["config", &format!("branch.{line}.remote"), "origin"],
+            );
+            run(
+                root,
+                &[
+                    "config",
+                    &format!("branch.{line}.merge"),
+                    "refs/heads/task/TSK-999-forge",
+                ],
+            );
+        }
+        let error = verdict(root, "TSK-002").unwrap_err();
+        (pin, error)
+    }
+
+    /// SF-1R with `git branch -u origin/task/TSK-999-forge main`.
+    #[test]
+    fn an_upstream_on_another_branch_is_not_honoured() {
+        let dir = repo();
+        let (pin, error) = upstream_on_another_branch(dir.path(), "main");
+        assert_eq!(
+            error.to_string(),
+            format!("task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'")
+        );
+    }
+
+    /// SF-1R through the producer line's branch config alone.
+    #[test]
+    fn a_line_config_naming_another_branch_is_not_honoured() {
+        let dir = repo();
+        let line = "integration/producer-line";
+        let (pin, error) = upstream_on_another_branch(dir.path(), line);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "task TSK-002 pins TSK-001 at {pin}: not on 'origin/main'; \
+                 '{line}' is not fetched here"
+            )
+        );
+    }
+
+    /// The fork case stays: an upstream on another configured remote is the
+    /// landing ref, although `origin/main` lacks the pin.
+    #[test]
+    fn an_upstream_on_another_configured_remote_is_the_landing_ref() {
+        let dir = repo();
+        let root = dir.path();
+        commit(root, "scaffold");
+        let _origin = with_origin(root);
+        let upstream = tempfile::tempdir().unwrap();
+        run(upstream.path(), &["init", "-q", "--bare"]);
+        run(
+            root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                upstream.path().to_str().unwrap(),
+            ],
+        );
+        task(root, "TSK-001", "complete", "[]", "");
+        let pin = commit(root, "findings");
+        run(root, &["push", "-q", "-u", "upstream", "main"]);
+        pinned_consumer(root, &pin);
+        verdict(root, "TSK-002").expect("the pin is on upstream/main");
+    }
+
     /// Review finding on issue 79: an upstream remote whose name is not valid
     /// UTF-8 decoded to nothing, so that remote was silently left out of the
     /// refresh. The owner is an identity, so it is an error.
