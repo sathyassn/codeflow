@@ -91,8 +91,32 @@ source identity or idempotency key) are refused; similar ones are
 suggested. Every free-text field is scanned and bounded, the files are
 private, an explicit purge path exists.
 
-Lanes: a session is a process; the coordinator is the lead role; a lane
-is a durable, harness-neutral unit of delegated work; a seat is the
+Streams: several coordinating sessions can run at once, within one
+harness and across harnesses, each managing its own lanes for a
+different body of work. A work stream `WS-NNN-<slug>` is local to the
+ledger like FU and LN, with a descriptive scope (an epic, several epics
+or a topic) of links only. One live coordinator per stream, held by
+lease and generation; a session names the stream it coordinates when
+it claims, and the start digest never guesses. Every lane belongs to
+exactly one stream and only that stream's coordinator opens or closes
+it; a lane moves between streams only by a recorded handover both
+coordinators make. Every follow-up belongs to a stream; operator asks
+go to the stream concerned or to a project intake list until a
+coordinator takes them. A task is active in one stream's lane at a
+time; a second stream starting it gets a warning naming the owner, and
+claims stay advisory. Cross-stream waits are allowed by id and are
+read-only. A coordinator's digest shows its own stream in detail plus
+one summary line per other stream; `codeflow coord status` shows every
+stream, its coordinator's liveness, lanes, owed follow-ups and operator
+items, and flags more than one epic built at once in a stream (issue
+280). A lone session gets a default stream automatically. Adoption and
+harness switching are per stream. Events: `stream_opened`,
+`stream_scope_changed`, `stream_closed`, `lane_handed_over`; every
+coordinator event carries its stream.
+
+Lanes: a session is a process; the coordinator is the lead role of a
+stream; a lane is a durable, harness-neutral unit of delegated work
+inside a stream; a seat is the
 harness session attached to it, replaceable, with a recorded kind
 (external, resumable, in-process); an attempt is one run of work with
 its own task branch and worktree, recording task, worktree, branch,
@@ -112,8 +136,8 @@ stale writer is refused where the operation can check it. A lease is
 coordination ownership, not an execution lock: before replacement work
 starts, the old seat's live panes, in-flight operations, branches and
 dirty worktrees are inventoried, anything not shown stopped is kept,
-and nothing is cleaned up from a timeout. Only the coordinator opens
-lanes. `work claim` keeps its behaviour (a hint and an optional
+and nothing is cleaned up from a timeout. Only a stream's coordinator opens
+and closes its lanes. `work claim` keeps its behaviour (a hint and an optional
 `--lane`); `cf-herdr` seat open takes `--lane` or a recorded `--no-lane`
 reason and keeps its live identity checks. The recovery inventory
 (dirty worktrees, unpushed and unreferenced commits) is in scope.
@@ -176,7 +200,8 @@ allowing CodeFlow's writes under `.git/codeflow/coord/` while refusing
 direct edits; a project with several clones has several ledgers, and
 the snapshot is the only way to share one; the read path must stay
 bounded without compaction. Ruled out: a tracked ledger in history, a
-per-machine or cross-machine ledger, closure by hand-off, automatic
+per-machine or cross-machine ledger, one coordinator per project (it
+is one per stream), closure by hand-off, automatic
 closure from a context link, automatic coordinator claims, semantic
 duplicate refusal and any claim that a lease fences arbitrary tools.
 The guidance homes (the managed block, cf-model-orchestrator and its
