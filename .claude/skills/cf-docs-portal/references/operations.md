@@ -203,6 +203,15 @@ canary claim rather than an inference from Unix tests.
 
 The locked `check`, `build`, `dev`, and `preview` scripts hold one top-level
 workflow lease, so another process cannot bind `dist` to the wrong snapshot.
+The lease records its owner: the coordinator's process id and host, and the
+process id of each writer (adapter, Astro, evidence) while it runs. A contender
+on the same host reclaims the lease at once, with one line naming the dead
+owner, when the coordinator and every recorded writer have exited, which covers
+a run killed with `SIGKILL`. A live coordinator or writer still blocks and its
+process ids are named. When liveness cannot be decided (another host, a lease
+without owner fields, a permission error), the four-hour age rule applies. A
+reused process id reads as live and blocks. A writer started in the instant
+before it is recorded, or a grandchild of a writer, is not tracked.
 Before Astro starts, the workflow rejects symlinks and non-regular entries in
 tool-controlled `dist`, `.astro`, and Node cache roots; it never follows an
 output link while cleaning. Run only one task-owned dev server per portal, stop
