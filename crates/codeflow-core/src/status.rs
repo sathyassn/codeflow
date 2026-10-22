@@ -1038,9 +1038,9 @@ mod tests {
         git(dir.path(), &["switch", "-q", "-c", "ev\u{202e}head"]);
         let printed = render_status(&collect_status(dir.path()), false);
         for (_, shown) in names {
-            assert!(printed.contains(&format!("branch {shown} ")), "{printed}");
+            assert!(printed.contains(&format!("branch {shown} ")), "{printed:?}");
         }
-        assert!(printed.contains("branch: ev\\u{202e}head"), "{printed}");
+        assert!(printed.contains("branch: ev\\u{202e}head"), "{printed:?}");
         assert!(
             !printed.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
             "{printed:?}"
@@ -1155,8 +1155,8 @@ mod tests {
 
         // Neither feature in use: neither line appears.
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(!rendered.contains("feedback:"), "{rendered}");
-        assert!(!rendered.contains("estimates:"), "{rendered}");
+        assert!(!rendered.contains("feedback:"), "{rendered:?}");
+        assert!(!rendered.contains("estimates:"), "{rendered:?}");
 
         // Estimates alone.
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
@@ -1166,8 +1166,8 @@ mod tests {
         )
         .unwrap();
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(rendered.contains("estimates: declined"), "{rendered}");
-        assert!(!rendered.contains("feedback:"), "{rendered}");
+        assert!(rendered.contains("estimates: declined"), "{rendered:?}");
+        assert!(!rendered.contains("feedback:"), "{rendered:?}");
 
         // Both: each keeps its own line.
         std::fs::create_dir_all(dir.path().join("project-management/feedback")).unwrap();
@@ -1175,14 +1175,14 @@ mod tests {
         assert_eq!(view.feedback, Some((0, Vec::new())));
         assert_eq!(view.estimates.as_deref(), Some("estimates: declined"));
         let rendered = render_status(&view, false);
-        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
-        assert!(rendered.contains("estimates: declined\n"), "{rendered}");
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered:?}");
+        assert!(rendered.contains("estimates: declined\n"), "{rendered:?}");
 
         // Feedback alone.
         std::fs::remove_file(dir.path().join(".codeflow/estimate.json")).unwrap();
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
-        assert!(!rendered.contains("estimates:"), "{rendered}");
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered:?}");
+        assert!(!rendered.contains("estimates:"), "{rendered:?}");
     }
 
     #[test]
@@ -1397,20 +1397,23 @@ mod tests {
         assert_eq!(cap.missing_epics, vec!["EPC-404"]);
 
         let rendered = render_delivery(&view);
-        assert!(rendered.contains("capability delivery:"), "{rendered}");
-        assert!(rendered.contains("CAP-001"), "{rendered}");
+        assert!(rendered.contains("capability delivery:"), "{rendered:?}");
+        assert!(rendered.contains("CAP-001"), "{rendered:?}");
         assert!(
             rendered.contains("EPC-001 Deliver flow  [in_progress]  tasks 1/2 open"),
-            "{rendered}"
+            "{rendered:?}"
         );
         assert!(
             rendered.contains("next: TSK-001-001 Wire CLI"),
-            "{rendered}"
+            "{rendered:?}"
         );
-        assert!(rendered.contains("EPC-404 (no epic record)"), "{rendered}");
+        assert!(
+            rendered.contains("EPC-404 (no epic record)"),
+            "{rendered:?}"
+        );
         // The unrelated epic and its task never appear in the rollup.
-        assert!(!rendered.contains("Elsewhere"), "{rendered}");
-        assert!(!rendered.contains("EPC-002"), "{rendered}");
+        assert!(!rendered.contains("Elsewhere"), "{rendered:?}");
+        assert!(!rendered.contains("EPC-002"), "{rendered:?}");
     }
 
     #[test]
@@ -1541,7 +1544,7 @@ mod tests {
             rendered.contains(&format!(
                 "removable worktree feat/squashed -> {rendered_path} (patch-equivalent in main)"
             )),
-            "{rendered}"
+            "{rendered:?}"
         );
     }
 
@@ -1578,7 +1581,7 @@ mod tests {
                 "cleanup: 1 candidate(s) against main\n  removable branch \
                  feat/already-landed (landed by ancestry in main)"
             ),
-            "{rendered}"
+            "{rendered:?}"
         );
     }
 

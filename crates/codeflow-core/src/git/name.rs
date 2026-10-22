@@ -506,9 +506,12 @@ pub fn display_print(text: &str) -> String {
 /// Text of several lines that `CodeFlow` composes and prints as one block,
 /// its lines at column 0 by design (a report, a digest, a list). Each
 /// `write!` or `writeln!` into the block is one call under the
-/// [`display_print`] rule, so a value a call interpolates cannot start a
-/// line of its own; only the lines the calls write are at column 0. A block
-/// printer takes a `TextBlock` and prints it as it stands (TSK-388).
+/// [`display_print`] rule, so a line break a call interpolates cannot start
+/// a line of its own. The rule does not cover a call's first line: the
+/// caller owns its first bytes, and a line whose first bytes could come
+/// from the checkout starts with a fixed label (`product: `, `branch `).
+/// A block printer takes a `TextBlock` and prints it as it stands. It has
+/// no `Display`, so a print macro cannot take it by mistake (TSK-388).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct TextBlock(String);
 
@@ -546,7 +549,8 @@ impl TextBlock {
 
     /// One `write!` or `writeln!` call, formatted whole and then appended
     /// under the [`display_print`] rule, so the line breaks it interpolates
-    /// are told apart from its own. Inherent, so the macros need no import.
+    /// are told apart from its own; the rule holds per call. Inherent, so
+    /// the macros need no import.
     ///
     /// # Errors
     /// Never; the result matches [`std::fmt::Write`].
@@ -556,28 +560,11 @@ impl TextBlock {
     }
 }
 
-impl std::fmt::Write for TextBlock {
-    fn write_str(&mut self, text: &str) -> std::fmt::Result {
-        self.push_str(text);
-        Ok(())
-    }
-
-    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::fmt::Result {
-        TextBlock::write_fmt(self, args)
-    }
-}
-
 impl std::ops::Deref for TextBlock {
     type Target = str;
 
     fn deref(&self) -> &str {
         &self.0
-    }
-}
-
-impl std::fmt::Display for TextBlock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
     }
 }
 

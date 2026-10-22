@@ -2862,16 +2862,16 @@ mod tests {
         let line = rendered
             .lines()
             .find(|line| line.contains(&claimed.branch) && line.contains("retain"))
-            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered}"));
+            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered:?}"));
         assert!(line.contains("retain-live"), "{line}");
         assert!(line.contains("open claim"), "{line}");
         assert!(
             !rendered
                 .lines()
                 .any(|line| line.contains(&claimed.branch) && line.contains("removable")),
-            "{rendered}"
+            "{rendered:?}"
         );
-        assert!(rendered.contains("active"), "{rendered}");
+        assert!(rendered.contains("active"), "{rendered:?}");
     }
 
     /// TSK-110 AC-2: the in-process read decides no landing by itself. On
