@@ -8,10 +8,10 @@
 use crate::workgraph::history;
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
+use crate::git::GitName;
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
 use crate::workgraph::readiness::{self, Backlog, State};
 use crate::workgraph::{durable_work_tracking_enabled, MarkdownStore, RecordStore};
@@ -28,7 +28,9 @@ pub struct WorktreeInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CleanupInfo {
     pub kind: String,
-    pub name: String,
+    /// The branch or worktree name as git holds it; status escapes it once,
+    /// where it prints it (TSK-388).
+    pub name: GitName,
     pub path: Option<String>,
     pub disposition: CleanupDisposition,
     pub proof: String,
@@ -168,7 +170,9 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
             (
                 branch,
                 worktrees,
-                target.as_ref().map(|item| item.name.clone()),
+                target
+                    .as_ref()
+                    .map(|item| crate::git::display_text(&item.name)),
                 cleanup,
             )
         } else {
@@ -283,7 +287,7 @@ fn collect_cleanup(
             Err(error) => {
                 out.push(CleanupInfo {
                     kind: "worktree".into(),
-                    name: "unproven inventory".into(),
+                    name: GitName::from_text("unproven inventory"),
                     path: None,
                     disposition: CleanupDisposition::RetainUnproven,
                     proof: format!("cannot read linked worktrees: {error}"),
@@ -292,13 +296,12 @@ fn collect_cleanup(
             }
         };
         for linked in linked {
-            let name = linked.name.display().to_string();
-            let name = name.as_str();
+            let name = &linked.name;
             let path = linked.path.as_path();
             let Ok(worktree_repo) = git2::Repository::open(path) else {
                 out.push(CleanupInfo {
                     kind: "worktree".to_string(),
-                    name: name.to_string(),
+                    name: name.clone(),
                     path: Some(path.display().to_string()),
                     disposition: CleanupDisposition::RetainUnproven,
                     proof: "worktree state unavailable".to_string(),
@@ -323,8 +326,7 @@ fn collect_cleanup(
             );
             out.push(CleanupInfo {
                 kind: "worktree".to_string(),
-                name: branch
-                    .map_or_else(|| format!("{name} (detached)"), |b| b.display().to_string()),
+                name: branch.unwrap_or_else(|| name.joined(b" (detached)")),
                 path: Some(path.display().to_string()),
                 disposition,
                 proof,
@@ -355,7 +357,7 @@ fn collect_cleanup(
                 classify_cleanup(repo_root, repo, oid, Some(name), target, Some(false));
             out.push(CleanupInfo {
                 kind: "branch".to_string(),
-                name: name.to_string(),
+                name: exact.clone(),
                 path: None,
                 disposition,
                 proof,
@@ -417,10 +419,12 @@ fn classify_cleanup(
             "landing target or revision unavailable".to_string(),
         );
     };
+    // The remote names its default branch, which messages show escaped.
+    let shown = crate::git::display_text(&target.name);
     if branch.is_some_and(|name| readiness::is_open_claim(repo_root, repo, name, oid, target.oid)) {
         return (
             CleanupDisposition::RetainLive,
-            format!("open claim: nothing of it has landed in {}", target.name),
+            format!("open claim: nothing of it has landed in {shown}"),
         );
     }
     if let Err(error) = history::check(repo) {
@@ -429,18 +433,18 @@ fn classify_cleanup(
     if oid == target.oid || history::descendant_of(repo, target.oid, oid).unwrap_or(false) {
         return (
             CleanupDisposition::Removable,
-            format!("landed by ancestry in {}", target.name),
+            format!("landed by ancestry in {shown}"),
         );
     }
     if branch.is_some_and(|name| patch_equivalent(repo_root, &target.name, name)) {
         return (
             CleanupDisposition::Removable,
-            format!("patch-equivalent in {}", target.name),
+            format!("patch-equivalent in {shown}"),
         );
     }
     (
         CleanupDisposition::RetainUnproven,
-        format!("not proven landed in {}", target.name),
+        format!("not proven landed in {shown}"),
     )
 }
 
@@ -618,8 +622,15 @@ fn collect_delivery(
 /// With `capabilities_table`, every capability entry is listed; otherwise
 /// only counts by status appear.
 #[must_use]
-pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
-    let mut out = String::new();
+pub fn render_status(view: &StatusView, capabilities_table: bool) -> crate::git::TextBlock {
+    // Status quotes ref names, record text and errors; every control,
+    // format and separator character in them is shown escaped, and each
+    // `writeln!` is one line under the block rule (TSK-388).
+    render_status_text(view, capabilities_table)
+}
+
+fn render_status_text(view: &StatusView, capabilities_table: bool) -> crate::git::TextBlock {
+    let mut out = crate::git::TextBlock::new();
 
     match &view.branch {
         Some(b) => {
@@ -635,31 +646,19 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     } else {
         let _ = writeln!(out, "worktrees: {}", view.worktrees.len());
         for wt in &view.worktrees {
-            let _ = writeln!(out, "  {} -> {}", wt.name, wt.path);
+            // A path is a field: a line break in it is escaped (TSK-388).
+            let _ = writeln!(
+                out,
+                "  {} -> {}",
+                wt.name,
+                crate::git::display_line(&wt.path)
+            );
         }
     }
 
     render_cleanup(&mut out, view);
 
-    match &view.work {
-        Some(work) => {
-            let _ = writeln!(
-                out,
-                "work: epics {} · tasks {}",
-                format_counts(&work.epics_by_status),
-                format_counts(&work.tasks_by_status)
-            );
-            for epic in &work.active_epics {
-                let _ = writeln!(out, "  in flight (epic): {epic}");
-            }
-            for task in &work.active_tasks {
-                let _ = writeln!(out, "  in flight (task): {task}");
-            }
-        }
-        None => {
-            let _ = writeln!(out, "work: (no project-management tier)");
-        }
-    }
+    render_work(&mut out, view);
     if let Some(backlog) = &view.derived {
         render_derived(&mut out, backlog);
     }
@@ -700,7 +699,7 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
                         entry.id,
                         entry.status,
                         entry.area,
-                        entry.name,
+                        crate::git::display_message(&entry.name),
                         entry.verified_by.join(", ")
                     );
                 }
@@ -716,13 +715,44 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     for note in &view.notes {
-        let _ = writeln!(out, "note: {note}");
+        let _ = writeln!(out, "note: {}", crate::git::display_message(note));
     }
 
     out
 }
 
-fn render_derived(out: &mut String, backlog: &Backlog) {
+/// The work summary, with each record title shown escaped (TSK-388).
+fn render_work(out: &mut crate::git::TextBlock, view: &StatusView) {
+    match &view.work {
+        Some(work) => {
+            let _ = writeln!(
+                out,
+                "work: epics {} · tasks {}",
+                format_counts(&work.epics_by_status),
+                format_counts(&work.tasks_by_status)
+            );
+            for epic in &work.active_epics {
+                let _ = writeln!(
+                    out,
+                    "  in flight (epic): {}",
+                    crate::git::display_message(epic)
+                );
+            }
+            for task in &work.active_tasks {
+                let _ = writeln!(
+                    out,
+                    "  in flight (task): {}",
+                    crate::git::display_message(task)
+                );
+            }
+        }
+        None => {
+            let _ = writeln!(out, "work: (no project-management tier)");
+        }
+    }
+}
+
+fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
     let _ = writeln!(out, "tasks: {}", backlog.counts_line());
     let _ = writeln!(out, "  {}", backlog.snapshot_line());
     for entry in backlog.in_state(State::Active) {
@@ -730,12 +760,17 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
             out,
             "  active: {} {} ({})",
             entry.task_id,
-            entry.title,
-            entry.branches.join(", ")
+            crate::git::display_message(&entry.title),
+            shown_branches(&entry.branches)
         );
     }
     for entry in backlog.in_state(State::Ready) {
-        let _ = writeln!(out, "  ready: {} {}", entry.task_id, entry.title);
+        let _ = writeln!(
+            out,
+            "  ready: {} {}",
+            entry.task_id,
+            crate::git::display_message(&entry.title)
+        );
     }
     // A Blocker or an invalid record outranks a claim; the branch stays shown.
     for state in [State::Blocked, State::Invalid] {
@@ -748,8 +783,8 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
                 "  {}: {} ({}; {})",
                 state.as_str(),
                 entry.task_id,
-                entry.reason,
-                entry.branches.join(", ")
+                crate::git::display_message(&entry.reason),
+                shown_branches(&entry.branches)
             );
         }
     }
@@ -757,10 +792,11 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
         let _ = writeln!(
             out,
             "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
-            branches.join(", ")
+            shown_branches(branches)
         );
     }
     for branch in &backlog.landed {
+        // In display form already, as the backlog holds it.
         let _ = writeln!(out, "  landed: {branch}");
     }
     for (epic, progress) in &backlog.epics {
@@ -772,7 +808,14 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
     }
 }
 
-fn render_cleanup(out: &mut String, view: &StatusView) {
+/// Branch names as status shows them, comma separated. The backlog holds
+/// them in display form already (`GitName::display`), so they are joined
+/// as they are; escaping them again would double each backslash.
+fn shown_branches(branches: &[String]) -> String {
+    branches.join(", ")
+}
+
+fn render_cleanup(out: &mut crate::git::TextBlock, view: &StatusView) {
     match &view.cleanup_target {
         Some(target) if view.cleanup.is_empty() => {
             let _ = writeln!(out, "cleanup: none (target {target})");
@@ -787,14 +830,15 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                 let path = item
                     .path
                     .as_deref()
-                    .map(|path| format!(" -> {path}"))
+                    .map(|path| format!(" -> {}", crate::git::display_line(path)))
                     .unwrap_or_default();
                 let _ = writeln!(
                     out,
                     "  {} {} {}{} ({})",
                     item.disposition.label(),
                     item.kind,
-                    item.name,
+                    // A branch name can hold any character git accepts.
+                    item.name.display(),
                     path,
                     item.proof
                 );
@@ -812,7 +856,8 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
                     "  {} {} {} ({})",
                     item.disposition.label(),
                     item.kind,
-                    item.name,
+                    // A branch name can hold any character git accepts.
+                    item.name.display(),
                     item.proof
                 );
             }
@@ -828,13 +873,23 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
 /// actionable tasks. Generated from the existing links, so it degrades the
 /// same way the base view does.
 #[must_use]
-pub fn render_delivery(view: &StatusView) -> String {
-    let mut out = String::new();
+pub fn render_delivery(view: &StatusView) -> crate::git::TextBlock {
+    render_delivery_text(view)
+}
+
+fn render_delivery_text(view: &StatusView) -> crate::git::TextBlock {
+    let mut out = crate::git::TextBlock::new();
     match &view.delivery {
         Some(caps) if !caps.is_empty() => {
             let _ = writeln!(out, "capability delivery:");
             for cap in caps {
-                let _ = writeln!(out, "  {}  {:<10}  {}", cap.id, cap.status, cap.name);
+                let _ = writeln!(
+                    out,
+                    "  {}  {:<10}  {}",
+                    cap.id,
+                    cap.status,
+                    crate::git::display_message(&cap.name)
+                );
                 if cap.epics.is_empty() && cap.missing_epics.is_empty() {
                     let _ = writeln!(out, "    (no epics linked)");
                 }
@@ -842,10 +897,14 @@ pub fn render_delivery(view: &StatusView) -> String {
                     let _ = writeln!(
                         out,
                         "    {} {}  [{}]  tasks {}/{} open",
-                        epic.format_id, epic.title, epic.status, epic.open_tasks, epic.total_tasks
+                        epic.format_id,
+                        crate::git::display_message(&epic.title),
+                        epic.status,
+                        epic.open_tasks,
+                        epic.total_tasks
                     );
                     for task in &epic.next_tasks {
-                        let _ = writeln!(out, "      next: {task}");
+                        let _ = writeln!(out, "      next: {}", crate::git::display_message(task));
                     }
                 }
                 for missing in &cap.missing_epics {
@@ -926,6 +985,66 @@ mod tests {
         )
         .unwrap();
         assert!(cleanup_target(&repo).is_err());
+    }
+
+    /// TSK-388: `origin/HEAD` names the branch the remote calls its default,
+    /// which can hold a control character that git accepts (the C1 CSI
+    /// here). Status shows it escaped; an ordinary name is unchanged.
+    #[test]
+    fn the_cleanup_target_shows_the_remote_default_branch_escaped() {
+        for (name, shown) in [("ev\u{9b}31mil", "ev\\x9b31mil"), ("trunk", "trunk")] {
+            let dir = tempfile::tempdir().unwrap();
+            init_repo(dir.path());
+            git(dir.path(), &["branch", "feat/landed"]);
+            let tracking = format!("refs/remotes/origin/{name}");
+            git(dir.path(), &["update-ref", &tracking, "HEAD"]);
+            git(
+                dir.path(),
+                &["symbolic-ref", "refs/remotes/origin/HEAD", &tracking],
+            );
+            let view = collect_status(dir.path());
+            assert_eq!(
+                view.cleanup_target.as_deref(),
+                Some(format!("origin/{shown}").as_str())
+            );
+            let landed = view
+                .cleanup
+                .iter()
+                .find(|item| item.name == GitName::from_text("feat/landed"))
+                .unwrap();
+            assert_eq!(
+                landed.proof,
+                format!("landed by ancestry in origin/{shown}")
+            );
+        }
+    }
+
+    /// TSK-388 round 1 (Grok F-1, F-2): a local branch can carry a name a
+    /// remote chose, holding a character git accepts that a terminal acts
+    /// on. Status names each cleanup candidate and the checked-out branch
+    /// escaped.
+    #[test]
+    fn status_names_cleanup_candidates_and_the_branch_escaped() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let names = [
+            ("ev\u{9b}2Jil", "ev\\x9b2Jil"),
+            ("ev\u{2028}il", "ev\\u{2028}il"),
+            ("ev\u{202e}lim", "ev\\u{202e}lim"),
+        ];
+        for (name, _) in names {
+            git(dir.path(), &["branch", name]);
+        }
+        git(dir.path(), &["switch", "-q", "-c", "ev\u{202e}head"]);
+        let printed = render_status(&collect_status(dir.path()), false);
+        for (_, shown) in names {
+            assert!(printed.contains(&format!("branch {shown} ")), "{printed:?}");
+        }
+        assert!(printed.contains("branch: ev\\u{202e}head"), "{printed:?}");
+        assert!(
+            !printed.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+            "{printed:?}"
+        );
     }
 
     fn init_repo(dir: &Path) {
@@ -1036,8 +1155,8 @@ mod tests {
 
         // Neither feature in use: neither line appears.
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(!rendered.contains("feedback:"), "{rendered}");
-        assert!(!rendered.contains("estimates:"), "{rendered}");
+        assert!(!rendered.contains("feedback:"), "{rendered:?}");
+        assert!(!rendered.contains("estimates:"), "{rendered:?}");
 
         // Estimates alone.
         std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
@@ -1047,8 +1166,8 @@ mod tests {
         )
         .unwrap();
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(rendered.contains("estimates: declined"), "{rendered}");
-        assert!(!rendered.contains("feedback:"), "{rendered}");
+        assert!(rendered.contains("estimates: declined"), "{rendered:?}");
+        assert!(!rendered.contains("feedback:"), "{rendered:?}");
 
         // Both: each keeps its own line.
         std::fs::create_dir_all(dir.path().join("project-management/feedback")).unwrap();
@@ -1056,14 +1175,14 @@ mod tests {
         assert_eq!(view.feedback, Some((0, Vec::new())));
         assert_eq!(view.estimates.as_deref(), Some("estimates: declined"));
         let rendered = render_status(&view, false);
-        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
-        assert!(rendered.contains("estimates: declined\n"), "{rendered}");
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered:?}");
+        assert!(rendered.contains("estimates: declined\n"), "{rendered:?}");
 
         // Feedback alone.
         std::fs::remove_file(dir.path().join(".codeflow/estimate.json")).unwrap();
         let rendered = render_status(&collect_status(dir.path()), false);
-        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
-        assert!(!rendered.contains("estimates:"), "{rendered}");
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered:?}");
+        assert!(!rendered.contains("estimates:"), "{rendered:?}");
     }
 
     #[test]
@@ -1278,20 +1397,23 @@ mod tests {
         assert_eq!(cap.missing_epics, vec!["EPC-404"]);
 
         let rendered = render_delivery(&view);
-        assert!(rendered.contains("capability delivery:"), "{rendered}");
-        assert!(rendered.contains("CAP-001"), "{rendered}");
+        assert!(rendered.contains("capability delivery:"), "{rendered:?}");
+        assert!(rendered.contains("CAP-001"), "{rendered:?}");
         assert!(
             rendered.contains("EPC-001 Deliver flow  [in_progress]  tasks 1/2 open"),
-            "{rendered}"
+            "{rendered:?}"
         );
         assert!(
             rendered.contains("next: TSK-001-001 Wire CLI"),
-            "{rendered}"
+            "{rendered:?}"
         );
-        assert!(rendered.contains("EPC-404 (no epic record)"), "{rendered}");
+        assert!(
+            rendered.contains("EPC-404 (no epic record)"),
+            "{rendered:?}"
+        );
         // The unrelated epic and its task never appear in the rollup.
-        assert!(!rendered.contains("Elsewhere"), "{rendered}");
-        assert!(!rendered.contains("EPC-002"), "{rendered}");
+        assert!(!rendered.contains("Elsewhere"), "{rendered:?}");
+        assert!(!rendered.contains("EPC-002"), "{rendered:?}");
     }
 
     #[test]
@@ -1355,7 +1477,7 @@ mod tests {
         let dirty = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/dirty")
+            .find(|item| item.name == GitName::from_text("feat/dirty"))
             .unwrap();
         assert_eq!(
             dirty.disposition,
@@ -1366,7 +1488,7 @@ mod tests {
         let pending = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/pending")
+            .find(|item| item.name == GitName::from_text("feat/pending"))
             .unwrap();
         assert_eq!(
             pending.disposition,
@@ -1402,7 +1524,7 @@ mod tests {
         let squashed = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/squashed")
+            .find(|item| item.name == GitName::from_text("feat/squashed"))
             .unwrap();
         assert_eq!(
             squashed.disposition,
@@ -1422,7 +1544,7 @@ mod tests {
             rendered.contains(&format!(
                 "removable worktree feat/squashed -> {rendered_path} (patch-equivalent in main)"
             )),
-            "{rendered}"
+            "{rendered:?}"
         );
     }
 
@@ -1444,7 +1566,7 @@ mod tests {
         let branch = view
             .cleanup
             .iter()
-            .find(|item| item.name == "feat/already-landed")
+            .find(|item| item.name == GitName::from_text("feat/already-landed"))
             .unwrap();
         assert_eq!(
             branch.disposition,
@@ -1459,7 +1581,7 @@ mod tests {
                 "cleanup: 1 candidate(s) against main\n  removable branch \
                  feat/already-landed (landed by ancestry in main)"
             ),
-            "{rendered}"
+            "{rendered:?}"
         );
     }
 

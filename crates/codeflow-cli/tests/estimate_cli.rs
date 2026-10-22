@@ -227,3 +227,51 @@ fn own_repository_judges_a_project_by_its_physical_path() {
     own_repository::own_repository(&project);
     assert!(project.join(".git").exists());
 }
+
+/// TSK-388 round 3 (Grok F-1, security S1): a forecast's pin path and
+/// exclusion reason can hold characters a terminal hides or acts on. The
+/// JSON report stays valid, decodes to the exact values, and its bytes hold
+/// none of those characters.
+#[test]
+fn a_hidden_character_in_the_forecast_keeps_the_json_report_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    own_repository::own_repository(dir.path());
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join("registry.json"), REGISTRY).unwrap();
+    std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(dir.path().join(".codeflow/policy.json"), "{}").unwrap();
+    let brief = "brief\u{202e}\u{ad}\u{e0041}.md";
+    let reason = "Fixture \u{202e}exclusion\u{ad}";
+    for path in [brief, "profile.md", "rubric.md"] {
+        std::fs::write(dir.path().join(path), "abc").unwrap();
+    }
+    let mut value = forecast();
+    value["packages"][0]["source"]["pin"]["path"] = json!(brief);
+    value["packages"][0]["stage_exclusions"][0]["reason"] = json!(reason);
+    std::fs::write(
+        dir.path().join("forecast.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let output = run(
+        dir.path(),
+        &home,
+        &["estimate", "check", "forecast.json", "--json"],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !text.contains(['\u{202e}', '\u{ad}', '\u{e0041}', '\u{9b}']),
+        "{text:?}"
+    );
+    let report: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!(report["exclusions"][0]["reason"], reason);
+    assert!(
+        report["source_digests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|digest| digest["path"] == brief),
+        "{report:#}"
+    );
+}

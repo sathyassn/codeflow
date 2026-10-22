@@ -236,15 +236,15 @@ fn run_gate_resolved(
             |reason| format!("{}; {reason}", selection.reason),
         );
         if selection.selected.contains(&target.name) {
-            eprintln!(
+            progress!(
                 "[codeflow test] selected {}: {reason}; requires [{}]",
                 target.name,
                 target.requires.join(", ")
             );
         } else if selection.skipped.contains(&target.name) {
-            eprintln!("[codeflow test] skipped {}: {reason}", target.name);
+            progress!("[codeflow test] skipped {}: {reason}", target.name);
         } else if selection.excluded.contains(&target.name) {
-            eprintln!("[codeflow test] excluded {}: {reason}", target.name);
+            progress!("[codeflow test] excluded {}: {reason}", target.name);
         }
     }
     let declarations = targets.clone();
@@ -384,7 +384,7 @@ fn run_gate_resolved(
             .filter(|(p, hash)| before.get(*p) != Some(*hash))
             .map(|(p, _)| p.as_str())
             .collect();
-        eprintln!(
+        progress!(
             "[codeflow test] generation changed the candidate: {}",
             changed.join(", ")
         );
@@ -412,7 +412,7 @@ fn run_gate_resolved(
         && results.len() == targets.len()
         && effective_mode == "full";
     if !ci_skipped.is_empty() && effective_mode == "full" {
-        eprintln!(
+        progress!(
             "[codeflow test] not complete: skipped in CI and still owed locally: {}",
             ci_skipped.join(", ")
         );
@@ -433,7 +433,7 @@ fn run_gate_resolved(
         run_dir.join("run.json"),
         serde_json::to_vec_pretty(&artifact)?,
     )?;
-    eprintln!(
+    progress!(
         "[codeflow test] artifact: {}",
         run_dir.join("run.json").display()
     );
@@ -446,7 +446,7 @@ fn run_gate_resolved(
         })?;
         let destination = delivery::durable_root(project_dir, &home).join(&run_id);
         copy_evidence(&run_dir, &destination)?;
-        eprintln!(
+        progress!(
             "[codeflow test] durable artifact: {}",
             destination.join("run.json").display()
         );

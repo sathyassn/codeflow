@@ -150,7 +150,7 @@ impl OutcomeReport {
 
     /// The plain-text report.
     #[must_use]
-    pub fn render(&self) -> String {
+    pub fn render(&self) -> crate::git::TextBlock {
         render::text(self)
     }
 }

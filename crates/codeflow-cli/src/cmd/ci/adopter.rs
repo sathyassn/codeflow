@@ -102,7 +102,7 @@ pub(super) fn resolve(
     let actor = actor.as_str();
     println!("codeflow ci: actor '{actor}'");
     if let Some(why) = why {
-        println!("codeflow ci: {why}");
+        println!("codeflow ci: {why}", why = crate::cmd::shown(&why));
     }
     let profile = adoption::matching_profile(profiles, actor, branch).cloned();
     if let Some(p) = &profile {
@@ -228,7 +228,10 @@ pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
     let (policy, project) = match read() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("codeflow ci: error: cannot read head configuration: {error}");
+            eprintln!(
+                "codeflow ci: error: cannot read head configuration: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return Some(2);
         }
     };
@@ -236,7 +239,10 @@ pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
     if let Some(text) = policy {
         if let Err(errors) = policy_schema::validate_policy_str(&text) {
             for e in &errors {
-                eprintln!("codeflow ci: head policy error: {e}");
+                eprintln!(
+                    "codeflow ci: head policy error: {e}",
+                    e = crate::cmd::shown(&e)
+                );
             }
             eprintln!(
                 "codeflow ci: error: the head's .codeflow/policy.json is not valid for this codeflow; nothing was verified"
@@ -251,7 +257,7 @@ pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
     }
     if let Some(text) = project {
         if let Err(e) = adoption::release_backend_str(&text, "the head's .codeflow/project.toml") {
-            eprintln!("codeflow ci: error: {e}");
+            eprintln!("codeflow ci: error: {e}", e = crate::cmd::shown(&e));
             failed = true;
         }
     }
