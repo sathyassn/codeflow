@@ -1,0 +1,11 @@
+id = "TSK-432"
+uid = "665b857d-bab6-42b1-9eb1-6cd7663dc2d0"
+kind = "TSK"
+title = "Pending work moves to a seat with capacity and a stopped seat resumes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:04:08Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
