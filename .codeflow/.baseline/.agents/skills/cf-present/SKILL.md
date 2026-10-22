@@ -67,15 +67,26 @@ perceived.
 6. [visual-craft](references/visual-craft.md): checklist
 7. [document-authoring](references/document-authoring.md): fields last
 
-**Choose blocks by information shape.** A visual must communicate one
-relationship in one grammar family under its twelve rules, never decorate
-prose. Give the governing relationship **one primary visual form at rest**,
-short plain prose around it; restyling the same chat answer is a failed use
-of this skill (text cards, bullet walls): stay in chat or restructure.
+**Anchor first, then build in order.** Open with three to five anchor
+lines (what this is, why it matters with one real instance, where it stands,
+what the reader decides), then one figure of the whole that names every part
+the page covers. Each later figure opens one named part, its lead saying
+what it adds; a term is drawn before it is used; the page ends with one ask.
+Run the cold-reader walk in `how-presentation-works.md` section 3 before
+open.
+
+**Choose blocks by information shape.** Every concept, mechanism, lifecycle,
+ownership model or comparison is a figure in one grammar family under its
+twelve rules, its governing path drawn in the accent-bearing marks. Text is
+the anchor, one lead per figure, captions and short bullets; a narrative
+block is at most three sentences, and tables sit in a disclosure as
+reference. Restyling the same chat answer is a failed use of this skill
+(text cards, bullet walls, a paragraph of definitions): stay in chat or
+restructure. Look at the rendered page before the handoff.
 
 Start from
 [present-document.example.json](resources/present-document.example.json)
-as a **shape** (carrier first), not a form to pad.
+as a **shape** (anchor, picture, parts, ask), not a form to pad.
 
 ## 3. Validate and open
 

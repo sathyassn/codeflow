@@ -24,11 +24,22 @@ mode: gesture → float → composer; rail only while armed; Esc backs out.
 If any fails, stay in chat or restructure; do not open a text-wall session.
 
 1. What **job** does this surface do that chat cannot?
-2. What is the **5-second picture** (no bullet recap)?
-3. What is the **single primary carrier**, and is it first?
-4. Does structure still argue if sentences are removed?
-5. Does a top-to-bottom walk avoid "memo restyled as blocks"?
+2. Does the page open with an **anchor** (three to five lines: what, why
+   with one real instance, where it stands, what is decided) and then one
+   **picture of the whole** naming every part that follows?
+3. Does each later figure open one named part, with a lead saying what it
+   adds, in the order understanding grows?
+4. Is every concept a figure, with its governing path in accent-bearing
+   marks, and does structure still argue if sentences are removed?
+5. Does the cold-reader walk pass: purpose clear from each lead, every term
+   drawn before use, no narrative block over three sentences, tables only in
+   a disclosure?
 6. Catalog only; stable IDs; no secrets/paths; one clear ask?
+
+Count the blocks before open: figures should outnumber narrative, bullets
+and table blocks outside disclosures combined, after the anchor. A
+concept-shaped document with no figure, or with narrative as its largest
+part, is restructured, not opened.
 
 ### Comment surface (runtime-owned chrome)
 
@@ -96,8 +107,12 @@ Meaning at rest. No dependence on animation to teach structure.
 
 ## Before open
 
-- [ ] Passed the method's stage 5 check; walked the page top to bottom
-- [ ] 5‑second picture named; primary carrier first
-- [ ] Structure survives sentence removal
-- [ ] No chat-restyle wall; no secrets/paths
+- [ ] Passed the method's stage 5 check, the cold-reader walk included
+- [ ] Anchor lines first, then the picture of the whole; each part's lead
+      ties it to that picture
+- [ ] Every concept a figure; governing path in accent-bearing marks;
+      structure survives sentence removal
+- [ ] Tables in a disclosure; no narrative over three sentences; no
+      secrets/paths
+- [ ] Exported and looked at: every figure drew
 - [ ] Handoff: **bootstrap link first**, then session id
