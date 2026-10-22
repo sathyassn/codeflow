@@ -1,0 +1,11 @@
+id = "TSK-439"
+uid = "a77f060f-9262-4509-a20e-880bce205842"
+kind = "TSK"
+title = "Lanes have ids, a lifecycle and a current seat"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T22:19:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
