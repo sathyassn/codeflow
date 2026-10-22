@@ -1425,20 +1425,23 @@ test("a lease whose liveness cannot be decided keeps the age rule", async () => 
 test("two contenders that find the same dead owner leave one holder", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-dead-race-"));
   try {
-    await plantWorkflowLease(root, { owner: { pid: await exitedProcessId(), host: os.hostname(), writers: [] } });
-    let holders = 0;
-    let most = 0;
-    const contend = () => withWorkflowLease(root, async () => {
-      holders += 1;
-      most = Math.max(most, holders);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      holders -= 1;
-      return "held";
-    }).catch((error) => error);
-    const { result } = await captureStderr(() => Promise.all([contend(), contend()]));
-    assert.equal(result.filter((outcome) => outcome === "held").length, 1);
-    assert.equal(result.filter((outcome) => /workflow already in progress/.test(String(outcome))).length, 1, result.map(String).join(" / "));
-    assert.equal(most, 1);
+    for (let round = 0; round < 5; round += 1) {
+      await plantWorkflowLease(root, { owner: { pid: await exitedProcessId(), host: os.hostname(), writers: [] } });
+      let holders = 0;
+      let most = 0;
+      const contend = () => withWorkflowLease(root, async () => {
+        holders += 1;
+        most = Math.max(most, holders);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        holders -= 1;
+        return "held";
+      }).catch((error) => error);
+      const { result } = await captureStderr(() => Promise.all([contend(), contend()]));
+      const summary = result.map(String).join(" / ");
+      assert.equal(result.filter((outcome) => outcome === "held").length, 1, summary);
+      assert.equal(result.filter((outcome) => /workflow already in progress/.test(String(outcome))).length, 1, summary);
+      assert.equal(most, 1);
+    }
     assert.equal(await withWorkflowLease(root, async () => "future"), "future");
   } finally { await rm(root, treeRemoval); }
 });

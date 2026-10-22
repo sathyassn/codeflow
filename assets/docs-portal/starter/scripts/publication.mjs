@@ -54,10 +54,17 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
       if (error?.code !== "EEXIST") throw error;
       await removeVerifiedWorkflowDirectory(candidate, lease.token);
       let existing;
-      // A holder that was reclaimed or released since the failed link is gone:
-      // take another attempt rather than failing the contender.
+      // A holder reclaimed or released since the failed link is gone, or is
+      // being removed while it is read: take another attempt instead of
+      // failing the contender. An unreadable holder that is still the claim
+      // stays an error.
+      const seen = await currentWorkflowClaimToken(portalDirectory).catch(() => undefined);
       try { existing = await readWorkflowLeaseClaimIdentity(portalDirectory, claim); }
-      catch (readError) { if (readError?.code === "ENOENT") continue; throw readError; }
+      catch (readError) {
+        const now = await currentWorkflowClaimToken(portalDirectory).catch(() => undefined);
+        if (readError?.code === "ENOENT" || (seen !== undefined && now !== undefined && now !== seen)) continue;
+        throw readError;
+      }
       const owner = await judgeWorkflowOwner(existing.lease, testHooks.probeProcess ?? probeProcess);
       if (owner.state === "dead") {
         const age = Math.max(0, Math.round((Date.now() - existing.lease.created_at_ms) / 1000));
