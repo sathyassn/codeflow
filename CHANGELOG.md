@@ -145,16 +145,6 @@ erratum below, never an edit of the section.
   To adopt: run `codeflow update`; it merges the new lines into an edited
   copy.
 
-<!-- codeflow:release-impact patch -->
-- **The docs portal starter takes the fixed `astro` release.** Advisories
-  GHSA-98hj-9722-w3j8 (fixed in 7.3.2) and GHSA-mpr7-6m5w-76rw (fixed in
-  7.3.3) affect `astro` 7.2.8, the version the starter pinned, and fail a
-  blocking dependency audit in a project with the portal. The starter's
-  `package.json` now pins `astro` to 7.3.8, and its lockfile moves `astro`
-  and the packages its new release requires to matching releases. `codeflow
-  update` installs both files; the portal's recorded runtime scripts are
-  unchanged.
-
 ## [3.1.0]
 
 > **Upgrading from 3.0.0.** Take these steps in order; the entries below give
