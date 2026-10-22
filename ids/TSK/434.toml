@@ -1,0 +1,11 @@
+id = "TSK-434"
+uid = "409e5250-09d8-4d93-85a5-78b859a71ac4"
+kind = "TSK"
+title = "An integration branch can be deleted only after it is merged"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:38:16Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
