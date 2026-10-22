@@ -341,10 +341,7 @@ fn git_guard(stdin: &str) -> i32 {
     let policy = &authority.policy;
     let repo_info = match codeflow_core::hooks::RepoInfo::discover(&root) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow git-guard: {error}", error = shown(&error));
-            return 2;
-        }
+        Err(error) => return guard_refusal(&error),
     };
     let branch = repo_info
         .as_ref()
@@ -360,10 +357,7 @@ fn git_guard(stdin: &str) -> i32 {
     // The session's root checkout, when the command runs in one (TSK-165).
     let root_checkout = match codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git) {
         Ok(value) => value,
-        Err(error) => {
-            eprintln!("codeflow git-guard: {error}", error = shown(&error));
-            return 2;
-        }
+        Err(error) => return guard_refusal(&error),
     };
 
     let lookup = gh_pr_base;
@@ -410,6 +404,12 @@ fn git_guard(stdin: &str) -> i32 {
         &authority.source,
     );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// A git-guard refusal for an input it cannot read: the error, escaped.
+fn guard_refusal(error: &dyn std::fmt::Display) -> i32 {
+    eprintln!("codeflow git-guard: {}", shown(error));
+    2
 }
 
 /// Grok shows only a hook's first stderr line as the reason it denied a

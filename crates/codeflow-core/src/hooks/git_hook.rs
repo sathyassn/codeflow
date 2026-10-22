@@ -754,6 +754,28 @@ pub fn ref_line_touches_local_branch(line: &str) -> bool {
     })
 }
 
+/// Refuses a ref update whose spelling can alias a protected ref, unless
+/// the transaction is sanctioned; the ref name is shown escaped (TSK-388).
+fn refuse_alias(
+    report: &mut StageReport,
+    policy: &GitPolicy,
+    sanctioned: bool,
+    refname: &str,
+    why: &str,
+) {
+    if policy.local_ref_protection.is_active() && !sanctioned {
+        report.violations.push(Violation::new(
+            "git.local_ref_protection",
+            policy.local_ref_protection,
+            format!(
+                "ref update of '{}': {why}",
+                crate::git::display_text(refname)
+            ),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
+        ));
+    }
+}
+
 /// The reference-transaction stage (charter §6.1 plane 1; ADR-0007): the
 /// harness-agnostic backstop that classic client hooks miss. Git calls it
 /// during ref updates; on the `prepared` state a non-zero exit cancels the
@@ -814,17 +836,13 @@ pub fn reference_transaction(
         // gc`) moves nothing, so the spelling checks below let it pass.
         let unchanged = || keeps_value(&repo, refname, old_oid, new_oid);
         if collisions.contains(refname) && !unchanged() {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': its name folds onto another ref's on a \
-                         case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto another ref's on a case-insensitive filesystem",
+            );
             continue;
         }
         // A fetched remote-tracking name that folds onto a protected branch
@@ -834,33 +852,27 @@ pub fn reference_transaction(
             && tracking_name_folds_onto_protected(&repo, policy, refname)
             && !unchanged()
         {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': its name folds onto a protected branch's \
-                         tracking ref on a case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "its name folds onto a protected branch's tracking ref on a \
+                 case-insensitive filesystem",
+            );
             continue;
         }
         // A spelling a case-insensitive filesystem may store as a guarded ref
         // is refused outright, failing closed (TSK-381 SF-3).
         if super::git_guard::transaction_ref_aliases(refname) && !unchanged() {
-            if policy.local_ref_protection.is_active() && !sanctioned {
-                report.violations.push(Violation::new(
-                    "git.local_ref_protection",
-                    policy.local_ref_protection,
-                    format!(
-                        "ref update of '{refname}': a non-ASCII character or a case-different \
-                         `refs/` prefix can name a protected ref on a case-insensitive filesystem"
-                    ),
-                    crate::remedy::PROTECTED_BRANCH.remedy(),
-                ));
-            }
+            refuse_alias(
+                &mut report,
+                policy,
+                sanctioned,
+                refname,
+                "a non-ASCII character or a case-different `refs/` prefix can name a \
+                 protected ref on a case-insensitive filesystem",
+            );
             continue;
         }
         let Some(branch) = super::git_guard::strip_ref_prefix(refname, "refs/heads/") else {
