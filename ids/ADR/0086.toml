@@ -1,0 +1,11 @@
+id = "ADR-0086"
+uid = "6be2c341-340f-4add-9d89-ecd41ae5994b"
+kind = "ADR"
+title = "The orchestration ledger and lanes live in the clone"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T22:19:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
