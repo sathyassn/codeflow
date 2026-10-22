@@ -136,8 +136,9 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   - Recovery exception: while the tip is red or lacks evidence, the only
     landings allowed are the repair of the failure and work needed to produce
     the evidence, such as a workflow fix without which the jobs cannot run.
-    After such a landing, ordinary landings wait for green verdicts on the
-    new tip.
+    Such a fix does not skip, weaken or remove the failing check, and it
+    still takes its own review and its landing candidate's full gate. After
+    such a landing, ordinary landings wait for green verdicts on the new tip.
   - Pending (a run still in progress) is not green: wait for it.
   - Cancelled, skipped and missing (no run for the tip) are not green: start
     or rerun the run. A skip counts only when it is a reuse that names a
