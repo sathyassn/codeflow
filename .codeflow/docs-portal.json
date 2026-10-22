@@ -118,7 +118,7 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "4f6b7efa87f101c4cebec1f68de4c98589346e3a9f5d17e8bdf466b0eec6abc5"
+      "pristine_sha256": "ec7233052c09a28b68aa5de06b039289416fe281c9287bc051ec3d34ace22009"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
