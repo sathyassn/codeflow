@@ -79,7 +79,14 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
           : "";
         throw new Error(`portal build/check workflow already in progress${starting}`);
       }
-      const stale = await retireWorkflowClaim(portalDirectory, claim, existing.claim, "reclaim", testHooks);
+      let stale;
+      // A claim another contender retired first can vanish while it is being
+      // verified (Windows reports it so): the race is lost, not an error.
+      try { stale = await retireWorkflowClaim(portalDirectory, claim, existing.claim, "reclaim", testHooks); }
+      catch (retireError) {
+        if (retireError?.code === "CODEFLOW_WORKFLOW_CLAIM_QUARANTINED" && retireError.disappeared === true) continue;
+        throw retireError;
+      }
       if (stale === null) continue;
       if (testHooks.afterStaleRename) await testHooks.afterStaleRename(stale, structuredClone(existing.lease));
       await removeVerifiedWorkflowClaim(stale, existing.lease.token);
@@ -321,6 +328,7 @@ async function quarantineSuspectWorkflowClaim(portalDirectory, retired, expected
   const detail = quarantined ? `quarantined as ${path.basename(suspect)}` : "disappeared before quarantine";
   const error = new Error(`portal workflow retired claim failed identity verification and was not restored; ${detail}`, { cause });
   error.code = "CODEFLOW_WORKFLOW_CLAIM_QUARANTINED";
+  error.disappeared = !quarantined;
   return error;
 }
 
