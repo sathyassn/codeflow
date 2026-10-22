@@ -1517,11 +1517,13 @@ fn fresh_runner(
 }
 
 /// `git worktree add` runs callbacks in the checkout it creates, with that
-/// worktree's configuration. A conditional include (`includeIf.gitdir`,
-/// `onbranch`, `hasconfig`) can apply there although it does not apply
-/// where the guard reads, so each such include is read as a file: a setting
-/// Git can run during the add, or a hooks path, refuses (TSK-379 review
-/// round 9). Includes they name are read the same way.
+/// worktree's configuration. A conditional include can apply there although
+/// it does not apply where the guard reads. Which ones do depends on the
+/// administrative directory Git creates, its name, its spelling through any
+/// alias and the new branch, so the guard does not decide it (TSK-379 review
+/// rounds 9 to 13): every conditional include, of any kind, is read as a
+/// file by the path Git reads it by, and a setting Git can run during the
+/// add, or a hooks path, refuses. Includes they name are read the same way.
 fn new_worktree_configuration(
     args: &[String],
     at: &Path,
@@ -1542,7 +1544,7 @@ fn new_worktree_configuration(
         .includes
         .iter()
         .filter(|include| !include.missing)
-        .filter(|include| include.condition.as_deref().is_some_and(may_apply))
+        .filter(|include| include.condition.is_some())
         .map(|include| (include.logical.clone(), include.path.clone()))
         .collect();
     let mut seen = std::collections::BTreeSet::new();
@@ -1589,39 +1591,6 @@ fn new_worktree_configuration(
         );
     }
     Ok(())
-}
-
-/// Whether an `includeIf` condition could hold in a new worktree. The
-/// worktree's Git directory is `<common>/worktrees/<name>`, and Git derives
-/// `<name>` from the checkout through sanitizing and a counter, so the name
-/// is not predicted (TSK-379 review rounds 9 to 11). A literal `gitdir` or
-/// `gitdir/i` pattern can hold only when it ends in `/` or its parent
-/// component is `worktrees`: Git matches the whole directory, and a pattern
-/// with one component matches at any depth. Every other condition, a glob
-/// and a `./` pattern may apply.
-fn may_apply(condition: &str) -> bool {
-    let (pattern, fold) = if let Some(pattern) = condition.strip_prefix("gitdir:") {
-        (pattern, false)
-    } else if let Some(pattern) = condition.strip_prefix("gitdir/i:") {
-        (pattern, true)
-    } else {
-        return true;
-    };
-    if pattern.contains(['*', '?', '[', '\\'])
-        || pattern.starts_with("./")
-        || pattern.ends_with('/')
-    {
-        return true;
-    }
-    let mut parts = pattern.rsplit('/').filter(|part| !part.is_empty());
-    let (_, parent) = (parts.next(), parts.next());
-    parent.is_none_or(|parent| {
-        if fold {
-            parent.eq_ignore_ascii_case("worktrees")
-        } else {
-            parent == "worktrees"
-        }
-    })
 }
 
 /// What a non-Git segment writes, from each directory it can run in.

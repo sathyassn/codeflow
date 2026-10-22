@@ -2551,14 +2551,13 @@ fn worktree_add_reads_includes_of_every_admin_name() {
     let root = shell_path(&f.root);
     let benign = f.temp.path().join("benign.conf");
     std::fs::write(&benign, "[user]\n\temail = work@example.com\n").unwrap();
-    let main = f.temp.path().join("main.conf");
-    std::fs::write(&main, "[core]\n\tfsmonitor = printf no > main-marker\n").unwrap();
     for (key, file) in [
         (
             format!("includeIf.gitdir:{root}/.git/worktrees/other.path"),
             &benign,
         ),
-        (format!("includeIf.gitdir:{root}/.git.path"), &main),
+        (format!("includeIf.gitdir:{root}/.git.path"), &benign),
+        ("includeIf.onbranch:task/**.path".to_string(), &benign),
     ] {
         git(&f.root, &["config", &key, &shell_path(file)]);
     }
@@ -2645,5 +2644,59 @@ fn worktree_add_reads_linked_includes_by_their_logical_path() {
             callback_logical,
             "marker for {callback_logical}"
         );
+    }
+}
+
+// Codex round 13, R12-1: Git can reach the administrative directory through
+// an alias and match a condition spelled with the resolved path, whose
+// parent is not `worktrees`. The guard reads every conditional include,
+// whatever its condition, so the add is refused; real Git applies it.
+#[cfg(unix)]
+#[test]
+fn worktree_add_reads_includes_through_an_admin_alias() {
+    for kind in ["gitdir", "gitdir/i"] {
+        let f = Fixture::new();
+        let root = shell_path(&f.root);
+        let admin = f.root.join(".git/worktrees");
+        let store = f.root.join(".git/admin-store");
+        std::fs::rename(&admin, &store).unwrap();
+        std::os::unix::fs::symlink(&store, &admin).unwrap();
+        let marker = f.temp.path().join("callback-marker");
+        let callback = f.temp.path().join("callback.conf");
+        std::fs::write(
+            &callback,
+            format!(
+                "[core]\n\tfsmonitor = printf ran > {}\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        let spelled = shell_path(&store.canonicalize().unwrap().join("aliaswt"));
+        git(
+            &f.root,
+            &[
+                "config",
+                &format!("includeIf.{kind}:{spelled}.path"),
+                &shell_path(&callback),
+            ],
+        );
+        let stage = f.temp.path().join("stage");
+        std::fs::create_dir_all(stage.join("aliaswt")).unwrap();
+        let dest = shell_path(&stage.join("aliaswt"));
+        let command = format!("git -C {root} worktree add --detach {dest}");
+        for hook in ["exec-guard", "git-guard"] {
+            let out = f.command(&stage, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        git(&f.root, &["worktree", "add", "--detach", &dest]);
+        let out = Command::new("git")
+            .args(["config", "--get", "core.fsmonitor"])
+            .current_dir(stage.join("aliaswt"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{kind}: {out:?}");
+        assert!(marker.exists(), "{kind}: the include did not apply");
     }
 }

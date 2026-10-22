@@ -647,18 +647,17 @@ option tables as the command runners, so another option's value is never
 taken for the output and Git's accepted abbreviations (`--pref`, `--fil`)
 count; an option the tables do not know, where its value could be the
 output, refuses. An alias that expands to one of these is judged the same
-way. `git worktree add` reads each conditional include (`includeIf`) that
-could apply to the new worktree but not where the guard reads, such as one
-keyed on the new worktree's Git directory, and refuses when it sets a
-setting Git can run during the add or a hooks path. Git derives the new
-worktree's Git directory name from the checkout by sanitizing it and adding
-a counter when it is taken, so the guard does not predict that name: every
-literal `gitdir` condition naming a directory under `worktrees`, and every
-condition ending in `/`, a glob, a relative pattern, `onbranch` and
-`hasconfig`, is read for every add. An include keyed on the main Git
-directory is not read, and benign includes pass. Each include is read by the
-path Git reads it by, so a relative include inside a linked file resolves
-from the link's directory; the new checkout then
+way. `git worktree add` reads the conditional includes (`includeIf`),
+which can apply to the new worktree though not where the guard reads, and
+refuses when one sets a setting Git can run during the add or a hooks path. Which conditions hold
+depends on the Git directory Git creates (its sanitized and numbered name,
+its spelling through any alias) and the new branch, so the guard does not
+decide it: every conditional include, of any kind, is read for every add.
+A repository with a callback-setting conditional include anywhere therefore
+refuses `git worktree add` through the guards, and the refusal names the
+include file; benign includes pass. Each include is read by the path Git
+reads it by, so a relative include inside a linked file resolves from the
+link's directory; the new checkout then
 counts as an earlier write for later commands on the line. Ordinary outputs such as
 `git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
 and `git diff --output=out.diff` remain available.
