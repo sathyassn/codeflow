@@ -280,8 +280,7 @@ fn parse(
                     ))
                 }
             };
-            // Git on Windows reads the plain drive spelling, not `\\?\`.
-            let path = crate::portable_path::canonicalize(&path).unwrap_or(path);
+            let path = path.canonicalize().unwrap_or(path);
             let condition = match key
                 .strip_prefix(b"includeif.")
                 .and_then(|rest| rest.strip_suffix(b".path"))
