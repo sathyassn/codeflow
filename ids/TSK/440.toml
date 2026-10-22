@@ -1,0 +1,11 @@
+id = "TSK-440"
+uid = "8cf82315-14aa-4859-ae97-e45873f47b5f"
+kind = "TSK"
+title = "The ledger hooks run on every harness through one implementation"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T22:19:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
