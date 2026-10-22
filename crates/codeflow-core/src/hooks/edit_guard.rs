@@ -614,6 +614,41 @@ pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
     })
 }
 
+/// `path` is `prefix` or lies below it, each component compared without
+/// regard to ASCII case. Git's administrative names are lower case, and on a
+/// case-insensitive filesystem a spelling such as `.git/Refs/Remotes` that
+/// does not exist yet, which [`normalize_case`] cannot correct, still
+/// creates the protected directory.
+fn under_ignoring_case(path: &Path, prefix: &Path) -> bool {
+    let mut parts = path.components();
+    prefix.components().all(|want| {
+        parts.next().is_some_and(|got| {
+            got.as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(want.as_os_str().as_encoded_bytes())
+        })
+    })
+}
+
+/// `path` lies under `dir` and a component below it holds a non-ASCII byte.
+/// A filesystem such as APFS may fold it onto a protected git name
+/// (`remoteſ` names the same entry as `remotes`), and a component that does
+/// not exist yet cannot be checked against the disk, so the path is judged
+/// protected, failing closed (TSK-381 SF-3).
+fn non_ascii_below(path: &Path, dir: &Path) -> bool {
+    under_ignoring_case(path, dir)
+        && path
+            .components()
+            .skip(dir.components().count())
+            .any(|part| !part.as_os_str().as_encoded_bytes().is_ascii())
+}
+
+/// `a` and `b` name one path, components compared as [`under_ignoring_case`]
+/// compares them.
+fn same_ignoring_case(a: &Path, b: &Path) -> bool {
+    a.components().count() == b.components().count() && under_ignoring_case(a, b)
+}
+
 /// Authority metadata cannot be relaxed by a policy read from that metadata.
 pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors: bool) -> bool {
     let read = |root: &Path| {
@@ -653,16 +688,19 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
             ) else {
                 continue;
             };
-            if !target.starts_with(&common) {
+            if !under_ignoring_case(&target, &common) {
                 continue;
+            }
+            if non_ascii_below(&target, &common) {
+                return true;
             }
             for (name, directory) in &paths {
                 let Ok(protected) = normalized(&common.join(name), resolve) else {
                     continue;
                 };
-                if target == protected
-                    || (*directory && target.starts_with(&protected))
-                    || (ancestors && protected.starts_with(&target))
+                if same_ignoring_case(&target, &protected)
+                    || (*directory && under_ignoring_case(&target, &protected))
+                    || (ancestors && under_ignoring_case(&protected, &target))
                 {
                     return true;
                 }
@@ -803,6 +841,9 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
         ("HEAD", false),
         ("hooks", true),
         ("refs/remotes", true),
+        // A direct write of a loose branch ref moves it without a ref
+        // transaction, so no hook sees it (TSK-381 review).
+        ("refs/heads", true),
         ("packed-refs", false),
         ("config", false),
         ("config.worktree", false),
@@ -823,6 +864,9 @@ fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBu
 struct ProtectedPath {
     path: [Result<PathBuf, String>; 2],
     directory: bool,
+    /// Under the git administrative directory, so compared without ASCII
+    /// case ([`under_ignoring_case`]).
+    git_owned: bool,
     base: PathBuf,
     resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
@@ -997,6 +1041,7 @@ fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
             .map(|(path, directory, base)| ProtectedPath {
                 path: both(path),
                 directory: *directory,
+                git_owned: path.starts_with(repo.commondir()),
                 base: base.clone(),
                 resolved_base: Default::default(),
             })
@@ -1047,19 +1092,32 @@ pub(crate) fn repository_enforcement_target(
             let target = normalized(target, resolve).map_err(|error| error.to_string())?;
             for entry in protected.iter() {
                 let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
-                if target == *path
-                    || (entry.directory && target.starts_with(path))
-                    || (ancestors
-                        && path.starts_with(&target)
-                        && target.starts_with(
-                            entry.resolved_base[reading]
-                                .get_or_init(|| {
-                                    normalized(&entry.base, resolve)
-                                        .map_err(|error| error.to_string())
-                                })
-                                .as_ref()
-                                .map_err(Clone::clone)?,
-                        ))
+                let under = |inner: &Path, outer: &Path| {
+                    if entry.git_owned {
+                        under_ignoring_case(inner, outer)
+                    } else {
+                        inner.starts_with(outer)
+                    }
+                };
+                let same = if entry.git_owned {
+                    same_ignoring_case(&target, path)
+                } else {
+                    target == *path
+                };
+                let base = || {
+                    entry.resolved_base[reading]
+                        .get_or_init(|| {
+                            normalized(&entry.base, resolve).map_err(|error| error.to_string())
+                        })
+                        .as_ref()
+                        .map_err(Clone::clone)
+                };
+                if entry.git_owned && non_ascii_below(&target, base()?) {
+                    return Ok(true);
+                }
+                if same
+                    || (entry.directory && under(&target, path))
+                    || (ancestors && under(path, &target) && under(&target, base()?))
                 {
                     return Ok(true);
                 }
@@ -1831,8 +1889,16 @@ mod tests {
         };
         let target = admin.join("config.worktree");
         assert!(repository_authority_target(&target, dir.path(), false));
-        assert!(!repository_authority_target(
+        // TSK-381 SF-3: every path under a git-directory component with a
+        // non-ASCII byte is refused, failing closed; an ordinary ASCII file
+        // of the git directory stays outside the authority paths.
+        assert!(repository_authority_target(
             &admin.join("other"),
+            dir.path(),
+            false
+        ));
+        assert!(!repository_authority_target(
+            &dir.path().join(".git/description"),
             dir.path(),
             false
         ));

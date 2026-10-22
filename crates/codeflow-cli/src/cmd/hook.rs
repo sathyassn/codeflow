@@ -334,6 +334,13 @@ fn git_guard(stdin: &str) -> i32 {
         .as_ref()
         .map(|info| info.branch.clone())
         .unwrap_or_default();
+    // Whether non-ASCII ref names may alias here, probed once for this
+    // invocation; outside a repository it stays undecided, failing closed.
+    let _aliasing = repo_info.as_ref().map(|info| {
+        codeflow_core::hooks::policy::NonAsciiAliasingScope::set(
+            codeflow_core::hooks::repo::case_insensitive_git_dir(&info.common_dir),
+        )
+    });
     // The session's root checkout, when the command runs in one (TSK-165).
     let root_checkout = match codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git) {
         Ok(value) => value,

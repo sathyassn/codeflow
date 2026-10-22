@@ -332,7 +332,10 @@ One readiness core judges a task for `work next`, `work claim`, `work start`,
 - its epic is open, or it is standalone
 - its code dependencies are complete in the execution base
 - its research or decision dependencies (`{id, kind, pin}`, the pin quoted) are
-  complete at their pinned commit
+  complete at their pinned commit, which is on the predecessor's target, this
+  task's target or the default branch; with any remote, each is read at a
+  remote-tracking ref (a configured upstream on a configured remote, else
+  `origin/<branch>`), and a local branch counts only with no remote
 
 A pin that YAML reads as a number or as null is refused with the quote remedy.
 A pin left out keeps the edge unmet.

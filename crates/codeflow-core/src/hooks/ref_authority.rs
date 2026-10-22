@@ -53,6 +53,10 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
         }
     }
     match sub {
+        "update-ref" | "symbolic-ref" if super::git_guard::ref_plumbing_aliases(sub, rest) => Some(
+            "a ref name with a non-ASCII character or a case-different `refs/` prefix can name a protected or remote-tracking ref on a case-insensitive filesystem"
+                .into(),
+        ),
         "update-ref" | "symbolic-ref" if super::git_guard::ref_plumbing_tampers(sub, rest) => Some(
             "remote-tracking refs may only be updated by the configured remote's fetch mapping"
                 .into(),
