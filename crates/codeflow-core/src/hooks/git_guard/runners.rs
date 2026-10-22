@@ -294,6 +294,112 @@ fn option_spec(verb: &str) -> Option<&'static OptionSpec> {
     }
 }
 
+/// The files and directories a Git command writes through its own output
+/// options and operands (TSK-379 review rounds 5 and 9), read with the same
+/// option tables, arities and unique-prefix resolution as every other Git
+/// verb here: `--output` on any verb that takes diff options, `archive -o`,
+/// `format-patch -o`, `bundle create FILE`, `merge-file` without `-p`,
+/// `checkout-index --prefix`, `bugreport` and `diagnose -o`, `index-pack
+/// -o`, `mailsplit -o`, fast-export and fast-import marks, and the file a
+/// `config --file` write changes. An option the table does not know, where
+/// its value could be the output, refuses.
+pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, String> {
+    let mut paths: Vec<String> = parse_options(rest, &catalog::DIFF_OUTPUT_OPTIONS)
+        .values_of('\0', "--output")
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let read = |spec: &OptionSpec, stop: bool, outputs: &[(char, &str)]| {
+        let parsed = checked_mode(rest, spec, stop)?;
+        let mut found = Vec::new();
+        for (short, long) in outputs {
+            found.extend(
+                parsed
+                    .values_of(*short, long)
+                    .into_iter()
+                    .map(str::to_string),
+            );
+            // An unknown short bundle could hold the output letter, and an
+            // unknown long word could be an abbreviation Git accepts.
+            if parsed.unread.iter().any(|word| {
+                (!word.starts_with("--") && *short != '\0' && word.contains(*short))
+                    || (word.starts_with("--")
+                        && !long.is_empty()
+                        && long.starts_with(word.split('=').next().unwrap_or(word)))
+            }) {
+                return Err(format!(
+                    "an option the guard does not read could name the `git {verb}` output"
+                ));
+            }
+        }
+        Ok::<_, String>((parsed, found))
+    };
+    match verb {
+        "archive" => paths.extend(read(&catalog::ARCHIVE_OPTIONS, false, &[('o', "--output")])?.1),
+        "format-patch" => paths.extend(
+            read(
+                &catalog::FORMAT_PATCH_OPTIONS,
+                false,
+                &[('o', "--output-directory"), ('\0', "--output")],
+            )?
+            .1,
+        ),
+        "bugreport" | "diagnose" => paths.extend(
+            read(
+                &catalog::REPORT_OPTIONS,
+                false,
+                &[('o', "--output-directory")],
+            )?
+            .1,
+        ),
+        "index-pack" => paths.extend(read(&catalog::INDEX_PACK_OPTIONS, false, &[('o', "")])?.1),
+        "mailsplit" => paths.extend(read(&catalog::MAILSPLIT_OPTIONS, false, &[('o', "")])?.1),
+        "checkout-index" => paths.extend(
+            read(
+                &catalog::CHECKOUT_INDEX_OPTIONS,
+                false,
+                &[('\0', "--prefix")],
+            )?
+            .1,
+        ),
+        "fast-export" | "fast-import" => {
+            paths.extend(read(&catalog::MARKS_OPTIONS, false, &[('\0', "--export-marks")])?.1);
+        }
+        "config" if !super::config_only_reads(rest) => {
+            paths.extend(read(&super::GIT_CONFIG_OPTIONS, false, &[('f', "--file")])?.1);
+        }
+        "merge-file" => {
+            let (parsed, _) = read(&catalog::MERGE_FILE_OPTIONS, true, &[])?;
+            if !parsed.unread.is_empty() {
+                return Err(
+                    "an option the guard does not read could name the `git merge-file` output"
+                        .into(),
+                );
+            }
+            if !(parsed.has_short(&['p']) || parsed.has_long("--stdout")) {
+                paths.extend(parsed.operands.first().map(|word| (*word).to_string()));
+            }
+        }
+        "bundle" if rest.first().is_some_and(|word| word == "create") => {
+            let parsed = checked_mode(&rest[1..], &catalog::BUNDLE_CREATE_OPTIONS, true)?;
+            if !parsed.unread.is_empty() {
+                return Err(
+                    "an option the guard does not read could name the `git bundle` output".into(),
+                );
+            }
+            paths.extend(
+                parsed
+                    .operands
+                    .first()
+                    .filter(|file| **file != "-")
+                    .map(|file| (*file).to_string()),
+            );
+        }
+        _ => {}
+    }
+    Ok(paths)
+}
+
 pub(super) fn command_options(verb: &str) -> bool {
     option_spec(verb).is_some() || matches!(verb, "for-each-repo" | "submodule--helper")
 }
@@ -1073,6 +1179,10 @@ fn unchanged(source: &Path, earlier: &[PathBuf]) -> Result<(), String> {
 struct Landing {
     path: Option<PathBuf>,
     places: bool,
+    /// Repository metadata a Git command creates (a new worktree's
+    /// administrative directory): it changes only what a command reading
+    /// that Git directory sees.
+    metadata: bool,
 }
 
 fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing>) {
@@ -1081,7 +1191,11 @@ fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing
     }
     if expands(target) {
         if places {
-            landings.push(Landing { path: None, places });
+            landings.push(Landing {
+                path: None,
+                places,
+                metadata: false,
+            });
         }
         return;
     }
@@ -1089,6 +1203,7 @@ fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing
         landings.push(Landing {
             path: Some(integrity_shell_path(target, dir)),
             places,
+            metadata: false,
         });
     }
 }
@@ -1213,10 +1328,30 @@ fn note_git_landings(
         return Ok(());
     };
     let start = [starting_directory(args, at)?];
-    for path in super::git_output_paths(verb, rest) {
+    for path in output_paths(verb, rest)? {
         land(&path, false, &start, landings);
     }
     match verb {
+        "worktree" if rest.first().is_some_and(|word| word == "add") => {
+            let parsed = checked_mode(&rest[1..], &catalog::WORKTREE_ADD_OPTIONS, true)?;
+            match parsed.operands.first() {
+                Some(path) if parsed.unread.is_empty() => land(path, true, &start, landings),
+                _ => {
+                    for word in &rest[1..] {
+                        land(word, true, &start, landings);
+                    }
+                }
+            }
+            // The new worktree's administrative directory in the common
+            // Git directory is created too.
+            if let Some(repo) = super::super::repo::open(&start[0])? {
+                landings.push(Landing {
+                    path: Some(repo.commondir().join("worktrees")),
+                    places: true,
+                    metadata: true,
+                });
+            }
+        }
         "clone" => {
             let parsed = checked(rest, &catalog::CLONE_OPTIONS)?;
             let directory = parsed
@@ -1354,6 +1489,12 @@ fn fresh_runner(
             continue;
         };
         let path = normal(path)?;
+        if landing.metadata {
+            if git_dirs.iter().any(|dir| dir.starts_with(&path)) {
+                return Err(STALE.into());
+            }
+            continue;
+        }
         let holder = git_holder(&path);
         let stale = trees.iter().any(|tree| {
             (landing.places && tree.starts_with(&path))
@@ -1371,6 +1512,164 @@ fn fresh_runner(
         }
     }
     Ok(())
+}
+
+/// `git worktree add` runs callbacks in the checkout it creates, with that
+/// worktree's configuration. A conditional include (`includeIf.gitdir`,
+/// `onbranch`, `hasconfig`) can apply there although it does not apply
+/// where the guard reads, so each such include is read as a file: a setting
+/// Git can run during the add, or a hooks path, refuses (TSK-379 review
+/// round 9). Includes they name are read the same way.
+fn new_worktree_configuration(
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+) -> Result<(), String> {
+    let Some(("worktree", rest)) = git_subcommand(args) else {
+        return Ok(());
+    };
+    if rest.first().is_none_or(|word| word != "add") {
+        return Ok(());
+    }
+    let environment = config_environment(env);
+    let config = crate::security::git_config::read(at, globals(args)?, &environment)?;
+    // The administrative directory Git names after the checkout's last
+    // component, adding digits when that name is taken.
+    let start = starting_directory(args, at)?;
+    let parsed = checked_mode(&rest[1..], &catalog::WORKTREE_ADD_OPTIONS, true)?;
+    let admin = parsed
+        .operands
+        .first()
+        .filter(|_| parsed.unread.is_empty())
+        .and_then(|path| {
+            integrity_shell_path(path, &start)
+                .file_name()
+                .map(PathBuf::from)
+        })
+        .zip(super::super::repo::open(&start)?)
+        .map(|(name, repo)| repo.commondir().join("worktrees").join(name));
+    let mut pending: Vec<PathBuf> = config
+        .includes
+        .iter()
+        .filter(|include| !include.missing)
+        .filter(|include| {
+            include
+                .condition
+                .as_deref()
+                .is_some_and(|condition| may_apply(condition, admin.as_deref()))
+        })
+        .map(|include| include.path.clone())
+        .collect();
+    let mut read = 0;
+    while let Some(path) = pending.pop() {
+        read += 1;
+        if read > 128 {
+            return Err("more than 128 conditional configuration files to read".into());
+        }
+        let file = crate::security::git_config::read_file(&path, &environment)?;
+        for key in file.keys()? {
+            let runs = key.eq_ignore_ascii_case("core.hookspath")
+                || catalog::SOURCES.iter().any(|source| {
+                    matches!(source,
+                        catalog::Source::Config(pattern, verbs) | catalog::Source::ConfigList(pattern, verbs)
+                            if catalog::config_matches(key, pattern) && catalog::active(verbs, "worktree"))
+                });
+            if !runs {
+                continue;
+            }
+            let hooks = key.eq_ignore_ascii_case("core.hookspath");
+            for value in config_values(&file, key)? {
+                if value.is_empty()
+                    || (!hooks
+                        && crate::security::git::config_kind(key, value)
+                            == crate::security::git::ConfigKind::Safe)
+                {
+                    continue;
+                }
+                return Err(format!(
+                    "the conditional include {} can apply to the new worktree and sets `{key}`, which the guard cannot judge before the worktree exists; add the worktree without that configuration or ask the operator",
+                    path.display()
+                ));
+            }
+        }
+        pending.extend(
+            file.includes
+                .iter()
+                .filter(|include| !include.missing)
+                .map(|include| include.path.clone()),
+        );
+    }
+    Ok(())
+}
+
+/// Whether an `includeIf` condition could hold in a new worktree whose
+/// administrative directory is `admin` (`None` when unknown). Only a
+/// `gitdir` condition with a literal pattern is decided; Git then matches
+/// the directory, a trailing `/` matching everything below it and a
+/// relative pattern matching at any depth. Any other condition may apply.
+fn may_apply(condition: &str, admin: Option<&Path>) -> bool {
+    let (pattern, fold) = if let Some(pattern) = condition.strip_prefix("gitdir:") {
+        (pattern, false)
+    } else if let Some(pattern) = condition.strip_prefix("gitdir/i:") {
+        (pattern, true)
+    } else {
+        return true;
+    };
+    let Some(admin) = admin else {
+        return true;
+    };
+    if pattern.contains(['*', '?', '[', '\\']) || pattern.starts_with("./") {
+        return true;
+    }
+    let pattern = match pattern.strip_prefix("~/") {
+        Some(rest) => match super::line_home::home() {
+            Some(home) => format!("{}/{rest}", crate::portable_path::slashed(&home)),
+            None => return true,
+        },
+        None => pattern.to_string(),
+    };
+    let fold = |text: &str| {
+        if fold {
+            text.to_lowercase()
+        } else {
+            text.to_string()
+        }
+    };
+    let pattern = fold(&pattern);
+    let candidates = [
+        admin.to_path_buf(),
+        admin.canonicalize().unwrap_or_else(|_| admin.to_path_buf()),
+        admin
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .zip(admin.file_name())
+            .map_or_else(|| admin.to_path_buf(), |(parent, name)| parent.join(name)),
+    ];
+    // Git adds digits to a taken name, so `<name>` may become `<name>2`.
+    let digits = |text: &str| {
+        let end = text
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !c.is_ascii_digit())
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        text[..end].to_string()
+    };
+    candidates.iter().any(|candidate| {
+        let dir = fold(&crate::portable_path::slashed(candidate));
+        let below = format!("{dir}/");
+        match (pattern.starts_with('/'), pattern.strip_suffix('/')) {
+            (true, Some(_)) => below.starts_with(&pattern),
+            (true, None) => dir == pattern || dir == digits(&pattern),
+            (false, Some(inner)) => {
+                below.contains(&format!("/{inner}/"))
+                    || below.contains(&format!("/{}/", digits(inner)))
+            }
+            (false, None) => {
+                dir.ends_with(&format!("/{pattern}"))
+                    || dir.ends_with(&format!("/{}", digits(&pattern)))
+            }
+        }
+    })
 }
 
 /// What a non-Git segment writes, from each directory it can run in.
@@ -1445,6 +1744,7 @@ impl Runner<'_> {
         pending: &mut Vec<Landing>,
     ) -> Result<Vec<String>, String> {
         fresh_runner(args, self.at, self.env, landings)?;
+        new_worktree_configuration(args, self.at, self.env)?;
         note_git_landings(self.segment, args, self.at, self.env, pending)?;
         let expanded = aliases(args.to_vec(), self.at, self.env)?;
         // An alias can expand to a creation or an output path; judge the

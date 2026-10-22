@@ -23,6 +23,8 @@ struct Entry {
 pub(crate) struct Include {
     pub(crate) path: PathBuf,
     pub(crate) missing: bool,
+    /// The `includeIf` condition, or `None` for a plain `include.path`.
+    pub(crate) condition: Option<String>,
 }
 
 #[derive(Debug)]
@@ -279,7 +281,24 @@ fn parse(
                 }
             };
             let path = path.canonicalize().unwrap_or(path);
-            includes.push(Include { path, missing });
+            let condition = match key
+                .strip_prefix(b"includeif.")
+                .and_then(|rest| rest.strip_suffix(b".path"))
+            {
+                Some(condition) => Some(
+                    std::str::from_utf8(condition)
+                        .map_err(|_| {
+                            "cannot verify Git configuration: an include condition is not UTF-8"
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            includes.push(Include {
+                path,
+                missing,
+                condition,
+            });
             if includes.len() > 128 {
                 return Err("cannot verify Git configuration: more than 128 includes".into());
             }
@@ -300,6 +319,36 @@ fn parse(
         sources,
         includes,
     })
+}
+
+/// Read one configuration file and the files it includes, as Git reads
+/// `git config --file`. Used for an include whose condition the caller
+/// cannot evaluate yet, such as one keyed on a worktree that does not exist.
+pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<EffectiveConfig, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    validate_environment(environment)?;
+    let directory = path
+        .parent()
+        .ok_or("cannot verify Git configuration: include file has no parent")?;
+    let mut command = crate::git::command();
+    command
+        .current_dir(directory)
+        .envs(environment)
+        .env_remove("GIT_CONFIG")
+        .stdin(Stdio::null())
+        .arg("--no-pager")
+        .arg("config")
+        .arg("--file")
+        .arg(path)
+        .args([
+            "--null",
+            "--list",
+            "--show-origin",
+            "--show-scope",
+            "--includes",
+        ]);
+    let bytes = bounded_output(&mut command, deadline)?;
+    parse(&bytes, directory, environment)
 }
 
 fn include_path(

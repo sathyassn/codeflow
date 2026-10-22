@@ -2357,3 +2357,128 @@ fn git_output_options_cannot_write_enforcement_files() {
         }
     }
 }
+
+// Codex review round 9, C1 and C4: builtin wrappers, appends and sourced
+// files change HOME too; a read-only use of the reassigned home passes.
+#[test]
+fn wrapped_and_unproven_home_changes_are_read() {
+    let f = Fixture::new();
+    let root = shell_path(&f.root);
+    let script = f.temp.path().join("home.sh");
+    std::fs::write(&script, format!("HOME={root}\n")).unwrap();
+    let script = shell_path(&script);
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            format!("command export HOME={root}; printf x > ~/.claude/settings.json"),
+            format!("builtin export HOME={root}; printf x > ~/.claude/settings.json"),
+            format!("command export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"),
+            format!("builtin export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"),
+            format!("command declare -x HOME={root}; git init ~/.claude/x"),
+            "HOME+=/x; printf x > ~/.claude/settings.json".to_string(),
+            format!("HOME={root}; HOME+=/.claude; printf x > ~/settings.json"),
+            format!(". '{script}'; printf x > ~/.claude/settings.json"),
+        ] {
+            let out = f.command(&f.root, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            format!("HOME={root}; git status -- ~/.claude/settings.json"),
+            "export -n HOME; git status".to_string(),
+            "command -v git && git status".to_string(),
+        ] {
+            let out = f.command(&f.root, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+// Codex review round 9, C2: output operands are read with the shared
+// option tables, so another option's value is never taken for the output
+// and Git's accepted abbreviations count.
+#[test]
+fn git_outputs_follow_option_arity_and_abbreviations() {
+    let f = Fixture::new();
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git merge-file --marker-size 7 .claude/settings.json base.json replacement.json",
+            "git merge-file -L a -L b -L c .claude/settings.json base.json replacement.json",
+            "git bundle create --version 2 .claude/settings.json HEAD",
+            "git -c alias.x='bundle create --version 2 .claude/settings.json HEAD' x",
+            "git checkout-index -f --pref=.claude/ -- settings.json",
+            "git -c alias.x='checkout-index -f --pref=.claude/ -- settings.json' x",
+            "git config --fil .claude/settings.local.json user.name x",
+            "git config --file .claude/settings.local.json user.name x",
+            "git -c alias.x='config --fil .claude/settings.local.json user.name x' x",
+            "git format-patch -ko .git/hooks HEAD~1",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git merge-file -p .claude/settings.json base.json replacement.json",
+            "git merge-file --marker-size 7 out.txt base.json replacement.json",
+            "git bundle create --version 2 ../repo.bundle HEAD",
+            "git checkout-index -f --pref=build/ -- settings.json",
+            "git format-patch --stdout HEAD~1",
+            "git diff --output-indicator-new=+ HEAD~1",
+            "git archive -o build/x.tar HEAD",
+            "git config --file build/x.conf user.name x",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
+// Codex review round 9, C3: a conditional include keyed on the new
+// worktree's Git directory applies only once the worktree exists. Both the
+// add and a later command there are refused while it sets a callback; a
+// benign include and the ordinary lifecycle keep passing.
+#[test]
+fn worktree_add_reads_the_new_worktree_configuration() {
+    let f = Fixture::new();
+    let stage = f.temp.path().join("stage");
+    for name in ["existingwt", "plainwt"] {
+        std::fs::create_dir_all(stage.join(name)).unwrap();
+    }
+    let marker = shell_path(&f.temp.path().join("callback-marker"));
+    let callback = f.temp.path().join("conditional.conf");
+    std::fs::write(
+        &callback,
+        format!("[core]\n\tfsmonitor = printf ran > {marker}\n"),
+    )
+    .unwrap();
+    let benign = f.temp.path().join("benign.conf");
+    std::fs::write(&benign, "[user]\n\temail = work@example.com\n").unwrap();
+    let root = shell_path(&f.root);
+    for (name, file) in [("existingwt", &callback), ("plainwt", &benign)] {
+        git(
+            &f.root,
+            &[
+                "config",
+                &format!("includeIf.gitdir:{root}/.git/worktrees/{name}.path"),
+                &shell_path(file),
+            ],
+        );
+    }
+    let stage_path = shell_path(&stage);
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            format!("git -C {root} worktree add --detach {stage_path}/existingwt"),
+            format!("git -C {root} worktree add --detach {stage_path}/existingwt && git -C {stage_path}/existingwt status"),
+            format!("git -C {root} worktree add --detach {stage_path}/plainwt && git -C {stage_path}/plainwt status"),
+        ] {
+            let out = f.command(&stage, hook, &command);
+            assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            format!("git -C {root} worktree add --detach {stage_path}/plainwt"),
+            "git worktree list".to_string(),
+        ] {
+            let out = f.command(&stage, hook, &command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+        let out = f.command(&f.root, hook, "git worktree add .worktrees/n -b task/n");
+        assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+    }
+}

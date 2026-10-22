@@ -9,8 +9,9 @@
 //! `read`, `unset` or a loop variable) leaves those words unread, and the
 //! line refuses ([`unread_violation`]).
 use super::{
-    command_argv, expand_shell_commands, hook_integrity_violation, shell_path_with_home,
-    shell_tokens, strip_reserved_words, token_integrity_path, Literals, PolicyLevel, Violation,
+    builtin_words, command_argv, expand_shell_commands, expands, hook_integrity_violation,
+    integrity_write_in_run, redirect_writes, run_dirs, shell_tokens, strip_reserved_words,
+    Literals, PolicyLevel, Violation,
 };
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -52,13 +53,14 @@ pub(crate) fn read(command: &str) -> LineHome {
             && raw.get(1).is_some_and(|word| word == "HOME");
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        if looping || reads_into_home(&words) {
+        if looping || reads_into_home(&words) || unproven_change(&words) {
             assigned = true;
             unread.get_or_insert(
-                "a command on the line sets HOME to a value the guard does not read",
+                "a command on the line can change HOME to a value the guard does not read",
             );
         }
-        if prefix_home(&words) {
+        let words = builtin_words(&words);
+        if prefix_home(words) {
             // The command's own words expand with the earlier home, but
             // what it runs (a shell body, a Git callback) sees the new one.
             assigned = true;
@@ -67,7 +69,7 @@ pub(crate) fn read(command: &str) -> LineHome {
                 "HOME is assigned in front of a command, so that command and its own words use different homes",
             );
         }
-        literals.note(&words);
+        literals.note(words);
         assigned |= literals.0.contains_key("HOME");
     }
     if !assigned || !after {
@@ -148,8 +150,53 @@ fn prefix_home(words: &[String]) -> bool {
         })
 }
 
+/// A HOME change the reader cannot prove to be one literal value: an
+/// append, a sourced file or an `eval` of text it does not read (either can
+/// run any assignment), a nameref declaration, or a `HOME=` word in any form
+/// other than a plain statement, a declaring builtin or a prefix, such as
+/// one behind a wrapper the reader does not unwrap.
+fn unproven_change(words: &[String]) -> bool {
+    if words.iter().any(|word| word.starts_with("HOME+=")) {
+        return true;
+    }
+    let unwrapped = builtin_words(words);
+    let Some((first, rest)) = unwrapped.split_first() else {
+        return words.iter().any(|word| word.starts_with("HOME="));
+    };
+    match first.as_str() {
+        "source" | "." => true,
+        "eval" => rest.iter().any(|word| expands(word)),
+        "declare" | "typeset" | "local" => rest
+            .iter()
+            .take_while(|word| word.starts_with('-'))
+            .any(|flag| flag.contains('n')),
+        "export" | "readonly" => false,
+        _ => {
+            let assignment = |word: &String| {
+                word.split_once('=')
+                    .is_some_and(|(name, _)| super::is_identifier(name))
+            };
+            let leading = unwrapped.iter().take_while(|word| assignment(word)).count();
+            let statement = leading == unwrapped.len();
+            // A plain statement or a prefix is read elsewhere; a `HOME=`
+            // word anywhere else is an assignment through a form the
+            // reader does not unwrap, or data it cannot tell from one.
+            !statement
+                && unwrapped[leading..]
+                    .iter()
+                    .skip(1)
+                    .any(|word| word.starts_with("HOME="))
+                && !matches!(first.as_str(), "env" | "echo" | "printf")
+                && (expands(first)
+                    || unwrapped.len() != words.len()
+                    || matches!(first.as_str(), "command" | "builtin"))
+        }
+    }
+}
+
 /// A builtin that stores a value it reads into HOME.
 fn reads_into_home(words: &[String]) -> bool {
+    let words = builtin_words(words);
     let Some((first, rest)) = words.split_first() else {
         return false;
     };
@@ -244,9 +291,9 @@ pub(crate) fn unread_violation(line: &LineHome, level: PolicyLevel) -> Option<Vi
 }
 
 /// Exec-guard reads no shell writes of its own, so a line that reassigns
-/// HOME refuses there when a word that uses the home names an enforcement
-/// path under that home. Git-guard resolves the same words through
-/// [`home`] in its own writer checks.
+/// HOME refuses there when a command that uses the home writes an
+/// enforcement path under that home, as git-guard's writer checks judge it.
+/// A read-only use, such as a Git pathspec, passes.
 pub(crate) fn named_enforcement(
     command: &str,
     cwd: &Path,
@@ -256,38 +303,25 @@ pub(crate) fn named_enforcement(
         return None;
     }
     let home = assigned()?;
-    for segment in expand_shell_commands(command).segments {
-        // Shell blanks and control operators end a word.
-        for piece in segment.split([' ', '\t', '\n', ';', '|', '&', '(', ')']) {
-            let start = piece
-                .find(|c: char| !"<>0123456789".contains(c))
-                .unwrap_or(piece.len());
-            let word = &piece[start..];
-            let word = word.strip_prefix(['"', '\'']).unwrap_or(word);
-            let word = word.strip_suffix(['"', '\'']).unwrap_or(word);
-            let uses = word == "~"
-                || word.starts_with("~/")
-                || word.starts_with("$HOME")
-                || word.starts_with("${HOME}");
-            if !uses {
-                continue;
-            }
-            let path = shell_path_with_home(word, cwd, Some(&home));
-            let Some(text) = path.to_str() else {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!("the line sets HOME, and `{word}` names a path that is not text"),
-                ));
-            };
-            if let Some(found) = token_integrity_path(text, cwd, cwd) {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!(
-                        "the line sets HOME to `{}`, so `{word}` names the integrity path `{found}`",
-                        home.display()
-                    ),
-                ));
-            }
+    let segments = expand_shell_commands(command).segments;
+    let run = run_dirs(&segments, cwd);
+    for segment in &segments {
+        if !uses_home(segment) {
+            continue;
+        }
+        let mut words = shell_tokens(segment);
+        strip_reserved_words(&mut words);
+        if let Some(found) =
+            integrity_write_in_run(&words, &redirect_writes(segment), level, &run, cwd, command)
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!(
+                    "the line sets HOME to `{}`, and {}",
+                    home.display(),
+                    found.message
+                ),
+            ));
         }
     }
     None
@@ -304,6 +338,10 @@ mod tests {
             "export HOME=/r; git clone u ~/.claude/x",
             "HOME=/r && rm -rf ~/.claude",
             "HOME=/r; printf x > \"$HOME/.claude/settings.json\"",
+            "command export HOME=/r; printf x > ~/.claude/settings.json",
+            "builtin export HOME=/r; git clone u ~/.claude/x",
+            "command -p declare -x HOME=/r; git init ~/.claude/x",
+            "builtin command export HOME=/r; rm -rf ~/.claude",
         ] {
             assert_eq!(read(line), LineHome::Literal(PathBuf::from("/r")), "{line}");
         }
@@ -317,6 +355,9 @@ mod tests {
             "git log HEAD~1 --format='%h~%s'",
             "HOME=/r; git status",
             "cd ~ && HOME=/r",
+            "echo HOME=x; ls ~",
+            "export -n HOME; ls ~",
+            "command -v git && git clone u ~/scratch/y",
         ] {
             assert_eq!(read(line), LineHome::Inherited, "{line}");
         }
@@ -334,6 +375,14 @@ mod tests {
             "for HOME in /a /b; do rm -rf ~/.claude; done",
             "ls ~; HOME=/r; rm -rf ~/.claude",
             "HOME=/a; HOME=/b; rm -rf ~/.claude",
+            "HOME+=/x; rm -rf ~/.claude",
+            "HOME=/r; HOME+=/x; rm -rf ~/.claude",
+            ". ./env.sh; rm -rf ~/.claude",
+            "source env.sh && rm -rf ~/.claude",
+            "eval \"$SETUP\"; rm -rf ~/.claude",
+            "declare -n H=HOME; H=/r; rm -rf ~/.claude",
+            "command -x export HOME=/r; rm -rf ~/.claude",
+            "$WRAP export HOME=/r; rm -rf ~/.claude",
         ] {
             assert!(matches!(read(line), LineHome::Unread(_)), "{line}");
         }

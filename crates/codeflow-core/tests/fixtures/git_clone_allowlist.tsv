@@ -66,3 +66,7 @@ crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=$X; git clone u ~/.c
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
 crates/codeflow-core/src/hooks/git_guard/line_home.rs	"git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("builtin export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("command export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"builtin export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"command -v git && git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.

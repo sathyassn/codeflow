@@ -5421,95 +5421,6 @@ pub(crate) fn git_command_write_violation(
     None
 }
 
-/// The paths a Git command writes through its own output options and
-/// operands (TSK-379 review round 5), relative to its starting directory:
-/// `archive -o`, the `--output` diff option of any verb, `format-patch -o`,
-/// `bundle create FILE`, `bugreport` and `diagnose -o`, `index-pack -o`,
-/// `mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
-/// fast-export and fast-import marks, and the file a `config --file` write
-/// changes. Unambiguous prefixes of `--output` and `--output-directory`
-/// count, because parse-options accepts them for some verbs.
-pub(crate) fn git_output_paths(verb: &str, rest: &[String]) -> Vec<String> {
-    let mut paths = Vec::new();
-    let short_output = matches!(
-        verb,
-        "archive" | "format-patch" | "bugreport" | "diagnose" | "index-pack" | "mailsplit"
-    );
-    let mut operands = Vec::new();
-    let mut words = rest.iter();
-    let mut options = true;
-    while let Some(word) = words.next() {
-        if options && word == "--" {
-            options = false;
-            continue;
-        }
-        if !options || !word.starts_with('-') || word == "-" {
-            operands.push(word.clone());
-            continue;
-        }
-        if let Some(long) = word.strip_prefix("--") {
-            let (name, attached) = match long.split_once('=') {
-                Some((name, value)) => (name, Some(value)),
-                None => (long, None),
-            };
-            let output = !name.is_empty()
-                && ("output".starts_with(name) || "output-directory".starts_with(name));
-            let named = match verb {
-                "checkout-index" => name == "prefix",
-                "fast-export" | "fast-import" => name == "export-marks",
-                "config" => name == "file",
-                _ => false,
-            };
-            if output || named {
-                match attached {
-                    Some(value) => paths.push(value.to_string()),
-                    None => paths.extend(words.next().cloned()),
-                }
-            }
-            continue;
-        }
-        let letters = &word[1..];
-        if verb == "merge-file" && letters == "L" {
-            words.next();
-            continue;
-        }
-        if verb == "config" && letters.starts_with('f') {
-            let value = &letters[1..];
-            if value.is_empty() {
-                paths.extend(words.next().cloned());
-            } else {
-                paths.push(value.to_string());
-            }
-            continue;
-        }
-        if short_output {
-            // Short options bundle (`-vo FILE`); `o` takes the rest of the
-            // word, else the next one.
-            if let Some(at) = letters.find('o') {
-                let value = &letters[at + 1..];
-                if value.is_empty() {
-                    paths.extend(words.next().cloned());
-                } else {
-                    paths.push(value.to_string());
-                }
-            }
-        }
-    }
-    match verb {
-        "bundle" if operands.first().is_some_and(|word| word == "create") => {
-            paths.extend(operands.get(1).filter(|file| *file != "-").cloned());
-        }
-        "merge-file" if !rest.iter().any(|word| word == "-p" || word == "--stdout") => {
-            paths.extend(operands.first().cloned());
-        }
-        "config" if config_only_reads(rest) => {
-            paths.retain(|_| false);
-        }
-        _ => {}
-    }
-    paths
-}
-
 /// A Git output path that lands on or inside an enforcement path, judged
 /// as the creation targets of clone, init and worktree add are.
 fn git_output_violation(
@@ -5520,10 +5431,11 @@ fn git_output_violation(
     cwd: &Path,
     payload_cwd: &Path,
 ) -> Option<Violation> {
-    let outputs = git_output_paths(verb, rest);
-    if outputs.is_empty() {
-        return None;
-    }
+    let outputs = match runners::output_paths(verb, rest) {
+        Ok(outputs) if outputs.is_empty() => return None,
+        Ok(outputs) => outputs,
+        Err(why) => return Some(hook_integrity_violation(level, why)),
+    };
     let mut directory = cwd.to_path_buf();
     let globals = &filled[..filled.len() - rest.len() - 1];
     for pair in globals.windows(2) {
@@ -5715,6 +5627,14 @@ fn direct_write_violation(
     if !(cmd == "git" && git_subcommand(args).is_some_and(|(verb, _)| verb == "config")) {
         if let Some(finding) = git_command_write_violation(cmd, args, level, cwd, payload_cwd, line)
         {
+            return Some(finding);
+        }
+    } else if level.is_active() {
+        // The file a config write changes is an output like any other; its
+        // keys are judged after shell-state tracking (TSK-379 round 9).
+        if let Some(finding) = git_subcommand(args).and_then(|(verb, rest)| {
+            git_output_violation(verb, args, rest, level, cwd, payload_cwd)
+        }) {
             return Some(finding);
         }
     }
@@ -6303,6 +6223,34 @@ pub(crate) fn expands(word: &str) -> bool {
 #[derive(Debug, Default)]
 struct Literals(BTreeMap<String, Option<String>>);
 
+/// A simple command's words with the builtin wrappers `command` and
+/// `builtin` removed (TSK-379 review round 9): `command export X=y` and
+/// `builtin declare -x X=y` assign in the current shell as the plain forms
+/// do. `command -v` and `-V` only look a name up, so their words come back
+/// empty; a `command` option the reader does not know is kept as written.
+pub(crate) fn builtin_words(mut words: &[String]) -> &[String] {
+    loop {
+        match words.first().map(String::as_str) {
+            Some("builtin") => words = &words[1..],
+            Some("command") => {
+                let options = words[1..]
+                    .iter()
+                    .take_while(|word| word.starts_with('-') && word.len() > 1)
+                    .count();
+                let flags = &words[1..=options];
+                if flags.iter().any(|flag| flag.contains(['v', 'V'])) {
+                    return &[];
+                }
+                if flags.iter().any(|flag| flag != "-p" && flag != "--") {
+                    return words;
+                }
+                words = &words[1 + options..];
+            }
+            _ => return words,
+        }
+    }
+}
+
 impl Literals {
     /// Record the assignments of one segment's words.
     fn note(&mut self, words: &[String]) {
@@ -6310,6 +6258,7 @@ impl Literals {
             w.split_once('=')
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
         }
+        let words = builtin_words(words);
         let declaring = matches!(
             words.first().map(String::as_str),
             Some("export" | "declare" | "typeset" | "local" | "readonly")

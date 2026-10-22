@@ -620,3 +620,190 @@ pub(super) const CHECKOUT_EDITOR_OPTIONS: OptionSpec = OptionSpec {
     long: EDITOR_MODE_OPTIONS.long,
     git_style: true,
 };
+
+// Output options and the value-taking options before them, from each verb's
+// Git 2.53 manual (TSK-379 review round 9). The output reader parses with
+// these tables so another option's value is never read as the output.
+
+/// The diff option `--output`, accepted by every verb that takes diff
+/// options. Git's diff parser takes only the full name.
+pub(super) const DIFF_OUTPUT_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[("--output", Arity::Value)],
+    git_style: false,
+};
+
+/// `git format-patch` (git-format-patch(1)); its own options take no
+/// abbreviation. Short letters with values: `-o`, `-v`; the rest are flags.
+pub(super) const FORMAT_PATCH_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('o', Arity::Value),
+        ('v', Arity::Value),
+        ('n', Arity::Flag),
+        ('N', Arity::Flag),
+        ('s', Arity::Flag),
+        ('k', Arity::Flag),
+        ('p', Arity::Flag),
+        ('q', Arity::Flag),
+        ('1', Arity::Flag),
+        ('2', Arity::Flag),
+        ('3', Arity::Flag),
+        ('4', Arity::Flag),
+        ('5', Arity::Flag),
+        ('6', Arity::Flag),
+        ('7', Arity::Flag),
+        ('8', Arity::Flag),
+        ('9', Arity::Flag),
+        ('0', Arity::Flag),
+    ],
+    long: &[
+        ("--output-directory", Arity::Value),
+        ("--output", Arity::Value),
+        ("--reroll-count", Arity::Value),
+        ("--start-number", Arity::Value),
+        ("--subject-prefix", Arity::Value),
+        ("--signature", Arity::Value),
+        ("--signature-file", Arity::Value),
+        ("--suffix", Arity::Value),
+        ("--to", Arity::Value),
+        ("--cc", Arity::Value),
+        ("--in-reply-to", Arity::Value),
+        ("--add-header", Arity::Value),
+        ("--base", Arity::Value),
+        ("--interdiff", Arity::Value),
+        ("--range-diff", Arity::Value),
+        ("--creation-factor", Arity::Value),
+        ("--description-file", Arity::Value),
+        ("--filename-max-length", Arity::Value),
+        ("--cover-from-description", Arity::Value),
+        ("--stdout", Arity::Flag),
+    ],
+    git_style: false,
+};
+
+/// `git bundle create`, read to its first operand, the bundle file.
+pub(super) const BUNDLE_CREATE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('q', Arity::Flag)],
+    long: &[
+        ("--quiet", Arity::Flag),
+        ("--progress", Arity::Flag),
+        ("--no-progress", Arity::Flag),
+        ("--all-progress", Arity::Flag),
+        ("--all-progress-implied", Arity::Flag),
+        ("--version", Arity::Value),
+    ],
+    git_style: true,
+};
+
+/// `git merge-file`, whose first operand is the file it rewrites.
+pub(super) const MERGE_FILE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('p', Arity::Flag), ('q', Arity::Flag), ('L', Arity::Value)],
+    long: &[
+        ("--stdout", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--object-id", Arity::Flag),
+        ("--diff3", Arity::Flag),
+        ("--zdiff3", Arity::Flag),
+        ("--ours", Arity::Flag),
+        ("--theirs", Arity::Flag),
+        ("--union", Arity::Flag),
+        ("--marker-size", Arity::Value),
+        ("--diff-algorithm", Arity::Value),
+    ],
+    git_style: true,
+};
+
+/// `git checkout-index`; `--prefix` places every file it writes.
+pub(super) const CHECKOUT_INDEX_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('u', Arity::Flag),
+        ('q', Arity::Flag),
+        ('a', Arity::Flag),
+        ('f', Arity::Flag),
+        ('n', Arity::Flag),
+        ('z', Arity::Flag),
+    ],
+    long: &[
+        ("--index", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--force", Arity::Flag),
+        ("--no-create", Arity::Flag),
+        ("--stdin", Arity::Flag),
+        ("--temp", Arity::Flag),
+        ("--ignore-skip-worktree-bits", Arity::Flag),
+        ("--prefix", Arity::Value),
+        ("--stage", Arity::Value),
+    ],
+    git_style: true,
+};
+
+/// `git bugreport` and `git diagnose`.
+pub(super) const REPORT_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('o', Arity::Value), ('s', Arity::Value)],
+    long: &[
+        ("--output-directory", Arity::Value),
+        ("--suffix", Arity::Value),
+        ("--no-suffix", Arity::Flag),
+        ("--mode", Arity::Value),
+        ("--diagnose", Arity::AttachedValue),
+    ],
+    git_style: true,
+};
+
+/// `git index-pack`: `-o FILE` names the index it writes.
+pub(super) const INDEX_PACK_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('o', Arity::Value), ('v', Arity::Flag)],
+    long: &[],
+    git_style: false,
+};
+
+/// `git mailsplit`: `-o<directory>` takes its value attached.
+pub(super) const MAILSPLIT_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('o', Arity::AttachedValue),
+        ('d', Arity::AttachedValue),
+        ('f', Arity::AttachedValue),
+        ('b', Arity::Flag),
+    ],
+    long: &[("--keep-cr", Arity::Flag), ("--mboxrd", Arity::Flag)],
+    git_style: false,
+};
+
+/// `git fast-export` and `git fast-import` marks files.
+pub(super) const MARKS_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[
+        ("--export-marks", Arity::Value),
+        ("--import-marks", Arity::Value),
+        ("--import-marks-if-exists", Arity::Value),
+    ],
+    git_style: true,
+};
+
+/// `git worktree add`, read to its first operand, the new checkout.
+pub(super) const WORKTREE_ADD_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('f', Arity::Flag),
+        ('q', Arity::Flag),
+    ],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--checkout", Arity::Flag),
+        ("--no-checkout", Arity::Flag),
+        ("--lock", Arity::Flag),
+        ("--reason", Arity::Value),
+        ("--orphan", Arity::Flag),
+        ("--track", Arity::Flag),
+        ("--no-track", Arity::Flag),
+        ("--guess-remote", Arity::Flag),
+        ("--no-guess-remote", Arity::Flag),
+        ("--relative-paths", Arity::Flag),
+        ("--no-relative-paths", Arity::Flag),
+        ("--quiet", Arity::Flag),
+    ],
+    git_style: true,
+};

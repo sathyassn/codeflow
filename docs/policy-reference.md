@@ -599,11 +599,17 @@ checked, so a symlink does not remove the target owner's protection.
   `~` and `$HOME` resolve against the HOME the line assigns before them, in
   every check of both shell hooks: `HOME=<repo>; rm -rf ~/.claude` is judged
   as `rm -rf <repo>/.claude`. Only one literal absolute value assigned in
-  statement or export form is read. Any other assignment before a word that
-  uses the home refuses: an unresolved or relative value, `HOME=` in front of
-  a command, `read`, `unset` or a loop variable, or a line that uses the home
-  both before and after assigning it. Exec-guard refuses such a line when a
-  word that uses the reassigned home names an enforcement path.
+  statement or export form is read, including behind the `command` and
+  `builtin` wrappers. Any other HOME change before a word that uses the home
+  refuses: an unresolved or relative value, an append (`HOME+=`), `HOME=` in
+  front of a command, `read`, `unset`, a loop variable, a nameref, an `eval`
+  of unread text, a sourced file, a wrapper the reader does not unwrap, or a
+  line that uses the home both before and after assigning it. The guard does
+  not read sourced files: a line that sources one and then uses the home
+  refuses because the file could set HOME, and what a sourced file does
+  otherwise remains unread. Exec-guard refuses such a line when a command
+  that uses the reassigned home writes an enforcement path, as git-guard
+  judges the write; a read-only use such as a Git pathspec passes.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.
@@ -636,8 +642,16 @@ Git's own output paths receive the same check in both shell hooks:
 `bundle create`, `bugreport` and `diagnose -o`, `index-pack -o`,
 `mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
 fast-export and fast-import marks, and the file a `git config --file` write
-changes when that file is not Git configuration. An alias that expands to
-one of these is judged the same way. Ordinary outputs such as
+changes when that file is not Git configuration. They are read with the same
+option tables as the command runners, so another option's value is never
+taken for the output and Git's accepted abbreviations (`--pref`, `--fil`)
+count; an option the tables do not know, where its value could be the
+output, refuses. An alias that expands to one of these is judged the same
+way. `git worktree add` reads each conditional include (`includeIf`) that
+could apply to the new worktree but not where the guard reads, such as one
+keyed on the new worktree's Git directory, and refuses when it sets a
+setting Git can run during the add or a hooks path; the new checkout then
+counts as an earlier write for later commands on the line. Ordinary outputs such as
 `git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
 and `git diff --output=out.diff` remain available.
 Source-removing rsync spellings protect the checkout's gitfile as well
