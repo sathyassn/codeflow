@@ -1,0 +1,11 @@
+id = "TSK-421"
+uid = "d261d937-f9a9-477c-a211-a963edfa11b9"
+kind = "TSK"
+title = "A line is synced from main and closed by one checked route each"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:23Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
