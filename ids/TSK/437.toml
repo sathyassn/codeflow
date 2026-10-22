@@ -1,0 +1,11 @@
+id = "TSK-437"
+uid = "f9120bf5-ab6a-439e-96e0-2fe31f21b106"
+kind = "TSK"
+title = "Each seat reaches only its own lane's sockets and never the container runtime"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:53:10Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
