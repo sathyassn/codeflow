@@ -1,0 +1,11 @@
+id = "TSK-423"
+uid = "58688cce-97a4-41e0-aa17-b1b9da15f014"
+kind = "TSK"
+title = "The managed rule and orchestrator skill require the follow-up ledger"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:32Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
