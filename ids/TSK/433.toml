@@ -1,0 +1,11 @@
+id = "TSK-433"
+uid = "26c66131-9e15-4835-a5d0-d7e8294649d7"
+kind = "TSK"
+title = "The epic line's pull request into main judges the line's own completions as its own"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:14:24Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
