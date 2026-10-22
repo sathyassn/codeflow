@@ -1,0 +1,11 @@
+id = "EPC-024"
+uid = "3e7f6e2b-e3a6-4c3e-87a9-b2c37312c54d"
+kind = "EPC"
+title = "quality defaults, local scan parity and seat capacity"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:02:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
