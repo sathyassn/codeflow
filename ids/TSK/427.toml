@@ -1,0 +1,11 @@
+id = "TSK-427"
+uid = "9b360739-bb29-4a2c-a899-190042bec75b"
+kind = "TSK"
+title = "Shipped instructions and reviews require full typing by default"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
