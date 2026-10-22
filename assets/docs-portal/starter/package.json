@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.6",
-    "astro": "7.2.8",
+    "astro": "7.3.8",
     "github-slugger": "2.0.0",
     "pagefind": "1.5.2",
     "remark-gfm": "4.0.1",
