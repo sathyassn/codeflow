@@ -1,0 +1,11 @@
+id = "TSK-413"
+uid = "68376b34-bbb4-405c-a0a1-9865b522efc7"
+kind = "TSK"
+title = "An inline interpreter program's git calls are read by the language's grammar"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:02:56Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
