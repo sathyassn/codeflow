@@ -111,24 +111,25 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   `crates/codeflow-present`;
   `scaffold` = `assets/` (base scaffold with its test-config templates, and
   the docs-portal starter); `docs` = `docs/`.
-- **Rust gates and builder evidence:** before every push, `cargo fmt --all --
-  --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
-  tests (`cargo test -p <crate> --test <name>`) and `codeflow test --mode
-  quick`; the pre-push hook's quick run is that evidence when it covers the
-  same tree. Builders do not run routine whole essential or full gates. A
-  targeted check that exists only in a heavier mode stays allowed, such as
-  `codeflow test --mode essential --only <target>`, and so do measurement
-  trials a task authorizes. For a `docs/**` change run `codeflow test --only
-  docs-portal` on the default full mode, whose figure fidelity check an
-  essential run also makes; that portal check refuses until the files it
-  reads, `docs/`, its figures, config and published records, match HEAD, so
-  commit those edits first. The primary runs one full gate on each landing
-  candidate, which also owes `codeflow test --mode essential` for a
-  `crates/**` change, including every empty-`narrow` target such as
-  `rust-workspace` (workspace lints: clippy all = deny, pedantic = warn).
-  Edition 2021, workspace-managed dependency versions in the root
-  `Cargo.toml`.
+- **Rust gates and builder evidence:**
+  - Before every push: `cargo fmt --all -- --check`, `cargo clippy
+    --workspace --all-targets -- -D warnings`, `RUSTDOCFLAGS="-D warnings"
+    cargo doc --workspace --no-deps`, targeted tests (`cargo test -p <crate>
+    --test <name>`) and `codeflow test --mode quick`. The pre-push hook's
+    quick run is that evidence when it covers the same tree.
+  - Builders do not run routine whole essential or full gates. A check that
+    exists only in a heavier mode runs as a targeted check, such as `codeflow
+    test --mode essential --only <target>` (`rust-workspace` is defined only
+    in essential). Measurement trials a task authorizes stay allowed.
+  - For a `docs/**` change run `codeflow test --only docs-portal` on the
+    default full mode, whose figure fidelity check an essential run also
+    makes. That portal check refuses until the files it reads, `docs/`, its
+    figures, config and published records, match HEAD, so commit those edits
+    first.
+  - The primary runs one full gate on each landing candidate. That gate does
+    not cover a target defined only in essential. Workspace lints: clippy all
+    = deny, pedantic = warn. Edition 2021, workspace-managed dependency
+    versions in the root `Cargo.toml`.
 - **Hosted green before the next landing.** An ordinary landing on an
   integration line waits until the line's current tip has green hosted
   "codeflow gates" and "windows" verdicts.
