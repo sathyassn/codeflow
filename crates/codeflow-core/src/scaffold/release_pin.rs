@@ -622,8 +622,9 @@ mod tests {
 
     #[test]
     fn an_unparseable_pinned_version_is_named_not_compared() {
-        // As strings "9.9.9" > "10.0", so a text order would refuse a pin
-        // that rises; the pin is named instead and nothing is fetched.
+        // As strings "9.9.9" is not older than "10.0", so a text order would
+        // accept a pin that numerically lowers; the pinned value is named
+        // instead and nothing is fetched.
         let dir = project("10.0");
         let before = std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap();
         let files = release("9.9.9");

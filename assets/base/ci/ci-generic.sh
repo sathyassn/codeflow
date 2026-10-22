@@ -57,21 +57,66 @@ codeflow_pin() {
   git show "$1:.codeflow/project.toml" 2>/dev/null |
     sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1
 }
-# Succeeds when version $1 is older than $2: numeric core first, and a
-# pre-release before its release, as codeflow orders versions.
+# Succeeds (0) when version $1 is older than $2, fails (1) when it is not,
+# and refuses (2) a version that is not MAJOR.MINOR.PATCH with an optional
+# -prerelease and +build. Orders as codeflow does: numbers by length then
+# digits (no arithmetic, so no overflow), a pre-release before its release,
+# pre-release identifiers numeric before alphanumeric, build ignored.
 codeflow_older() {
-  awk -v a="$1" -v b="$2" 'BEGIN {
-    i = index(a, "-"); ca = i ? substr(a, 1, i - 1) : a; pa = i ? substr(a, i + 1) : ""
-    j = index(b, "-"); cb = j ? substr(b, 1, j - 1) : b; pb = j ? substr(b, j + 1) : ""
-    n = split(ca, x, "."); m = split(cb, y, ".")
-    for (k = 1; k <= (n > m ? n : m); k++) {
-      if (x[k] + 0 < y[k] + 0) exit 0
-      if (x[k] + 0 > y[k] + 0) exit 1
+  LC_ALL=C awk -v a="$1" -v b="$2" '
+    function alnum(s) { return s != "" && s !~ /[^0-9A-Za-z-]/ }
+    function numeric(s) { return s !~ /[^0-9]/ }
+    function idents(s, pre,   n, p, i) {
+      if (s == "") return 0
+      n = split(s, p, ".")
+      for (i = 1; i <= n; i++) {
+        if (!alnum(p[i])) return 0
+        if (pre && numeric(p[i]) && length(p[i]) > 1 && substr(p[i], 1, 1) == "0") return 0
+      }
+      return 1
     }
-    if (pa != "" && pb == "") exit 0
-    if (pa == "" || pb == "") exit 1
-    exit (pa < pb) ? 0 : 1
-  }'
+    function parse(v, k,   plus, dash, i, t, c) {
+      plus = index(v, "+")
+      if (plus) {
+        if (!idents(substr(v, plus + 1), 0)) return 0
+        v = substr(v, 1, plus - 1)
+      }
+      dash = index(v, "-")
+      has[k] = 0
+      if (dash) {
+        if (!idents(substr(v, dash + 1), 1)) return 0
+        pre[k] = substr(v, dash + 1)
+        has[k] = 1
+        v = substr(v, 1, dash - 1)
+      }
+      if (split(v, c, ".") != 3) return 0
+      for (i = 1; i <= 3; i++) {
+        t = c[i] ""
+        if (t == "" || !numeric(t) || (length(t) > 1 && substr(t, 1, 1) == "0")) return 0
+        if (length(t) > 20 || (length(t) == 20 && t > "18446744073709551615")) return 0
+        core[k, i] = t
+      }
+      return 1
+    }
+    function scmp(x, y) { x = x ""; y = y ""; return x < y ? -1 : (x > y ? 1 : 0) }
+    function ncmp(x, y) { if (length(x) != length(y)) return length(x) < length(y) ? -1 : 1; return scmp(x, y) }
+    BEGIN {
+      if (!parse(a, 1) || !parse(b, 2)) exit 2
+      for (i = 1; i <= 3; i++) {
+        r = ncmp(core[1, i], core[2, i])
+        if (r) exit (r < 0 ? 0 : 1)
+      }
+      if (has[1] && !has[2]) exit 0
+      if (!has[1]) exit 1
+      n = split(pre[1], p, "."); m = split(pre[2], q, ".")
+      for (i = 1; i <= n && i <= m; i++) {
+        pn = numeric(p[i]); qn = numeric(q[i])
+        if (pn != qn) exit (pn ? 0 : 1)
+        r = pn ? ncmp(p[i], q[i]) : scmp(p[i], q[i])
+        if (r) exit (r < 0 ? 0 : 1)
+      }
+      exit (n < m) ? 0 : 1
+    }'
 }
 # The [scaffold_sha256] table a commit pins, as "<version> <digest>" for
 # this triple with "-" for a missing value, or nothing without a table.

@@ -191,4 +191,73 @@ mod tests {
             assert_eq!(version_skew_warning(dir.path(), "9.0.0"), None, "{pin}");
         }
     }
+
+    /// The shipped CI templates order pins with a shell function. It must
+    /// agree with `is_older` on every row, and refuse what the parser rejects.
+    #[cfg(unix)]
+    #[test]
+    fn the_ci_shell_function_orders_versions_as_is_older_does() {
+        const CI: &str = include_str!("../../../../assets/base/ci/ci-generic.sh");
+        let start = CI.find("codeflow_older() {").expect("function");
+        let end = start + CI[start..].find("\n}\n").expect("end") + 3;
+        let function = &CI[start..end];
+        let max = "18446744073709551615.0.0";
+        let rows = [
+            ("3.2.0-rc.2", "3.2.0-rc.10"),
+            ("3.2.0-rc.10", "3.2.0-rc.2"),
+            ("3.2.0+build-1", "3.2.0"),
+            ("3.2.0", "3.2.0+build-1"),
+            ("18446744073709551614.0.0", max),
+            ("18446744073709551615.0.0", "18446744073709551614.0.0"),
+            ("1.9.0", "2.0.0"),
+            ("2.0.0", "1.9.0"),
+            ("2.0.0", "2.0.0"),
+            ("2.0.0-dev", "2.0.0"),
+            ("2.0.0", "2.0.0-dev"),
+            ("2.0.0-alpha", "2.0.0-beta"),
+            ("2.0.0-1", "2.0.0-alpha"),
+            ("2.0.0-alpha", "2.0.0-1"),
+            ("2.0.0-alpha", "2.0.0-alpha.1"),
+            ("2.0.0-alpha.1", "2.0.0-alpha"),
+            ("2.0.0+two", "2.0.1+one"),
+            (
+                "2.0.0-rc.99999999999999999999999",
+                "2.0.0-rc.100000000000000000000000",
+            ),
+            ("2.10.0", "2.9.0"),
+            ("2.9.0", "2.10.0"),
+        ];
+        let run = |a: &str, b: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("{function}\ncodeflow_older \"$1\" \"$2\""))
+                .arg("sh")
+                .args([a, b])
+                .output()
+                .unwrap()
+                .status
+                .code()
+        };
+        for (a, b) in rows {
+            let expect = i32::from(!is_older(a, b).unwrap());
+            assert_eq!(run(a, b), Some(expect), "{a} vs {b}");
+        }
+        for bad in [
+            "3.2",
+            "10.0",
+            "3.2.0x",
+            "v3.2.0",
+            "",
+            "3.2.0-",
+            "01.0.0",
+            "3.2.0-01",
+            "18446744073709551616.0.0",
+            "3.2.0+",
+            "3.2.0+a+b",
+        ] {
+            assert!(!is_parseable(bad), "{bad}");
+            assert_eq!(run(bad, "9.0.0"), Some(2), "{bad:?} left");
+            assert_eq!(run("9.0.0", bad), Some(2), "{bad:?} right");
+        }
+    }
 }
