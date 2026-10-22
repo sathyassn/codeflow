@@ -127,6 +127,9 @@ pub fn evaluate_in(
     } else {
         evaluate_floor(command)
     };
+    // `~` and `$HOME` name the home the line assigns before them (TSK-379).
+    let line_home = super::git_guard::line_home::read(command);
+    let _home = super::git_guard::line_home::Scope::enter(command, &line_home);
     // Shell startup files: always blocking, no policy key (TSK-242); the
     // default user and system git configuration files by the same check,
     // under `git.hook_integrity` at its level. A command the catastrophic
@@ -140,6 +143,13 @@ pub fn evaluate_in(
             &crate::security::startup::StartupEnv::from_process_at(cwd),
             integrity,
         ));
+    }
+    if violations.is_empty() {
+        if let Some(finding) = super::git_guard::line_home::unread_violation(&line_home, integrity)
+            .or_else(|| super::git_guard::line_home::named_enforcement(command, cwd, integrity))
+        {
+            violations.push(finding);
+        }
     }
     if violations.is_empty() {
         if let Some(finding) = super::git_guard::git_runner_write_violation(command, cwd, integrity)
@@ -168,16 +178,21 @@ pub fn evaluate_in(
             violations.push(violation);
         }
     }
-    let home = crate::portable_path::user_home();
-    for finding in crate::security::interpreter::evaluate(
-        command,
-        levels,
-        integrity,
-        cwd,
-        root,
-        home.as_deref(),
-    ) {
-        merge_strongest(&mut violations, finding);
+    // Interpreter code expands `~` with the home its process inherits: the
+    // line's assigned home, judged besides the guard's own.
+    let homes = std::iter::once(crate::portable_path::user_home())
+        .chain(super::git_guard::line_home::assigned().map(Some));
+    for home in homes {
+        for finding in crate::security::interpreter::evaluate(
+            command,
+            levels,
+            integrity,
+            cwd,
+            root,
+            home.as_deref(),
+        ) {
+            merge_strongest(&mut violations, finding);
+        }
     }
     violations
 }

@@ -147,8 +147,9 @@ fn revision_operand(word: &str) -> bool {
     operator || word.contains("..")
 }
 
-// Only the current user's home has a proven expansion. The remaining path
-// must be literal; named-user homes and glob/brace suffixes stay unread.
+// Only the current user's home has a proven expansion: the HOME the line
+// assigned, else the inherited one (TSK-379). The remaining path must be
+// literal; named-user homes and glob/brace suffixes stay unread.
 fn home_operand(word: &str) -> bool {
     let Some(tail) = word
         .strip_prefix("~/")
@@ -158,7 +159,7 @@ fn home_operand(word: &str) -> bool {
     };
     !expands(tail)
         && !tail.chars().any(super::pattern_character)
-        && crate::portable_path::user_home().is_some_and(|home| home.is_absolute())
+        && super::line_home::home().is_some_and(|home| home.is_absolute())
 }
 
 fn patterns(
@@ -321,7 +322,7 @@ fn grep_syntax(rest: &[String], segment: &str) -> Result<(), String> {
         {
             let home = (word.text.starts_with("$HOME/") || word.text.starts_with("${HOME}/"))
                 && word.literal()
-                && crate::portable_path::user_home().is_some_and(|p| p.is_absolute());
+                && super::line_home::home().is_some_and(|p| p.is_absolute());
             let prefix = word.text.split(['$', '`']).next().unwrap_or("");
             if !word.pattern
                 && ((!prefix.is_empty() && !prefix.starts_with(['-', '~', '='])) || home)
@@ -1065,6 +1066,407 @@ fn unchanged(source: &Path, earlier: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
+/// A path an earlier command on the line writes (TSK-379 security round 8).
+/// `places` marks a destination the command fills with entries it does not
+/// name: a recursive copy, move or sync, a link, an archive extraction or a
+/// clone. `None` is a placement the guard cannot resolve.
+struct Landing {
+    path: Option<PathBuf>,
+    places: bool,
+}
+
+fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing>) {
+    if target.starts_with('-') && target != "-" {
+        return;
+    }
+    if expands(target) {
+        if places {
+            landings.push(Landing { path: None, places });
+        }
+        return;
+    }
+    for dir in dirs {
+        landings.push(Landing {
+            path: Some(integrity_shell_path(target, dir)),
+            places,
+        });
+    }
+}
+
+fn named_git(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+}
+
+/// What a non-Git command writes, for the runner-state check: its
+/// redirections and operands, and where it places entries it does not name.
+fn note_landings(
+    segment: &str,
+    program: &str,
+    args: &[String],
+    dirs: &[PathBuf],
+    landings: &mut Vec<Landing>,
+) {
+    if !may_change_discard_state(segment) {
+        return;
+    }
+    for target in &redirect_writes(segment).targets {
+        land(target, false, dirs, landings);
+    }
+    let name = basename(program);
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    // Tests and metadata readers name paths without writing them.
+    if !matches!(
+        name,
+        "test" | "[" | "stat" | "wc" | "head" | "tail" | "file" | "du" | "readlink" | "realpath"
+    ) {
+        for arg in args {
+            land(arg, false, dirs, landings);
+        }
+    }
+    let Some(effects) = crate::security::unresolved::writer_effects(name, args, &[]) else {
+        // Archivers the writer table does not list extract into the
+        // directory they run in.
+        if matches!(
+            name,
+            "cpio" | "bsdcpio" | "pax" | "7z" | "7za" | "7zz" | "7zr" | "unar" | "ar" | "jar"
+        ) {
+            land(".", true, dirs, landings);
+            for arg in args {
+                land(arg, true, dirs, landings);
+            }
+        }
+        return;
+    };
+    if effects.read.unknown.is_some() {
+        for arg in args {
+            land(arg, true, dirs, landings);
+        }
+    }
+    for path in &effects.writes {
+        land(path, false, dirs, landings);
+    }
+    if let Some(copy) = &effects.copy {
+        if let Some(dest) = &copy.dest {
+            // A plain copy or move of named regular files lands each file
+            // under its own name; nothing else can appear at the destination.
+            let recursive = copy.flags.iter().any(|flag| {
+                matches!(
+                    flag.as_str(),
+                    "-R" | "-r" | "-a" | "--recursive" | "--archive"
+                ) || (flag.starts_with('-')
+                    && !flag.starts_with("--")
+                    && flag.contains(['R', 'r', 'a']))
+            });
+            let files = matches!(name, "cp" | "mv")
+                && !recursive
+                && !copy.sources.is_empty()
+                && copy.sources.iter().all(|source| {
+                    !expands(source)
+                        && dirs.iter().all(|dir| {
+                            let path = integrity_shell_path(source, dir);
+                            !named_git(&path)
+                                && std::fs::symlink_metadata(&path)
+                                    .is_ok_and(|meta| meta.file_type().is_file())
+                        })
+                });
+            land(
+                if dest.is_empty() { "." } else { dest },
+                !files,
+                dirs,
+                landings,
+            );
+        }
+    }
+    if let Some(places) = &effects.places {
+        if places.dirs.is_empty() {
+            land(".", true, dirs, landings);
+        }
+        let mut joined = String::new();
+        for dir in &places.dirs {
+            land(dir, true, dirs, landings);
+            joined = if joined.is_empty() || dir.starts_with(['/', '~']) {
+                dir.clone()
+            } else {
+                format!("{}/{dir}", joined.trim_end_matches('/'))
+            };
+            land(&joined, true, dirs, landings);
+        }
+    }
+}
+
+/// What a Git command writes, for the runner-state check: its redirections
+/// and output paths, a clone's checkout, and the Git directory an init
+/// creates from a template.
+fn note_git_landings(
+    segment: &str,
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+    landings: &mut Vec<Landing>,
+) -> Result<(), String> {
+    let dirs = [at.to_path_buf()];
+    for target in &redirect_writes(segment).targets {
+        land(target, false, &dirs, landings);
+    }
+    let Some((verb, rest)) = git_subcommand(args) else {
+        return Ok(());
+    };
+    let start = [starting_directory(args, at)?];
+    for path in super::git_output_paths(verb, rest) {
+        land(&path, false, &start, landings);
+    }
+    match verb {
+        "clone" => {
+            let parsed = checked(rest, &catalog::CLONE_OPTIONS)?;
+            let directory = parsed
+                .operands
+                .get(1)
+                .map(|dir| (*dir).to_string())
+                .or_else(|| parsed.operands.first().and_then(|url| humanish(url)));
+            land(directory.as_deref().unwrap_or("."), true, &start, landings);
+        }
+        "init" => {
+            let template = rest
+                .iter()
+                .any(|word| word == "--template" || word.starts_with("--template="))
+                || env.contains_key("GIT_TEMPLATE_DIR")
+                || std::env::var_os("GIT_TEMPLATE_DIR").is_some()
+                || crate::security::git_config::read(at, globals(args)?, &config_environment(env))?
+                    .get("init.templatedir")?
+                    .is_some();
+            if template {
+                for path in super::git_init_paths(rest) {
+                    land(
+                        &format!("{}/.git", path.trim_end_matches('/')),
+                        false,
+                        &start,
+                        landings,
+                    );
+                    land(&path, false, &start, landings);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The directory `git clone URL` creates: the URL's last path part without
+/// a trailing `.git` or `/.git`.
+fn humanish(url: &str) -> Option<String> {
+    let url = url.trim_end_matches('/');
+    let url = url.strip_suffix("/.git").unwrap_or(url);
+    let name = url.rsplit(['/', ':']).next()?;
+    let name = name.strip_suffix(".git").unwrap_or(name);
+    (!name.is_empty() && name != "." && name != ".." && !expands(name)).then(|| name.to_string())
+}
+
+/// The first `.git` component of `path`, as the directory that holds it.
+fn git_holder(path: &Path) -> Option<PathBuf> {
+    let mut holder = PathBuf::new();
+    for component in path.components() {
+        if component.as_os_str().eq_ignore_ascii_case(".git") {
+            return Some(holder);
+        }
+        holder.push(component);
+    }
+    None
+}
+
+/// Refuse when an earlier write on the line could create, replace or move
+/// repository state the next Git command discovers or reads: a `.git` at
+/// or above its starting directory or work tree, an entry placed at or
+/// above them, a write in or around its explicit Git directory, or one at
+/// a configuration file its environment names. The guard read that state
+/// before the line ran, so the read would be stale.
+fn fresh_runner(
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+    landings: &[Landing],
+) -> Result<(), String> {
+    const STALE: &str = "an earlier command may rewrite Git runner configuration or saved instructions; run the commands separately";
+    if landings.is_empty() {
+        return Ok(());
+    }
+    if landings.iter().any(|landing| landing.path.is_none()) {
+        return Err(STALE.into());
+    }
+    let start = starting_directory(args, at)?;
+    let parsed = checked(globals(args)?, &GLOBAL_OPTIONS)?;
+    let mut trees = vec![start.clone()];
+    let mut git_dirs = Vec::new();
+    let mut files = Vec::new();
+    for value in parsed.values_of('\0', "--work-tree") {
+        trees.push(integrity_shell_path(value, &start));
+    }
+    for value in parsed.values_of('\0', "--git-dir") {
+        git_dirs.push(integrity_shell_path(value, &start));
+    }
+    let inherited = inherited_locations(|name| std::env::var(name))?;
+    let variables = env
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.clone()))
+        .chain(inherited.iter().map(|(name, value)| (*name, value.clone())));
+    for (name, value) in variables {
+        let path = integrity_shell_path(&value, &start);
+        match name {
+            "GIT_DIR" | "GIT_COMMON_DIR" => git_dirs.push(path),
+            "GIT_WORK_TREE" => trees.push(path),
+            "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG" => {
+                // Read from either side of a `-C` change.
+                files.push(integrity_shell_path(&value, at));
+                files.push(path);
+            }
+            "HOME" => {
+                files.push(path.join(".gitconfig"));
+                files.push(path.join(".config/git/config"));
+            }
+            "XDG_CONFIG_HOME" => files.push(path.join("git/config")),
+            _ => {}
+        }
+    }
+    if let Some(home) = super::line_home::home() {
+        files.push(home.join(".gitconfig"));
+        files.push(home.join(".config/git/config"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        files.push(PathBuf::from(xdg).join("git/config"));
+    }
+    let normal = |path: &Path| -> Result<PathBuf, String> {
+        super::super::edit_guard::normalized(path, true).map_err(|error| error.to_string())
+    };
+    let trees = trees
+        .iter()
+        .map(|p| normal(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let git_dirs = git_dirs
+        .iter()
+        .map(|p| normal(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let files = files
+        .iter()
+        .map(|p| normal(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    for landing in landings {
+        let Some(path) = &landing.path else {
+            continue;
+        };
+        let path = normal(path)?;
+        let holder = git_holder(&path);
+        let stale = trees.iter().any(|tree| {
+            (landing.places && tree.starts_with(&path))
+                || holder
+                    .as_ref()
+                    .is_some_and(|holder| tree.starts_with(holder))
+        }) || git_dirs
+            .iter()
+            .any(|dir| path.starts_with(dir) || (landing.places && dir.starts_with(&path)))
+            || files
+                .iter()
+                .any(|file| *file == path || (landing.places && file.starts_with(&path)));
+        if stale {
+            return Err(STALE.into());
+        }
+    }
+    Ok(())
+}
+
+/// What a non-Git segment writes, from each directory it can run in.
+fn note_segment(
+    filled: &str,
+    tokens: &[String],
+    program: &str,
+    args: &[String],
+    locations: &[PathBuf],
+    earlier: &mut Vec<PathBuf>,
+    landings: &mut Vec<Landing>,
+) {
+    note_writes(filled, args, locations, earlier);
+    let (changes, _) = launcher_effects(tokens);
+    let dirs: Vec<PathBuf> = locations
+        .iter()
+        .map(|start| {
+            changes.iter().fold(start.clone(), |at, change| {
+                integrity_shell_path(change, &at)
+            })
+        })
+        .collect();
+    note_landings(filled, program, args, &dirs, landings);
+}
+
+/// Read the command bodies and callbacks a runner starts, each from the
+/// directories it runs in.
+fn descend(
+    runner: &Runner<'_>,
+    args: &[String],
+    [commands, configured]: [&Vec<String>; 2],
+    bodies: &mut Vec<Body>,
+) -> Result<(), String> {
+    let child = Inputs::child(args, runner.env)?;
+    for (commands, callbacks) in [(commands, false), (configured, true)] {
+        if commands.is_empty() {
+            continue;
+        }
+        let dirs = if callbacks {
+            callback_directories(args, runner.at, runner.env)?
+        } else {
+            directories(args, runner.at, runner.env)?
+        };
+        for dir in dirs {
+            for command in commands {
+                collect(command, &dir, runner.depth + 1, &child, bodies)?;
+                bodies.push(Body {
+                    command: command.clone(),
+                    directory: dir.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One Git segment at one starting directory.
+struct Runner<'a> {
+    segment: &'a str,
+    at: &'a Path,
+    env: &'a crate::security::git_config::Environment,
+    depth: usize,
+}
+
+impl Runner<'_> {
+    /// Check the runner state against earlier writes, note this segment's
+    /// own writes, and resolve its aliases.
+    fn resolve(
+        &self,
+        args: &[String],
+        landings: &[Landing],
+        pending: &mut Vec<Landing>,
+    ) -> Result<Vec<String>, String> {
+        fresh_runner(args, self.at, self.env, landings)?;
+        note_git_landings(self.segment, args, self.at, self.env, pending)?;
+        let expanded = aliases(args.to_vec(), self.at, self.env)?;
+        // An alias can expand to a creation or an output path; judge the
+        // expansion as the written command is judged. A nested body's
+        // expansion is itself judged as a body.
+        if self.depth == 0 && expanded != args {
+            if let Some(found) = super::git_command_write_violation(
+                "git",
+                &expanded,
+                super::PolicyLevel::Block,
+                self.at,
+                self.at,
+                self.segment,
+            ) {
+                return Err(found.message);
+            }
+            note_git_landings(self.segment, &expanded, self.at, self.env, pending)?;
+        }
+        Ok(expanded)
+    }
+}
+
 fn note_writes(segment: &str, args: &[String], dirs: &[PathBuf], earlier: &mut Vec<PathBuf>) {
     if !may_change_discard_state(segment) {
         return;
@@ -1086,6 +1488,28 @@ fn note_writes(segment: &str, args: &[String], dirs: &[PathBuf], earlier: &mut V
             earlier.push(integrity_shell_path(target, dir));
         }
     }
+}
+
+// Git does not expand `~` in its own location options; the shell already
+// did. Hand the configuration reader the directory the shell gives Git.
+fn home_globals(mut args: Vec<String>) -> Vec<String> {
+    if !super::line_home::tilde_resolves() {
+        return args;
+    }
+    let Some((_, rest)) = git_subcommand(&args) else {
+        return args;
+    };
+    let end = args.len() - rest.len() - 1;
+    for at in 1..end {
+        if matches!(args[at - 1].as_str(), "-C" | "--git-dir" | "--work-tree")
+            && home_operand(&args[at])
+        {
+            if let Some(path) = integrity_shell_path(&args[at], Path::new("/")).to_str() {
+                args[at] = path.to_string();
+            }
+        }
+    }
+    args
 }
 
 // A known directory with no enclosing repository is distinct from unreadable
@@ -1313,6 +1737,7 @@ fn collect(
     let mut changed_sources = false;
     let mut changed_aliases = false;
     let mut earlier = Vec::new();
+    let mut landings = Vec::new();
     for (index, segment) in segments.into_iter().enumerate() {
         let filled = literals.fill(&segment);
         let (mut tokens, mut patterns) = command_argv_patterns(&filled);
@@ -1324,9 +1749,18 @@ fn collect(
             continue;
         };
         let Some(args) = arguments(program, args) else {
-            note_writes(&filled, args, &locations[index], &mut earlier);
+            note_segment(
+                &filled,
+                &tokens,
+                program,
+                args,
+                &locations[index],
+                &mut earlier,
+                &mut landings,
+            );
             continue;
         };
+        let args = home_globals(args);
         if matches!(args.as_slice(), [flag] if flag == "--version" || flag == "-v") {
             continue;
         }
@@ -1341,12 +1775,19 @@ fn collect(
         let args = config_env(&args, &literals, &tokens)?;
         let mut env = inputs.environment.clone();
         env.extend(environment(&tokens, &literals)?);
+        let mut pending = Vec::new();
         for start in &locations[index] {
             let (changes, uncertain) = launcher_effects(&tokens);
             let at = changes.iter().fold(start.clone(), |at, change| {
                 integrity_shell_path(change, &at)
             });
-            let args = aliases(args.clone(), &at, &env)?;
+            let runner = Runner {
+                segment: &filled,
+                at: &at,
+                env: &env,
+                depth,
+            };
+            let args = runner.resolve(&args, &landings, &mut pending)?;
             if depth > 0 && args != original {
                 bodies.push(Body {
                     command: normalized_command(&args, &env),
@@ -1370,27 +1811,9 @@ fn collect(
             if let Some(reason) = run.unknown.as_ref().or(uncertain.as_ref()) {
                 return Err(reason.clone());
             }
-            let child = Inputs::child(&args, &env)?;
-            for (commands, callbacks) in [(&commands, false), (&configured, true)] {
-                if commands.is_empty() {
-                    continue;
-                }
-                let dirs = if callbacks {
-                    callback_directories(&args, &at, &env)?
-                } else {
-                    directories(&args, &at, &env)?
-                };
-                for dir in dirs {
-                    for command in commands {
-                        collect(command, &dir, depth + 1, &child, bodies)?;
-                        bodies.push(Body {
-                            command: command.clone(),
-                            directory: dir.clone(),
-                        });
-                    }
-                }
-            }
+            descend(&runner, &args, [&commands, &configured], bodies)?;
         }
+        landings.extend(pending);
     }
     Ok(())
 }

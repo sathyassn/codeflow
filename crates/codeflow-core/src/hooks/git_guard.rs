@@ -26,6 +26,7 @@ use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
+pub(crate) mod line_home;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -496,8 +497,15 @@ fn evaluate_report_with_runners(
     read_runners: bool,
 ) -> Evaluation {
     let _facts = super::edit_guard::RepoFactsScope::enter();
+    // `~` and `$HOME` name the home the line assigns before them (TSK-379).
+    let home = line_home::read(command);
+    let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
+    violations.extend(line_home::unread_violation(
+        &home,
+        ctx.policy.hook_integrity,
+    ));
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
     branches.line = command.to_string();
@@ -3031,7 +3039,7 @@ pub(crate) struct RunDirs {
 /// unknown (TSK-216 round 10). It over-approximates: a command is judged
 /// from each listed directory.
 pub(crate) fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
-    run_dirs_from_home(segments, start, crate::portable_path::user_home())
+    run_dirs_from_home(segments, start, line_home::home())
 }
 
 /// [`run_dirs`] with `~` read as `home`: the startup guard passes the home
@@ -3260,7 +3268,7 @@ fn integrity_write_in_run(
 }
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
-    shell_path_with_home(token, cwd, crate::portable_path::user_home().as_deref())
+    shell_path_with_home(token, cwd, line_home::home().as_deref())
 }
 
 /// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
@@ -4145,7 +4153,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
                 GlobStop::TooManyEntries => format!("target glob `{text}` has too many entries"),
             });
     }
-    if (text == "~" || text.starts_with("~/")) && crate::portable_path::user_home().is_none() {
+    if (text == "~" || text.starts_with("~/")) && line_home::home().is_none() {
         return Err("cannot resolve the home directory".to_string());
     }
     Ok(Some(vec![integrity_shell_path(&text, cwd)]))
@@ -5367,6 +5375,11 @@ pub(crate) fn git_command_write_violation(
                         "`git config` would write core.hooksPath, which changes where git looks for hooks".into()));
                 }
             }
+            if let Some(finding) =
+                git_output_violation(verb, &filled, rest, level, cwd, payload_cwd)
+            {
+                return Some(finding);
+            }
             let creates = matches!(verb, "clone" | "init")
                 || (verb == "worktree" && rest.first().is_some_and(|word| word == "add"));
             if creates {
@@ -5406,6 +5419,161 @@ pub(crate) fn git_command_write_violation(
         }
     }
     None
+}
+
+/// The paths a Git command writes through its own output options and
+/// operands (TSK-379 review round 5), relative to its starting directory:
+/// `archive -o`, the `--output` diff option of any verb, `format-patch -o`,
+/// `bundle create FILE`, `bugreport` and `diagnose -o`, `index-pack -o`,
+/// `mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
+/// fast-export and fast-import marks, and the file a `config --file` write
+/// changes. Unambiguous prefixes of `--output` and `--output-directory`
+/// count, because parse-options accepts them for some verbs.
+pub(crate) fn git_output_paths(verb: &str, rest: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let short_output = matches!(
+        verb,
+        "archive" | "format-patch" | "bugreport" | "diagnose" | "index-pack" | "mailsplit"
+    );
+    let mut operands = Vec::new();
+    let mut words = rest.iter();
+    let mut options = true;
+    while let Some(word) = words.next() {
+        if options && word == "--" {
+            options = false;
+            continue;
+        }
+        if !options || !word.starts_with('-') || word == "-" {
+            operands.push(word.clone());
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (long, None),
+            };
+            let output = !name.is_empty()
+                && ("output".starts_with(name) || "output-directory".starts_with(name));
+            let named = match verb {
+                "checkout-index" => name == "prefix",
+                "fast-export" | "fast-import" => name == "export-marks",
+                "config" => name == "file",
+                _ => false,
+            };
+            if output || named {
+                match attached {
+                    Some(value) => paths.push(value.to_string()),
+                    None => paths.extend(words.next().cloned()),
+                }
+            }
+            continue;
+        }
+        let letters = &word[1..];
+        if verb == "merge-file" && letters == "L" {
+            words.next();
+            continue;
+        }
+        if verb == "config" && letters.starts_with('f') {
+            let value = &letters[1..];
+            if value.is_empty() {
+                paths.extend(words.next().cloned());
+            } else {
+                paths.push(value.to_string());
+            }
+            continue;
+        }
+        if short_output {
+            // Short options bundle (`-vo FILE`); `o` takes the rest of the
+            // word, else the next one.
+            if let Some(at) = letters.find('o') {
+                let value = &letters[at + 1..];
+                if value.is_empty() {
+                    paths.extend(words.next().cloned());
+                } else {
+                    paths.push(value.to_string());
+                }
+            }
+        }
+    }
+    match verb {
+        "bundle" if operands.first().is_some_and(|word| word == "create") => {
+            paths.extend(operands.get(1).filter(|file| *file != "-").cloned());
+        }
+        "merge-file" if !rest.iter().any(|word| word == "-p" || word == "--stdout") => {
+            paths.extend(operands.first().cloned());
+        }
+        "config" if config_only_reads(rest) => {
+            paths.retain(|_| false);
+        }
+        _ => {}
+    }
+    paths
+}
+
+/// A Git output path that lands on or inside an enforcement path, judged
+/// as the creation targets of clone, init and worktree add are.
+fn git_output_violation(
+    verb: &str,
+    filled: &[String],
+    rest: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    let outputs = git_output_paths(verb, rest);
+    if outputs.is_empty() {
+        return None;
+    }
+    let mut directory = cwd.to_path_buf();
+    let globals = &filled[..filled.len() - rest.len() - 1];
+    for pair in globals.windows(2) {
+        if pair[0] == "-C" {
+            directory = integrity_shell_path(&pair[1], &directory);
+        }
+    }
+    let cwd = directory.as_path();
+    for output in &outputs {
+        if expands(output) || output.is_empty() {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot prove the `git {verb}` output path; pass a literal path outside enforcement directories"),
+            ));
+        }
+        // A repository's own configuration file, and a user or system one,
+        // is judged by the key checks of `git config`; any other file is an
+        // output.
+        if verb == "config" {
+            let path = integrity_shell_path(output, cwd);
+            if git_configuration_file(&path)
+                || super::edit_guard::global_git_config_target(&path, payload_cwd)
+            {
+                continue;
+            }
+        }
+        if let Some(path) = token_integrity_path(output, cwd, payload_cwd) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`git {verb}` would write the integrity path `{path}`"),
+            ));
+        }
+        if verb != "config" {
+            let path = integrity_shell_path(output, cwd);
+            if let Some(finding) = creation_path_violation(verb, &path, level, payload_cwd) {
+                return Some(finding);
+            }
+        }
+    }
+    None
+}
+
+/// `config` or `config.worktree` inside a `.git` directory.
+fn git_configuration_file(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == "config" || name == "config.worktree")
+        && path.parent().is_some_and(|dir| {
+            dir.components()
+                .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+        })
 }
 
 fn creation_path_violation(
@@ -5701,6 +5869,25 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
 
     fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
         let cmd = self.cmd;
+        // rsync reads an empty operand as the current directory, so a
+        // source or destination spelled `''` is judged as `.`; mv follows
+        // the same reading (TSK-379 security round 8).
+        let current = |path: &String| {
+            if path.is_empty() {
+                ".".to_string()
+            } else {
+                path.clone()
+            }
+        };
+        let copy = &crate::security::unresolved::CopyRead {
+            dest: copy.dest.as_ref().map(current),
+            target: copy.target,
+            sources: copy.sources.iter().map(current).collect(),
+            directories: copy.directories,
+            written: copy.written.clone(),
+            flags: copy.flags.clone(),
+            unknown: copy.unknown.clone(),
+        };
         // A dry run writes nothing at its destination.
         if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
             return None;
@@ -5740,6 +5927,20 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
                 .iter()
                 .find_map(|dest| contained_git_directory_violation(dest, self.cwd, self.level))
             {
+                return Some(finding);
+            }
+            // Deleting what the source lacks empties a checkout destination
+            // as a recursive removal does (TSK-379 security round 8).
+            let dests: Vec<_> = copy.dest.iter().map(String::as_str).collect();
+            if let Some(finding) = worktree_delete_check(
+                &format!("`{cmd} --delete` removes from its destination"),
+                &dests,
+                self.level,
+                self.cwd,
+                self.payload_cwd,
+                self.line,
+                None,
+            ) {
                 return Some(finding);
             }
         }
@@ -5828,9 +6029,11 @@ fn directory_removal_violation(
         "find" => find_mutating_roots(args),
         _ => None,
     }?;
+    // An empty filename names nothing for these programs: rm, rmdir and
+    // find each report it missing and remove nothing.
     removed
         .iter()
-        .filter(|path| !path.starts_with('-'))
+        .filter(|path| !path.is_empty() && !path.starts_with('-'))
         .find_map(|path| contained_git_directory_violation(path, cwd, level))
 }
 
@@ -5839,10 +6042,6 @@ fn contained_git_directory_violation(
     cwd: &Path,
     level: PolicyLevel,
 ) -> Option<Violation> {
-    // An empty filename cannot remove the current directory.
-    if path.is_empty() {
-        return None;
-    }
     let target = integrity_shell_path(path, cwd);
     match super::repo::contains_git_directory(&target) {
         Ok(false) => None,

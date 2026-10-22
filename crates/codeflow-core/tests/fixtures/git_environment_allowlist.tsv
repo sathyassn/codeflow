@@ -178,3 +178,4 @@ crates/codeflow-present/src/responses.rs	env(crash::CRASH_AT,cut.to_string())	1	
 # TSK-373: the uppercase Git marker is path data, not an injected configuration key.
 crates/codeflow-cli/tests/hooks_cli.rs	exec_guard_contract_3(&root,"python3 tool.py .WORKTREES/W/.GIT")	1	Inert command payload checks the uppercase Git-pointer spelling against the fixture filesystem case probe; this call does not change process environment.
 crates/codeflow-core/src/security/interpreter.rs	judge_in(&repo,&repo.root,&repo.root,"python3 tool.py .WORKTREES/W/.GIT",PolicyLevel::Block,)	1	Inert command payload checks the uppercase Git-pointer spelling against the fixture filesystem case probe; this call does not change process environment.
+crates/codeflow-core/src/hooks/git_guard/runners.rs	"GIT_CONFIG"	1	Matches a configuration-file variable a judged Git command names, for the runner-state check; never sets a process environment.

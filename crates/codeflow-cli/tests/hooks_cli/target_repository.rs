@@ -2137,3 +2137,223 @@ fn repair4_pager_configuration_and_environment_routes() {
         }
     }
 }
+
+// Security round 8, SEC-379-R8-1: rsync reads an empty operand as the
+// current directory, so it removes or replaces the checkout's files.
+#[test]
+fn empty_copy_operands_read_as_the_current_directory() {
+    let f = Fixture::new();
+    let empty = f.temp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let dest = shell_path(&f.temp.path().join("dest"));
+    let empty = shell_path(&empty);
+    for cwd in [&f.root, &f.linked] {
+        for command in [
+            format!("rsync -a --remove-source-files '' '{dest}'"),
+            format!("rsync -a --delete '{empty}/' ''"),
+            format!("rsync -a --delete '{empty}/' ."),
+            format!("mv '' '{dest}'"),
+        ] {
+            let out = f.command(cwd, "git-guard", &command);
+            assert!(refused(&out), "{}: {command}: {out:?}", cwd.display());
+        }
+        for command in [
+            "rm -f '' notes.txt".to_string(),
+            "find '' -name x".to_string(),
+            format!("rsync -a --delete '{empty}/' build/"),
+        ] {
+            let out = f.command(cwd, "git-guard", &command);
+            assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
+        }
+    }
+}
+
+// Security round 8, SEC-379-R8-2: a repository copied, moved, synced,
+// extracted, linked or cloned into place earlier on the line is state the
+// guard read before the line ran. With or without global callbacks, the
+// next Git command there is refused; ordinary writes that create no
+// repository state keep passing.
+#[test]
+fn earlier_writes_make_the_next_runner_state_unknown() {
+    let f = Fixture::new();
+    let evil = f.temp.path().join("evil");
+    std::fs::create_dir(&evil).unwrap();
+    git(&evil, &["init", "-b", "main"]);
+    let wipe = format!("rm -rf {}", shell_path(&f.root.join(".claude")));
+    git(&evil, &["config", "core.fsmonitor", &wipe]);
+    let stage = f.temp.path().join("stage");
+    std::fs::create_dir_all(stage.join("x")).unwrap();
+    let evil = shell_path(&evil);
+    let lfs = f.temp.path().join("global.conf");
+    std::fs::write(&lfs, "[filter \"lfs\"]\n clean = git-lfs clean -- %f\n smudge = git-lfs smudge -- %f\n process = git-lfs filter-process\n").unwrap();
+    for global in [Path::new("/dev/null"), lfs.as_path()] {
+        for hook in ["exec-guard", "git-guard"] {
+            let run = |cwd: &Path, command: &str| {
+                run_with_stdin(
+                    codeflow()
+                        .args(["hook", hook, "--contract", "3"])
+                        .current_dir(cwd)
+                        .env("HOME", f.temp.path())
+                        .env("USERPROFILE", f.temp.path())
+                        .env("GIT_CONFIG_GLOBAL", global),
+                    &guard_payload(command, cwd),
+                )
+            };
+            for command in [
+                format!("cp -R '{evil}/.git' x/ && git -C x status"),
+                format!("mv '{evil}/.git' x/ && git -C x status"),
+                format!("cp -R '{evil}' x/ && git -C x/evil status"),
+                format!("rsync -a '{evil}/' x/ && git -C x status"),
+                format!("ln -s '{evil}/.git' x/.git && git -C x status"),
+                format!("printf 'gitdir: {evil}/.git\\n' > x/.git && git -C x status"),
+                format!("cd x && cp -R '{evil}/.git' . && git status"),
+            ] {
+                let out = run(&stage, &command);
+                assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
+                if hook == "exec-guard" {
+                    assert!(refused(&out), "{hook} {command}: {out:?}");
+                }
+            }
+            for command in [
+                "git -C . status",
+                "git config --file config user.name x",
+                "printf x > notes.txt && git -C . status",
+            ] {
+                let out = run(&stage, command);
+                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+            }
+            for command in [
+                "printf note > notes.txt && git add notes.txt",
+                "cp README.md copy.md && git add copy.md",
+                "cp ../../base.txt . && git add base.txt",
+                "mkdir -p build && cp README.md build/ && git status",
+                "rm -rf build && git status",
+            ] {
+                let out = run(&f.linked, command);
+                assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+            }
+        }
+    }
+}
+
+// Fable review round 5 majors 1 and 2, security round 8 R8-3: `~` and
+// `$HOME` name the home the line assigns before them, in every resolver.
+#[test]
+fn reassigned_home_resolves_tilde_and_home_words() {
+    let f = Fixture::new();
+    let root = shell_path(&f.root);
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            format!("HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"),
+            format!(
+                "export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x"
+            ),
+            format!("HOME={root}; rm -rf ~/.claude"),
+            format!("HOME={root}; printf x > ~/.claude/settings.json"),
+            format!("HOME={root}; printf x > \"$HOME/.claude/settings.json\""),
+            format!("HOME={root}; git init ~/.claude/x"),
+            "HOME=$UNPROVEN; git clone https://example.test/x/y.git ~/scratch/y".to_string(),
+            "HOME=/zz PATH=\"$HOME/bin:$PATH\" git status".to_string(),
+            format!("HOME={root} bash -c 'rm -rf ~/.claude'"),
+        ] {
+            let out = f.command(&f.linked, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for command in [
+            "git clone https://example.test/x/y.git ~/scratch/y",
+            "PATH=\"$HOME/bin:$PATH\" git status",
+            "git -C ~/repo status",
+            "git stash push -- ~/repo/README.md",
+            "git log -1 --format='%h~%s'",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+    let out = f.command(
+        &f.linked,
+        "exec-guard",
+        &format!("HOME={root}; python3 tool.py ~/.claude/settings.json"),
+    );
+    assert!(refused(&out), "{out:?}");
+    // A quoted `~` is a directory named `~`, not the home.
+    let out = f.command(&f.linked, "git-guard", "git -C '~/repo' status");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+}
+
+// Fable review round 5 major 3: Git's own output options are writes.
+#[test]
+fn git_output_options_cannot_write_enforcement_files() {
+    let f = Fixture::new();
+    let root = shell_path(&f.root);
+    for hook in ["exec-guard", "git-guard"] {
+        for (cwd, command) in [
+            (
+                &f.linked,
+                format!("git archive HEAD -o {root}/.claude/settings.json"),
+            ),
+            (
+                &f.root,
+                "git archive -o .git/hooks/pre-commit HEAD".to_string(),
+            ),
+            (
+                &f.root,
+                "git archive -vo .git/hooks/pre-commit HEAD".to_string(),
+            ),
+            (
+                &f.linked,
+                format!("git format-patch -o {root}/.git/hooks HEAD~1"),
+            ),
+            (
+                &f.linked,
+                format!("git diff --output={root}/.claude/settings.json"),
+            ),
+            (
+                &f.linked,
+                format!("git diff --output {root}/.claude/settings.json"),
+            ),
+            (
+                &f.linked,
+                format!("git log --output={root}/.codeflow/policy.json -1"),
+            ),
+            (
+                &f.linked,
+                format!("git bundle create {root}/.claude/settings.json HEAD"),
+            ),
+            (
+                &f.linked,
+                format!("git config --file {root}/.codeflow/policy.json x.y z"),
+            ),
+            (
+                &f.root,
+                "git checkout-index -a --prefix=.claude/".to_string(),
+            ),
+            (
+                &f.root,
+                "git merge-file .claude/settings.json base.txt base.txt".to_string(),
+            ),
+            (
+                &f.linked,
+                "git -c alias.x='archive -o .claude/settings.json HEAD' x".to_string(),
+            ),
+        ] {
+            let out = f.command(cwd, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+        }
+        for (cwd, command) in [
+            (&f.linked, "git archive -o build/x.tar HEAD"),
+            (&f.linked, "git format-patch -o patches/ HEAD~1"),
+            (&f.linked, "git diff --output=out.diff"),
+            (&f.linked, "git log -1 --output-indicator-new=+"),
+            (&f.linked, "git format-patch --stdout HEAD~1"),
+            (&f.root, "git config --file .git/config user.name x"),
+            (
+                &f.root,
+                "git merge-file -p .claude/settings.json base.txt base.txt",
+            ),
+        ] {
+            let out = f.command(cwd, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}

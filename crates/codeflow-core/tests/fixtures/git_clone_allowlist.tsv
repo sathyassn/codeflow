@@ -46,16 +46,23 @@ crates/codeflow-core/tests/manifest_consistency.rs	filter(|paragraph|{["evidence
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -u 'rm -rf .claude' /source scratch"	1	Inert hook payload tests the upload-pack command source; never executed as Git.
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	"clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential"	1	Vocabulary selecting command-valued transport settings; no process starts here.
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	CommandOption("clone",'u',"--upload-pack")	1	Catalog entry for judging a clone option's command body; never starts Git.
-crates/codeflow-core/src/hooks/git_guard/runners.rs	"clone"	1	Selects the option table in the shared reader; never starts Git.
+crates/codeflow-core/src/hooks/git_guard/runners.rs	"clone"	2	Selects the option table in the shared reader and reads a clone destination for the runner-state check; never starts Git.
 crates/codeflow-core/src/hooks/git_guard/runners/catalog.rs	ConfigOption("clone",'c',"--config")	1	Catalog entry for clone-local configuration inspection; never starts Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -c 'filter.fixture.smudge=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local filter configuration; never executes Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --config='core.sshCommand=rm -rf .claude' /source scratch"	1	Inert hook payload for clone-local transport configuration; never executes Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --reject-shallow /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -4 /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone --ipv4 --no-remote-submodules /source scratch/clone"	1	Inert ordinary-option payload judged by the built hook; no Git clone executes.
-crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/y"	2	Inert home-path regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~someone/scratch/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/scratch/*"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/{scratch,repo}/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.claude/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone https://example.test/x/y.git ~/repo/.git/hooks/y"	1	Inert home-path regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"HOME=$UNPROVEN; git clone https://example.test/x/y.git ~/scratch/y"	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-cli/tests/hooks_cli/target_repository.rs	format!("export HOME={root}; git clone https://example.test/x/y.git ~/.claude/skills/x")	1	Inert HOME-reassignment regression payload judged by the built hook; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=$X; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"export HOME=/r; git clone u ~/.claude/x"	1	Inert line-home unit input read as text; no Git clone executes.
+crates/codeflow-core/src/hooks/git_guard/line_home.rs	"git clone u ~/scratch/y"	1	Inert line-home unit input read as text; no Git clone executes.

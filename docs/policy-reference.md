@@ -526,8 +526,11 @@ checked, so a symlink does not remove the target owner's protection.
   refuses and names the inspection problem; narrow a cleanup target when
   the search exceeds the bound.
 - Shell moves of a worktree, and `rsync --remove-source-files` targeting its
-  source, refuse. Copying a worktree does not authorize deleting its source.
-  Use `git worktree move` or `git worktree remove` for lifecycle changes.
+  source, refuse. So does `rsync --delete` into a checkout. An empty `mv` or
+  `rsync` operand is read as the current directory, as rsync reads it; an
+  empty `rm`, `rmdir` or `find` operand names nothing. Copying a worktree
+  does not authorize deleting its source. Use `git worktree move` or
+  `git worktree remove` for lifecycle changes.
 - Persistent writes of `core.worktree`, `core.bare` and
   `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
   hooks, regardless of the config file or scope. Reads and command-local
@@ -576,14 +579,31 @@ checked, so a symlink does not remove the target owner's protection.
   body; this includes configured URLs, URL rewrites and direct helper calls.
   A preceding config write that could change command settings or a saved-instruction rewrite
   makes the next Git command's runner state unknown; run those commands
-  separately so the guard can read the resulting state.
+  separately so the guard can read the resulting state. The same holds for
+  any earlier write on the line that can create, replace or move repository
+  state the next Git command reads: a path with a `.git` component at or
+  above its starting directory or work tree; a copy, move, sync, link,
+  archive extraction or clone whose destination is that directory or above
+  it; a write in or around its explicit Git directory; or the configuration
+  file its environment or home names. A copy or move of named regular files
+  into the directory still passes, as do ordinary writes that create no
+  repository state.
   Push operands can use preceding literal assignments on the same line,
   for example `BRANCH=task/topic; git push origin "$BRANCH"`. Git-guard's
   fetch-source check requires a literal configured remote name or its URL.
   An inherited shell variable whose value the reader cannot prove remains
   unresolved. PATH assignments can extend the inherited PATH using `$HOME`,
-  and ordinary path operands can start with `~/` or be `~`. Named-user homes
-  and remaining brace or filename patterns still require a literal path.
+  and ordinary path operands, including `git -C` and discard pathspecs, can
+  start with `~/` or be `~`. Named-user homes, a quoted `~` and remaining
+  brace or filename patterns still require a literal path.
+  `~` and `$HOME` resolve against the HOME the line assigns before them, in
+  every check of both shell hooks: `HOME=<repo>; rm -rf ~/.claude` is judged
+  as `rm -rf <repo>/.claude`. Only one literal absolute value assigned in
+  statement or export form is read. Any other assignment before a word that
+  uses the home refuses: an unresolved or relative value, `HOME=` in front of
+  a command, `read`, `unset` or a loop variable, or a line that uses the home
+  both before and after assigning it. Exec-guard refuses such a line when a
+  word that uses the reassigned home names an enforcement path.
 - An honestly deleted checkout remains prunable. When registration and a
   live checkout disagree, the operator runs `git worktree repair` in their
   own terminal outside the harness.
@@ -611,6 +631,15 @@ through a same-line variable assignment. An unresolved creation target
 refuses. `git init`, including `--separate-git-dir`, cannot create inside
 an enforcement directory or a configured worktree location. Scratch
 initialization outside these locations remains available.
+Git's own output paths receive the same check in both shell hooks:
+`archive -o`, the `--output` option of any verb, `format-patch -o`,
+`bundle create`, `bugreport` and `diagnose -o`, `index-pack -o`,
+`mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
+fast-export and fast-import marks, and the file a `git config --file` write
+changes when that file is not Git configuration. An alias that expands to
+one of these is judged the same way. Ordinary outputs such as
+`git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
+and `git diff --output=out.diff` remain available.
 Source-removing rsync spellings protect the checkout's gitfile as well
 as its directory.
 

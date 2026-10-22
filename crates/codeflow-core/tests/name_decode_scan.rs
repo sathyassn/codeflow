@@ -6144,6 +6144,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
