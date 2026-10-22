@@ -1,0 +1,11 @@
+id = "TSK-444"
+uid = "271d8fe1-dfa2-429d-b1de-e0ef6daed723"
+kind = "TSK"
+title = "The presentation and portal design direction is settled and tokened"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T23:42:03Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
