@@ -285,14 +285,14 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
         if !previous.trim().is_empty() {
             lock.notes.push(format!(
                 "reclaimed a stale gate lock at {} left by {}",
-                path.display(),
-                describe_holder(&previous)
+                crate::git::display_path(&path),
+                crate::git::display_line(&describe_holder(&previous))
             ));
         }
         if let Err(error) = write_record(&mut file, &record) {
             lock.notes.push(format!(
                 "gate lock at {} is held but its holder record could not be written: {error}",
-                path.display()
+                crate::git::display_path(&path)
             ));
         }
         lock.files.push(file);
@@ -557,9 +557,9 @@ pub fn check_cargo_target_dir(
          in parallel, a shared target directory lets one build overwrite another's \
          binaries mid-run; for parallel work, point it inside each worktree (for \
          example {}).",
-        target.display(),
-        root.display(),
-        root.join("target").display()
+        crate::git::display_path(&target),
+        crate::git::display_path(&root),
+        crate::git::display_path(&root.join("target"))
     ))
 }
 

@@ -602,11 +602,8 @@ fn hooks_wiring(root: &Path) -> Wiring {
     if wired {
         return Wiring::Read;
     }
-    let path = active
-        .strip_prefix(root)
-        .unwrap_or(&active)
-        .display()
-        .to_string();
+    // A path is a field in the message (TSK-388).
+    let path = crate::git::display_path(active.strip_prefix(root).unwrap_or(&active));
     let uncalled = match shims_not_called(&active, &shims) {
         Ok(names) => names,
         Err(error) => return Wiring::Unreadable(format!("cannot read hook wiring: {error}")),
@@ -675,7 +672,7 @@ fn shims_not_called(active: &Path, shims: &Path) -> Result<Vec<String>, String> 
                 uncalled.push(format!("{name} (no hook)"));
                 continue;
             }
-            Err(error) => return Err(format!("{}: {error}", hook.display())),
+            Err(error) => return Err(format!("{}: {error}", crate::git::display_path(&hook))),
         };
         let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
         let why = if !crate::scaffold::detect::is_executable(&hook) {
@@ -746,7 +743,13 @@ fn input_failure(
     CheckResult {
         name: name.into(),
         status: Status::Fail,
-        message: format!("cannot read {}: {error}; repair the file or its parent directories, then rerun `codeflow doctor --check {name}`", path.display()),
+        // The path and the error (which can name the path again) are
+        // fields: a line break in either stays in this line (TSK-388).
+        message: format!(
+            "cannot read {}: {}; repair the file or its parent directories, then rerun `codeflow doctor --check {name}`",
+            crate::git::display_path(path),
+            crate::git::display_line(&error.to_string())
+        ),
         duration: start.elapsed(),
     }
 }
@@ -1176,7 +1179,10 @@ fn check_grok(opts: &Options) -> CheckResult {
             format!(".grok/hooks present, {presence}: grok trust not read ({why})"),
         ),
         GrokTrust::Unreadable(why) => {
-            let step = format!("repair or remove {}, then {trust}", opts.grok_home().join("trusted_folders.toml").display());
+            let step = format!(
+                "repair or remove {}, then {trust}",
+                crate::git::display_path(&opts.grok_home().join("trusted_folders.toml"))
+            );
             (
                 Status::Warn(remedy::DOCTOR_HARNESS_APPROVAL.with(&[("step", &step), ("check", "grok")])),
                 format!(
@@ -1451,12 +1457,17 @@ fn grok_path_note(opts: &Options, root: &Path) -> String {
         .as_ref()
         .and_then(|exe| std::fs::canonicalize(exe).ok())
         .filter(|own| *own != found)
-        .map(|own| format!(", not this doctor binary {}", own.display()))
+        .map(|own| {
+            format!(
+                ", not this doctor binary {}",
+                crate::git::display_path(&own)
+            )
+        })
         .unwrap_or_default();
     let flags = format!("{inside}{other}");
     format!(
         "; PATH resolves codeflow to {}{flags} (unverified; doctor does not run it)",
-        found.display()
+        crate::git::display_path(&found)
     )
 }
 
@@ -1892,7 +1903,7 @@ fn observe_binding_drift(
                             format!(
                                 "{} settings changed at {}",
                                 record.binding_id,
-                                source.path.display()
+                                crate::git::display_path(&source.path)
                             ),
                         ));
                     }
@@ -1902,7 +1913,7 @@ fn observe_binding_drift(
                     format!(
                         "{} settings source {} cannot be checked: {error}",
                         record.binding_id,
-                        source.path.display()
+                        crate::git::display_path(&source.path)
                     ),
                 )),
             }
@@ -2204,11 +2215,17 @@ fn check_permissions(opts: &Options) -> CheckResult {
     if !unwritable.is_empty() {
         let paths: Vec<String> = unwritable
             .iter()
-            .map(|(dir, _)| format!("`{}`", dir.display()))
+            .map(|(dir, _)| format!("`{}`", crate::git::display_path(dir)))
             .collect();
         let errors: Vec<String> = unwritable
             .iter()
-            .map(|(dir, error)| format!("{}: {error}", dir.display()))
+            .map(|(dir, error)| {
+                format!(
+                    "{}: {}",
+                    crate::git::display_path(dir),
+                    crate::git::display_line(&error.to_string())
+                )
+            })
             .collect();
         return CheckResult {
             name: "permissions".into(),
@@ -2716,10 +2733,11 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
         Err(error) => return fail(format!("cannot read repository bare state: {error}")),
     };
     let git_entry = root.join(".git");
+    let shown_entry = crate::git::display_path(&git_entry);
     let has_working_tree = is_bare
         && match crate::absence::proven_absent(&git_entry) {
             Ok(absent) => !absent,
-            Err(error) => return fail(format!("cannot inspect {}: {error}", git_entry.display())),
+            Err(error) => return fail(format!("cannot inspect {shown_entry}: {error}")),
         };
     if has_working_tree {
         return fail(

@@ -395,7 +395,11 @@ fn print_coverage_report(reports: &[CoverageReport]) {
     println!("coverage:");
     for r in reports {
         if let Some(note) = &r.note {
-            println!("  {}: {note}", r.target);
+            println!(
+                "  {}: {}",
+                codeflow_core::git::display_text(&r.target),
+                codeflow_core::git::display_line(note)
+            );
             continue;
         }
         let overall = r

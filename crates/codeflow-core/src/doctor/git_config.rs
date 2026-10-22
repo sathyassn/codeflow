@@ -20,7 +20,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
                 .map(|include| {
                     format!(
                         "{} ({})",
-                        include.path.display(),
+                        crate::git::display_path(&include.path),
                         if include.missing {
                             "missing; contributes no configuration"
                         } else {
