@@ -280,7 +280,8 @@ fn parse(
                     ))
                 }
             };
-            let path = path.canonicalize().unwrap_or(path);
+            // Git on Windows reads the plain drive spelling, not `\\?\`.
+            let path = crate::portable_path::canonicalize(&path).unwrap_or(path);
             let condition = match key
                 .strip_prefix(b"includeif.")
                 .and_then(|rest| rest.strip_suffix(b".path"))
@@ -327,6 +328,9 @@ fn parse(
 pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<EffectiveConfig, String> {
     let deadline = Instant::now() + Duration::from_secs(3);
     validate_environment(environment)?;
+    // Include paths are canonical; Git on Windows does not accept the
+    // verbatim `\\?\` spelling that canonicalization produces there.
+    let path = &crate::portable_path::without_verbatim(path.to_path_buf());
     let directory = path
         .parent()
         .ok_or("cannot verify Git configuration: include file has no parent")?;
