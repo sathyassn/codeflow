@@ -1,0 +1,11 @@
+id = "TSK-443"
+uid = "094004ee-481b-419f-be0c-03aa60a981c2"
+kind = "TSK"
+title = "The present review surface draws, selects and checks what it renders"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T23:42:00Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
