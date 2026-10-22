@@ -167,6 +167,76 @@ fn assert_blocks(result: &(i32, String), what: &str, needle: &str) {
     );
 }
 
+/// TSK-388: the pre-push hook hands `codeflow ci` the destination's default
+/// branch as `--into`, and a remote can put control characters in that
+/// name: an OSC title sequence, or the C1 control CSI that git accepts.
+/// `codeflow ci` names the acceptance target escaped, and an ordinary name
+/// unchanged.
+#[test]
+fn an_acceptance_target_holding_control_characters_is_named_escaped() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    for (into, shown) in [
+        ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
+        ("ev\u{9b}31mil", "ev\\x9b31mil"),
+        ("release/next", "release/next"),
+    ] {
+        let (_, printed) = ci_into(
+            root,
+            "main",
+            "feat/tracked",
+            &body("Task: TSK-001"),
+            Some(into),
+        );
+        assert!(
+            printed.contains(&format!("acceptance target '{shown}' (--into)")),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains(['\u{1b}', '\u{7}', '\u{9b}']),
+            "{printed:?}"
+        );
+    }
+}
+
+/// TSK-388 round 1 (Grok F-1, F-2): `codeflow ci --branch` of a name that
+/// holds a character git accepts and a terminal acts on (the C1 control
+/// CSI, a line separator, a right-to-left override) names it escaped in
+/// the branch context, the branch line and the branch-naming refusal.
+#[test]
+fn a_branch_context_holding_control_characters_is_named_escaped() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    for (branch, shown) in [
+        ("ev\u{9b}31mil", "ev\\x9b31mil"),
+        ("ev\u{2028}il", "ev\\u{2028}il"),
+        ("ev\u{202e}lim", "ev\\u{202e}lim"),
+    ] {
+        let (_, printed) = ci_into(root, "main", branch, &body("Task: TSK-001"), None);
+        for expected in [
+            format!("branch context '{shown}' (--branch)"),
+            format!("codeflow ci: branch '{shown}'"),
+            format!("branch '{shown}' does not match"),
+        ] {
+            assert!(printed.contains(&expected), "{expected}: {printed}");
+        }
+        assert!(
+            !printed.contains(['\u{9b}', '\u{2028}', '\u{202e}']),
+            "{printed:?}"
+        );
+    }
+}
+
 /// AC-1: one fixture per class, and the unclassified and planning-only
 /// negative controls.
 #[test]

@@ -42,7 +42,7 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
         .context("cannot resolve ~/.codeflow (HOME unset; set CODEFLOW_HOME)")?;
 
     let user_config = registry::UserConfig::load(&home).unwrap_or_else(|e| {
-        eprintln!("warning: {e}; using defaults");
+        eprintln!("warning: {e}; using defaults", e = crate::cmd::shown(&e));
         registry::UserConfig::default()
     });
     let limit = args.limit.or(user_config.recall.limit).unwrap_or(20);
@@ -113,24 +113,30 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
             println!(
                 "{}. [{}] {} ({}) — {}",
                 i + 1,
-                r.repo,
-                r.path,
+                // Indexed records: each field is one line (TSK-388).
+                codeflow_core::git::display_line(&r.repo),
+                codeflow_core::git::display_line(&r.path),
                 r.kind,
-                r.title
+                codeflow_core::git::display_line(&r.title)
             );
-            println!("   {}", r.snippet.replace('\n', " "));
+            println!(
+                "   {}",
+                codeflow_core::git::display_line(&r.snippet.replace('\n', " "))
+            );
         }
     }
 
     let all_notes: Vec<&String> = report.notes.iter().chain(notes_extra.iter()).collect();
     if !all_notes.is_empty() {
-        println!("\ncoverage notes:");
+        println!();
+        println!("coverage notes:");
         for note in all_notes {
             println!("  - {note}");
         }
     }
+    println!();
     println!(
-        "\nindex: {} synced, {} unchanged, {} removed",
+        "index: {} synced, {} unchanged, {} removed",
         report.stats.files_indexed, report.stats.files_skipped, report.stats.files_removed
     );
 

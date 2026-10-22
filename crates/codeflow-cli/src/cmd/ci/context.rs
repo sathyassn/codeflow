@@ -67,7 +67,11 @@ pub(super) fn resolve(
                 explicit_target.is_some(),
             )? {
                 base_candidates = vec![tip];
-                range_source = format!("{source} '{target}' for branch '{branch}'");
+                range_source = format!(
+                    "{source} '{}' for branch '{}'",
+                    codeflow_core::git::display_text(target),
+                    codeflow_core::git::display_text(&branch)
+                );
             }
         }
     }
@@ -115,11 +119,7 @@ pub(super) fn resolve(
         (inferred, "branches at the resolved base commit")
     };
     let target = super::line_target(root, into.as_deref())?;
-    if into.is_some() {
-        println!("codeflow ci: acceptance target '{target}' ({source})");
-    } else {
-        println!("codeflow ci: target '{target}' (repository default)");
-    }
+    print_target(&target, into.is_some().then_some(source));
     Ok(Context {
         head,
         base,
@@ -130,6 +130,18 @@ pub(super) fn resolve(
         into,
         target,
     })
+}
+
+/// Print the acceptance target and where it came from (`None`: the
+/// repository default). The pre-push hook hands over the destination's
+/// default branch as `--into`, and the destination names that branch, so
+/// the target is shown escaped (TSK-388).
+fn print_target(target: &str, source: Option<&str>) {
+    let shown = codeflow_core::git::display_text(target);
+    match source {
+        Some(source) => println!("codeflow ci: acceptance target '{shown}' ({source})"),
+        None => println!("codeflow ci: target '{shown}' (repository default)"),
+    }
 }
 
 fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
@@ -180,8 +192,10 @@ pub(in crate::cmd) fn judged_declared_target(
         return Ok(Some(Declared::Eligible(target)));
     }
     if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
-        let reason =
-            format!("is not a protected branch or a valid epic line distinct from '{branch}'");
+        let reason = format!(
+            "is not a protected branch or a valid epic line distinct from '{}'",
+            codeflow_core::git::display_text(branch)
+        );
         return Ok(Some(Declared::Rejected { target, reason }));
     }
     let bind = |anchor: &str, place: &str| {
@@ -295,15 +309,28 @@ fn head_context(
     detected: &super::DetectedRange,
 ) -> Result<(String, String), String> {
     let head_ref = args.head.as_deref().unwrap_or(&detected.head);
-    let head = rev_parse(root, head_ref)?
-        .ok_or_else(|| format!("head '{head_ref}' does not name a commit; nothing was verified"))?;
+    let head = rev_parse(root, head_ref)?.ok_or_else(|| {
+        format!(
+            "head '{}' does not name a commit; nothing was verified",
+            codeflow_core::git::display_text(head_ref)
+        )
+    })?;
     let head_source = if args.head.is_some() {
         "--head"
     } else {
         detected.head_source
     };
     let (branch, branch_source) = branch(root, args, environment)?;
-    println!("codeflow ci: head {head} ({head_source}: {head_ref}); branch context '{}' ({branch_source})", if branch.is_empty() { "none" } else { &branch });
+    // A branch name can hold any character git accepts (TSK-388).
+    let shown = if branch.is_empty() {
+        "none".to_string()
+    } else {
+        codeflow_core::git::display_text(&branch)
+    };
+    println!(
+        "codeflow ci: head {head} ({head_source}: {}); branch context '{shown}' ({branch_source})",
+        codeflow_core::git::display_text(head_ref)
+    );
     if args.head.is_some() && args.branch.is_none() {
         println!("codeflow ci: context: pass --branch <name> if this head belongs to another line; branch context selects frozen or amendable acceptance binding");
     }
@@ -380,7 +407,7 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
     match names.len() {
         0 => Ok(None),
         1 => Ok(names.into_iter().next()),
-        _ => Err(format!("planning branch '{branch}' has several epic lines: {}; pass --into <target> and --base <ref>", names.into_iter().collect::<Vec<_>>().join(", "))),
+        _ => Err(format!("planning branch '{}' has several epic lines: {}; pass --into <target> and --base <ref>", codeflow_core::git::display_text(branch), names.into_iter().map(|name| codeflow_core::git::display_text(&name)).collect::<Vec<_>>().join(", "))),
     }
 }
 

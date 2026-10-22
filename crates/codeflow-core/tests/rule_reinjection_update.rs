@@ -500,8 +500,8 @@ fn guidance_lists_every_installed_skill_and_agent_at_every_tier() {
         let agents: Vec<String> = line("Agents: ")
             .map(|l| l.split(", ").map(str::to_string).collect())
             .unwrap_or_default();
-        assert_eq!(skills, installed.skills, "{tier}\n{block}");
-        assert_eq!(agents, installed.agents, "{tier}\n{block}");
+        assert_eq!(skills, installed.skills, "{tier}\n{block:?}");
+        assert_eq!(agents, installed.agents, "{tier}\n{block:?}");
         println!(
             "{tier}: {} skills, {} agents, block {} bytes",
             skills.len(),

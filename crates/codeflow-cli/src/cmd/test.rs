@@ -92,7 +92,7 @@ pub fn run(args: &TestArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -119,7 +119,10 @@ pub fn run(args: &TestArgs) -> i32 {
             // `--strict` exits non-zero so a scripted/unattended caller cannot
             // mistake "ran nothing" for "passed".
             eprintln!("==============================================================");
-            eprintln!("WARNING: codeflow test had nothing to run — {reason}.");
+            eprintln!(
+                "WARNING: codeflow test had nothing to run — {reason}.",
+                reason = crate::cmd::shown(&reason)
+            );
             eprintln!("test gate: executed 0; skipped 0; not complete");
             eprintln!("         No tests were executed. This is NOT a green test run.");
             eprintln!("         Configure .codeflow/test-config.json or add a");
@@ -145,29 +148,16 @@ pub fn run(args: &TestArgs) -> i32 {
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
+                // A target name is checkout text, shown as one line after a
+                // fixed label (TSK-388).
                 println!(
-                    "{}: {verdict} (exit {}, {} ms)",
-                    r.name, r.exit_code, r.duration_ms
+                    "target {}: {verdict} (exit {}, {} ms)",
+                    codeflow_core::git::display_text(&r.name),
+                    r.exit_code,
+                    r.duration_ms
                 );
                 if !r.passed() {
-                    if let Some(err) = &r.error {
-                        eprintln!("  error: {err}");
-                    }
-                    // Parsed failure summary FIRST — failing test IDs + file:line
-                    // + counts — so the signal sits above the raw scrollback.
-                    // Absent when no report artifact exists (raw output is then
-                    // the only detail).
-                    if let Some(report) = &r.report {
-                        print_failure_report(report);
-                    }
-                    let stdout = r.stdout.trim();
-                    if !stdout.is_empty() {
-                        eprintln!("  stdout:\n{stdout}");
-                    }
-                    let stderr = r.stderr.trim();
-                    if !stderr.is_empty() {
-                        eprintln!("  stderr:\n{stderr}");
-                    }
+                    print_failure(r);
                 }
             }
             print_coverage_report(&coverage);
@@ -191,7 +181,7 @@ pub fn run(args: &TestArgs) -> i32 {
             }
         }
         Err(e) => {
-            eprintln!("codeflow test: {e}");
+            eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
             1
         }
     }
@@ -241,6 +231,31 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
     Ok(Some(lock))
 }
 
+/// A failed target's detail: its error, the parsed failure summary FIRST
+/// (failing test IDs, `file:line`, counts) so the signal sits above the raw
+/// scrollback, then its captured output, every line indented (TSK-388).
+fn print_failure(r: &codeflow_core::testing::gate::GateTargetResult) {
+    if let Some(err) = &r.error {
+        eprintln!("  error: {err}", err = crate::cmd::shown(&err));
+    }
+    // Parsed failure summary FIRST — failing test IDs + file:line
+    // + counts — so the signal sits above the raw scrollback.
+    // Absent when no report artifact exists (raw output is then
+    // the only detail).
+    if let Some(report) = &r.report {
+        print_failure_report(report);
+    }
+    let stdout = r.stdout.trim();
+    if !stdout.is_empty() {
+        // Relayed output: every line indented (TSK-388).
+        eprintln!("  stdout:\n{}", codeflow_core::git::display_relay(stdout));
+    }
+    let stderr = r.stderr.trim();
+    if !stderr.is_empty() {
+        eprintln!("  stderr:\n{}", codeflow_core::git::display_relay(stderr));
+    }
+}
+
 /// Print the parsed failure summary (counts + failing test IDs + `file:line`)
 /// for a failed target, above its raw stdout/stderr.
 fn print_failure_report(report: &FailureReport) {
@@ -250,11 +265,15 @@ fn print_failure_report(report: &FailureReport) {
     );
     for f in &report.failures {
         match &f.location {
-            Some(loc) => eprintln!("  FAILED {} ({loc})", f.id),
-            None => eprintln!("  FAILED {}", f.id),
+            Some(loc) => eprintln!(
+                "  FAILED {} ({})",
+                codeflow_core::git::display_text(&f.id),
+                crate::cmd::shown(loc)
+            ),
+            None => eprintln!("  FAILED {}", codeflow_core::git::display_text(&f.id)),
         }
         if let Some(msg) = &f.message {
-            eprintln!("         {msg}");
+            eprintln!("         {}", crate::cmd::shown(msg));
         }
     }
 }
@@ -265,7 +284,7 @@ fn run_setup(args: &SetupArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -278,7 +297,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
                     return 1;
                 }
                 Err(error) => {
-                    eprintln!("codeflow test setup: {error}");
+                    eprintln!(
+                        "codeflow test setup: {error}",
+                        error = crate::cmd::shown(&error)
+                    );
                     return 1;
                 }
             };
@@ -292,7 +314,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
         let loaded = match crate::embedded::read_test_template(name) {
             Ok(loaded) => loaded,
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 return 1;
             }
         };
@@ -311,12 +336,15 @@ fn run_setup(args: &SetupArgs) -> i32 {
             Err(SetupError::ConfigExists(path)) => {
                 eprintln!(
                     "codeflow test setup: {} already exists; inspect it or rerun this template with --replace",
-                    path.display()
+                    codeflow_core::git::display_path(&path)
                 );
                 1
             }
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 1
             }
         };
@@ -326,7 +354,10 @@ fn run_setup(args: &SetupArgs) -> i32 {
         return match setup::run_add_target(&root, &TerminalPromptProvider) {
             Ok(SetupResult::Written | SetupResult::WrittenNoTargets | SetupResult::Aborted) => 0,
             Err(error) => {
-                eprintln!("codeflow test setup: {error}");
+                eprintln!(
+                    "codeflow test setup: {error}",
+                    error = crate::cmd::shown(&error)
+                );
                 1
             }
         };
@@ -345,12 +376,12 @@ fn run_setup(args: &SetupArgs) -> i32 {
             // Idempotent: a real, populated config is never overwritten.
             println!(
                 "{} already has targets — leaving it unchanged.",
-                path.display()
+                codeflow_core::git::display_path(&path)
             );
             0
         }
         Err(e) => {
-            eprintln!("codeflow test setup: {e}");
+            eprintln!("codeflow test setup: {e}", e = crate::cmd::shown(&e));
             1
         }
     }
@@ -365,7 +396,11 @@ fn print_coverage_report(reports: &[CoverageReport]) {
     println!("coverage:");
     for r in reports {
         if let Some(note) = &r.note {
-            println!("  {}: {note}", r.target);
+            println!(
+                "  {}: {}",
+                codeflow_core::git::display_text(&r.target),
+                codeflow_core::git::display_line(note)
+            );
             continue;
         }
         let overall = r
@@ -378,9 +413,12 @@ fn print_coverage_report(reports: &[CoverageReport]) {
         };
         println!(
             "  {}: {overall} overall — {} pass, {} fail{exceptions}",
-            r.target, r.thresholds_passed, r.thresholds_failed,
+            codeflow_core::git::display_text(&r.target),
+            r.thresholds_passed,
+            r.thresholds_failed,
         );
         for (file, pct, threshold) in &r.failing_files {
+            let file = codeflow_core::git::display_line(file);
             println!("    below threshold: {file} {pct:.1}% < {threshold}");
         }
     }

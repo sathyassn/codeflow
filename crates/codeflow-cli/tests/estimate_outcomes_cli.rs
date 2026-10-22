@@ -1004,3 +1004,38 @@ fn an_unreadable_reviewed_commit_is_reported() {
         "{report:#}"
     );
 }
+
+/// TSK-388 round 3 (Grok F-1, security S1): a forecast path and a task
+/// title can hold characters a terminal hides or acts on. The JSON report
+/// stays valid, decodes to the exact values, and its bytes hold none of
+/// those characters.
+#[test]
+fn a_hidden_character_keeps_the_outcomes_json_valid() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.deliver("TSK-001", T0 + 1000, 2 * HOUR);
+    let title = "Fixture \u{202e}task\u{ad}\u{e0041}\u{9b}";
+    let path = fx.root.join("project-management/tasks/TSK-001.md");
+    let record = std::fs::read_to_string(&path).unwrap().replace(
+        "title: \"Fixture task TSK-001\"",
+        "title: \"Fixture \\u202etask\\u00ad\\U000E0041\\u009b\"",
+    );
+    std::fs::write(&path, record).unwrap();
+    fx.commit("docs: retitle TSK-001", T0 + 5 * HOUR);
+    let forecast = "ev\u{202e}x.json";
+    let out = fx.run(&["estimate", "outcomes", "--json", "--forecast", forecast]);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !text.contains(['\u{202e}', '\u{ad}', '\u{e0041}', '\u{9b}']),
+        "{text:?}"
+    );
+    let report: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!(task(&report, "TSK-001")["title"], title, "{report:#}");
+    assert!(text.contains("ev\\u202ex.json"), "{text}");
+    assert!(
+        report
+            .to_string()
+            .contains(&serde_json::to_string(forecast).unwrap()[1..9]),
+        "{report:#}"
+    );
+}
