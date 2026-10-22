@@ -37,7 +37,7 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
       token: randomBytes(24).toString("hex"),
       created_at_ms: now,
       heartbeat_at_ms: now,
-      owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0 },
+      owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" },
     };
     const candidate = path.join(portalDirectory, `.workflow-lock-candidate-${lease.token}`);
     try {
@@ -67,6 +67,9 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
       }
       const owner = await workflowOwnerVerdict(portalDirectory, existing.lease, testHooks.probeProcess ?? probeProcess);
       if (owner.state === "gone") continue;
+      if (owner.state === "unstable") {
+        throw new Error("portal build/check workflow already in progress (its owner record kept changing, so no stable proof of exit exists; retry, or remove .portal/workflow.lock once no portal process runs)");
+      }
       if (owner.state === "dead") {
         const age = Math.max(0, Math.round((Date.now() - existing.lease.created_at_ms) / 1000));
         process.stderr.write(`portal workflow lease owner (process ${existing.lease.owner.pid} on ${existing.lease.owner.host}) has exited with no writer running; reclaiming its ${age}s old lease\n`);
@@ -122,7 +125,11 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
   heartbeat.unref();
   // The coordinator records each writer it starts, so a contender can tell a
   // coordinator that died from a workflow that has stopped writing.
+  let keepLease = false;
   const writers = {
+    // A writer that could not be proven stopped keeps the lease: it is not
+    // released when the workflow ends, so the record keeps naming that writer.
+    keepLease() { keepLease = true; },
     // Recorded and durable before a writer is spawned: a coordinator killed
     // between the spawn and the record leaves a marker, not a silent gap.
     beginWriter() {
@@ -151,7 +158,7 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
   } finally {
     clearInterval(heartbeat);
     await leaseWrite;
-    await releaseWorkflowLease(portalDirectory, claim, lease, testHooks);
+    if (!keepLease) await releaseWorkflowLease(portalDirectory, claim, lease, testHooks);
   }
 }
 
@@ -166,35 +173,47 @@ async function judgeWorkflowOwner(lease, probe) {
   if (lease.owner === undefined || owner.host !== os.hostname()) return { state: "unknown", live: [], starting: false };
   const live = [];
   let undecided = false;
-  const check = async (pid, withGroup) => {
-    const states = [pid === process.pid ? "live" : await probe(pid)];
-    if (withGroup && process.platform !== "win32") states.push(await probe(-pid));
-    if (states.includes("live")) live.push(pid);
-    else if (states.some((state) => state !== "dead")) undecided = true;
+  // Group members are only visible when the lease says each writer led a group.
+  const grouped = owner.groups === true && process.platform !== "win32";
+  const check = async (pid, isWriter) => {
+    const state = pid === process.pid ? "live" : await probe(pid);
+    if (state === "live") { live.push(String(pid)); return; }
+    const group = isWriter && grouped ? await probe(-pid) : "dead";
+    if (group === "live") live.push(`group ${pid}`);
+    else if (state !== "dead" || group !== "dead") undecided = true;
   };
   await check(owner.pid, false);
   for (const pid of owner.writers) await check(pid, true);
   if (live.length > 0) return { state: "live", live, starting: false };
   const starting = owner.starting > 0;
-  return { state: undecided || starting ? "unknown" : "dead", live, starting };
+  // Without groups the workers a writer left behind cannot be seen, so a
+  // recorded writer that is gone proves nothing about them.
+  const untracked = owner.writers.length > 0 && !grouped;
+  return { state: undecided || starting || untracked ? "unknown" : "dead", live, starting };
 }
 
-// A dead verdict is final only against the owner's last record: a coordinator
-// can record a writer after the contender read the lease and die before it
-// probes. Once nothing of the owner runs its record cannot change, so the
-// record is read again and judged again until it stops changing.
+// A verdict that allows a reclaim, a dead owner or an expired unknown one, is
+// final only against the owner's last record: a coordinator can record a
+// writer after the contender read the lease and die before it probes. Nothing
+// of such an owner runs, so its record cannot change; it is read again and
+// judged again until it stops changing. A record that never settles is no proof.
 async function workflowOwnerVerdict(portalDirectory, lease, probe) {
   let judged = lease;
   for (let round = 0; round < 5; round += 1) {
     const verdict = await judgeWorkflowOwner(judged, probe);
-    if (verdict.state !== "dead") return verdict;
+    if (verdict.state === "live") return verdict;
     let final;
     try { final = await readWorkflowLeaseDirectory(workflowCandidate(portalDirectory, judged.token)); }
-    catch (error) { if (error?.code === "ENOENT") return { state: "gone", live: [], starting: false }; throw error; }
+    catch (error) {
+      // The holder was reclaimed or released while it was read: not a proof either way.
+      const now = await currentWorkflowClaimToken(portalDirectory).catch(() => undefined);
+      if (error?.code === "ENOENT" || (now !== undefined && now !== judged.token)) return { state: "gone", live: [], starting: false };
+      throw error;
+    }
     if (final.token === judged.token && JSON.stringify(final.owner) === JSON.stringify(judged.owner)) return verdict;
     judged = final;
   }
-  return { state: "unknown", live: [], starting: false };
+  return { state: "unstable", live: [], starting: false };
 }
 
 function probeProcess(pid) {
@@ -543,7 +562,10 @@ async function readPublicationLease(lockDirectory) {
 function validateWorkflowLease(lease) {
   if (lease && typeof lease === "object" && !Array.isArray(lease) && Object.hasOwn(lease, "owner")) {
     const { owner, ...rest } = lease;
-    const shape = owner && typeof owner === "object" && !Array.isArray(owner) && ["host,pid,writers", "host,pid,starting,writers"].includes(Object.keys(owner).sort().join(","))
+    const keys = owner && typeof owner === "object" && !Array.isArray(owner) ? Object.keys(owner) : [];
+    const shape = keys.length >= 3 && ["host", "pid", "writers"].every((key) => keys.includes(key))
+      && keys.every((key) => ["host", "pid", "writers", "starting", "groups"].includes(key))
+      && (owner.groups === undefined || typeof owner.groups === "boolean")
       && (owner.starting === undefined || (Number.isSafeInteger(owner.starting) && owner.starting >= 0 && owner.starting <= 64))
       && Number.isSafeInteger(owner.pid) && owner.pid > 0
       && typeof owner.host === "string" && owner.host.length > 0 && owner.host.length <= 255

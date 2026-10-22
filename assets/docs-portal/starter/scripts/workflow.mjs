@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
+import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertToolOutputRoots, withWorkflowLease } from "./publication.mjs";
 import { lockDigestFailure } from "./runtime-scripts.mjs";
@@ -62,33 +62,46 @@ function start(lifecycle, writers, command, args, resolve, reject) {
   }
   const untrack = lifecycle.trackChild(child);
   const recorded = (child.pid === undefined ? writers.abandonWriter() : writers.recordWriter(child.pid)).then(() => null, (failure) => failure);
-  // A writer the lease cannot name must not keep running.
-  recorded.then((recordError) => { if (recordError) signalGroup("SIGKILL"); });
+  const unproven = (what) => {
+    writers.keepLease();
+    return new Error(`${what}; the workflow lease is kept so no other run starts over it. Stop process ${child.pid} and anything it started, then run again (or remove .portal/workflow.lock once no portal process runs)`);
+  };
   let settled = false;
   const finish = (error) => {
     if (settled) return;
     settled = true;
     untrack();
     recorded.then(async (recordError) => {
-      if (child.pid !== undefined) await retireWriter(writers, child.pid, signalGroup);
-      const failure = error ?? recordError;
+      let failure = recordError ?? error;
+      if (child.pid !== undefined && !(await retireWriter(writers, child.pid, signalGroup))) {
+        failure = unproven("a process the portal workflow started could not be proven stopped");
+      }
       if (failure) reject(failure); else resolve();
     });
   };
+  // A writer the lease cannot name must not keep running: it is stopped, and
+  // the stop confirmed, before anything else proceeds.
+  recorded.then(async (recordError) => {
+    if (recordError === null) return;
+    try { await stopChild(child, "SIGKILL"); }
+    catch { finish(unproven("a process the portal workflow started could not be named in the lease and could not be proven stopped")); }
+  });
   child.once("error", finish);
   child.once("exit", (code, signal) => finish(lifecycle.interruptedBy !== null || code === 0 ? null : new Error(`${args.join(" ")} failed with ${signal ?? code}`)));
 }
 
 // A writer leaves the lease only when its whole group is gone: workers it left
-// behind are stopped, and while any remains the writer stays recorded.
+// behind are stopped, and while any remains the writer stays recorded and the
+// caller keeps the lease. Without groups (Windows) the workers cannot be seen,
+// so the writer stays recorded and a contender treats the lease as undecidable.
 async function retireWriter(writers, pid, signalGroup) {
-  if (GROUPS) {
-    const groupAlive = () => { try { process.kill(-pid, 0); return true; } catch (error) { return error?.code !== "ESRCH"; } };
-    if (groupAlive()) {
-      signalGroup("SIGKILL");
-      for (let waited = 0; waited < 40 && groupAlive(); waited += 1) await new Promise((done) => setTimeout(done, 50));
-      if (groupAlive()) return;
-    }
+  if (!GROUPS) return true;
+  const groupAlive = () => { try { process.kill(-pid, 0); return true; } catch (error) { return error?.code !== "ESRCH"; } };
+  if (groupAlive()) {
+    signalGroup("SIGKILL");
+    for (let waited = 0; waited < 40 && groupAlive(); waited += 1) await new Promise((done) => setTimeout(done, 50));
+    if (groupAlive()) return false;
   }
   await writers.forgetWriter(pid);
+  return true;
 }
