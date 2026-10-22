@@ -134,10 +134,9 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     if as_json {
         // JSON keeps each value exact; its bytes hold no hidden character
         // (`display_json`, TSK-388).
-        println!(
-            "{}",
-            codeflow_core::git::display_json(&next_json(&backlog).to_string())
-        );
+        println_block!(codeflow_core::git::TextBlock::json(
+            &next_json(&backlog).to_string()
+        ));
         return 0;
     }
     println!("{}", backlog.snapshot_line());

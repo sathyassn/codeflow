@@ -477,6 +477,122 @@ pub fn display_path(path: &std::path::Path) -> String {
     display_line(&path.display().to_string())
 }
 
+/// One print call's text as a terminal sink writes it (TSK-388):
+/// [`display_output`], and each further line that does not already start
+/// with a space or a tab is indented two spaces. Whatever a print call
+/// interpolates, a line break inside it cannot start a line at column 0, so
+/// no value can pass a line of its own as one of `CodeFlow`'s; a layout that
+/// already indents its further lines prints unchanged. Text that is
+/// several column-0 lines by design prints through a block printer.
+#[must_use]
+pub fn display_print(text: &str) -> String {
+    let shown = display_output(text);
+    if !shown.contains('\n') {
+        return shown;
+    }
+    let mut out = String::with_capacity(shown.len() + 16);
+    for (index, line) in shown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+            if !line.is_empty() && !line.starts_with([' ', '\t']) {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Text of several lines that `CodeFlow` composes and prints as one block,
+/// its lines at column 0 by design (a report, a digest, a list). Each
+/// `write!` or `writeln!` into the block is one call under the
+/// [`display_print`] rule, so a value a call interpolates cannot start a
+/// line of its own; only the lines the calls write are at column 0. A block
+/// printer takes a `TextBlock` and prints it as it stands (TSK-388).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TextBlock(String);
+
+impl TextBlock {
+    /// An empty block.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// JSON text as serde writes it, hidden characters escaped by
+    /// [`display_json`]. A JSON string holds no raw line break, so each of
+    /// its lines is structure the serializer wrote.
+    #[must_use]
+    pub fn json(text: &str) -> Self {
+        Self(display_json(text))
+    }
+
+    /// The block's text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The block's text, owned.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    /// Appends one call's text under the [`display_print`] rule.
+    pub fn push_str(&mut self, text: &str) {
+        self.0.push_str(&display_print(text));
+    }
+
+    /// One `write!` or `writeln!` call, formatted whole and then appended
+    /// under the [`display_print`] rule, so the line breaks it interpolates
+    /// are told apart from its own. Inherent, so the macros need no import.
+    ///
+    /// # Errors
+    /// Never; the result matches [`std::fmt::Write`].
+    pub fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::fmt::Result {
+        self.push_str(&args.to_string());
+        Ok(())
+    }
+}
+
+impl std::fmt::Write for TextBlock {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.push_str(text);
+        Ok(())
+    }
+
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::fmt::Result {
+        TextBlock::write_fmt(self, args)
+    }
+}
+
+impl std::ops::Deref for TextBlock {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TextBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for TextBlock {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for TextBlock {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 /// Text another program wrote, as `CodeFlow` relays it: [`display_output`]
 /// with every line, the first included, indented two spaces, so no relayed
 /// line can start at column 0 and pass as one of `CodeFlow`'s own (TSK-388).
@@ -806,7 +922,86 @@ mod tests {
 
 #[cfg(test)]
 mod output_tests {
-    use super::{display_json, display_message, display_output};
+    use super::{display_json, display_message, display_output, display_print, TextBlock};
+
+    /// Values a print call could interpolate: line breaks alone, with CR,
+    /// leading, trailing, doubled, and a forged `CodeFlow` line after each.
+    const HOSTILE: [&str; 7] = [
+        "ev\ncodeflow test: passed",
+        "ev\r\nok  test-config: healthy",
+        "\n[codeflow test] completed target 'x': passed",
+        "ev\n\ncodeflow status: allowed\n",
+        "a\nb\nc",
+        "ev\u{2028}codeflow test: passed",
+        "ev\n\u{202e}codeflow test: passed",
+    ];
+
+    /// No line after the first starts at column 0, unless it is empty.
+    fn assert_off_column_zero(what: &str, printed: &str) {
+        for line in printed.split('\n').skip(1) {
+            assert!(
+                line.is_empty() || line.starts_with([' ', '\t']),
+                "{what}: column-0 continuation {line:?} in {printed:?}"
+            );
+        }
+    }
+
+    /// TSK-388 round 7, the sink invariant: whatever one print call
+    /// interpolates, no further line of it starts at column 0, and a
+    /// layout that already indents prints unchanged.
+    #[test]
+    fn a_print_call_keeps_every_interpolated_line_off_column_zero() {
+        for value in HOSTILE {
+            for printed in [
+                display_print(value),
+                display_print(&format!("ok  doctor: {value}")),
+                display_print(&format!("{value}: FAILED")),
+                display_print(&format!("x {value} y\n")),
+            ] {
+                assert_off_column_zero(value, &printed);
+                assert_eq!(display_print(&printed), printed, "idempotent");
+            }
+        }
+        assert_eq!(
+            display_print("ev\ncodeflow test: passed"),
+            "ev\n  codeflow test: passed"
+        );
+        assert_eq!(display_print("a\r\nb"), "a\\x0d\n  b");
+        let kept = "warn  x: y\n      clear it: run z\n";
+        assert_eq!(display_print(kept), kept);
+        assert_eq!(display_print("plain"), "plain");
+    }
+
+    /// The block builder applies the rule per `writeln!`: a value cannot
+    /// start a line of its own, and each call's own line stays at column 0.
+    #[test]
+    fn a_text_block_keeps_interpolated_lines_off_column_zero() {
+        for value in HOSTILE {
+            let mut block = TextBlock::new();
+            let _ = writeln!(block, "branch: {value}");
+            let _ = writeln!(block, "worktrees: {value}");
+            let _ = write!(block, "tail {value}");
+            let lines: Vec<&str> = block.split('\n').collect();
+            assert!(lines[0].starts_with("branch: "), "{block:?}");
+            let own = lines
+                .iter()
+                .filter(|line| line.starts_with("worktrees: "))
+                .count();
+            assert_eq!(own, 1, "{block:?}");
+            for line in &lines {
+                assert!(
+                    line.is_empty()
+                        || line.starts_with([' ', '\t'])
+                        || line.starts_with("branch: ")
+                        || line.starts_with("worktrees: ")
+                        || line.starts_with("tail "),
+                    "{value:?}: forged line {line:?} in {block:?}"
+                );
+            }
+        }
+        let json = serde_json::to_string_pretty(&serde_json::json!({"t": "a\nb"})).unwrap();
+        assert_eq!(TextBlock::json(&json).as_str(), json, "JSON prints exact");
+    }
 
     /// TSK-388 round 2: JSON keeps every value, and its bytes hold no C1,
     /// bidi or tag character.

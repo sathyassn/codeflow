@@ -146,13 +146,15 @@ fn session_orient(stdin: &str) -> i32 {
             };
             let digest = orient::generate(&root);
             let mut out = std::io::stdout();
-            // The digest quotes branch names and record text (TSK-388).
-            let _ = write!(out, "{}", codeflow_core::git::display_output(&digest));
+            // The digest quotes branch names and record text: a block, each
+            // line written under the sink rule (TSK-388).
+            let _ = out.write_all(digest.as_str().as_bytes());
             // The digest's own off-switch also silences the guidance block.
             if !digest.is_empty() {
                 let source = guidance::payload_source(stdin).unwrap_or_default();
                 if let Some(block) = guidance::session_guidance(&root, &source) {
-                    let _ = write!(out, "\n{}", codeflow_core::git::display_output(&block));
+                    let _ = out.write_all(b"\n");
+                    let _ = out.write_all(block.as_str().as_bytes());
                 }
             }
             let _ = out.flush();
@@ -180,7 +182,7 @@ fn prompt_reminder(stdin: &str) -> i32 {
         stdin,
     ) {
         let mut out = std::io::stdout();
-        let _ = writeln!(out, "{}", codeflow_core::git::display_output(&line));
+        let _ = term_writeln!(out, "{line}");
         let _ = out.flush();
     }
     0
@@ -428,7 +430,7 @@ fn grok_deny(
     let mut reason: Vec<String> = violations.iter().map(|v| v.render(plane)).collect();
     reason.push(format!("policy source: {source}"));
     let decision = serde_json::json!({"decision": "deny", "reason": reason.join("\n")});
-    let _ = writeln!(
+    let _ = term_writeln!(
         out,
         "{}",
         codeflow_core::git::display_json(&decision.to_string())
@@ -500,7 +502,7 @@ fn shell_call(
         Ok(p) => p,
         Err(e) => {
             let finding = payload_finding("exec-guard", &e);
-            let _ = writeln!(err, "{}", finding.line("codeflow exec-guard", "error"));
+            let _ = term_writeln!(err, "{}", finding.line("codeflow exec-guard", "error"));
             return Err(e);
         }
     };
@@ -522,7 +524,7 @@ fn exec_guard_answer(
     root: Option<&std::path::Path>,
 ) -> i32 {
     if !violations.is_empty() {
-        let _ = writeln!(err, "policy source: {source}");
+        let _ = term_writeln!(err, "policy source: {source}");
     }
     grok_deny(out, stdin, "exec-guard", violations, source);
     super::render_outcome_to(err, "exec-guard", root, violations, &[], 2)
@@ -562,7 +564,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            let _ = writeln!(err, "codeflow hook: {error}", error = shown(&error));
+            let _ = term_writeln!(err, "codeflow hook: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -572,7 +574,7 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         .map(std::ffi::OsString::into_string)
         .transpose()
     else {
-        let _ = writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
+        let _ = term_writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
         return 2;
     };
     let violations = exec_guard::evaluate_in(

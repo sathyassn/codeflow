@@ -69,7 +69,7 @@ pub fn run(args: &ReportArgs) -> i32 {
     };
     match ceremony::build(&root, &prefixes, window, &ceremony::Gh) {
         Ok(report) => {
-            print!("{report}");
+            print_block!(report.block());
             0
         }
         Err(error) => {

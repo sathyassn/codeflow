@@ -27,7 +27,6 @@
 //! `gh` CLI) is implemented. Other providers get the printed manual
 //! checklist until an adapter is warranted (charter D18).
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -84,29 +83,32 @@ pub struct ProtectReport {
 impl ProtectReport {
     /// Render the report for terminal output.
     #[must_use]
-    pub fn render(&self) -> String {
-        let mut out = String::new();
+    pub fn render(&self) -> crate::git::TextBlock {
+        // Lines quote remote rule names and API messages: each `writeln!`
+        // is one line under the block rule (TSK-388).
+        let mut out = crate::git::TextBlock::new();
         for line in &self.lines {
-            out.push_str(line);
-            out.push('\n');
+            let _ = writeln!(out, "{line}");
         }
         if !self.limitations.is_empty() {
-            out.push_str("\nNot applied:\n");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "Not applied:");
             for l in &self.limitations {
-                out.push_str("  - ");
-                out.push_str(l);
-                out.push('\n');
+                let _ = writeln!(out, "  - {l}");
             }
         }
         if !self.checklist.is_empty() {
-            out.push_str("\nManual checklist (GitHub: Settings -> Branches / Rules):\n");
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "Manual checklist (GitHub: Settings -> Branches / Rules):"
+            );
             for c in &self.checklist {
-                out.push_str("  ");
-                out.push_str(c);
-                out.push('\n');
+                let _ = writeln!(out, "  {c}");
             }
         }
-        let _ = write!(out, "\nstatus: {}\n", self.status.as_str());
+        let _ = writeln!(out);
+        let _ = writeln!(out, "status: {}", self.status.as_str());
         out
     }
 }

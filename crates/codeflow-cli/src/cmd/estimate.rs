@@ -130,9 +130,9 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
             return 1;
         };
         // Values exact, no hidden character in the bytes (TSK-388).
-        println!("{}", codeflow_core::git::display_json(&text));
+        println_block!(codeflow_core::git::TextBlock::json(&text));
     } else {
-        print!("{}", report.render());
+        print_block!(report.render());
     }
     i32::from(!report.is_clean())
 }
@@ -159,7 +159,7 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
             return 1;
         };
         // Values exact, no hidden character in the bytes (TSK-388).
-        println!("{}", codeflow_core::git::display_json(&text));
+        println_block!(codeflow_core::git::TextBlock::json(&text));
     } else {
         for finding in &report.findings {
             println!(

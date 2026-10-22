@@ -128,13 +128,15 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
 
     let all_notes: Vec<&String> = report.notes.iter().chain(notes_extra.iter()).collect();
     if !all_notes.is_empty() {
-        println!("\ncoverage notes:");
+        println!();
+        println!("coverage notes:");
         for note in all_notes {
             println!("  - {note}");
         }
     }
+    println!();
     println!(
-        "\nindex: {} synced, {} unchanged, {} removed",
+        "index: {} synced, {} unchanged, {} removed",
         report.stats.files_indexed, report.stats.files_skipped, report.stats.files_removed
     );
 

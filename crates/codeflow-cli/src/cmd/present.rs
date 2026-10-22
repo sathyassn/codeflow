@@ -309,10 +309,9 @@ fn check(
     };
     let lines = codeflow_present::document::check_document(&bytes);
     for line in &lines {
-        println!(
-            "{}",
-            codeflow_core::git::display_json(&serde_json::to_string(line)?)
-        );
+        println_block!(codeflow_core::git::TextBlock::json(&serde_json::to_string(
+            line
+        )?));
     }
     // `faults` and `valid` keep their meaning; warnings never fail the check.
     let faults = lines.iter().filter(|line| line.is_fault()).count();
@@ -368,21 +367,15 @@ fn run_command(
             from,
             to,
         } => {
-            println!(
-                "{}",
-                codeflow_core::git::display_json(&serde_json::to_string_pretty(&store.diff(
-                    parse_id(session_id)?,
-                    *from,
-                    *to
-                )?)?)
-            );
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.diff(parse_id(session_id)?, *from, *to)?)?
+            ));
             Ok(())
         }
         PresentCommand::List => {
-            println!(
-                "{}",
-                codeflow_core::git::display_json(&serde_json::to_string_pretty(&store.list()?)?)
-            );
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.list()?)?
+            ));
             Ok(())
         }
         PresentCommand::Show {
@@ -406,12 +399,9 @@ fn run_command(
             Ok(())
         }
         PresentCommand::History { session_id } => {
-            println!(
-                "{}",
-                codeflow_core::git::display_json(&serde_json::to_string_pretty(
-                    &store.history(parse_id(session_id)?)?
-                )?)
-            );
+            println_block!(codeflow_core::git::TextBlock::json(
+                &serde_json::to_string_pretty(&store.history(parse_id(session_id)?)?)?
+            ));
             Ok(())
         }
         PresentCommand::Resolve {
@@ -573,10 +563,9 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
 fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Result<()> {
     let session = store.load(id)?;
     if session.status != SessionStatus::Active {
-        println!(
-            "{}",
-            codeflow_core::git::display_json(&serde_json::to_string_pretty(&session)?)
-        );
+        println_block!(codeflow_core::git::TextBlock::json(
+            &serde_json::to_string_pretty(&session)?
+        ));
         return Ok(());
     }
     let healthy = match (session.service_port, session.service_instance) {

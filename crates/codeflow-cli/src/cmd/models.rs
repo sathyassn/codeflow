@@ -74,7 +74,7 @@ pub fn run(args: &ModelsArgs) -> i32 {
     };
     if args.json {
         match serde_json::to_string_pretty(&result) {
-            Ok(json) => println!("{}", codeflow_core::git::display_json(&json)),
+            Ok(json) => println_block!(codeflow_core::git::TextBlock::json(&json)),
             Err(error) => {
                 eprintln!("models resolve: {error}", error = crate::cmd::shown(&error));
                 return 2;

@@ -95,7 +95,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         adapter.apply(&plan)
     };
 
-    print!("{}", report.render());
+    print_block!(report.render());
     let registry = codeflow_core::ids::REGISTRY_BRANCH;
     if tracked
         && !*dry_run

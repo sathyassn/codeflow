@@ -1,29 +1,31 @@
 //! codeflow — the AI-development discipline layer CLI.
 
 // The output sink (TSK-388). These shadow `println!`, `print!`, `eprintln!`
-// and `eprint!` for this crate: what they print goes through
-// `codeflow_core::git::display_output`, which escapes each control, format
-// and separator character other than a line break or tab, and keeps
-// backslashes. CodeFlow quotes branch names a remote chose, record titles and
-// policy values from a checkout, and errors that carry them. A field that can
-// hold a line break also passes `cmd::shown`, so it cannot start a line of
-// its own; an error `run` returns is printed the same way in `main`. JSON
-// goes through `codeflow_core::git::display_json` first, which leaves this
-// sink nothing to change. `codeflow-core` and `codeflow-present` shadow
-// their own print macros the same way. Not covered here: `write!` and
-// `writeln!` to a terminal writer (each escapes its own fields), the
-// standard library's panic message, and clap's usage and error output.
+// and `eprint!` for this crate: what one call prints goes through
+// `codeflow_core::git::display_print`, which escapes each control, format
+// and separator character other than a line break or tab, keeps
+// backslashes, and indents each further line that does not already start
+// indented. CodeFlow quotes branch names a remote chose, record titles,
+// paths and policy values from a checkout, and errors that carry them;
+// whatever a call interpolates, a line break in it cannot start a line at
+// column 0. `term_write!` and `term_writeln!` apply the same rule to a
+// terminal writer. Text that is several column-0 lines by design is a
+// `codeflow_core::git::TextBlock`, built one `writeln!` per line under the
+// same rule, and prints through `print_block!` or `println_block!`; JSON is
+// a `TextBlock::json`. `codeflow-core` and `codeflow-present` shadow their
+// own print macros the same way. Not covered here: the standard library's
+// panic message, and clap's usage and error output.
 macro_rules! println {
     () => {
         ::std::println!()
     };
     ($($arg:tt)*) => {
-        ::std::println!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+        ::std::println!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
     };
 }
 macro_rules! print {
     ($($arg:tt)*) => {
-        ::std::print!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+        ::std::print!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
     };
 }
 macro_rules! eprintln {
@@ -31,12 +33,43 @@ macro_rules! eprintln {
         ::std::eprintln!()
     };
     ($($arg:tt)*) => {
-        ::std::eprintln!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+        ::std::eprintln!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
     };
 }
 macro_rules! eprint {
     ($($arg:tt)*) => {
-        ::std::eprint!("{}", ::codeflow_core::git::display_output(&::std::format!($($arg)*)))
+        ::std::eprint!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+
+// A block prints as it stands: its lines were written under the sink rule.
+macro_rules! print_block {
+    ($block:expr) => {
+        ::std::print!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+macro_rules! println_block {
+    ($block:expr) => {
+        ::std::println!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+// One write to a terminal writer under the sink rule.
+macro_rules! term_write {
+    ($out:expr, $($arg:tt)*) => {{
+        // For a caller that has not imported it; harmless where it has.
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+        $out.write_all(
+            ::codeflow_core::git::display_print(&::std::format!($($arg)*)).as_bytes(),
+        )
+    }};
+}
+macro_rules! term_writeln {
+    ($out:expr) => {
+        term_write!($out, "\n")
+    };
+    ($out:expr, $($arg:tt)*) => {
+        term_write!($out, "{}\n", ::std::format!($($arg)*))
     };
 }
 
@@ -210,12 +243,12 @@ fn update(
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }
-    print!("{report}");
+    print_block!(report.block());
     cmd::present::provision_state_root_or_warn();
     print_workspace_hint(cwd);
     let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
     if let Some(portal_report) = &portal_report {
-        print!("{portal_report}");
+        print_block!(portal_report.block());
     }
     if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
         std::process::exit(2);
@@ -295,7 +328,7 @@ fn report_workspace(
     step: Option<root_checkout::BranchStep>,
 ) -> anyhow::Result<()> {
     match step {
-        Some(step) => println!("{}", root_checkout::finish(root, step)?),
+        Some(step) => println_block!(root_checkout::finish(root, step)?.block()),
         None => print_workspace_hint(root),
     }
     Ok(())
@@ -411,7 +444,7 @@ fn run() -> anyhow::Result<()> {
             if !yes {
                 decide_pr_template(&cwd, &mut report)?;
             }
-            print!("{report}");
+            print_block!(report.block());
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }

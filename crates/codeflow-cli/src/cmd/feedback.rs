@@ -396,7 +396,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             .map(|(topic, members)| serde_json::json!({ "topic": topic, "items": members }))
             .collect();
         match serde_json::to_string_pretty(&value) {
-            Ok(text) => println!("{}", codeflow_core::git::display_json(&text)),
+            Ok(text) => println_block!(codeflow_core::git::TextBlock::json(&text)),
             Err(error) => {
                 eprintln!("error: {error}", error = shown(&error));
                 return 1;

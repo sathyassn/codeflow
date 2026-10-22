@@ -8,7 +8,6 @@
 use crate::workgraph::history;
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
@@ -623,14 +622,15 @@ fn collect_delivery(
 /// With `capabilities_table`, every capability entry is listed; otherwise
 /// only counts by status appear.
 #[must_use]
-pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
+pub fn render_status(view: &StatusView, capabilities_table: bool) -> crate::git::TextBlock {
     // Status quotes ref names, record text and errors; every control,
-    // format and separator character in them is shown escaped (TSK-388).
-    crate::git::display_output(&render_status_text(view, capabilities_table))
+    // format and separator character in them is shown escaped, and each
+    // `writeln!` is one line under the block rule (TSK-388).
+    render_status_text(view, capabilities_table)
 }
 
-fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
-    let mut out = String::new();
+fn render_status_text(view: &StatusView, capabilities_table: bool) -> crate::git::TextBlock {
+    let mut out = crate::git::TextBlock::new();
 
     match &view.branch {
         Some(b) => {
@@ -722,7 +722,7 @@ fn render_status_text(view: &StatusView, capabilities_table: bool) -> String {
 }
 
 /// The work summary, with each record title shown escaped (TSK-388).
-fn render_work(out: &mut String, view: &StatusView) {
+fn render_work(out: &mut crate::git::TextBlock, view: &StatusView) {
     match &view.work {
         Some(work) => {
             let _ = writeln!(
@@ -752,7 +752,7 @@ fn render_work(out: &mut String, view: &StatusView) {
     }
 }
 
-fn render_derived(out: &mut String, backlog: &Backlog) {
+fn render_derived(out: &mut crate::git::TextBlock, backlog: &Backlog) {
     let _ = writeln!(out, "tasks: {}", backlog.counts_line());
     let _ = writeln!(out, "  {}", backlog.snapshot_line());
     for entry in backlog.in_state(State::Active) {
@@ -815,7 +815,7 @@ fn shown_branches(branches: &[String]) -> String {
     branches.join(", ")
 }
 
-fn render_cleanup(out: &mut String, view: &StatusView) {
+fn render_cleanup(out: &mut crate::git::TextBlock, view: &StatusView) {
     match &view.cleanup_target {
         Some(target) if view.cleanup.is_empty() => {
             let _ = writeln!(out, "cleanup: none (target {target})");
@@ -873,12 +873,12 @@ fn render_cleanup(out: &mut String, view: &StatusView) {
 /// actionable tasks. Generated from the existing links, so it degrades the
 /// same way the base view does.
 #[must_use]
-pub fn render_delivery(view: &StatusView) -> String {
-    crate::git::display_output(&render_delivery_text(view))
+pub fn render_delivery(view: &StatusView) -> crate::git::TextBlock {
+    render_delivery_text(view)
 }
 
-fn render_delivery_text(view: &StatusView) -> String {
-    let mut out = String::new();
+fn render_delivery_text(view: &StatusView) -> crate::git::TextBlock {
+    let mut out = crate::git::TextBlock::new();
     match &view.delivery {
         Some(caps) if !caps.is_empty() => {
             let _ = writeln!(out, "capability delivery:");

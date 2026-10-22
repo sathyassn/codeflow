@@ -34,7 +34,7 @@ pub fn run(args: &IntegrateArgs) -> i32 {
     };
     match integrate_with_mode(&root, &args.branch, &args.into, mode) {
         Ok(outcome) => {
-            println!("{outcome}");
+            println_block!(outcome.block());
             0
         }
         Err(e) => {

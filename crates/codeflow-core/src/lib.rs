@@ -25,17 +25,17 @@ macro_rules! println {
         ::std::println!()
     };
     ($($arg:tt)*) => {
-        ::std::println!("{}", $crate::git::display_output(&::std::format!($($arg)*)))
+        ::std::println!("{}", $crate::git::display_print(&::std::format!($($arg)*)))
     };
 }
 macro_rules! print {
     ($($arg:tt)*) => {
-        ::std::print!("{}", $crate::git::display_output(&::std::format!($($arg)*)))
+        ::std::print!("{}", $crate::git::display_print(&::std::format!($($arg)*)))
     };
 }
 macro_rules! eprint {
     ($($arg:tt)*) => {
-        ::std::eprint!("{}", $crate::git::display_output(&::std::format!($($arg)*)))
+        ::std::eprint!("{}", $crate::git::display_print(&::std::format!($($arg)*)))
     };
 }
 // Through `eprint!`, so both stay in use; escaping is idempotent.

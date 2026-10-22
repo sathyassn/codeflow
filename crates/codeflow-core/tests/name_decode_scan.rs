@@ -487,7 +487,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
-        "WorkspaceReport::fmt",
+        "WorkspaceReport::write_block",
         "name",
         1,
         "format-contract",

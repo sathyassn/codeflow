@@ -125,6 +125,22 @@ pub struct IntegrateOutcome {
 
 impl std::fmt::Display for IntegrateOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl IntegrateOutcome {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> std::fmt::Result {
         // Branch and target names, test target names, reasons and the
         // checkout are fields: each stays on its line (TSK-388).
         use crate::git::{display_line, display_text};

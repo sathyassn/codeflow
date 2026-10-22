@@ -10,7 +10,7 @@
 // outside tests; a warning can quote a repository error that names a path.
 macro_rules! eprint {
     ($($arg:tt)*) => {
-        ::std::eprint!("{}", $crate::output::display_output(&::std::format!($($arg)*)))
+        ::std::eprint!("{}", $crate::output::display_print(&::std::format!($($arg)*)))
     };
 }
 // Through `eprint!`, so both stay in use; escaping is idempotent.

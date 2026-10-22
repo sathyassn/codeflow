@@ -65,6 +65,29 @@ pub fn display_output(text: &str) -> String {
     shown
 }
 
+/// One print call's text at a terminal sink, as in
+/// `codeflow_core::git::display_print`: [`display_output`], and each
+/// further line that does not start with a space or a tab indented two
+/// spaces, so no interpolated line break starts a line at column 0.
+#[must_use]
+pub fn display_print(text: &str) -> String {
+    let shown = display_output(text);
+    if !shown.contains('\n') {
+        return shown;
+    }
+    let mut out = String::with_capacity(shown.len() + 16);
+    for (index, line) in shown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+            if !line.is_empty() && !line.starts_with([' ', '\t']) {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 /// A message field: [`display_output`], with each further line indented,
 /// as in `codeflow_core::git::display_message`.
 #[must_use]

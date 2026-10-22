@@ -61,23 +61,15 @@ pub fn run(args: &DoctorArgs) -> i32 {
 fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
     if args.list {
         for name in doctor::check_names() {
-            let _ = writeln!(out, "{name}");
+            let _ = term_writeln!(out, "{name}");
         }
         return 0;
     }
     for note in codeflow_core::hooks::policy_schema::deprecation_warnings(std::path::Path::new(
         &opts.project_dir,
     )) {
-        let _ = writeln!(
-            out,
-            "note  policy: {}",
-            codeflow_core::git::display_output(&note.text)
-        );
-        let _ = writeln!(
-            out,
-            "      clear it: {}",
-            codeflow_core::git::display_output(&note.remedy)
-        );
+        let _ = term_writeln!(out, "note  policy: {}", note.text);
+        let _ = term_writeln!(out, "      clear it: {}", note.remedy);
     }
     let results = if let Some(name) = &args.check {
         match doctor::run_check(name, opts) {
@@ -111,27 +103,20 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
                 "FAIL"
             }
         };
-        let _ = writeln!(
+        let _ = term_writeln!(
             out,
             "{badge}  {name}: {message}",
             name = r.name,
-            // A check message can quote a policy value or a ref (TSK-388).
-            message = codeflow_core::git::display_output(&r.message)
+            // A check message can quote a policy value, a ref or a path;
+            // the sink rule keeps each further line indented (TSK-388).
+            message = r.message
         );
         match &r.status {
             Status::Warn(remedy) => {
-                let _ = writeln!(
-                    out,
-                    "      clear it: {}",
-                    codeflow_core::git::display_output(remedy)
-                );
+                let _ = term_writeln!(out, "      clear it: {}", remedy);
             }
             Status::Note(remedy) => {
-                let _ = writeln!(
-                    out,
-                    "      confirm: {}",
-                    codeflow_core::git::display_output(remedy)
-                );
+                let _ = term_writeln!(out, "      confirm: {}", remedy);
             }
             Status::Pass | Status::Fail => {}
         }

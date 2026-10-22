@@ -152,7 +152,7 @@ pub fn run(args: &DelegateArgs) -> i32 {
                 || INTERRUPTED.load(Ordering::SeqCst),
             ) {
                 Ok(result) => {
-                    print!("{}", codeflow_core::git::display_json(&result.json));
+                    print_block!(codeflow_core::git::TextBlock::json(&result.json));
                     if result.failed {
                         10
                     } else {

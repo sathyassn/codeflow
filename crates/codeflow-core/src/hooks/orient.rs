@@ -6,7 +6,6 @@
 //! `mcp serve`. Off-switch: `orient.enabled = false` in
 //! `.codeflow/project.toml` (D21).
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::models::{EpicFilter, EpicStatus, TaskFilter, TaskStatus};
@@ -22,14 +21,15 @@ pub const MAX_LINES: usize = 30;
 ///
 /// Returns an empty string when orient is disabled in `project.toml`.
 #[must_use]
-pub fn generate(root: &Path) -> String {
+pub fn generate(root: &Path) -> crate::git::TextBlock {
     let authority = super::landed_policy::load(root);
     let project_toml = authority.as_ref().ok().and_then(|a| a.project.clone());
     if !enabled(project_toml.as_ref()) {
-        return String::new();
+        return crate::git::TextBlock::new();
     }
 
-    let mut out = String::new();
+    // Each `writeln!` is one line under the block rule (TSK-388).
+    let mut out = crate::git::TextBlock::new();
     let name = project_name(root);
     let _ = writeln!(out, "# orient — {name}");
 

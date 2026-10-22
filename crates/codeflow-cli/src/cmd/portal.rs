@@ -47,7 +47,7 @@ pub fn run(args: &PortalArgs, assets: &dyn AssetSource) -> i32 {
     };
     match result {
         Ok(report) => {
-            print!("{report}");
+            print_block!(report.block());
             i32::from(report.has_conflicts()) * 2
         }
         Err(error) => {
