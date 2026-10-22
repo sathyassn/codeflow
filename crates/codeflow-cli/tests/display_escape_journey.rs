@@ -726,7 +726,10 @@ fn doctor_and_gate_notes_cannot_forge_lines() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path();
 
-    // Grok: the scaffold version from a checkout's project settings.
+    // Grok: the scaffold version from a checkout's project settings. The
+    // hostile value is not a parseable version, so the skew warning stays
+    // quiet (TSK-333) and the version reaches no line; the output is still
+    // checked for forged lines.
     let version = base.join("version");
     std::fs::create_dir(&version).unwrap();
     git(&version, &["init", "-q", "-b", "main"]);
@@ -739,7 +742,7 @@ fn doctor_and_gate_notes_cannot_forge_lines() {
         "scaffold version",
         codeflow(&version).args(["status"]),
         0,
-        &["scaffold 0.0.1\\x0acodeflow test: passed is behind"],
+        &[],
     );
 
     // Grok: the coverage note names a target whose name holds a newline.
