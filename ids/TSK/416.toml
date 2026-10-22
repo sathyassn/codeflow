@@ -1,0 +1,11 @@
+id = "TSK-416"
+uid = "9bcb2399-356f-4bd2-827a-9ca934c0edee"
+kind = "TSK"
+title = "Readiness and completion checks judge a line by the reference they report"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:06Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
