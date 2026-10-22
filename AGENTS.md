@@ -130,8 +130,8 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   Edition 2021, workspace-managed dependency versions in the root
   `Cargo.toml`.
 - **Hosted green before the next landing.** An ordinary landing on an
-  integration line waits until the line's current tip has green `codeflow
-  gates` and `windows` verdicts.
+  integration line waits until the line's current tip has green hosted
+  "codeflow gates" and "windows" verdicts.
   - Recovery exception: while the tip is red or lacks evidence, the only
     landings allowed are the repair of the failure and work needed to produce
     the evidence, such as a workflow fix without which the jobs cannot run.
@@ -147,7 +147,7 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     as a pass. A failure shown to be unrelated to the next landing still
     blocks it until repaired, under the recovery exception.
   - Once TSK-358 lands, a pull request into a line also needs its own green
-    `codeflow gates` and `windows` verdicts at the exact head that lands;
+    "codeflow gates" and "windows" verdicts at the exact head that lands;
     TSK-358 updates this sentence when it lands.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
