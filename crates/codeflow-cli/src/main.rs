@@ -58,7 +58,9 @@ enum Command {
         /// Only pin this codeflow release for CI: download its archives,
         /// check them against its sha256.sum and write `scaffold_version` and
         /// their digests (`[scaffold_sha256]`) to .codeflow/project.toml.
-        /// Nothing else changes. Upgrade step one; land it before the update.
+        /// Nothing else changes. The version must read as MAJOR.MINOR.PATCH
+        /// with an optional -prerelease and +build; any other is refused
+        /// before a download. Upgrade step one; land it before the update.
         #[arg(long, value_name = "VERSION", conflicts_with_all = ["diff", "force"])]
         pin: Option<String>,
     },
