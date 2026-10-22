@@ -336,7 +336,8 @@ impl ProtectionPlan {
             } else {
                 "branch protection"
             };
-            lines.push(format!("{} [{mechanism}]:", rule.pattern));
+            // The pattern is policy text: a fixed label starts the line.
+            lines.push(format!("branch {} [{mechanism}]:", rule.pattern));
             for intent in rule.intent_lines() {
                 lines.push(format!("  - {intent}"));
             }
@@ -1276,10 +1277,10 @@ printf '{}'
         let report = plan.dry_run_report("github");
         assert_eq!(report.status, ProtectStatus::DryRun);
         let text = report.render();
-        assert!(text.contains("main [branch protection]:"), "got:\n{text}");
+        assert!(text.contains("main [branch protection]:"), "got:\n{text:?}");
         assert!(
             text.contains("release/* [ruleset (glob pattern)]:"),
-            "got:\n{text}"
+            "got:\n{text:?}"
         );
         assert!(text.contains("require a pull request before merging"));
         assert!(text.contains("block force pushes"));
@@ -1331,7 +1332,7 @@ printf '{}'
             .iter()
             .any(|c| c.contains("[ ] release/*: block force pushes")));
         let text = report.render();
-        assert!(text.contains("status: degraded"), "got:\n{text}");
+        assert!(text.contains("status: degraded"), "got:\n{text:?}");
     }
 
     #[cfg(unix)]
@@ -1356,11 +1357,11 @@ printf '{}'
         let text = report.render();
         assert!(
             text.contains("applied branch protection for main"),
-            "got:\n{text}"
+            "got:\n{text:?}"
         );
         assert!(
             text.contains("applied ruleset for release/*"),
-            "got:\n{text}"
+            "got:\n{text:?}"
         );
         assert!(text.contains("status: applied"));
     }
@@ -1415,7 +1416,7 @@ printf '{}'
         let report = plan.dry_run_report("github").render();
         assert!(
             report.contains("codeflow/registry [ruleset (data profile)]:"),
-            "{report}"
+            "{report:?}"
         );
     }
 
@@ -1511,9 +1512,9 @@ printf '{}'
                 "require status checks to pass on a branch that is up to date with its base: \
                  codeflow gates, secret scan, security review, commit standards"
             ),
-            "{text}"
+            "{text:?}"
         );
-        assert!(text.contains("updated in place"), "{text}");
+        assert!(text.contains("updated in place"), "{text:?}");
         std::fs::write(
             &path,
             r#"{ "git": { "protected_branches": ["main"], "required_checks": ["build", "windows"] } }"#,
@@ -1525,7 +1526,7 @@ printf '{}'
             .render();
         assert!(
             text.contains("up to date with its base: build, windows"),
-            "{text}"
+            "{text:?}"
         );
     }
 
@@ -1614,7 +1615,12 @@ esac
     fn a_glob_ruleset_requires_strict_checks_pinned_to_github_actions() {
         let host = Host::new("[]", &[], None);
         let report = host.apply(r#"["release/*"]"#);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{}",
+            report.render().as_str()
+        );
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "POST repos/o/r/rulesets");
@@ -1654,7 +1660,12 @@ esac
     fn classic_protection_is_strict_and_keeps_conversation_resolution() {
         let host = Host::new("[]", &[], Some(LIVE_PROTECTION));
         let report = host.apply(r#"["main"]"#);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{}",
+            report.render().as_str()
+        );
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/branches/main/protection");
@@ -1684,7 +1695,12 @@ esac
         });
         let host = Host::new("[]", &[], Some(&live.to_string()));
         let report = host.apply(r#"["main"]"#);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{}",
+            report.render().as_str()
+        );
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         let reviews = &writes[0].1["required_pull_request_reviews"];
@@ -1712,7 +1728,7 @@ esac
             report.status,
             ProtectStatus::Degraded,
             "{}",
-            report.render()
+            report.render().as_str()
         );
         assert!(list.writes().is_empty(), "{:?}", list.writes());
 
@@ -1722,7 +1738,7 @@ esac
             report.status,
             ProtectStatus::Degraded,
             "{}",
-            report.render()
+            report.render().as_str()
         );
         assert!(protection.writes().is_empty(), "{:?}", protection.writes());
     }
@@ -1749,7 +1765,12 @@ esac
         )
         .unwrap();
         let report = host.apply(r#"["main"]"#);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{}",
+            report.render().as_str()
+        );
         let writes = host.writes();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/24379074");
@@ -1762,10 +1783,10 @@ esac
         let host = Host::new(list, &[(24_379_074, LIVE_RULESET)], Some(LIVE_PROTECTION));
         let report = host.apply(r#"["main"]"#);
         let text = report.render();
-        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert_eq!(report.status, ProtectStatus::Applied, "{text:?}");
         assert!(
             text.contains("updated ruleset 'main required checks' (24379074) in place for main"),
-            "{text}"
+            "{text:?}"
         );
         // One write, to that ruleset: no second ruleset, no classic PUT.
         let writes = host.writes();
@@ -1812,7 +1833,12 @@ esac
     #[cfg(unix)]
     fn writes_against(rulesets: &[(u64, &str, &[&str], &[&str])]) -> Vec<String> {
         let (report, writes) = apply_against(r#"["main"]"#, rulesets);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        assert_eq!(
+            report.status,
+            ProtectStatus::Applied,
+            "{}",
+            report.render().as_str()
+        );
         writes
     }
 
@@ -1855,7 +1881,12 @@ esac
         for branches in [r#"["release/*"]"#, r#"["feature/foo"]"#] {
             let (report, writes) =
                 apply_against(branches, &[(8, "active", &["refs/heads/**"], &[])]);
-            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            assert_eq!(
+                report.status,
+                ProtectStatus::Applied,
+                "{}",
+                report.render().as_str()
+            );
             let expected = if branches.contains('*') {
                 "POST repos/o/r/rulesets"
             } else {
@@ -1876,7 +1907,12 @@ esac
         for branches in [r#"["qa/foo"]"#, r#"["qa/foo/bar"]"#] {
             let (report, writes) =
                 apply_against(branches, &[(9, "active", &["refs/heads/qa**/**/*"], &[])]);
-            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            assert_eq!(
+                report.status,
+                ProtectStatus::Applied,
+                "{}",
+                report.render().as_str()
+            );
             assert_eq!(writes, ["PUT repos/o/r/rulesets/9"], "{branches}");
         }
     }
@@ -1890,10 +1926,10 @@ esac
         for include in ["refs/heads/[^m]*", "refs/heads/[ma"] {
             let (report, writes) = apply_against(r#"["main"]"#, &[(10, "active", &[include], &[])]);
             let text = report.render();
-            assert_eq!(report.status, ProtectStatus::Degraded, "{text}");
+            assert_eq!(report.status, ProtectStatus::Degraded, "{text:?}");
             assert!(writes.is_empty(), "{include}: {writes:?}");
-            assert!(text.contains("ruleset 10"), "{text}");
-            assert!(text.contains(include), "{text}");
+            assert!(text.contains("ruleset 10"), "{text:?}");
+            assert!(text.contains(include), "{text:?}");
         }
         // A readable ruleset that targets the branch is still updated, and
         // the unreadable one is reported beside it.
@@ -1905,9 +1941,9 @@ esac
             ],
         );
         let text = report.render();
-        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert_eq!(report.status, ProtectStatus::Applied, "{text:?}");
         assert_eq!(writes, ["PUT repos/o/r/rulesets/11"]);
-        assert!(text.contains("refs/heads/[^m]*"), "{text}");
+        assert!(text.contains("refs/heads/[^m]*"), "{text:?}");
     }
 
     #[cfg(unix)]

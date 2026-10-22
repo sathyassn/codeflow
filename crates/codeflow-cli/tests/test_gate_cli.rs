@@ -215,8 +215,14 @@ fn sequential_start_lines_precede_each_target_and_stdout_is_unchanged() {
     let stdout = String::from_utf8_lossy(&out.join().unwrap()).into_owned();
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3, "stdout: {stdout}");
-    assert!(lines[0].starts_with("first: ok (exit 0, "), "{stdout}");
-    assert!(lines[1].starts_with("second: ok (exit 0, "), "{stdout}");
+    assert!(
+        lines[0].starts_with("target first: ok (exit 0, "),
+        "{stdout}"
+    );
+    assert!(
+        lines[1].starts_with("target second: ok (exit 0, "),
+        "{stdout}"
+    );
     assert_eq!(lines[2], "test gate: passed (executed 2; skipped 0)");
     assert!(
         !stdout.contains("[codeflow test]"),

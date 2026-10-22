@@ -443,9 +443,15 @@ fn list_groups_open_items_first_and_status_counts_them() {
         "declined",
     );
     let listed = ok(&codeflow(&root, &["feedback", "list"]), "list");
+    // A topic line starts with its fixed label (TSK-388).
     let order: Vec<&str> = listed
         .lines()
-        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|line| {
+            line.strip_prefix("topic: ")
+                .unwrap_or(line)
+                .split_whitespace()
+                .next()
+        })
         .collect();
     assert_eq!(
         order,

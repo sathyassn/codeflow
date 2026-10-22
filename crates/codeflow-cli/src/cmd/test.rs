@@ -148,9 +148,10 @@ pub fn run(args: &TestArgs) -> i32 {
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };
-                // A target name is checkout text, shown as one line (TSK-388).
+                // A target name is checkout text, shown as one line after a
+                // fixed label (TSK-388).
                 println!(
-                    "{}: {verdict} (exit {}, {} ms)",
+                    "target {}: {verdict} (exit {}, {} ms)",
                     codeflow_core::git::display_text(&r.name),
                     r.exit_code,
                     r.duration_ms

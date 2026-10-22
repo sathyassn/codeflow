@@ -221,7 +221,9 @@ fn render_text(result: &Resolution) {
     for (prefix, p) in result
         .participants
         .iter()
-        .map(|p| ("", p))
+        // Participant names come from the project's catalog: a fixed
+        // label starts each line (TSK-388).
+        .map(|p| ("participant: ", p))
         .chain(result.obligations.iter().map(|p| ("obligation: ", p)))
     {
         let label = match p.label {
@@ -263,7 +265,7 @@ fn render_text(result: &Resolution) {
         let prefix = if gap.participant.starts_with("xhigh-reasoning:") {
             "obligation: "
         } else {
-            ""
+            "participant: "
         };
         let label = if gap.label == ParticipantLabel::Required {
             "required"

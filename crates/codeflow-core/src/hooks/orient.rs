@@ -33,8 +33,10 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
     let name = project_name(root);
     let _ = writeln!(out, "# orient — {name}");
 
+    // The description is checkout prose: a fixed label owns the line's
+    // first bytes, so it cannot read as a line of CodeFlow's (TSK-388).
     if let Some(one_liner) = product_one_liner(root, project_toml.as_ref()) {
-        let _ = writeln!(out, "{one_liner}");
+        let _ = writeln!(out, "product: {one_liner}");
     }
 
     if let Some(line) = branch_line(root) {
@@ -63,11 +65,17 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
 
     let _ = writeln!(out, "{}", gates_line(root));
 
-    let _ = writeln!(
-        out,
-        "{}",
-        super::landed_policy::diagnostic(root).unwrap_or_else(|e| e)
-    );
+    // Each line above starts with its own label (`branch:`, `work:`,
+    // `tasks:`, `capabilities:`, `gates:`); the policy line does too, and
+    // its error keeps that label (TSK-388).
+    match super::landed_policy::diagnostic(root) {
+        Ok(line) => {
+            let _ = writeln!(out, "{line}");
+        }
+        Err(error) => {
+            let _ = writeln!(out, "policy source: {error}");
+        }
+    }
     let binary = std::process::Command::new("codeflow")
         .args(["git-hook", "capabilities"])
         .output();
@@ -488,7 +496,7 @@ mod tests {
         full_fixture(dir.path());
         let digest = generate(dir.path());
 
-        assert!(digest.lines().count() <= MAX_LINES, "{digest}");
+        assert!(digest.lines().count() <= MAX_LINES, "{digest:?}");
         // <500 token budget: chars/4 is a generous proxy.
         assert!(
             digest.len() < 2000,
@@ -663,7 +671,7 @@ mod tests {
         let digest = generate(dir.path());
         assert!(
             digest.contains("work: 1 epics (1 in progress) · 2 tasks (1 open)"),
-            "{digest}"
+            "{digest:?}"
         );
     }
 

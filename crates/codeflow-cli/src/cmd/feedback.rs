@@ -413,7 +413,8 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         return 0;
     }
     for (topic, members) in groups {
-        println!("{topic}");
+        // A topic is checkout text: a fixed label starts the line.
+        println!("topic: {}", codeflow_core::git::display_line(&topic));
         for item in members {
             let placed = if item.placed_in.is_empty() {
                 String::new()

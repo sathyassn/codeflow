@@ -309,8 +309,10 @@ fn run_docs_lint(root: &Path) -> bool {
     for warning in &report.warnings {
         eprintln!("{}", warning.line("validate --docs", "warning"));
     }
+    // An issue starts with a checkout file path: a fixed label owns the
+    // line's first bytes (TSK-388).
     for issue in &report.issues {
-        eprintln!("{issue}");
+        eprintln!("validate --docs: error: {issue}");
     }
 
     if report.is_clean() {
