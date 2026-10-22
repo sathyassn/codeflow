@@ -1,0 +1,11 @@
+id = "TSK-426"
+uid = "1ee4aca5-8f16-4407-b9f4-8c4eb99ef4df"
+kind = "TSK"
+title = "Strict typing and linting are the default tooling per language"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:47Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
