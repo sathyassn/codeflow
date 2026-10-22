@@ -1,0 +1,11 @@
+id = "TSK-438"
+uid = "c7cdbf67-b014-4a41-852f-46856f74887b"
+kind = "TSK"
+title = "A supervisor and a separate agent account isolate lanes beyond the sandbox"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:53:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
