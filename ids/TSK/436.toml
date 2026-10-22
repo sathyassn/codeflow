@@ -1,0 +1,11 @@
+id = "TSK-436"
+uid = "30b2d4e2-bc79-4976-b965-1825892177ed"
+kind = "TSK"
+title = "A task criterion can record a deferred result proved after merge"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:53:06Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
