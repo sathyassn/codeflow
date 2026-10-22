@@ -1,0 +1,11 @@
+id = "TSK-430"
+uid = "f4f5e4fc-9631-43ce-ab62-5772c780962d"
+kind = "TSK"
+title = "One local command gives the hosted secret-scan and dependency-audit verdicts"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:04:01Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
