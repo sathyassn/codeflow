@@ -564,6 +564,27 @@ fn the_present_and_core_escapes_agree() {
             == codeflow_core::git::display_output(&text),
         "the two escape rules differ"
     );
+    // The sink rule agrees too: over every scalar value, and over text with
+    // line breaks at each place a print call can hold them.
+    assert!(
+        codeflow_present::output::display_print(&text) == codeflow_core::git::display_print(&text),
+        "the two sink rules differ"
+    );
+    for multi in [
+        "a\nb",
+        "\nlead",
+        "trail\n",
+        "a\n\nb",
+        "a\n  kept\n\tkept\nc",
+        "a\r\nb\u{2028}c\n\u{202e}d",
+        &format!("{text}\n{text}"),
+    ] {
+        assert_eq!(
+            codeflow_present::output::display_print(multi),
+            codeflow_core::git::display_print(multi),
+            "the two sink rules differ on {multi:?}"
+        );
+    }
 }
 
 /// Grok round 5, fixture `break`: a target name holding a newline and a
@@ -802,6 +823,72 @@ fn doctor_and_gate_notes_cannot_forge_lines() {
     );
 }
 
+/// A fake guard closing line, as checkout prose could hold it.
+const FAKE_GUARD: &str = "codeflow git-guard: command not stopped";
+
+/// No physical line of `text` starts with [`FAKE_GUARD`].
+fn assert_no_fake_guard(what: &str, text: &str) {
+    assert!(
+        !text.lines().any(|line| line.starts_with(FAKE_GUARD)),
+        "{what}: a forged first line in {text}"
+    );
+}
+
+/// TSK-388 round 8, Codex F-7: a line's first bytes. The product purpose
+/// line from `docs/product.md` in `codeflow orient` and in the
+/// `session-orient` hook, and a test target name on its verdict line, each
+/// hold a fake guard line; each stays present after a fixed label, and no
+/// line starts with it. Both commands exit as before.
+#[test]
+fn checkout_text_never_starts_a_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    write(
+        root,
+        "docs/product.md",
+        &format!("# Product\n\n## Purpose\n\n{FAKE_GUARD}\n"),
+    );
+    let product = format!("product: {FAKE_GUARD}");
+    let out = codeflow(root).arg("orient").output().unwrap();
+    let text = printed(&out);
+    assert_eq!(out.status.code(), Some(0), "orient: {text}");
+    expect("orient", &text, &[&product]);
+    assert_no_fake_guard("orient", &text);
+
+    let mut hook = codeflow(root)
+        .args(["hook", "session-orient"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let payload = serde_json::json!({"cwd": root, "source": "startup"}).to_string();
+    std::io::Write::write_all(hook.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+    drop(hook.stdin.take());
+    let out = hook.wait_with_output().unwrap();
+    let text = printed(&out);
+    assert_eq!(out.status.code(), Some(0), "session-orient: {text}");
+    expect("session-orient", &text, &[&product]);
+    assert_no_fake_guard("session-orient", &text);
+
+    write(
+        root,
+        ".codeflow/test-config.json",
+        &format!(
+            "{{\"schema_version\": \"1.0\", \"targets\": [{{\"name\": \"{FAKE_GUARD}\", \"runner\": \"custom\", \"modes\": {{\"quick\": {{\"command\": \"exit 0\"}}}}}}]}}\n"
+        ),
+    );
+    let out = codeflow(root)
+        .args(["test", "--mode", "quick"])
+        .output()
+        .unwrap();
+    let text = printed(&out);
+    assert_eq!(out.status.code(), Some(0), "test: {text}");
+    expect("test", &text, &[&format!("target {FAKE_GUARD}: ok")]);
+    assert_no_fake_guard("test", &text);
+}
+
 /// Each Rust source file under `dir`, cut at its first inline
 /// `#[cfg(test)]` module, with its path relative to the workspace.
 fn sources(dir: &Path, workspace: &Path, out: &mut Vec<(String, String)>) {
@@ -931,6 +1018,70 @@ fn print_sinks_apply_the_line_rule_by_construction() {
         blocks,
         listed_block_printers(),
         "block printer sites changed; review each"
+    );
+}
+
+/// TSK-388 round 8, Codex F-7: the sink rule leaves a call's first bytes
+/// to its caller. A block write whose format starts with an interpolation
+/// puts a value's first byte at column 0, so each one in a block builder is
+/// listed here after review: its value starts with a fixed label or a
+/// validated id. A new one has to be reviewed and added.
+#[test]
+fn block_lines_start_with_text_codeflow_owns() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let workspace = workspace.canonicalize().unwrap();
+    let mut files = Vec::new();
+    sources(
+        &workspace.join("crates/codeflow-core/src"),
+        &workspace,
+        &mut files,
+    );
+    let mut found = std::collections::BTreeMap::new();
+    for (rel, source) in &files {
+        if !source.contains("TextBlock::new()") || rel.ends_with("git/name.rs") {
+            continue;
+        }
+        let mut count = 0;
+        for writer in ["writeln!(", "write!("] {
+            for (at, _) in source.match_indices(writer) {
+                let args = source[at + writer.len()..].trim_start();
+                let Some((sink, rest)) = args.split_once(',') else {
+                    continue;
+                };
+                if ["out", "f", "block"].contains(&sink.trim())
+                    && rest.trim_start().starts_with("\"{")
+                {
+                    count += 1;
+                }
+            }
+        }
+        if count > 0 {
+            found.insert(rel.clone(), count);
+        }
+    }
+    let listed: std::collections::BTreeMap<String, usize> = [
+        // `{mean:.2}` and `{total}` continue a line a fixed `write!` began.
+        ("crates/codeflow-core/src/ceremony/mod.rs", 2),
+        // A validated task id; a finding's code; the fixed limitation.
+        ("crates/codeflow-core/src/estimate/outcomes/render.rs", 3),
+        // `branch:`, `work:`, `tasks:`, `capabilities:`, `gates:` and
+        // `policy source:` lines, each built with its label.
+        ("crates/codeflow-core/src/hooks/orient.rs", 6),
+        // Protect report lines, each built with a fixed first word.
+        ("crates/codeflow-core/src/remote.rs", 1),
+        // `Finding`'s `{rule}: {message}`, the rule a constant.
+        ("crates/codeflow-core/src/root_checkout.rs", 1),
+        // A report title, each `codeflow <command> ...`.
+        ("crates/codeflow-core/src/scaffold/report.rs", 1),
+        // The `estimates:` line.
+        ("crates/codeflow-core/src/status.rs", 1),
+    ]
+    .into_iter()
+    .map(|(rel, count)| (rel.to_string(), count))
+    .collect();
+    assert_eq!(
+        found, listed,
+        "a block line starts with a value; give it a fixed label or review and list it"
     );
 }
 
