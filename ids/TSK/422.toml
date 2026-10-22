@@ -1,0 +1,11 @@
+id = "TSK-422"
+uid = "2140401e-3eca-4e57-9bc3-7327a0d28ecd"
+kind = "TSK"
+title = "An orchestrator's follow-up ledger is a command whose rows close on proof"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:27Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
