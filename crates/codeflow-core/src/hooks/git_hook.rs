@@ -825,7 +825,7 @@ pub fn reference_transaction(
         // without naming it exactly (`origin/MAIN` beside a protected `main`)
         // would land on that tracking ref once it exists (Codex F3).
         if super::policy::non_ascii_aliasing()
-            && tracking_name_folds_onto_protected(policy, refname)
+            && tracking_name_folds_onto_protected(&repo, policy, refname)
             && !unchanged()
         {
             if policy.local_ref_protection.is_active() && !sanctioned {
@@ -908,13 +908,40 @@ pub fn reference_transaction(
 }
 
 /// Whether a remote-tracking `refname` folds onto a protected branch it does
-/// not name exactly ([`GitPolicy::branch_folds_onto_protected`]). The remote
-/// name may hold `/`, so every branch the name could end in is judged.
-fn tracking_name_folds_onto_protected(policy: &GitPolicy, refname: &str) -> bool {
-    refname.strip_prefix("refs/remotes/").is_some_and(|rest| {
-        rest.match_indices('/')
-            .any(|(at, _)| policy.branch_folds_onto_protected(&rest[at + 1..]))
-    })
+/// not name exactly ([`GitPolicy::branch_folds_onto_protected`]). The branch
+/// is the part after the longest `refs/remotes/<remote>/` prefix of a
+/// configured remote, so `origin/feat/MAIN` is the branch `feat/MAIN`, which
+/// folds onto nothing protected. Under no configured remote, or when the
+/// remotes cannot be read, every branch the name could end in is judged,
+/// failing closed for an unconfigured destination.
+fn tracking_name_folds_onto_protected(
+    repo: &Repository,
+    policy: &GitPolicy,
+    refname: &str,
+) -> bool {
+    let Some(rest) = refname.strip_prefix("refs/remotes/") else {
+        return false;
+    };
+    // A remote name that is not valid UTF-8 names no text prefix.
+    let remote = repo.remotes().ok().and_then(|remotes| {
+        remotes
+            .iter_bytes()
+            .filter_map(|name| {
+                crate::git::GitName::from_bytes(name)
+                    .rule_text()
+                    .ok()
+                    .map(str::to_string)
+            })
+            .filter(|name| rest.starts_with(&format!("{name}/")))
+            .map(|name| name.len())
+            .max()
+    });
+    match remote {
+        Some(len) => policy.branch_folds_onto_protected(&rest[len + 1..]),
+        None => rest
+            .match_indices('/')
+            .any(|(at, _)| policy.branch_folds_onto_protected(&rest[at + 1..])),
+    }
 }
 
 /// The ref names this transaction writes (a new value that is not zero)
@@ -2981,6 +3008,70 @@ mod tests {
             assert_eq!(v.len(), 1, "{name}: {v:?}");
             assert_eq!(v[0].rule, "git.local_ref_protection", "{name}");
         }
+    }
+
+    /// TSK-381 Fable confirm item 1: with `origin` configured, only the branch
+    /// after `refs/remotes/origin/` is judged, so `feat/MAIN` and
+    /// `release/Main` fetch; `MAIN`, `maſter` and a name under no configured
+    /// remote are refused where the git directory folds names.
+    #[test]
+    fn test_reference_transaction_judges_the_branch_after_the_configured_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        git(
+            dir.path(),
+            &["remote", "add", "origin", "/nonexistent/origin.git"],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let run = |name: &str| {
+            reference_transaction(
+                dir.path(),
+                &GitPolicy::default(),
+                &format!("{ZERO40} {ahead} {name}\n"),
+                false,
+                false,
+            )
+            .unwrap()
+            .violations
+        };
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        for name in [
+            "refs/remotes/origin/feat/MAIN",
+            "refs/remotes/origin/release/Main",
+        ] {
+            assert!(run(name).is_empty(), "{name}");
+        }
+        for name in [
+            "refs/remotes/origin/MAIN",
+            "refs/remotes/origin/ma\u{17f}ter",
+            "refs/remotes/nobody/MAIN",
+        ] {
+            assert_eq!(run(name).len(), 1, "{name}");
+        }
+    }
+
+    /// TSK-381 SF-8: APFS ignores Unicode normalization, so an NFD spelling of
+    /// an existing NFC tracking ref is that ref's file and is refused where
+    /// the git directory folds names.
+    #[test]
+    fn test_reference_transaction_refuses_an_nfd_write_onto_an_nfc_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let base = rev_parse(dir.path(), "HEAD");
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/integration/caf\u{e9}",
+                &base,
+            ],
+        );
+        let ahead = commit_ahead_of_main(dir.path());
+        let _insensitive = crate::hooks::policy::NonAsciiAliasingScope::set(true);
+        let stdin = format!("{ZERO40} {ahead} refs/remotes/origin/integration/cafe\u{301}\n");
+        let report =
+            reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
+        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
     }
 
     /// TSK-381 SF-4: the sync allowance trusts only the tracking ref git lists

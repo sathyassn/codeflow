@@ -1127,6 +1127,20 @@ fn tsk381_a_unicode_remote_branch_fetches_and_a_folded_directory_does_not() {
         tip
     );
 
+    // Fable confirm item 1: only the branch after the configured remote's
+    // prefix is judged, so `feat/MAIN` is not taken for `MAIN` beside `main`.
+    git(&origin, &["update-ref", "refs/heads/feat/MAIN", &tip]);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/feat/MAIN"]),
+        tip
+    );
+
     git(
         &origin,
         &["update-ref", "refs/heads/INTEGRATION/producer-line", &tip],
@@ -1152,6 +1166,67 @@ fn tsk381_a_unicode_remote_branch_fetches_and_a_folded_directory_does_not() {
             .unwrap();
         assert!(!landed.status.success(), "the folded directory landed");
     }
+}
+
+/// TSK-381 SF-7, the D1 reproduction: the producer's line is
+/// `integration/producer-line`, and origin holds the completion only as
+/// `INTEGRATION/producer-line`. With no local `integration/` directory the
+/// fetch passes, and the tracking ref is read by the spelling git stored, so
+/// the consumer pinning that completion stays waiting.
+#[test]
+fn tsk381_a_differently_spelled_line_does_not_land_a_research_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let insensitive = codeflow_core::hooks::repo::case_insensitive_git_dir(&root.join(".git"));
+    let remote = tempfile::tempdir().unwrap();
+    let origin = case_sensitive_origin(remote.path(), insensitive);
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    commit_record(
+        root,
+        "TSK-003",
+        &record_on("TSK-003", "integration/producer-line", "[]"),
+    );
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["switch", "-qc", "integration/producer-line"]);
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    git(
+        root,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/INTEGRATION/producer-line",
+        ],
+    );
+    git(
+        root,
+        &[
+            "update-ref",
+            "-d",
+            "refs/remotes/origin/INTEGRATION/producer-line",
+        ],
+    );
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &["update-ref", "-d", "refs/heads/integration/producer-line"],
+    );
+    commit_record(
+        root,
+        "TSK-004",
+        &record_on("TSK-004", "main", &research_pin("TSK-003", &pin)),
+    );
+    wire_transaction_hook(root);
+    let out = fetch_origin(root);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    let next = String::from_utf8_lossy(&next.stdout).to_string();
+    assert!(next.contains("waiting  TSK-004"), "{next}");
 }
 
 /// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead

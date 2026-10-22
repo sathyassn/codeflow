@@ -30,29 +30,36 @@ pub fn case_insensitive_git_dir(dir: &Path) -> bool {
 }
 
 /// The name a filesystem that folds case may store as the same entry: an
-/// approximation of Unicode case folding (`ſ` and `K` fold to `s` and `k`).
+/// approximation of APFS name comparison, which ignores both case and
+/// Unicode normalization. The name is decomposed, case folded (upper case,
+/// then lower case: `ſ` and `K` fold to `s` and `k`) and recomposed, so an
+/// NFD `café` and an NFC `café` fold alike (TSK-381 SF-8).
 #[must_use]
 pub fn folded_ref_name(name: &str) -> String {
-    name.to_uppercase().to_lowercase()
+    use unicode_normalization::UnicodeNormalization as _;
+    let decomposed: String = name.nfd().collect();
+    decomposed.to_uppercase().to_lowercase().nfc().collect()
 }
 
 /// The commit `name` points to, read only when git lists a ref by exactly
 /// that spelling and no other listed spelling folds to it (TSK-381 SF-4). On
 /// a case-insensitive filesystem a loose `refs/remotes/origin/MAIN` also
 /// opens as `refs/remotes/origin/main`, so a lookup by name can return a
-/// ref fetched under another spelling; the listing gives the spelling git
-/// stored, and a folded alias reads as absent.
+/// ref fetched under another spelling. Every ref is listed from `refs/` down
+/// and compared byte for byte: a listing glob that named a directory along
+/// `name` would open it under the spelling asked for and report the stored
+/// `INTEGRATION/x` as `integration/x` (SF-7), so no glob is used. This catches
+/// an alias while the genuine ref is packed or absent; once a loose alias has
+/// been written over a loose genuine ref, the stored spelling is the genuine
+/// one, and the reference-transaction hook's collision refusal is the control.
 ///
 /// # Errors
 ///
 /// Returns the git error when the references cannot be listed or peeled.
 pub fn listed_ref_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, git2::Error> {
-    let glob = name
-        .rsplit_once('/')
-        .map_or_else(|| name.to_string(), |(dir, _)| format!("{dir}/*"));
     let folded = folded_ref_name(name);
     let (mut exact, mut alias) = (None, false);
-    for reference in repo.references_glob(&glob)? {
+    for reference in repo.references()? {
         let reference = reference?;
         let listed = reference.name_bytes();
         if listed == name.as_bytes() {
@@ -657,6 +664,35 @@ mod tests {
             assert_eq!(listed("refs/remotes/origin/main"), None);
             assert_eq!(listed("refs/remotes/origin/MAIN"), None);
         }
+    }
+
+    /// TSK-381 SF-7: a tracking ref stored under `INTEGRATION/` is judged by
+    /// that stored spelling, not as `integration/` because the listing asked
+    /// for that directory. SF-8: NFD and NFC spellings fold alike.
+    #[test]
+    fn a_ref_under_a_differently_spelled_directory_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("t", "t@example.test").unwrap();
+        let commit = repo.commit(None, &sig, &sig, "one", &tree, &[]).unwrap();
+        let stored = dir.path().join(".git/refs/remotes/origin/INTEGRATION");
+        std::fs::create_dir_all(&stored).unwrap();
+        std::fs::write(stored.join("producer-line"), format!("{commit}\n")).unwrap();
+        let listed = |name: &str| super::listed_ref_commit(&repo, name).unwrap();
+        assert_eq!(
+            listed("refs/remotes/origin/integration/producer-line"),
+            None
+        );
+        assert_eq!(
+            listed("refs/remotes/origin/INTEGRATION/producer-line"),
+            Some(commit)
+        );
+        assert_eq!(
+            super::folded_ref_name("integration/cafe\u{301}"),
+            super::folded_ref_name("integration/caf\u{e9}")
+        );
     }
 
     #[test]
