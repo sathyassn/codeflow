@@ -1,5 +1,6 @@
 ---
 id: ADR-0086
+uid: 6be2c341-340f-4add-9d89-ecd41ae5994b              # hidden record identity, written once by `new`; never edit
 title: The orchestration ledger and lanes live in the clone
 date: 2026-10-22
 status: proposed          # proposed | accepted | superseded
