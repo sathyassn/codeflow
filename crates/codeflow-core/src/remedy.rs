@@ -149,18 +149,25 @@ impl Finding {
     #[must_use]
     pub fn line(&self, plane: &str, kind: &str) -> String {
         // A finding's own text can span lines (a tool's error); they stay
-        // indented under it, so the remedy line stays with its finding.
+        // indented under it, so the remedy line stays with its finding. It
+        // can quote a name or content a remote supplied (TSK-388).
         format!(
             "{plane}: {kind}: {}\n  clear it: {}",
-            self.text.trim_end().replace('\n', "\n  "),
-            self.remedy
+            crate::git::display_message(self.text.trim_end()),
+            crate::git::display_message(&self.remedy)
         )
     }
 }
 
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (clear it: {})", self.text, self.remedy)
+        // The text can quote a name or content a remote supplied (TSK-388).
+        write!(
+            f,
+            "{} (clear it: {})",
+            crate::git::display_message(&self.text),
+            crate::git::display_message(&self.remedy)
+        )
     }
 }
 

@@ -162,8 +162,9 @@ impl Violation {
             "codeflow {plane}: {verdict} — policy rule {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  policy file: .codeflow/policy.json",
             rule = self.rule,
             level = self.level,
-            msg = self.message,
-            remedy = self.remedy,
+            // A message can quote a name or content a remote supplied.
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
         )
     }
 
@@ -180,8 +181,8 @@ impl Violation {
             "codeflow {plane}: {verdict} — lifecycle invariant {rule} ({level})\n  {msg}\n  sanctioned: {remedy}\n  authority: {authority}",
             rule = self.rule,
             level = self.level,
-            msg = self.message,
-            remedy = self.remedy,
+            msg = crate::git::display_message(&self.message),
+            remedy = crate::git::display_message(&self.remedy),
         )
     }
 }

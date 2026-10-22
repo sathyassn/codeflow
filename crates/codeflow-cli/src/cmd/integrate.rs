@@ -22,7 +22,7 @@ pub fn run(args: &IntegrateArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -34,11 +34,11 @@ pub fn run(args: &IntegrateArgs) -> i32 {
     };
     match integrate_with_mode(&root, &args.branch, &args.into, mode) {
         Ok(outcome) => {
-            println!("{outcome}");
+            println_block!(outcome.block());
             0
         }
         Err(e) => {
-            eprintln!("codeflow integrate: {e}");
+            eprintln!("codeflow integrate: {e}", e = crate::cmd::shown(&e));
             eprintln!("nothing was merged into '{}'", args.into);
             1
         }

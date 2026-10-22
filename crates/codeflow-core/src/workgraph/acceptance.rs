@@ -1577,7 +1577,8 @@ fn judge_reopened(
         };
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
-                "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
+                "the target `{0}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {0}`)",
+                crate::git::display_text(name)
             ));
         }
         tips.extend(found);
@@ -1591,7 +1592,8 @@ fn judge_reopened(
             if found.is_empty() {
                 return TaskJudgement::unreadable(format!(
                     "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
-                    name.name,
+                    // `origin/HEAD` names it, as the remote said (TSK-388).
+                    crate::git::display_text(&name.name),
                     if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
                 ));
             }

@@ -874,3 +874,163 @@ fn r22_own_landing_ancestry_refuses_missing_object_and_keeps_unrelated() {
     assert!(!own_review_reaches(&repo, unrelated, oid).unwrap());
     assert!(own_review_reaches(&repo, Oid::from_str(&"a".repeat(40)).unwrap(), oid).is_err());
 }
+
+/// Default branch names a remote can advertise, each holding a terminal
+/// escape sequence, and how a message shows them (TSK-388): an OSC title
+/// sequence, which only a server that is not git sends, and the C1 control
+/// CSI (U+009B), which git itself accepts in a branch name.
+const HOSTILE: [(&str, &str); 2] = [
+    ("ev\u{1b}]0;owned\u{7}il", "ev\\x1b]0;owned\\x07il"),
+    ("ev\u{9b}31mil", "ev\\x9b31mil"),
+];
+
+/// Whether `message` shows `shown` and holds none of the hostile names'
+/// control characters.
+fn escaped(message: &str, shown: &str) -> bool {
+    message.contains(shown) && !message.contains(['\u{1b}', '\u{7}', '\u{9b}'])
+}
+
+/// A destination whose default branch is `name` at `tip`, with no URL.
+fn named_default(name: &str, tip: Oid) -> Destination {
+    Destination {
+        url: None,
+        default: Some((name.to_string(), tip)),
+        heads: vec![(name.to_string(), tip)],
+    }
+}
+
+#[test]
+fn a_missing_default_branch_is_named_escaped() {
+    let oid = "a".repeat(40);
+    let refused = |name: &str| {
+        from_advertisement(
+            "fixture",
+            &format!("ref: refs/heads/{name}\tHEAD\n{oid}\trefs/heads/main\n"),
+        )
+        .unwrap_err()
+    };
+    for (name, shown) in HOSTILE {
+        let error = refused(name);
+        assert!(
+            escaped(&error, &format!("names '{shown}' as its default branch")),
+            "{error:?}"
+        );
+    }
+    let error = refused("trunk");
+    assert!(
+        error.contains("names 'trunk' as its default branch"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_release_scope_names_the_default_branch_escaped() {
+    let policy = |pattern: &str| {
+        format!(
+            "{{\"schema_version\": 1, \"git\": {{\"release_branch_pattern\": \"{pattern}\"}}}}\n"
+        )
+    };
+    for (name, shown) in HOSTILE.into_iter().chain([("main", "main")]) {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, tip) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b".codeflow/policy.json", b"{\"schema_version\": 1}\n")],
+        );
+        let short = &tip.to_string()[..9];
+        let source = scope(dir.path(), &named_default(name, tip), "feat/x", None)
+            .unwrap()
+            .source;
+        assert!(
+            escaped(
+                &source,
+                &format!("built in (no release_branch_pattern at {shown} {short})")
+            ),
+            "{source:?}"
+        );
+        let tip = crate::git::add_commit(
+            &repo,
+            &[(b".codeflow/policy.json", policy("release/*").as_bytes())],
+        );
+        let short = &tip.to_string()[..9];
+        let source = scope(dir.path(), &named_default(name, tip), "feat/x", None)
+            .unwrap()
+            .source;
+        assert_eq!(source, format!("{shown} at {short}"));
+        // A pattern that would match the default branch itself.
+        let tip = crate::git::add_commit(
+            &repo,
+            &[(
+                b".codeflow/policy.json",
+                policy(&format!("{}*", &name[..2])).as_bytes(),
+            )],
+        );
+        let error = scope(dir.path(), &named_default(name, tip), "feat/x", None).unwrap_err();
+        assert!(
+            escaped(
+                &error,
+                &format!("the policy at the default target {shown} ({tip})")
+            ) && error.contains(&format!("it matches the protected branch '{shown}'")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn reading_the_default_target_names_it_escaped() {
+    for (name, shown) in HOSTILE.into_iter().chain([("main", "main")]) {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, tip) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b".codeflow/project.toml", b"schema_version = [\n")],
+        );
+        let error = default_tracks_work(dir.path(), &named_default(name, tip)).unwrap_err();
+        assert!(
+            escaped(
+                &error,
+                &format!("durable work tracking at the default target {shown}: ")
+            ),
+            "{error:?}"
+        );
+        // A tip this clone lacks and cannot fetch.
+        let absent = Oid::from_str(&"a".repeat(40)).unwrap();
+        let error = default_tracks_work(dir.path(), &named_default(name, absent)).unwrap_err();
+        assert!(
+            escaped(&error, &format!("the judge needs {shown} at {absent}, ")),
+            "{error:?}"
+        );
+        let error = advertised_tip_here(dir.path(), &Destination::default(), name).unwrap_err();
+        assert!(
+            escaped(&error, &format!("advertises no branch '{shown}'")),
+            "{error:?}"
+        );
+    }
+}
+
+/// A release judgement whose destination's default branch is a git-valid
+/// name holding the C1 control CSI names it escaped in its transition-table
+/// refusals. A legacy note, which also names that branch, needs a verified
+/// epic line, and an epic line lands only on `main` or `master`.
+#[test]
+fn a_release_judgement_names_the_default_branch_escaped() {
+    let (name, shown) = HOSTILE[1];
+    let fx = Fx::new();
+    let landing = fx.land_mixed("src/mixed.rs");
+    fx.record_table(BASELINE_KEY, &format!("\"{LINE_A}\" = \"{landing}\"\n"));
+    fx.release_importing(LINE_A);
+    let origin = fx.origin.to_str().unwrap();
+    fx.git(&["push", "-q", "origin", &format!("main:refs/heads/{name}")]);
+    git_in(
+        &fx.origin,
+        &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")],
+    );
+    let destination = ask_destination(&fx.root, Some(origin)).unwrap();
+    assert_eq!(destination.default.as_ref().unwrap().0, name);
+    let published = fx.git(&["rev-parse", &format!("origin/{RELEASE}")]);
+    for approved in [&[(LINE_A, landing.as_str())][..], &[]] {
+        let refused = judge(&fx.root, &destination, &published, "HEAD", approved).unwrap_err();
+        assert!(
+            escaped(&refused, &format!("`{BASELINE_KEY}` on {shown} names ")),
+            "{refused:?}"
+        );
+    }
+}

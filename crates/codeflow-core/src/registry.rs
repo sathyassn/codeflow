@@ -98,7 +98,12 @@ pub struct RootUnreadable {
 
 impl std::fmt::Display for RootUnreadable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cannot inspect {}: {}", self.path.display(), self.error)
+        write!(
+            f,
+            "cannot inspect {}: {}",
+            crate::git::display_path(&self.path),
+            self.error
+        )
     }
 }
 

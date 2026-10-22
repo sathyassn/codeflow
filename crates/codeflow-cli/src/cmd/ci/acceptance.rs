@@ -63,8 +63,8 @@ pub(super) fn dispatch(
                 } else {
                     "frozen"
                 },
-                branch,
-                range.target
+                codeflow_core::git::display_text(branch),
+                codeflow_core::git::display_text(range.target)
             );
             pull_request_findings_judged(
                 root,
@@ -133,12 +133,12 @@ fn judge(
     // pre-push hook states a release push's scope itself.
     eprintln!(
         "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
-        names.branch,
+        codeflow_core::git::display_text(names.branch),
         names
             .into
-            .map(|into| format!(" into '{into}'"))
+            .map(|into| format!(" into '{}'", codeflow_core::git::display_text(into)))
             .unwrap_or_default(),
-        scope.pattern,
+        codeflow_core::git::display_text(&scope.pattern),
         scope.source
     );
     let head = match release_head(root, range, scope) {

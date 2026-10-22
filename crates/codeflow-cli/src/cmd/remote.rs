@@ -59,10 +59,13 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         (Ok(plan), Ok(())) => plan,
         (read, schema) => {
             if let Err(error) = read {
-                eprintln!("remote protect: {error}");
+                eprintln!("remote protect: {error}", error = crate::cmd::shown(&error));
             }
             for error in schema.err().unwrap_or_default() {
-                eprintln!("remote protect: policy error: {error}");
+                eprintln!(
+                    "remote protect: policy error: {error}",
+                    error = crate::cmd::shown(&error)
+                );
             }
             anyhow::bail!(
                 "{} is invalid or cannot be read, so no rules were planned or applied (see `codeflow policy explain`)",
@@ -75,7 +78,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     if ProtectionPlan::policy_absent(&policy_path).map_err(anyhow::Error::msg)? {
         eprintln!(
             "note: {} not found — using charter defaults (main, master)",
-            policy_path.display()
+            codeflow_core::git::display_path(&policy_path)
         );
     }
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
@@ -92,7 +95,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         adapter.apply(&plan)
     };
 
-    print!("{}", report.render());
+    print_block!(report.render());
     let registry = codeflow_core::ids::REGISTRY_BRANCH;
     if tracked
         && !*dry_run
@@ -108,7 +111,10 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
                 .data_profile
                 .insert(codeflow_core::ids::AUTHORITY.to_string(), today);
         }) {
-            eprintln!("warning: could not record the applied data profile: {error}");
+            eprintln!(
+                "warning: could not record the applied data profile: {error}",
+                error = crate::cmd::shown(&error)
+            );
         }
     }
     Ok(())

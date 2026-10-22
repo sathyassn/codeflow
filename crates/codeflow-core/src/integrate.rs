@@ -125,7 +125,31 @@ pub struct IntegrateOutcome {
 
 impl std::fmt::Display for IntegrateOutcome {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "integrated '{}' into '{}'", self.branch, self.target)?;
+        f.write_str(self.block().as_str())
+    }
+}
+
+impl IntegrateOutcome {
+    /// The text as a block for a terminal: each `writeln!` is one line
+    /// under the block rule, so a quoted value cannot start a line of its
+    /// own (TSK-388).
+    #[must_use]
+    pub fn block(&self) -> crate::git::TextBlock {
+        let mut block = crate::git::TextBlock::new();
+        let _ = self.write_block(&mut block);
+        block
+    }
+
+    fn write_block(&self, f: &mut crate::git::TextBlock) -> std::fmt::Result {
+        // Branch and target names, test target names, reasons and the
+        // checkout are fields: each stays on its line (TSK-388).
+        use crate::git::{display_line, display_text};
+        writeln!(
+            f,
+            "integrated '{}' into '{}'",
+            display_text(&self.branch),
+            display_text(&self.target)
+        )?;
         writeln!(
             f,
             "  target:    {} -> {} ({} commit{})",
@@ -147,7 +171,8 @@ impl std::fmt::Display for IntegrateOutcome {
             TestGateSummary::SkippedNoTargets { reason } => {
                 writeln!(
                     f,
-                    "  test gate: SKIPPED (executed 0; skipped 0; not complete): {reason}"
+                    "  test gate: SKIPPED (executed 0; skipped 0; not complete): {}",
+                    display_line(reason)
                 )?;
                 writeln!(
                     f,
@@ -159,13 +184,17 @@ impl std::fmt::Display for IntegrateOutcome {
                     f,
                     "  test gate: passed (executed {}; skipped 0; {})",
                     targets.len(),
-                    targets.join(", ")
+                    targets
+                        .iter()
+                        .map(|name| display_text(name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )?;
             }
         }
-        writeln!(f, "  checkout:  {}", self.final_checkout)?;
+        writeln!(f, "  checkout:  {}", display_text(&self.final_checkout))?;
         for warning in &self.warnings {
-            writeln!(f, "  WARNING:   {warning}")?;
+            writeln!(f, "  WARNING:   {}", display_line(warning))?;
         }
         Ok(())
     }
