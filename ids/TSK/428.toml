@@ -1,0 +1,11 @@
+id = "TSK-428"
+uid = "b6515e41-7e18-4da3-83e7-4bfc957fe0d8"
+kind = "TSK"
+title = "A repository holds only what it needs long term"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:55Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
