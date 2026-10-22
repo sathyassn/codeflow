@@ -1,33 +1,512 @@
 {
   "schema_version": 2,
-  "title": "Review the dual-lineage delivery boundary",
-  "summary": "Independent explore lanes meet only at settle; ship with the Windows canary as follow-up, or hold.",
+  "title": "Ship or hold the dual-lineage boundary",
   "language": "en",
+  "summary": "The ship decision for TSK-042, with one open check.",
   "provenance": {
     "task_id": "TSK-042"
   },
   "blocks": [
     {
-      "type": "html",
-      "id": "primary-stage",
-      "title": "Two lanes meet only at settle",
-      "caption": "Claude and Codex explore apart, meet once at settle, review each other and pass the gates before one PR.",
-      "legend": [
-        {
-          "label": "Dashed outline",
-          "means": "a gate that has not passed yet"
-        },
-        {
-          "label": "Dashed line",
-          "means": "no context passes between the lanes"
-        }
-      ],
-      "html": "<svg viewBox='0 0 560 312' style='width:100%;height:auto;display:block' fill='none'><title>Two explore lanes meet at settle, then cross review, gates and one PR</title><defs><marker id='cfx-arrow' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0 0 L10 5 L0 10 Z' fill='var(--cf-diagram-line)'></path></marker></defs><g data-cf-group='claude-explore' data-cf-label='Claude explore lane'><rect x='20' y='20' width='200' height='56' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='36' y='42' fill='var(--cf-text)' font-size='15' font-weight='600'>claude explore</text><text x='36' y='60' fill='var(--cf-text-muted)' font-size='12'>design lead lane</text></g><g data-cf-group='codex-explore' data-cf-label='Codex explore lane'><rect x='20' y='140' width='200' height='56' rx='10' fill='var(--cf-surface-raised)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='36' y='162' fill='var(--cf-text)' font-size='15' font-weight='600'>codex explore</text><text x='36' y='180' fill='var(--cf-text-muted)' font-size='12'>independent lane</text></g><path data-cf-target='no-shared-context' data-cf-label='No shared context between the lanes' d='M120 78 L120 138' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' stroke-dasharray='4 5'></path><text data-cf-for='no-shared-context' x='130' y='112' fill='var(--cf-text-muted)' font-size='11' style='font-family:var(--cf-font-mono)'>no shared context</text><g data-cf-group='settle' data-cf-label='Settle contested points'><rect x='330' y='70' width='210' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='346' y='92' fill='var(--cf-text)' font-size='15' font-weight='600'>settle contested</text><text x='346' y='110' fill='var(--cf-text-muted)' font-size='12'>the only meeting point</text></g><path data-cf-target='claude-to-settle' data-cf-label='Claude lane reaches settle' d='M220 48 C 280 48 290 86 328 92' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#cfx-arrow)'></path><path data-cf-target='codex-to-settle' data-cf-label='Codex lane reaches settle' d='M220 168 C 280 168 290 112 328 106' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#cfx-arrow)'></path><g data-cf-group='cross-review' data-cf-label='Cross review'><rect x='330' y='166' width='210' height='56' rx='10' fill='var(--cf-surface)' stroke='var(--cf-border-strong)' stroke-width='1.5'></rect><text x='346' y='188' fill='var(--cf-text)' font-size='15' font-weight='600'>cross review</text><text x='346' y='206' fill='var(--cf-text-muted)' font-size='12'>each reads the other</text></g><path data-cf-target='settle-to-review' data-cf-label='Settle hands off to cross review' d='M435 126 L435 164' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#cfx-arrow)'></path><g data-cf-group='tests-gate' data-cf-label='Tests gate, passed'><rect x='330' y='262' width='66' height='30' rx='7' fill='var(--cf-surface-raised)' stroke='var(--cf-border)'></rect><text x='363' y='282' fill='var(--cf-positive)' font-size='11' text-anchor='middle' style='font-family:var(--cf-font-mono)'>tests pass</text></g><g data-cf-group='review-gate' data-cf-label='Review gate, passed'><rect x='402' y='262' width='66' height='30' rx='7' fill='var(--cf-surface-raised)' stroke='var(--cf-border)'></rect><text x='435' y='282' fill='var(--cf-positive)' font-size='11' text-anchor='middle' style='font-family:var(--cf-font-mono)'>review pass</text></g><g data-cf-group='canary-gate' data-cf-label='Windows canary, still open'><rect x='474' y='262' width='66' height='30' rx='7' fill='var(--cf-surface-raised)' stroke='var(--cf-warning)' stroke-dasharray='4 4'></rect><text x='507' y='282' fill='var(--cf-warning)' font-size='11' text-anchor='middle' style='font-family:var(--cf-font-mono)'>canary open</text></g><path data-cf-target='review-to-gates' data-cf-label='Cross review goes to the gates' d='M435 222 L435 260' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#cfx-arrow)'></path><g data-cf-group='pr' data-cf-label='One sealed PR'><rect x='20' y='252' width='200' height='50' rx='10' fill='var(--cf-accent-soft)' stroke='var(--cf-accent)' stroke-width='1.5'></rect><text x='36' y='282' fill='var(--cf-text)' font-size='15' font-weight='600'>one PR</text></g><path data-cf-target='gates-to-pr' data-cf-label='Passed gates seal one PR' d='M328 277 L222 277' stroke='var(--cf-diagram-line)' stroke-width='1.5' fill='none' marker-end='url(#cfx-arrow)'></path></svg>"
+      "type": "narrative",
+      "id": "anchor",
+      "markdown": "## Ship or hold the dual-lineage boundary\n\n- **What:** a change that keeps Claude and Codex apart while they explore, so each opinion stays independent until one settle step (TSK-042).\n- **Why it matters:** if the lanes share context early, the second opinion stops being a second opinion.\n- **Where it stands:** built and reviewed; every check is green except the native Windows canary, which has not run.\n- **You decide:** ship now with the canary as a follow-up, or hold until it runs."
     },
     {
       "type": "narrative",
-      "id": "thesis",
-      "markdown": "The governing claim is structural: independent explore lanes meet only at settle ([fig:primary-stage]). Approve shipping with the Windows canary as explicit follow-up, or hold until that canary is green."
+      "id": "whole-head",
+      "markdown": "## The whole path\n\nFive steps from two independent lanes to one pull request; the canary is the one open step."
+    },
+    {
+      "type": "figure",
+      "id": "whole-path",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "whole-path",
+          "family": "flow",
+          "binding": "authored",
+          "question": "How does a change travel from two independent lanes to one pull request, and what is still open?",
+          "idea": "Two lanes meet only at settle, pass review and the gates, and wait on one unrun check before you decide.",
+          "title": "From two independent lanes to one pull request",
+          "kicker": "The whole path",
+          "caption": "The lanes never share context before settle, and the only open step between the gates and your decision is the Windows canary.",
+          "states": [
+            {
+              "name": "agent",
+              "mark": "agent",
+              "means": "A step an agent takes"
+            },
+            {
+              "name": "merge",
+              "mark": "merge",
+              "means": "Settle: the one meeting point"
+            },
+            {
+              "name": "human",
+              "mark": "human",
+              "means": "Your decision"
+            },
+            {
+              "name": "done",
+              "mark": "done",
+              "means": "Travelled"
+            },
+            {
+              "name": "todo",
+              "mark": "todo",
+              "means": "Not yet travelled"
+            },
+            {
+              "name": "stop",
+              "mark": "stop",
+              "means": "A check that has not run"
+            },
+            {
+              "name": "apart",
+              "mark": "blocked",
+              "means": "No shared context"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "review is independent",
+              "source": "AGENTS.md",
+              "derive": "the always rules",
+              "check": {
+                "kind": "contains",
+                "text": "Review is independent"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 240,
+            "draw": [
+              {
+                "text": "Explore",
+                "x": 90,
+                "y": 24,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Settle",
+                "x": 250,
+                "y": 24,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Review",
+                "x": 390,
+                "y": 24,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Gates",
+                "x": 530,
+                "y": 24,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Ship",
+                "x": 660,
+                "y": 24,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "deco": "rule",
+                "shape": "line",
+                "x1": 20,
+                "y1": 40,
+                "x2": 700,
+                "y2": 40
+              },
+              {
+                "state": "apart",
+                "shape": "path",
+                "d": "M90 100V181",
+                "id": "apart"
+              },
+              {
+                "text": "kept apart",
+                "x": 102,
+                "y": 145,
+                "style": "mute",
+                "for": [
+                  "apart"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M99 90C170 90 200 140 238 140",
+                "id": "p1"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M99 190C170 190 200 140 238 140",
+                "id": "p2"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M262 140H381",
+                "id": "p3"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M399 140H521",
+                "id": "p4"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M539 140H650",
+                "id": "p5"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 595,
+                "y1": 128,
+                "x2": 595,
+                "y2": 152,
+                "id": "canary"
+              },
+              {
+                "text": "Windows canary not run",
+                "x": 595,
+                "y": 116,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "canary"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 90,
+                "cy": 90,
+                "r": 8,
+                "id": "claude"
+              },
+              {
+                "text": "Claude explores",
+                "x": 90,
+                "y": 72,
+                "anchor": "middle",
+                "for": [
+                  "claude"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 90,
+                "cy": 190,
+                "r": 8,
+                "id": "codex"
+              },
+              {
+                "text": "Codex explores",
+                "x": 90,
+                "y": 222,
+                "anchor": "middle",
+                "for": [
+                  "codex"
+                ]
+              },
+              {
+                "state": "merge",
+                "shape": "diamond",
+                "cx": 250,
+                "cy": 140,
+                "r": 12,
+                "id": "settle"
+              },
+              {
+                "text": "settle",
+                "x": 250,
+                "y": 172,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "settle"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 390,
+                "cy": 140,
+                "r": 8,
+                "id": "review"
+              },
+              {
+                "text": "cross review",
+                "x": 390,
+                "y": 172,
+                "anchor": "middle",
+                "for": [
+                  "review"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 530,
+                "cy": 140,
+                "r": 8,
+                "id": "gates"
+              },
+              {
+                "text": "tests and review pass",
+                "x": 520,
+                "y": 172,
+                "anchor": "middle",
+                "for": [
+                  "gates"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 660,
+                "cy": 140,
+                "r": 9,
+                "id": "you"
+              },
+              {
+                "text": "you decide",
+                "x": 660,
+                "y": 172,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "you"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "rotate",
+            "drops": [],
+            "marks": "same",
+            "reason": "The path reads top to bottom at phone width.",
+            "elongation_max": 1.8,
+            "width": 360,
+            "height": 400,
+            "draw": [
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 110,
+                "cy": 40,
+                "r": 8,
+                "id": "claude"
+              },
+              {
+                "text": "Claude explores",
+                "x": 110,
+                "y": 20,
+                "anchor": "middle",
+                "for": [
+                  "claude"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 250,
+                "cy": 40,
+                "r": 8,
+                "id": "codex"
+              },
+              {
+                "text": "Codex explores",
+                "x": 250,
+                "y": 20,
+                "anchor": "middle",
+                "for": [
+                  "codex"
+                ]
+              },
+              {
+                "state": "apart",
+                "shape": "path",
+                "d": "M120 40H240",
+                "id": "apart"
+              },
+              {
+                "text": "no shared context",
+                "x": 180,
+                "y": 62,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "apart"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M110 49C110 90 150 110 168 110",
+                "id": "p1"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M250 49C250 90 210 110 192 110",
+                "id": "p2"
+              },
+              {
+                "state": "merge",
+                "shape": "diamond",
+                "cx": 180,
+                "cy": 110,
+                "r": 12,
+                "id": "settle"
+              },
+              {
+                "text": "settle",
+                "x": 200,
+                "y": 115,
+                "style": "strong",
+                "for": [
+                  "settle"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M180 122V181",
+                "id": "p3"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 180,
+                "cy": 190,
+                "r": 8,
+                "id": "review"
+              },
+              {
+                "text": "each reviews the other",
+                "x": 200,
+                "y": 195,
+                "for": [
+                  "review"
+                ]
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M180 199V261",
+                "id": "p4"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 180,
+                "cy": 270,
+                "r": 8,
+                "id": "gates"
+              },
+              {
+                "text": "tests and review pass",
+                "x": 200,
+                "y": 275,
+                "for": [
+                  "gates"
+                ]
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M180 279V370",
+                "id": "p5"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 166,
+                "y1": 325,
+                "x2": 194,
+                "y2": 325,
+                "id": "canary"
+              },
+              {
+                "text": "Windows canary not run",
+                "x": 200,
+                "y": 330,
+                "style": "mute",
+                "for": [
+                  "canary"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 180,
+                "cy": 380,
+                "r": 9,
+                "id": "you"
+              },
+              {
+                "text": "you decide",
+                "x": 200,
+                "y": 385,
+                "style": "strong",
+                "for": [
+                  "you"
+                ]
+              }
+            ]
+          },
+          "twin": {
+            "columns": [
+              "Step",
+              "What happens"
+            ],
+            "rows": [
+              [
+                "Explore",
+                "Claude and Codex each explore alone, with no shared context"
+              ],
+              [
+                "Settle",
+                "the two lanes meet for the first time"
+              ],
+              [
+                "Review",
+                "each reviews the other's work"
+              ],
+              [
+                "Gates",
+                "tests and review pass; the Windows canary has not run"
+              ],
+              [
+                "Ship",
+                "you decide: ship now or hold"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "narrative",
+      "id": "evidence-head",
+      "markdown": "## What the evidence says\n\nThe Gates step of the figure, check by check."
     },
     {
       "type": "status",
@@ -51,29 +530,40 @@
       ]
     },
     {
+      "type": "narrative",
+      "id": "options-head",
+      "markdown": "## Your two options\n\nBoth keep the path above; they differ only in when the canary runs."
+    },
+    {
       "type": "comparison",
       "id": "options",
       "columns": [
         {
           "title": "Ship now",
-          "markdown": "Accept the Windows canary as explicit release follow-up. Structure of the delivery path is settled."
+          "markdown": "- merge today\n- the canary runs as a tracked follow-up before release"
         },
         {
           "title": "Hold",
-          "markdown": "Wait until the supported native Windows canary is complete before merge."
+          "markdown": "- merge after the canary passes\n- nothing waits on a follow-up"
         }
       ]
     },
     {
-      "type": "callout",
-      "id": "comment-hint",
-      "tone": "info",
-      "markdown": "Use **Comment** (`C`) on a lane, an arrow or a gate in the stage if the boundary is wrong. Notes rail appears only while Comment mode is on."
-    },
-    {
-      "type": "feedback_prompt",
-      "id": "decision-request",
-      "prompt": "Approve ship-with-follow-up, request hold until Windows canary, or mark the structural claim wrong."
+      "type": "decision",
+      "id": "ship-or-hold",
+      "title": "Ship now or hold?",
+      "markdown": "Mark a wrong step on the figure first, then choose.",
+      "options": [
+        {
+          "value": "ship",
+          "label": "Ship, canary as a follow-up",
+          "recommended": true
+        },
+        {
+          "value": "hold",
+          "label": "Hold until the canary passes"
+        }
+      ]
     }
   ]
 }
