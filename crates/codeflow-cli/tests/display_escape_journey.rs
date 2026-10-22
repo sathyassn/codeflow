@@ -107,6 +107,8 @@ fn assert_clean(what: &str, text: &str) {
                 .is_some_and(|(_, rest)| rest.starts_with("allowed")))
             || line.starts_with("codeflow test: passed")
             || line.starts_with("[codeflow test] completed target 'x'")
+            || line.starts_with("ok  test-config: healthy")
+            || line.starts_with("ok  permissions: verified")
     });
     assert!(
         forged.is_none(),
@@ -677,4 +679,279 @@ fn paths_and_relayed_output_cannot_forge_lines() {
     );
     let status = printed(&codeflow(&root).arg("status").output().unwrap());
     expect("status", &status, &["wt\\x0acodeflow status: allowed"]);
+}
+
+/// Runs `cmd` and checks the exit code and the output: no forged line at
+/// column 0, and each `expected` text.
+fn row(what: &str, cmd: &mut Command, code: i32, expected: &[&str]) {
+    let out = cmd.output().unwrap();
+    let text = printed(&out);
+    assert_eq!(
+        out.status.code(),
+        Some(code),
+        "{what}: exit changed: {text}"
+    );
+    expect(what, &text, expected);
+}
+
+/// TSK-388 round 7, the sink rule at work: Codex's two doctor reproductions
+/// (a newline in a checkout path and in `CODEFLOW_HOME`) and Grok's four
+/// printers (the coverage note, a stale gate lock note, the shared
+/// `CARGO_TARGET_DIR` warning, the scaffold version warning). Each value
+/// holds a line break and a fake result line; none starts a line at column
+/// 0, and each command exits as it did before.
+#[test]
+fn doctor_and_gate_notes_cannot_forge_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+
+    // Grok: the scaffold version from a checkout's project settings.
+    let version = base.join("version");
+    std::fs::create_dir(&version).unwrap();
+    git(&version, &["init", "-q", "-b", "main"]);
+    write(
+        &version,
+        ".codeflow/project.toml",
+        "schema_version = 1\ntier = \"minimal\"\nscaffold_version = \"0.0.1\\ncodeflow test: passed\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n",
+    );
+    row(
+        "scaffold version",
+        codeflow(&version).args(["status"]),
+        0,
+        &["scaffold 0.0.1\\x0acodeflow test: passed is behind"],
+    );
+
+    // Grok: the coverage note names a target whose name holds a newline.
+    let coverage = base.join("coverage");
+    std::fs::create_dir(&coverage).unwrap();
+    git(&coverage, &["init", "-q", "-b", "main"]);
+    write(
+        &coverage,
+        ".codeflow/test-config.json",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"ev\\ncodeflow test: passed\", \"runner\": \"custom\", \"coverage\": {\"format\": \"lcov\", \"path\": \"missing.info\"}, \"modes\": {\"full\": {\"command\": \"exit 0\"}}}]}\n",
+    );
+    row(
+        "coverage note",
+        codeflow(&coverage).args(["test", "--mode", "full"]),
+        0,
+        &["  ev\\x0acodeflow test: passed: "],
+    );
+
+    // Windows forbids a line break in a file name.
+    if !cfg!(unix) {
+        return;
+    }
+
+    // Codex: a checkout path in the test-config check, which the nested
+    // error names again.
+    let checkout = base.join("ev\nok  test-config: healthy\nend");
+    std::fs::create_dir(&checkout).unwrap();
+    git(&checkout, &["init", "-q", "-b", "main"]);
+    write(&checkout, ".codeflow/test-config.json", "{");
+    row(
+        "doctor test-config",
+        codeflow(&checkout).args(["doctor", "--check", "test-config"]),
+        1,
+        &["ev\\x0aok  test-config: healthy\\x0aend"],
+    );
+
+    // Codex: `CODEFLOW_HOME` a regular file whose name holds the fake line.
+    let plain = base.join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    git(&plain, &["init", "-q", "-b", "main"]);
+    let home = base.join("state\nok  permissions: verified\nend");
+    std::fs::write(&home, "").unwrap();
+    row(
+        "doctor permissions",
+        codeflow(&plain)
+            .args(["doctor", "--check", "permissions"])
+            .env("CODEFLOW_HOME", &home),
+        0,
+        &["state\\x0aok  permissions: verified\\x0aend"],
+    );
+
+    // Grok: a stale gate lock in a repository whose path holds the fake
+    // line, and the shared `CARGO_TARGET_DIR` warning naming that path.
+    let forged =
+        base.join("ev\n[codeflow test] completed target 'x': passed\ncodeflow test: passed");
+    std::fs::create_dir(&forged).unwrap();
+    git(&forged, &["init", "-q", "-b", "main"]);
+    write(
+        &forged,
+        ".codeflow/test-config.json",
+        "{\"schema_version\": \"1.0\", \"targets\": [{\"name\": \"build\", \"runner\": \"custom\", \"modes\": {\"quick\": {\"command\": \"cargo --version\"}, \"full\": {\"command\": \"exit 0\"}}}]}\n",
+    );
+    write(
+        &forged,
+        ".git/codeflow/full-gate.lock",
+        "pid=4194305\ndir=/tmp\nstarted=1\n",
+    );
+    row(
+        "stale gate lock",
+        codeflow(&forged).args(["test", "--mode", "full"]),
+        0,
+        &["reclaimed a stale gate lock at "],
+    );
+    row(
+        "shared cargo target",
+        codeflow(&forged)
+            .args(["test", "--mode", "quick"])
+            .env("CARGO_TARGET_DIR", base.join("cargodir")),
+        0,
+        &["is shared outside this worktree ("],
+    );
+}
+
+/// Each Rust source file under `dir`, cut at its first inline
+/// `#[cfg(test)]` module, with its path relative to the workspace.
+fn sources(dir: &Path, workspace: &Path, out: &mut Vec<(String, String)>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            sources(&path, workspace, out);
+            continue;
+        }
+        let name = path.to_string_lossy().to_string();
+        if path.extension().is_none_or(|ext| ext != "rs") || name.ends_with("tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        // Cut at the first inline test module (`mod x {`), not at a
+        // `mod x;` declaration.
+        let cut = text
+            .match_indices("#[cfg(test)]\nmod ")
+            .find_map(|(at, _)| {
+                let line = text[at..].lines().nth(1).unwrap_or_default();
+                line.trim_end().ends_with('{').then_some(at)
+            });
+        let text = cut.map_or(text.as_str(), |cut| &text[..cut]).to_string();
+        let rel = path
+            .strip_prefix(workspace)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        out.push((rel, text));
+    }
+}
+
+/// TSK-388 round 7, the sink by construction: every print shadow applies
+/// `display_print`; the standard print macros appear only inside those
+/// shadows and the block printers; no CLI terminal writer uses a bare
+/// `write!` or `writeln!`; and the block printers are used only where
+/// listed. A new printer has to use the rule or be added here for review.
+#[test]
+fn print_sinks_apply_the_line_rule_by_construction() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let workspace = workspace.canonicalize().unwrap();
+    let mut files = Vec::new();
+    for krate in ["codeflow-cli", "codeflow-core", "codeflow-present"] {
+        sources(
+            &workspace.join("crates").join(krate).join("src"),
+            &workspace,
+            &mut files,
+        );
+    }
+    let text = |rel: &str| {
+        files
+            .iter()
+            .find(|(path, _)| path == rel)
+            .map(|(_, text)| text.clone())
+            .unwrap()
+    };
+    for (rel, shadows) in [
+        // The four shadows and `term_write!`.
+        ("crates/codeflow-cli/src/main.rs", 5),
+        ("crates/codeflow-core/src/lib.rs", 3),
+        ("crates/codeflow-present/src/lib.rs", 1),
+    ] {
+        let source = text(rel);
+        assert_eq!(
+            source
+                .matches("display_print(&::std::format!($($arg)*))")
+                .count(),
+            shadows,
+            "{rel}: a print shadow does not apply display_print"
+        );
+        assert!(!source.contains("display_output(&::std::format!"), "{rel}");
+    }
+    let mut raw = std::collections::BTreeMap::new();
+    let mut blocks = std::collections::BTreeMap::new();
+    let mut bare_writers = Vec::new();
+    for (rel, source) in &files {
+        for macro_name in [
+            "::std::print!",
+            "::std::println!",
+            "::std::eprint!",
+            "::std::eprintln!",
+        ] {
+            let count = source.matches(macro_name).count();
+            if count > 0 {
+                *raw.entry(rel.clone()).or_insert(0) += count;
+            }
+        }
+        let count =
+            source.matches("print_block!(").count() + source.matches("println_block!(").count();
+        if count > 0 {
+            blocks.insert(rel.clone(), count);
+        }
+        if rel.starts_with("crates/codeflow-cli/") {
+            for writer in ["writeln!(out", "write!(out", "writeln!(err", "write!(err"] {
+                // `term_writeln!(out` is the rule's writer, not a bare one.
+                let bare = source.match_indices(writer).any(|(at, _)| {
+                    !source[..at]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                });
+                if bare {
+                    bare_writers.push(format!("{rel}: {writer}"));
+                }
+            }
+        }
+    }
+    let expected_raw: std::collections::BTreeMap<String, usize> = [
+        ("crates/codeflow-cli/src/main.rs", 8),
+        ("crates/codeflow-core/src/lib.rs", 5),
+        ("crates/codeflow-present/src/lib.rs", 1),
+    ]
+    .into_iter()
+    .map(|(rel, count)| (rel.to_string(), count))
+    .collect();
+    assert_eq!(
+        raw, expected_raw,
+        "a standard print macro outside the shadows"
+    );
+    assert!(
+        bare_writers.is_empty(),
+        "bare terminal writers: {bare_writers:?}"
+    );
+    // Block printers take only a `TextBlock`: a report built one line per
+    // `writeln!` under the rule, or JSON from serde.
+    assert_eq!(
+        blocks,
+        listed_block_printers(),
+        "block printer sites changed; review each"
+    );
+}
+
+/// The files that print a block, and how many times each does.
+fn listed_block_printers() -> std::collections::BTreeMap<String, usize> {
+    [
+        ("crates/codeflow-cli/src/cmd/delegate.rs", 1),
+        ("crates/codeflow-cli/src/cmd/estimate.rs", 3),
+        ("crates/codeflow-cli/src/cmd/feedback.rs", 1),
+        ("crates/codeflow-cli/src/cmd/integrate.rs", 1),
+        ("crates/codeflow-cli/src/cmd/models.rs", 1),
+        ("crates/codeflow-cli/src/cmd/orient.rs", 1),
+        ("crates/codeflow-cli/src/cmd/portal.rs", 1),
+        ("crates/codeflow-cli/src/cmd/present.rs", 5),
+        ("crates/codeflow-cli/src/cmd/remote.rs", 1),
+        ("crates/codeflow-cli/src/cmd/report.rs", 1),
+        ("crates/codeflow-cli/src/cmd/status.rs", 2),
+        ("crates/codeflow-cli/src/cmd/work.rs", 1),
+        ("crates/codeflow-cli/src/main.rs", 4),
+    ]
+    .into_iter()
+    .map(|(rel, count)| (rel.to_string(), count))
+    .collect()
 }
