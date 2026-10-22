@@ -2472,92 +2472,106 @@ fn worktree_add_reads_the_new_worktree_configuration() {
             format!("git -C {root} worktree add --detach {stage_path}/existingwt"),
             format!("git -C {root} worktree add --detach {stage_path}/existingwt && git -C {stage_path}/existingwt status"),
             format!("git -C {root} worktree add --detach {stage_path}/plainwt && git -C {stage_path}/plainwt status"),
+            // Any worktree's include can apply to a new one (round 11).
+            format!("git -C {root} worktree add --detach {stage_path}/plainwt"),
         ] {
             let out = f.command(&stage, hook, &command);
             assert_eq!(out.status.code(), Some(2), "{hook} {command}: {out:?}");
         }
-        for command in [
-            format!("git -C {root} worktree add --detach {stage_path}/plainwt"),
-            "git worktree list".to_string(),
-        ] {
-            let out = f.command(&stage, hook, &command);
-            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
-        }
-        let out = f.command(&f.root, hook, "git worktree add .worktrees/n -b task/n");
+        let out = f.command(&stage, hook, "git worktree list");
         assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
     }
 }
 
-// Codex confirm round 10, R9-1: Git appends a counter to a taken
-// administrative name (`work1` becomes `work11`), so an include keyed on
-// the suffixed name applies to the new worktree. Its callback runs during
-// the add; an unrelated include and an ordinary add keep passing.
+// Codex rounds 10 and 11 (R9-1, R10-1): Git derives the new worktree's
+// administrative name through sanitizing and a counter (`work..1` becomes
+// `work.1`, `work1.lock` and `work1.lock.lock` become `work1`, a taken
+// `work1` becomes `work11`), so the guard does not predict it. An include
+// keyed on any worktree's Git directory is read for every add; its callback
+// runs during the add. A benign include, one keyed on the main Git
+// directory and the ordinary lifecycle keep passing.
 #[test]
-fn worktree_add_matches_counter_suffixed_admin_names() {
+fn worktree_add_reads_includes_of_every_admin_name() {
+    for (requested, admin, taken) in [
+        ("work..1", "work.1", false),
+        ("work1.lock", "work1", false),
+        ("work1.lock.lock", "work1", false),
+        ("work1", "work11", true),
+    ] {
+        let f = Fixture::new();
+        let root = shell_path(&f.root);
+        let stage = f.temp.path().join("stage");
+        std::fs::create_dir_all(stage.join(requested)).unwrap();
+        if taken {
+            let old = f.temp.path().join("old/work1");
+            git(&f.root, &["worktree", "add", "--detach", &shell_path(&old)]);
+        }
+        let marker = f.temp.path().join("callback-marker");
+        let callback = f.temp.path().join("callback.conf");
+        std::fs::write(
+            &callback,
+            format!(
+                "[core]\n\tfsmonitor = printf ran > {}\n",
+                shell_path(&marker)
+            ),
+        )
+        .unwrap();
+        git(
+            &f.root,
+            &[
+                "config",
+                &format!("includeIf.gitdir:{root}/.git/worktrees/{admin}.path"),
+                &shell_path(&callback),
+            ],
+        );
+        let dest = shell_path(&stage.join(requested));
+        for hook in ["exec-guard", "git-guard"] {
+            for options in [
+                "--detach",
+                "-b task/new",
+                "--lock --reason test -b task/new",
+                "--orphan -b task/new",
+            ] {
+                let command = format!("git -C {root} worktree add {options} {dest}");
+                let out = f.command(&stage, hook, &command);
+                assert!(refused(&out), "{hook} {command}: {out:?}");
+            }
+        }
+        #[cfg(unix)]
+        {
+            git(&f.root, &["worktree", "add", "--detach", &dest]);
+            assert!(
+                f.root.join(".git/worktrees").join(admin).is_dir(),
+                "{requested}"
+            );
+            assert!(marker.exists(), "{requested}: the include did not apply");
+        }
+    }
     let f = Fixture::new();
     let root = shell_path(&f.root);
-    let stage = f.temp.path().join("stage");
-    for name in ["work1", "plainwt"] {
-        std::fs::create_dir_all(stage.join(name)).unwrap();
-    }
-    let old = f.temp.path().join("old/work1");
-    git(&f.root, &["worktree", "add", "--detach", &shell_path(&old)]);
-    let marker = f.temp.path().join("callback-marker");
-    let callback = f.temp.path().join("callback.conf");
-    std::fs::write(
-        &callback,
-        format!(
-            "[core]\n\tfsmonitor = printf ran > {}\n",
-            shell_path(&marker)
-        ),
-    )
-    .unwrap();
-    let unrelated = f.temp.path().join("unrelated.conf");
-    std::fs::write(
-        &unrelated,
-        "[core]\n\tfsmonitor = printf no > unrelated-marker\n",
-    )
-    .unwrap();
+    let benign = f.temp.path().join("benign.conf");
+    std::fs::write(&benign, "[user]\n\temail = work@example.com\n").unwrap();
+    let main = f.temp.path().join("main.conf");
+    std::fs::write(&main, "[core]\n\tfsmonitor = printf no > main-marker\n").unwrap();
     for (key, file) in [
         (
-            format!("includeIf.gitdir:{root}/.git/worktrees/work11.path"),
-            &callback,
-        ),
-        (
-            format!("includeIf.gitdir/i:{root}/.git/worktrees/WORK12.path"),
-            &callback,
-        ),
-        (
             format!("includeIf.gitdir:{root}/.git/worktrees/other.path"),
-            &unrelated,
+            &benign,
         ),
+        (format!("includeIf.gitdir:{root}/.git.path"), &main),
     ] {
         git(&f.root, &["config", &key, &shell_path(file)]);
     }
-    let dest = shell_path(&stage.join("work1"));
     for hook in ["exec-guard", "git-guard"] {
-        for options in [
-            "--detach",
-            "-b task/new",
-            "--lock --reason test -b task/new",
-            "--orphan -b task/new",
+        for command in [
+            "git worktree add .worktrees/n -b task/n",
+            "git worktree add --detach .worktrees/m",
+            "git worktree list",
+            "git worktree remove .worktrees/w",
+            "git worktree prune",
         ] {
-            let command = format!("git -C {root} worktree add {options} {dest}");
-            let out = f.command(&stage, hook, &command);
-            assert!(refused(&out), "{hook} {command}: {out:?}");
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
-        let command = format!(
-            "git -C {root} worktree add --detach {}",
-            shell_path(&stage.join("plainwt"))
-        );
-        let out = f.command(&stage, hook, &command);
-        assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
-    }
-    // Real Git uses the suffixed name and runs the callback during the add.
-    #[cfg(unix)]
-    {
-        git(&f.root, &["worktree", "add", "--detach", &dest]);
-        assert!(f.root.join(".git/worktrees/work11").is_dir());
-        assert!(marker.exists(), "the include did not apply");
     }
 }

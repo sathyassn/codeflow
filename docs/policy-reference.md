@@ -650,13 +650,13 @@ output, refuses. An alias that expands to one of these is judged the same
 way. `git worktree add` reads each conditional include (`includeIf`) that
 could apply to the new worktree but not where the guard reads, such as one
 keyed on the new worktree's Git directory, and refuses when it sets a
-setting Git can run during the add or a hooks path. Git names that
-directory after the checkout and appends a counter when the name is taken
-(`work1` can become `work11`), so a literal `gitdir` condition is read when
-its last component is the predicted name followed by any digits. Its
-directory part is not compared, since one path has several spellings, and
-a condition ending in `/`, a glob, a name Git would sanitize, `onbranch`
-and `hasconfig` are always read; the new checkout then
+setting Git can run during the add or a hooks path. Git derives the new
+worktree's Git directory name from the checkout by sanitizing it and adding
+a counter when it is taken, so the guard does not predict that name: every
+literal `gitdir` condition naming a directory under `worktrees`, and every
+condition ending in `/`, a glob, a relative pattern, `onbranch` and
+`hasconfig`, is read for every add. An include keyed on the main Git
+directory is not read, and benign includes pass; the new checkout then
 counts as an earlier write for later commands on the line. Ordinary outputs such as
 `git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
 and `git diff --output=out.diff` remain available.

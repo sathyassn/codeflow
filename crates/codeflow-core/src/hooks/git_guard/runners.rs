@@ -1535,36 +1535,11 @@ fn new_worktree_configuration(
     }
     let environment = config_environment(env);
     let config = crate::security::git_config::read(at, globals(args)?, &environment)?;
-    // The administrative directory Git names after the checkout's last
-    // component, adding digits when that name is taken.
-    let start = starting_directory(args, at)?;
-    let parsed = checked_mode(&rest[1..], &catalog::WORKTREE_ADD_OPTIONS, true)?;
-    let name = parsed
-        .operands
-        .first()
-        .filter(|_| parsed.unread.is_empty())
-        .and_then(|path| {
-            integrity_shell_path(path, &start)
-                .file_name()
-                .and_then(|name| name.to_str().map(str::to_string))
-        })
-        // Git sanitizes a name with other characters; then it is unknown.
-        .filter(|name| {
-            !name.starts_with('.')
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
-        });
     let mut pending: Vec<PathBuf> = config
         .includes
         .iter()
         .filter(|include| !include.missing)
-        .filter(|include| {
-            include
-                .condition
-                .as_deref()
-                .is_some_and(|condition| may_apply(condition, name.as_deref()))
-        })
+        .filter(|include| include.condition.as_deref().is_some_and(may_apply))
         .map(|include| include.path.clone())
         .collect();
     let mut read = 0;
@@ -1609,24 +1584,20 @@ fn new_worktree_configuration(
     Ok(())
 }
 
-/// Whether an `includeIf` condition could hold in a new worktree whose
-/// administrative directory Git names `name` (`None` when unknown). Git
-/// appends a counter to a taken name (`work1` becomes `work11`), so a
-/// literal `gitdir` or `gitdir/i` pattern can hold only when its last
-/// component is that name followed by zero or more digits; digits that
-/// belong to the name are never removed. The directory part is not
-/// compared, because a path can be spelled several ways (links, Windows
-/// short names). A pattern ending in `/`, a glob, a `./` pattern and any
-/// other condition may apply.
-fn may_apply(condition: &str, name: Option<&str>) -> bool {
+/// Whether an `includeIf` condition could hold in a new worktree. The
+/// worktree's Git directory is `<common>/worktrees/<name>`, and Git derives
+/// `<name>` from the checkout through sanitizing and a counter, so the name
+/// is not predicted (TSK-379 review rounds 9 to 11). A literal `gitdir` or
+/// `gitdir/i` pattern can hold only when it ends in `/` or its parent
+/// component is `worktrees`: Git matches the whole directory, and a pattern
+/// with one component matches at any depth. Every other condition, a glob
+/// and a `./` pattern may apply.
+fn may_apply(condition: &str) -> bool {
     let (pattern, fold) = if let Some(pattern) = condition.strip_prefix("gitdir:") {
         (pattern, false)
     } else if let Some(pattern) = condition.strip_prefix("gitdir/i:") {
         (pattern, true)
     } else {
-        return true;
-    };
-    let Some(name) = name else {
         return true;
     };
     if pattern.contains(['*', '?', '[', '\\'])
@@ -1635,14 +1606,15 @@ fn may_apply(condition: &str, name: Option<&str>) -> bool {
     {
         return true;
     }
-    let last = pattern.rsplit('/').next().unwrap_or(pattern);
-    let (last, name) = if fold {
-        (last.to_lowercase(), name.to_lowercase())
-    } else {
-        (last.to_string(), name.to_string())
-    };
-    last.strip_prefix(name.as_str())
-        .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+    let mut parts = pattern.rsplit('/').filter(|part| !part.is_empty());
+    let (_, parent) = (parts.next(), parts.next());
+    parent.is_none_or(|parent| {
+        if fold {
+            parent.eq_ignore_ascii_case("worktrees")
+        } else {
+            parent == "worktrees"
+        }
+    })
 }
 
 /// What a non-Git segment writes, from each directory it can run in.
