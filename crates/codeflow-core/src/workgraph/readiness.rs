@@ -76,8 +76,13 @@ pub struct Entry {
     pub state: State,
     /// Why it is not ready (empty when ready or active).
     pub reason: String,
-    /// Visible, unlanded branches carrying the task id.
+    /// Visible, unlanded branches carrying the task id, in display form
+    /// (`GitName::display`), for text output.
     pub branches: Vec<String>,
+    /// The same branches as git stores them, for machine output: the exact
+    /// text, or the display form for a name that is not valid UTF-8, which
+    /// no text can hold exactly (TSK-388).
+    pub branch_names: Vec<String>,
     /// Branches on unrelated remotes, reported as information rather than claims.
     pub informational_branches: Vec<String>,
 }
@@ -130,18 +135,25 @@ impl Backlog {
     }
 
     /// One line naming the snapshot the verdicts were read from (R-41).
+    /// The reference and target are ref names, which can hold any
+    /// character git accepts, so they are shown escaped (TSK-388).
     #[must_use]
     pub fn snapshot_line(&self) -> String {
+        use crate::git::{display_message, display_text};
         let tips = self
             .snapshots
             .iter()
             .map(
                 |snapshot| match (&snapshot.reference, &snapshot.tip, &snapshot.problem) {
                     (Some(reference), Some(tip), _) => {
-                        format!("{reference}@{}", &tip[..tip.len().min(9)])
+                        format!("{}@{}", display_text(reference), &tip[..tip.len().min(9)])
                     }
-                    (_, _, Some(problem)) => format!("{} ({problem})", snapshot.target),
-                    _ => format!("{} (not found)", snapshot.target),
+                    (_, _, Some(problem)) => format!(
+                        "{} ({})",
+                        display_text(&snapshot.target),
+                        display_message(problem)
+                    ),
+                    _ => format!("{} (not found)", display_text(&snapshot.target)),
                 },
             )
             .collect::<Vec<_>>()
@@ -153,6 +165,13 @@ impl Backlog {
                 .unwrap_or("never (local refs only)")
         )
     }
+}
+
+/// `name` as machine output carries it: the exact text, or the display
+/// form for a name that is not valid UTF-8, which no text can hold.
+fn exact_text(name: &GitName) -> String {
+    name.rule_text()
+        .map_or_else(|_| name.display().to_string(), str::to_owned)
 }
 
 /// The identity of a target name, for comparing a branch with declared
@@ -315,7 +334,7 @@ impl WorkBranches {
                 format!(
                     "also on {remote}: {} (not a claim: {remote} does not carry work to {})",
                     branch.display(),
-                    shown(target)
+                    crate::git::display_text(&shown(target))
                 )
             })
             .collect()
@@ -813,10 +832,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             // The report shows names; the decisions above used exact bytes.
             out.landed
                 .extend(done.iter().map(|name| name.display().to_string()));
-            let names: Vec<String> = names
+            let (branch_names, names): (Vec<String>, Vec<String>) = names
                 .iter()
-                .map(|name| name.display().to_string())
-                .collect();
+                .map(|name| (exact_text(name), name.display().to_string()))
+                .unzip();
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
@@ -847,6 +866,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 state,
                 reason,
                 branches: names,
+                branch_names,
                 informational_branches: carried.information(&record.id, reference),
             });
         }
@@ -3198,16 +3218,16 @@ mod tests {
         let line = rendered
             .lines()
             .find(|line| line.contains(&claimed.branch) && line.contains("retain"))
-            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered}"));
+            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered:?}"));
         assert!(line.contains("retain-live"), "{line}");
         assert!(line.contains("open claim"), "{line}");
         assert!(
             !rendered
                 .lines()
                 .any(|line| line.contains(&claimed.branch) && line.contains("removable")),
-            "{rendered}"
+            "{rendered:?}"
         );
-        assert!(rendered.contains("active"), "{rendered}");
+        assert!(rendered.contains("active"), "{rendered:?}");
     }
 
     /// TSK-110 AC-2: the in-process read decides no landing by itself. On

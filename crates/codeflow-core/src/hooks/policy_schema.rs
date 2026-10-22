@@ -968,7 +968,8 @@ impl PolicyError {
 /// Render a JSON value for an error message: a string as `'value'`, else its JSON.
 fn show_value(v: &Value) -> String {
     match v {
-        Value::String(s) => format!("'{s}'"),
+        // A policy value is checkout content, shown escaped (TSK-388).
+        Value::String(s) => format!("'{}'", crate::git::display_text(s)),
         other => other.to_string(),
     }
 }

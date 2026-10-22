@@ -38,7 +38,7 @@ pub fn run(args: &PolicyArgs) -> i32 {
         PolicyCommand::Show => match super::repo_root() {
             Ok(root) => show(&root),
             Err(error) => {
-                eprintln!("codeflow: {error}");
+                eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
                 2
             }
         },
@@ -73,7 +73,8 @@ fn explain() -> i32 {
         let group = group_of(spec);
         if group != current_group {
             current_group = group;
-            println!("\n{group}");
+            println!();
+            println!("{group}");
         }
         let default = lookup(&defaults, spec.path).map_or_else(String::new, render_value);
         println!(
@@ -119,7 +120,10 @@ fn show(root: &Path) -> i32 {
             println!("codeflow policy: .codeflow/policy.json is in effect");
         }
         PolicySource::UnreadableFile(error) => {
-            eprintln!("codeflow policy: {error}");
+            eprintln!(
+                "codeflow policy: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
         PolicySource::MalformedFile => {
@@ -127,7 +131,7 @@ fn show(root: &Path) -> i32 {
         }
     }
     for e in &errors {
-        eprintln!("codeflow policy: error: {e}");
+        eprintln!("codeflow policy: error: {e}", e = crate::cmd::shown(&e));
     }
 
     let defaults = default_policy_value();
@@ -136,7 +140,8 @@ fn show(root: &Path) -> i32 {
         let group = group_of(spec);
         if group != current_group {
             current_group = group;
-            println!("\n{group}");
+            println!();
+            println!("{group}");
         }
         let file_value = file.as_ref().and_then(|f| lookup(f, spec.path));
         let (tag, value) = match file_value {
@@ -153,8 +158,9 @@ fn show(root: &Path) -> i32 {
     if errors.is_empty() {
         0
     } else {
+        eprintln!();
         eprintln!(
-            "\ncodeflow policy: {} invalid finding(s) — fix the key(s) above (see `codeflow policy explain` for valid values)",
+            "codeflow policy: {} invalid finding(s) — fix the key(s) above (see `codeflow policy explain` for valid values)",
             errors.len()
         );
         1

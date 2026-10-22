@@ -1,5 +1,78 @@
 //! codeflow — the AI-development discipline layer CLI.
 
+// The output sink (TSK-388). These shadow `println!`, `print!`, `eprintln!`
+// and `eprint!` for this crate: what one call prints goes through
+// `codeflow_core::git::display_print`, which escapes each control, format
+// and separator character other than a line break or tab, keeps
+// backslashes, and indents each further line that does not already start
+// indented. CodeFlow quotes branch names a remote chose, record titles,
+// paths and policy values from a checkout, and errors that carry them;
+// whatever a call interpolates, a line break in it cannot start a line at
+// column 0. `term_write!` and `term_writeln!` apply the same rule to a
+// terminal writer. Text that is several column-0 lines by design is a
+// `codeflow_core::git::TextBlock`, built one `writeln!` per line under the
+// same rule, and prints through `print_block!` or `println_block!`; JSON is
+// a `TextBlock::json`. `codeflow-core` and `codeflow-present` shadow their
+// own print macros the same way. Not covered here: the standard library's
+// panic message, and clap's usage and error output.
+macro_rules! println {
+    () => {
+        ::std::println!()
+    };
+    ($($arg:tt)*) => {
+        ::std::println!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! print {
+    ($($arg:tt)*) => {
+        ::std::print!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprintln {
+    () => {
+        ::std::eprintln!()
+    };
+    ($($arg:tt)*) => {
+        ::std::eprintln!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+macro_rules! eprint {
+    ($($arg:tt)*) => {
+        ::std::eprint!("{}", ::codeflow_core::git::display_print(&::std::format!($($arg)*)))
+    };
+}
+
+// A block prints as it stands: its lines were written under the sink rule.
+macro_rules! print_block {
+    ($block:expr) => {
+        ::std::print!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+macro_rules! println_block {
+    ($block:expr) => {
+        ::std::println!("{}", ::codeflow_core::git::TextBlock::as_str(&$block))
+    };
+}
+// One write to a terminal writer under the sink rule.
+macro_rules! term_write {
+    ($out:expr, $($arg:tt)*) => {{
+        // For a caller that has not imported it; harmless where it has.
+        #[allow(unused_imports)]
+        use ::std::io::Write as _;
+        $out.write_all(
+            ::codeflow_core::git::display_print(&::std::format!($($arg)*)).as_bytes(),
+        )
+    }};
+}
+macro_rules! term_writeln {
+    ($out:expr) => {
+        term_write!($out, "\n")
+    };
+    ($out:expr, $($arg:tt)*) => {
+        term_write!($out, "{}\n", ::std::format!($($arg)*))
+    };
+}
+
 mod cmd;
 #[cfg(test)]
 mod command_reference;
@@ -170,12 +243,12 @@ fn update(
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }
-    print!("{report}");
+    print_block!(report.block());
     cmd::present::provision_state_root_or_warn();
     print_workspace_hint(cwd);
     let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
     if let Some(portal_report) = &portal_report {
-        print!("{portal_report}");
+        print_block!(portal_report.block());
     }
     if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
         std::process::exit(2);
@@ -189,7 +262,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
     let base = match scaffold::release_pin::release_url() {
         Ok(base) => base,
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            eprintln!(
+                "codeflow update --pin: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 1;
         }
     };
@@ -204,7 +280,10 @@ fn pin_release(root: &std::path::Path, version: &str) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("codeflow update --pin: error: {error}");
+            eprintln!(
+                "codeflow update --pin: error: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
@@ -216,7 +295,10 @@ fn print_workspace_hint(root: &std::path::Path) {
     let policy = match codeflow_core::hooks::policy::Policy::load(root) {
         Ok(policy) => policy.git,
         Err(error) => {
-            eprintln!("codeflow: cannot read workspace policy: {error}");
+            eprintln!(
+                "codeflow: cannot read workspace policy: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return;
         }
     };
@@ -246,7 +328,7 @@ fn report_workspace(
     step: Option<root_checkout::BranchStep>,
 ) -> anyhow::Result<()> {
     match step {
-        Some(step) => println!("{}", root_checkout::finish(root, step)?),
+        Some(step) => println_block!(root_checkout::finish(root, step)?.block()),
         None => print_workspace_hint(root),
     }
     Ok(())
@@ -290,7 +372,22 @@ fn selected_tier(minimal: bool, standard: bool, full: bool) -> Option<scaffold::
     }
 }
 
-fn main() -> anyhow::Result<()> {
+/// The CLI boundary (TSK-388): an error `run` returns is printed here, its
+/// whole chain in the form Rust's own termination prints (`Error: ...`
+/// with `Caused by:`), escaped through `cmd::shown`, and the process exits
+/// with status 1 as before. A path or name in the chain cannot write a
+/// terminal escape sequence or start a line of its own.
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {}", cmd::shown(&format!("{error:?}")));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     // A hook git fires during this command runs this binary (SPC-013 R-85):
     // the path goes only into git children's environment, so an inherited
     // value is dropped here and no other child ever sees one.
@@ -347,7 +444,7 @@ fn main() -> anyhow::Result<()> {
             if !yes {
                 decide_pr_template(&cwd, &mut report)?;
             }
-            print!("{report}");
+            print_block!(report.block());
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }

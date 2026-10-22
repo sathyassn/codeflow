@@ -61,7 +61,11 @@ pub fn run_interactive(
         eprintln!("Doctor found errors:");
         for check in &checks {
             if check.status == doctor::CheckStatus::Fail {
-                eprintln!("  FAIL: {} — {}", check.name, check.message);
+                eprintln!(
+                    "  FAIL: {} — {}",
+                    check.name,
+                    crate::git::display_message(&check.message)
+                );
             }
         }
         eprintln!("Fix the issues above and re-run setup.");
@@ -70,7 +74,10 @@ pub fn run_interactive(
 
     // Write via config-writer
     write_config(&config_path, &config)?;
-    println!("Config written to {}", config_path.display());
+    println!(
+        "Config written to {}",
+        crate::git::display_path(&config_path)
+    );
     println!("Next: run `codeflow test --mode essential` to try it.");
 
     Ok(SetupResult::Written)
@@ -113,12 +120,15 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
         println!(
             "No supported stack detected — wrote a config with no targets to {}. \
              Add a supported stack and rerun setup, or edit the config explicitly.",
-            config_path.display()
+            crate::git::display_path(&config_path)
         );
         return Ok(SetupResult::WrittenNoTargets);
     }
 
-    println!("Auto-detected config written to {}", config_path.display());
+    println!(
+        "Auto-detected config written to {}",
+        crate::git::display_path(&config_path)
+    );
     Ok(SetupResult::Written)
 }
 
@@ -177,7 +187,7 @@ pub fn run_template_content(
     write_config(&config_path, &config)?;
     println!(
         "Template '{template_name}' written to {}",
-        config_path.display()
+        crate::git::display_path(&config_path)
     );
 
     Ok(SetupResult::Written)
@@ -215,7 +225,7 @@ pub fn run_add_target(
             }
             existing.targets.push(t);
             write_config(&config_path, &existing)?;
-            println!("Target added to {}", config_path.display());
+            println!("Target added to {}", crate::git::display_path(&config_path));
             Ok(SetupResult::Written)
         }
         None => Ok(SetupResult::Aborted),

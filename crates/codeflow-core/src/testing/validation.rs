@@ -300,7 +300,10 @@ pub fn emit_ledger_event(
     let line = match serde_json::to_string(&event) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("warning: failed to serialize ledger event: {e}");
+            eprintln!(
+                "warning: failed to serialize ledger event: {}",
+                crate::git::display_message(&e.to_string())
+            );
             return;
         }
     };
@@ -317,7 +320,10 @@ pub fn emit_ledger_event(
             }
         }
         Err(e) => {
-            eprintln!("warning: cannot open ledger file: {e}");
+            eprintln!(
+                "warning: cannot open ledger file: {}",
+                crate::git::display_message(&e.to_string())
+            );
         }
     }
 }

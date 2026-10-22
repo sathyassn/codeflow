@@ -20,14 +20,14 @@ pub fn run(args: &StatusArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let view = collect_status(&root);
-    print!("{}", render_status(&view, args.capabilities));
+    print_block!(render_status(&view, args.capabilities));
     if args.delivery {
-        print!("{}", render_delivery(&view));
+        print_block!(render_delivery(&view));
     }
     0
 }

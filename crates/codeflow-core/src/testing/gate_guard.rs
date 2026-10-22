@@ -110,7 +110,12 @@ pub struct LockHeld {
 impl std::fmt::Display for LockHeld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.holder.starts_with("gate lock unavailable:") {
-            return write!(f, "{} (lock: {})", self.holder, self.path.display());
+            return write!(
+                f,
+                "{} (lock: {})",
+                self.holder,
+                crate::git::display_path(&self.path)
+            );
         }
         let holder = if self.holder.trim().is_empty() {
             "a process that has not recorded itself yet".to_string()
@@ -125,14 +130,14 @@ impl std::fmt::Display for LockHeld {
                  group {} of {holder}, whose gate process has exited. Only one full gate \
                  runs at a time; wait for those targets to finish or stop them (lock: {})",
                 groups.join(", "),
-                self.path.display()
+                crate::git::display_path(&self.path)
             );
         }
         write!(
             f,
             "another full gate is running on this machine: {holder}. Only one full gate \
              runs at a time; wait for it to finish (lock: {})",
-            self.path.display()
+            crate::git::display_path(&self.path)
         )
     }
 }
@@ -280,14 +285,14 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
         if !previous.trim().is_empty() {
             lock.notes.push(format!(
                 "reclaimed a stale gate lock at {} left by {}",
-                path.display(),
-                describe_holder(&previous)
+                crate::git::display_path(&path),
+                crate::git::display_line(&describe_holder(&previous))
             ));
         }
         if let Err(error) = write_record(&mut file, &record) {
             lock.notes.push(format!(
                 "gate lock at {} is held but its holder record could not be written: {error}",
-                path.display()
+                crate::git::display_path(&path)
             ));
         }
         lock.files.push(file);
@@ -552,9 +557,9 @@ pub fn check_cargo_target_dir(
          in parallel, a shared target directory lets one build overwrite another's \
          binaries mid-run; for parallel work, point it inside each worktree (for \
          example {}).",
-        target.display(),
-        root.display(),
-        root.join("target").display()
+        crate::git::display_path(&target),
+        crate::git::display_path(&root),
+        crate::git::display_path(&root.join("target"))
     ))
 }
 

@@ -3,6 +3,7 @@
 //! shared registry (issue 75). The rules live in
 //! `codeflow_core::feedback`; this module parses arguments and prints.
 
+use super::shown;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -140,7 +141,7 @@ pub fn run(args: &FeedbackArgs) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = shown(&error));
             return 2;
         }
     };
@@ -173,12 +174,12 @@ pub fn run(args: &FeedbackArgs) -> i32 {
                         "{id}  {} -> {}  {}",
                         outcome.from,
                         outcome.to,
-                        outcome.path.display()
+                        codeflow_core::git::display_path(&outcome.path)
                     );
                     0
                 }
                 Err(error) => {
-                    eprintln!("error: {error}");
+                    eprintln!("error: {error}", error = shown(&error));
                     1
                 }
             }
@@ -237,14 +238,18 @@ fn template(root: &Path) -> Result<String, String> {
             Err(reason) => {
                 eprintln!(
                     "warning: {} is not usable ({reason}); the shipped template is used",
-                    feedback::PROJECT_TEMPLATE
+                    feedback::PROJECT_TEMPLATE,
+                    reason = shown(&reason)
                 );
                 Ok(embedded)
             }
         },
         Ok(None) => Ok(embedded),
         Err(reason) => {
-            eprintln!("warning: {reason}; the shipped template is used");
+            eprintln!(
+                "warning: {reason}; the shipped template is used",
+                reason = shown(&reason)
+            );
             Ok(embedded)
         }
     }
@@ -258,7 +263,7 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let topics = match feedback::topics(root) {
         Ok(topics) => topics,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     };
@@ -269,7 +274,10 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let template = match template(root) {
         Ok(template) => template,
         Err(error) => {
-            eprintln!("error: feedback template unavailable: {error}");
+            eprintln!(
+                "error: feedback template unavailable: {error}",
+                error = shown(&error)
+            );
             return 1;
         }
     };
@@ -279,7 +287,7 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
         ),
         Ok((_, false)) => {}
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     }
@@ -306,7 +314,11 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let Some(record) = issuer.settle(result) else {
         return 1;
     };
-    println!("{}  {}", record.id, record.path.display());
+    println!(
+        "{}  {}",
+        record.id,
+        codeflow_core::git::display_path(&record.path)
+    );
     0
 }
 
@@ -314,7 +326,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     let topics = match feedback::topics(root) {
         Ok(topics) => topics,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {error}", error = shown(&error));
             return 1;
         }
     };
@@ -322,12 +334,15 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     let tracked = match feedback::tracked(root) {
         Ok(tracked) => tracked,
         Err(error) => {
+            let error = shown(&error);
             eprintln!("error: {} cannot be read: {error}", feedback::FEEDBACK_DIR);
             return 1;
         }
     };
     let loaded = feedback::load(root);
     for (path, reason) in &loaded.unreadable {
+        let reason = shown(&reason);
+        let path = codeflow_core::git::display_line(path);
         eprintln!("warning: {path} cannot be read: {reason}");
     }
     // An item or a directory that cannot be read is an error, never a
@@ -349,12 +364,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         // its file and a listed topic, nothing that could inject Markdown.
         let errors = feedback::lint(root).errors;
         if !errors.is_empty() {
-            for finding in &errors {
-                eprintln!(
-                    "error: {}:{}: {}",
-                    finding.path, finding.line, finding.message
-                );
-            }
+            errors.iter().for_each(print_lint_error);
             eprintln!(
                 "error: {} not written; fix the items `codeflow validate --docs` names first",
                 feedback::INDEX_PATH
@@ -368,7 +378,7 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
                 0
             }
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = shown(&error));
                 1
             }
         };
@@ -386,9 +396,9 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             .map(|(topic, members)| serde_json::json!({ "topic": topic, "items": members }))
             .collect();
         match serde_json::to_string_pretty(&value) {
-            Ok(text) => println!("{text}"),
+            Ok(text) => println_block!(codeflow_core::git::TextBlock::json(&text)),
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {error}", error = shown(&error));
                 return 1;
             }
         }
@@ -403,15 +413,27 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         return 0;
     }
     for (topic, members) in groups {
-        println!("{topic}");
+        // A topic is checkout text: a fixed label starts the line.
+        println!("topic: {}", codeflow_core::git::display_line(&topic));
         for item in members {
             let placed = if item.placed_in.is_empty() {
                 String::new()
             } else {
                 format!("  in {}", item.placed_in.join(", "))
             };
-            println!("  {}  {:<10}  {}{placed}", item.id, item.status, item.title);
+            let title = shown(&item.title);
+            println!("  {}  {:<10}  {title}{placed}", item.id, item.status);
         }
     }
     0
+}
+
+/// One lint error: the item path and message are checkout text (TSK-388).
+fn print_lint_error(finding: &codeflow_core::feedback::LintFinding) {
+    let path = codeflow_core::git::display_line(&finding.path);
+    eprintln!(
+        "error: {path}:{}: {}",
+        finding.line,
+        shown(&finding.message)
+    );
 }

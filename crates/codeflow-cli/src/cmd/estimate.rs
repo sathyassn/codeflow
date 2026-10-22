@@ -109,14 +109,17 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(error) => {
-            eprintln!("estimate outcomes: cannot read the current directory: {error}");
+            eprintln!(
+                "estimate outcomes: cannot read the current directory: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return 2;
         }
     };
@@ -126,9 +129,10 @@ fn outcomes(options: &codeflow_core::estimate::outcomes::Options, json: bool) ->
             eprintln!("estimate outcomes: report serialization failed");
             return 1;
         };
-        println!("{text}");
+        // Values exact, no hidden character in the bytes (TSK-388).
+        println_block!(codeflow_core::git::TextBlock::json(&text));
     } else {
-        print!("{}", report.render());
+        print_block!(report.render());
     }
     i32::from(!report.is_clean())
 }
@@ -137,7 +141,7 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -154,12 +158,15 @@ fn check(forecast_path: &std::path::Path, json: bool) -> i32 {
             eprintln!("estimate check: report serialization failed");
             return 1;
         };
-        println!("{text}");
+        // Values exact, no hidden character in the bytes (TSK-388).
+        println_block!(codeflow_core::git::TextBlock::json(&text));
     } else {
         for finding in &report.findings {
             println!(
                 "{} at {}: {}",
-                finding.code, finding.location, finding.message
+                finding.code,
+                codeflow_core::git::display_line(&finding.location),
+                finding.message
             );
         }
         println!(

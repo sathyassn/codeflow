@@ -100,7 +100,11 @@ pub fn render_stage(
     block_code: i32,
 ) -> i32 {
     for status in &report.status {
-        eprintln!("codeflow {plane}: {status}");
+        // A status line can quote a name a remote supplied (TSK-388).
+        eprintln!(
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_message(status)
+        );
     }
     render_findings(
         &mut std::io::stderr(),
@@ -126,13 +130,18 @@ fn render_findings(
     block_code: i32,
 ) -> i32 {
     for finding in relayed {
-        let _ = writeln!(err, "codeflow {plane}: {finding}");
+        // Relayed output, escaped where it was read; escaping is idempotent.
+        let _ = term_writeln!(
+            err,
+            "codeflow {plane}: {}",
+            codeflow_core::git::display_output(finding)
+        );
     }
     for note in notes {
-        let _ = writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
+        let _ = term_writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
     }
     for v in violations {
-        let _ = writeln!(err, "{}", v.render(plane));
+        let _ = term_writeln!(err, "{}", v.render(plane));
     }
     let stopped = any_blocking(violations);
     if let Some(root) = root {
@@ -142,7 +151,7 @@ fn render_findings(
     if !relayed.is_empty() || !violations.is_empty() || !notes.is_empty() {
         let operation = operation_of(plane);
         let verdict = if stopped { "stopped" } else { "not stopped" };
-        let _ = writeln!(err, "codeflow {plane}: {operation} {verdict}");
+        let _ = term_writeln!(err, "codeflow {plane}: {operation} {verdict}");
     }
     let _ = err.flush();
     if stopped {
@@ -174,7 +183,10 @@ fn record_refusal(
         Ok(Some(info)) => info,
         Ok(None) => return,
         Err(error) => {
-            eprintln!("codeflow: cannot record refusal: {error}");
+            eprintln!(
+                "codeflow: cannot record refusal: {error}",
+                error = crate::cmd::shown(&error)
+            );
             return;
         }
     };
@@ -272,8 +284,38 @@ fn repo_root_from(cwd: &std::path::Path) -> Result<PathBuf, String> {
     }
 }
 
+/// `text` as a printed field shows it ([`codeflow_core::git::display_message`]):
+/// escaped, with each further line indented, so an error, reason or title
+/// that quotes remote or checkout content cannot start a line of its own
+/// (TSK-388).
+pub(crate) fn shown(text: &dyn std::fmt::Display) -> String {
+    codeflow_core::git::display_message(&text.to_string())
+}
+
 #[cfg(test)]
 mod root_tests {
+    /// TSK-388 round 7: a terminal writer applies the sink rule per call,
+    /// so a value with a line break cannot start a doctor result line.
+    #[test]
+    fn terminal_writers_keep_interpolated_lines_off_column_zero() {
+        let mut out: Vec<u8> = Vec::new();
+        let value = "ev\nok  test-config: healthy";
+        let _ = term_writeln!(out, "FAIL  test-config: cannot read {value}");
+        let _ = term_write!(out, "warn  x: {value}\n");
+        let _ = term_writeln!(out, "      clear it: run {value}");
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.lines().all(|line| !line.starts_with("ok  ")),
+            "{text:?}"
+        );
+        assert_eq!(
+            text,
+            "FAIL  test-config: cannot read ev\n  ok  test-config: healthy\n\
+             warn  x: ev\n  ok  test-config: healthy\n      \
+             clear it: run ev\n  ok  test-config: healthy\n"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn r22_repository_root_missing_cwd_is_not_dot() {

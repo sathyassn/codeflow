@@ -37,7 +37,7 @@ pub fn run(args: &PortalArgs, assets: &dyn AssetSource) -> i32 {
     let root = match super::repo_root() {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("codeflow: {error}");
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
             return 2;
         }
     };
@@ -47,11 +47,14 @@ pub fn run(args: &PortalArgs, assets: &dyn AssetSource) -> i32 {
     };
     match result {
         Ok(report) => {
-            print!("{report}");
+            print_block!(report.block());
             i32::from(report.has_conflicts()) * 2
         }
         Err(error) => {
-            eprintln!("codeflow portal: {error}");
+            eprintln!(
+                "codeflow portal: {error}",
+                error = crate::cmd::shown(&error)
+            );
             1
         }
     }
