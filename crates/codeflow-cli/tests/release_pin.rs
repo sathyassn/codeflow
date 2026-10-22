@@ -191,6 +191,80 @@ fn update_pin_writes_only_the_version_and_the_checked_digests() {
     assert_eq!(fx.changed(), "");
 }
 
+/// TSK-333: a version the strict parser rejects is refused before any
+/// download or write, naming the value, and a hand-edited pin it rejects is
+/// named by the pin and by doctor, never compared as text.
+#[test]
+fn update_pin_and_doctor_name_an_unparseable_version() {
+    let fx = Fixture::new();
+    fx.publish("99.0.0");
+    let before = fx.read(STATE);
+    for version in ["3.2", "10.0", "3.2.0x"] {
+        let refused = fx.codeflow(&["update", "--pin", version]);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{version}: {}",
+            text(&refused)
+        );
+        let said = text(&refused);
+        assert!(
+            said.contains(&format!("`{version}` is not a codeflow version")),
+            "{said}"
+        );
+        assert!(!said.contains("cannot download"), "{version}: {said}");
+        assert_eq!(fx.read(STATE), before, "{version}");
+        assert_eq!(fx.changed(), "", "{version}");
+    }
+
+    let edited = before
+        .lines()
+        .map(|line| {
+            if line.starts_with("scaffold_version") {
+                "scaffold_version = \"10.0\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(edited, before);
+    // Doctor compares the branch's pin with the one `main` pins.
+    git(&fx.root(), &["checkout", "-q", "-b", "feat/pin"]);
+    std::fs::write(fx.root().join(STATE), &edited).unwrap();
+    git(&fx.root(), &["add", "-A"]);
+    git(
+        &fx.root(),
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "chore: hand-edit the pin",
+        ],
+    );
+    let pin = fx.codeflow(&["update", "--pin", "99.0.0"]);
+    assert_eq!(pin.status.code(), Some(1), "{}", text(&pin));
+    assert!(
+        text(&pin).contains("\"10.0\" is not a parseable version"),
+        "{}",
+        text(&pin)
+    );
+    assert_eq!(fx.read(STATE), edited);
+    assert_eq!(fx.changed(), "");
+
+    let doctor = fx.codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(
+        text(&doctor).contains("\"10.0\" is not a parseable version"),
+        "{}",
+        text(&doctor)
+    );
+}
+
 /// A project line the installers refuse (here a key named outside printable
 /// ASCII) stays as the project wrote it, so the pin refuses before writing
 /// and names it, doctor names the same line, and once it is renamed the pin

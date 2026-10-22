@@ -15,7 +15,7 @@ use std::path::Path;
 use crate::scaffold::release_pin::{
     is_table_header, pinned_digests, unread_line, PinnedDigests, TABLE,
 };
-use crate::scaffold::version::is_older;
+use crate::scaffold::version::{is_older, is_parseable, Unparseable};
 
 use super::Status;
 use crate::remedy;
@@ -209,12 +209,27 @@ fn checkout_pin(root: &Path) -> Result<(String, Option<String>, String, String),
     Ok((state, policy, pin, verified))
 }
 
+/// A warning that names a pin the shared version parser rejects, so no
+/// success report certifies it. `whose` says where the pin is read.
+fn unparseable_pin(pin: &str, whose: &str) -> Option<PinReport> {
+    (!is_parseable(pin)).then(|| PinReport {
+        status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
+        message: format!(
+            "scaffold_version {} {whose}, so it is not compared and CI cannot install it as a release",
+            Unparseable(pin.to_string())
+        ),
+    })
+}
+
 /// The pin state of the checkout at `root`.
 pub(super) fn report(root: &Path) -> PinReport {
     let (head_state, head_policy, head_pin, verified) = match checkout_pin(root) {
         Ok(checked) => checked,
         Err(report) => return report,
     };
+    if let Some(report) = unparseable_pin(&head_pin, "in this checkout") {
+        return report;
+    }
     let target_files = match target_files(root) {
         Ok(target) => target,
         Err(error) => return refused(&error),
@@ -247,6 +262,9 @@ pub(super) fn report(root: &Path) -> PinReport {
             Ok(checked) => checked,
             Err(report) => return report,
         };
+    if let Some(report) = unparseable_pin(&target_pin, &format!("on {target}")) {
+        return report;
+    }
     if target_pin == head_pin {
         return same_pin(
             &target,
@@ -255,7 +273,18 @@ pub(super) fn report(root: &Path) -> PinReport {
             (&head_state, &verified),
         );
     }
-    if is_older(&head_pin, &target_pin) {
+    let lowered = match is_older(&head_pin, &target_pin) {
+        Ok(lowered) => lowered,
+        Err(error) => {
+            return PinReport {
+                status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
+                message: format!(
+                    "scaffold_version {error}, so this checkout's pin ({head_pin}) and {target}'s ({target_pin}) are not compared"
+                ),
+            }
+        }
+    };
+    if lowered {
         return PinReport {
             status: Status::Warn(
                 remedy::DOCTOR_CI_PIN_LOWERED.with(&[("pin", &target_pin), ("target", &target)]),
@@ -766,6 +795,63 @@ mod tests {
             "{}",
             report.message
         );
+    }
+
+    #[test]
+    fn an_unparseable_pin_is_named_and_never_compared() {
+        // As strings "10.0" < "9.0.0", which would call this a lowered pin.
+        let dir = project("9.0.0");
+        write(dir.path(), STATE, &state("10.0"));
+        let shown = report(dir.path());
+        assert!(shown.status.is_warn(), "{}", shown.message);
+        assert!(
+            shown
+                .message
+                .contains("\"10.0\" is not a parseable version"),
+            "{}",
+            shown.message
+        );
+        assert!(!shown.message.contains("lowers"), "{}", shown.message);
+        // An unparseable pin on the target branch is named the same way.
+        let dir = project("3.10");
+        write(dir.path(), STATE, &state("3.2.0"));
+        let shown = report(dir.path());
+        assert!(shown
+            .message
+            .contains("\"3.10\" is not a parseable version"));
+    }
+
+    #[test]
+    fn an_unparseable_pin_is_never_certified_as_healthy() {
+        // The same invalid pin on the target and on the checkout.
+        let dir = project("10.0");
+        let shown = report(dir.path());
+        assert!(shown.status.is_warn(), "{}", shown.message);
+        assert!(
+            shown
+                .message
+                .contains("\"10.0\" is not a parseable version"),
+            "{}",
+            shown.message
+        );
+        // A lone branch, with no target to compare with.
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "feat/only"]);
+        write(dir.path(), STATE, &state("10.0"));
+        write(dir.path(), POLICY, POLICY_TEXT);
+        let shown = report(dir.path());
+        assert!(shown.status.is_warn(), "{}", shown.message);
+        assert!(
+            shown
+                .message
+                .contains("\"10.0\" is not a parseable version"),
+            "{}",
+            shown.message
+        );
+        // A valid lone branch still passes.
+        write(dir.path(), STATE, &state("1.2.3"));
+        let shown = report(dir.path());
+        assert_eq!(shown.status, Status::Pass, "{}", shown.message);
     }
 
     #[test]
