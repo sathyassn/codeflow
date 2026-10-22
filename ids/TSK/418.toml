@@ -1,0 +1,11 @@
+id = "TSK-418"
+uid = "4acebb34-4b48-4225-8c93-d96003e2484b"
+kind = "TSK"
+title = "A records-only editorial change lands wording changes to many closed records"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-22T21:03:13Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
