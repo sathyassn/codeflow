@@ -306,9 +306,17 @@ No fields. Recorded by the holder or the operator.
   link is done on its target and every prerequisite and `waits_on` id it
   declares is met: the task `complete`, with an acceptance block that passes
   the acceptance rules and is bound to its reviewed commit as CI binds a
-  completion at the commit that introduced the current completion (a
-  reopen and re-completion is judged again), on the tip of the landing line its
-  record declares, with the UID the link pinned. A landing line is the one
+  completion as its landing gate bound it, on the tip of the landing line its
+  record declares, with the UID the link pinned. The completion that counts
+  is the newest transition on that line's first-parent history: a commit
+  where the record (found only at the record layouts, by its UID) goes from
+  not complete to complete, or changes its acceptance block while complete.
+  A move that changes neither is no transition. A direct transition is
+  judged at its own commit; a merge at the head it brought in, which must
+  hold the same completion (a merge that edits the record is judged at the
+  merge and cannot bind). The review must be on the judged head's
+  first-parent line, and for a merge no reopen of the task may lie on the
+  target's first-parent history between the review and the merge. A landing line is the one
   remote-tracking ref the declared target names, by the same remote rules
   `work start` uses (`origin/main` is origin's, never another remote's; a
   bare name is `origin`'s, never chosen by a local branch's upstream
