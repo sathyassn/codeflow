@@ -1582,3 +1582,41 @@ fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
         2
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn reserve_keeps_the_calling_binary_for_git_hook_dispatch() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+    let hook = root.path().join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nprintf '%s' \"$CODEFLOW_HOOK_BINARY\" > hook-binary\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = command(
+        root.path(),
+        home.path(),
+        &[
+            "reserve",
+            "--",
+            "git",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "test: dispatch",
+        ],
+    )
+    .env("CODEFLOW_HOOK_BINARY", "unrelated-codeflow")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let expected = std::env::var_os("CODEFLOW_TEST_GATE_BIN")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("hook-binary")).unwrap(),
+        expected.to_str().unwrap()
+    );
+}

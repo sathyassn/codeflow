@@ -797,7 +797,7 @@ pub fn run_reserved_command(
             message: "a command is required".into(),
         });
     };
-    let mut command = Command::new(program);
+    let mut command = crate::git::process(program);
     command.args(&args[1..]).current_dir(cwd);
     if let Some(workers) = workers {
         let oracle = if args.iter().any(|arg| arg == "nextest") {
