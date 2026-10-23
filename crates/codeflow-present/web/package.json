@@ -11,8 +11,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "check:browser": "node scripts/browser-check.mjs && npm run check:transport",
-    "check:entities": "node scripts/entity-browser-check.mjs",
+    "check:browser": "node scripts/browser-check.mjs && npm run check:transport && npm run check:surface",
+    "check:entities": "node scripts/entity-browser-check.mjs && npm run check:surface",
+    "check:surface": "node scripts/review-surface-browser-check.mjs",
     "check:matrix": "node scripts/matrix-browser-check.mjs",
     "check:forms": "node scripts/form-browser-check.mjs",
     "check:delivery": "node scripts/delivery-browser-check.mjs",

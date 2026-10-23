@@ -20,6 +20,7 @@
     { "path": "scripts/child-lifecycle.mjs", "ownership": "managed" },
     { "path": "scripts/chrome-verify.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
+    { "path": "scripts/figure-declaration-rules.json", "ownership": "managed" },
     { "path": "scripts/figure-grammar.mjs", "ownership": "managed" },
     { "path": "scripts/generator.mjs", "ownership": "managed" },
     { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },

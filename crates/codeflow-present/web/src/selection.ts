@@ -8,7 +8,7 @@ const REGION_SCALE = 1_000_000;
 const ANNOTATABLE = [
   "h1", "h2", "h3", "p", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td",
   "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside", ".cf-line",
-  ".cf-field",
+  ".cf-field", "[role=tab]",
 ].join(",");
 
 /**
@@ -101,6 +101,9 @@ function resolveFrom(block: HTMLElement, element: Element): Resolution {
   if (entity && block.contains(entity) && entity !== block) return entityResolution(block, entity);
   const shape = element.closest(TARGETS);
   if (!shape || shape === block || !block.contains(shape)) return blockResolution(block);
+  if (isSvgRoot(shape)) {
+    return { block, element: shape, via: "shape", label: collapseLabel(labelTextOf(shape)) || blockLabel(block) };
+  }
   const own = ownLabel(block, shape);
   if (own) return { block, element: shape, via: "shape", label: own };
   // A shape inside a labelled group resolves to the nearest labelled group.
@@ -267,6 +270,7 @@ const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcapti
  */
 export function isTextualTarget(target: Element): boolean {
   if (target.closest(FRAME)) return false;
+  if (target.closest("[role=tab]")) return true;
   const tag = target.tagName.toUpperCase();
   if (tag === "TEXT" || tag === "TSPAN") return true;
   if ((target.namespaceURI ?? "").includes("svg")) return false;

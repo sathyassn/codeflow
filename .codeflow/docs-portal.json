@@ -80,9 +80,13 @@
       "ownership": "managed",
       "pristine_sha256": "37087b488dfbd010322197279510e487d3403384b33d21d6a93963ab6757e927"
     },
+    "scripts/figure-declaration-rules.json": {
+      "ownership": "managed",
+      "pristine_sha256": "cedb2a8103d4c51a85f89800734dbd8ad5f9f38e41afcfdd9d8c40fa2468bedb"
+    },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ff99a7531837ed8bbb2d024303e4717bb87904bae4573504e6cb0cce2c610d97"
+      "pristine_sha256": "18a3f484658c51191d6eeca5d2a4ba086d37ce37a45e3b34f05e180404909604"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",

@@ -134,7 +134,11 @@ Its facts cite CodeFlow's own `AGENTS.md`; substitute your repository's
 sources before you copy it. The service checks the envelope (schema version,
 a family from the nine, the authored binding, a title and a caption, at most
 64 KiB); the runtime validates the rest with the grammar module before it
-draws and shows the refusal in place of the figure.
+draws and shows the refusal in place of the figure. `present check` also checks
+composition dimensions and fact-check kinds from the same rule data as the
+renderer, including the 720-unit wide limit and JSON-source checks. It warns
+when a Concept section has no figure or when narrative text dominates; these
+warnings do not refuse a document.
 Present draws authored figures only, and it draws each fact as declared: only
 the portal re-derives facts from their sources, so cite sources a reviewer
 can check. A document draws at most 24 figure blocks.
@@ -144,7 +148,10 @@ can check. A document draws at most 24 figure blocks.
 `disclosure.blocks` and each `tabs[].blocks` use the same block catalog. Nest
 only when the hierarchy improves comprehension; the runtime rejects excessive
 depth and total blocks. Avoid tabs when readers need to compare the content
-side by side.
+side by side. A `tabs` block accepts an optional `title`, used above the control
+and in the section list (otherwise "Views"). The first panel opens initially;
+click a tab or use Left, Right, Home and End while its tab has focus. In Comment
+mode a click pins the tab label; leave Comment to change panels.
 
 ### Sandboxed HTML
 
@@ -156,6 +163,10 @@ runtime scopes authored style selectors and contains its layout/paint so it
 cannot style or overlay review controls. Scripts, forms, navigation, network
 loads, reserved runtime identities, and top-layer controls are prohibited.
 Offline exports additionally place authored HTML in a sandboxed frame.
+The export renderer copies the computed theme and project tokens into it so
+SVG paint stays visible.
+Stages using those variables need the export renderer's JavaScript; a stage
+with its own styles can draw without it.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
 HTML, and never make ASCII stand in for a figure the claim deserves.

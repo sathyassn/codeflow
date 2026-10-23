@@ -150,6 +150,8 @@ pub enum Block {
     },
     Tabs {
         id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
         tabs: Vec<Tab>,
     },
     FeedbackPrompt {
@@ -812,11 +814,7 @@ impl Block {
             | Self::Form { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
             // No raw ids in the nav (QA defect 8): a name the reader can see.
-            Self::Tabs { tabs, .. } => tabs
-                .iter()
-                .map(|tab| tab.label.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            Self::Tabs { title, .. } => title.clone().unwrap_or_else(|| "Views".to_string()),
             Self::Bullets { items, .. } => items
                 .first()
                 .map_or_else(|| "List".to_string(), |item| prose_nav_label(item)),
@@ -1226,7 +1224,10 @@ fn validate_block(
                 ids,
             )
         }
-        Block::Tabs { tabs, .. } => {
+        Block::Tabs { title, tabs, .. } => {
+            if let Some(title) = title {
+                require_nonempty_bounded("tabs title", title, limits::MAX_TITLE_BYTES)?;
+            }
             if tabs.is_empty() || tabs.len() > 12 {
                 return Err(invalid("tabs must contain one to twelve entries"));
             }
@@ -1848,8 +1849,53 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
             faults.push(CheckFault::fault(None, "document", message));
         }
     }
+    for block in document.walk() {
+        if let Block::Figure { id, declaration } = block {
+            for message in crate::figure_rules::declaration_faults(declaration) {
+                faults.push(CheckFault::fault(Some(id.clone()), "figure", message));
+            }
+        }
+    }
     faults.extend(review_warnings(&document));
+    faults.extend(figure_balance_warnings(&document));
     faults
+}
+
+fn figure_balance_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
+    let mut warnings = Vec::new();
+    let blocks = document.walk();
+    let figures = blocks
+        .iter()
+        .filter(|block| matches!(block, Block::Figure { .. } | Block::Html { .. }))
+        .count();
+    let narratives: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Narrative { markdown, .. } => Some(markdown.as_str()),
+            _ => None,
+        })
+        .collect();
+    // A named Concept section is an author signal, not a guess from the title.
+    let concept = blocks
+        .iter()
+        .any(|block| block.id() == "concept" || block.id().starts_with("concept-"))
+        || narratives.iter().any(|markdown| {
+            markdown.lines().any(|line| {
+                let heading = line.trim_start().trim_start_matches('#').trim();
+                line.trim_start().starts_with('#') && heading.eq_ignore_ascii_case("concept")
+            })
+        });
+    if concept && figures == 0 {
+        warnings.push(CheckFault::warning(None, "figure-balance", "the Concept section has no figure or html stage; consider drawing its governing relationship".into()));
+    }
+    let narrative_words: usize = narratives
+        .iter()
+        .map(|text| text.split_whitespace().count())
+        .sum();
+    if narrative_words > figures.max(1).saturating_mul(500) {
+        warnings.push(CheckFault::warning(None, "figure-balance", "narrative text dominates this document (over 500 narrative words per figure, or over 500 words with no figure); consider a figure for the governing relationship".into()));
+    }
+    warnings
 }
 
 /// Advisory warnings for stages a reviewer cannot comment on part by part
@@ -2359,7 +2405,7 @@ mod tests {
             ),
             (
                 serde_json::json!({"type": "tabs", "id": "views", "tabs": [{"label": "Plan", "blocks": []}, {"label": "Risks", "blocks": []}]}),
-                "Plan, Risks",
+                "Views",
             ),
             (
                 serde_json::json!({"type": "bullets", "id": "points", "items": ["Select **words** to quote them."]}),

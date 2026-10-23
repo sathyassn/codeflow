@@ -48,7 +48,7 @@ const RECIPES = {
   figure: { block: "flow", element: { entities: true } },
   media: { block: "screenshot", text: { in: "figcaption", words: "stands in" }, element: { click: "img", label: "Four coloured quadrants" }, area: { box: "img", plain: true } },
   disclosure: { block: "more", text: { in: "summary", words: "More detail", context: false }, element: { click: "summary", label: "More detail" }, area: { closed: "details" } },
-  tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "details:nth-of-type(2) > summary", label: "Risks" }, area: { closed: "details" } },
+  tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "[role=tab]:nth-of-type(2)", label: "Risks" }, area: {} },
   feedback_prompt: { block: "ask", text: { in: "p", words: "Mark anything" }, element: { click: "p", label: "Mark anything that is wrong, then submit the review." } },
   html: { block: "stage", text: { in: "svg text", words: "Service" }, element: { entities: true } },
   // TSK-119: a form's option label is its words; a click on a field's input

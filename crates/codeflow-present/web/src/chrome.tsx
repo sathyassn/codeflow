@@ -628,7 +628,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
    * Diagram / empty: drag draws a region. Shift+drag forces region anywhere.
    * Priority on release: text selection > deliberate region > element click.
    */
-  useEffect(() => {
+  // Restore pointer listeners with the composer close, before the next drag.
+  useLayoutEffect(() => {
     if (!commentMode || captureMode || busy || composerOpen) return undefined;
 
     shiftRef.current = false;
@@ -677,7 +678,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
       // A form's controls are review targets while commenting; the form
       // runtime keeps the gesture from changing them (SPC-014 B6).
-      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form]")) return;
+      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form], [role=tab]")) return;
       let releasedText = false;
       if (pendingPinRef.current) {
         releasedText = capturedSelectionCovers(pendingPinRef.current, event.clientX, event.clientY);
@@ -895,6 +896,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setHot(null);
     };
   }, [busy, captureMode, commentMode, composerOpen, config.review_limits.max_selector_utf16, documentRoot]);
+
+  // A phone sheet changes document padding even when its outer size stays
+  // constant, so ResizeObserver alone cannot notice the moved anchors.
+  useLayoutEffect(() => setMarkerEpoch(value => value + 1), [railVisible]);
 
   // Markers hold document coordinates; anything that reflows the document
   // (viewport resize, type scale, rail open) must re-measure their anchors.
@@ -2078,7 +2083,7 @@ function observeSections(root: HTMLElement, onChange: (id: string) => void): () 
 // sections list names the disclosure or tabs block only (QA defect 8).
 function sectionElements(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")]
-    .filter((section) => !section.parentElement?.closest("details"));
+    .filter((section) => !section.parentElement?.closest("details, [role=tabpanel]"));
 }
 
 function isEditable(target: EventTarget | null): boolean {
