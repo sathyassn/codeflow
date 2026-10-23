@@ -976,29 +976,132 @@ pub fn landing_lines(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     Ok(default_tip_lines(repo_root, &repo))
 }
 
-/// Whether a completion is bound to its review as CI binds it: the
-/// `reviewed` commit exists, is in the tip's history, does not already hold
-/// the task complete, and the completions between it and the tip carry no
-/// binding finding for this task.
+/// The path of a task's record in `tree`: `project-management/tasks/ID.md`
+/// or a task file under an epic's folder.
+fn record_path(tree: &git2::Tree<'_>, task_id: &str) -> Option<String> {
+    let mut found = None;
+    let _ = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if root.starts_with("project-management/")
+            && entry.name().ok() == Some(format!("{task_id}.md").as_str())
+        {
+            found = Some(format!("{root}{task_id}.md"));
+            return git2::TreeWalkResult::Abort;
+        }
+        if root.is_empty() && entry.name().ok() != Some("project-management") {
+            return git2::TreeWalkResult::Skip;
+        }
+        git2::TreeWalkResult::Ok
+    });
+    found
+}
+
+/// The record of `task_id` at `commit`, read from the blob at `path`.
+fn record_at(repo: &Repository, commit: &str, path: &str) -> Option<Record> {
+    let tree = git2::Oid::from_str(commit)
+        .and_then(|oid| repo.find_commit(oid))
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    let entry = tree.get_path(Path::new(path)).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    let text = std::str::from_utf8(blob.content()).ok()?;
+    parse_record(text, RecordKind::Task).ok()
+}
+
+/// Every commit in `tip`'s history that changed `path`, newest first in
+/// topological order, each with its parents, read through Git with replace
+/// refs and grafts disabled. `None` when the history cannot be read.
+fn record_history(
+    repo_root: &Path,
+    tip: git2::Oid,
+    path: &str,
+) -> Option<Vec<(String, Vec<String>)>> {
+    let output = crate::git::judging_command()
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "--no-replace-objects",
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "core.useReplaceRefs=false",
+            "log",
+            "--full-history",
+            "--topo-order",
+            "--format=%H %P",
+        ])
+        .arg(tip.to_string())
+        .arg("--")
+        .arg(path)
+        .env(
+            "GIT_GRAFT_FILE",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut ids = line.split(' ');
+                let commit = ids.next()?.to_string();
+                Some((commit, ids.map(str::to_string).collect()))
+            })
+            .collect(),
+    )
+}
+
+/// Whether the task's current completion on `tip` is bound to its review
+/// as CI binds a completion. The completion episode is found in the
+/// record's own history: the newest commit that holds the task complete
+/// with this `reviewed` block while none of its parents does. That commit
+/// (on a task branch for a merged pull request, on the line for a direct
+/// completion) is the head the completion is judged at, exactly as its
+/// pull request was: the reviewed commit is in its history and did not
+/// already hold the task complete, and `completions_in_range` from the
+/// reviewed commit to it reports no binding finding for the task. A later
+/// reopen and re-completion is a new episode and is judged again, with the
+/// reopen in its range; an unrelated later merge changes nothing.
 fn completion_bound(
     repo_root: &Path,
     repo: &Repository,
     tip: git2::Oid,
     task_id: &str,
+    path: &str,
     reviewed: &str,
 ) -> bool {
     use super::acceptance::{completions_in_range, Criteria, RunBases};
     let Ok(oid) = git2::Oid::from_str(reviewed) else {
         return false;
     };
-    let Ok(commit) = repo.find_commit(oid) else {
+    let Ok(review) = repo.find_commit(oid) else {
         return false;
     };
-    if !crate::git::commit_reachable_from(repo_root, reviewed, &[tip.to_string()]).unwrap_or(false)
+    let holds = |record: Option<Record>| {
+        record.is_some_and(|record| {
+            record.status == "complete" && record.reviewed.as_deref() == Some(reviewed)
+        })
+    };
+    let Some(history) = record_history(repo_root, tip, path) else {
+        return false;
+    };
+    let Some(introduced) = history.iter().find_map(|(commit, parents)| {
+        (holds(record_at(repo, commit, path))
+            && !parents
+                .iter()
+                .any(|parent| holds(record_at(repo, parent, path))))
+        .then(|| commit.clone())
+    }) else {
+        return false;
+    };
+    if !crate::git::commit_reachable_from(repo_root, reviewed, std::slice::from_ref(&introduced))
+        .unwrap_or(false)
     {
         return false;
     }
-    let complete_at_review = commit
+    let complete_at_review = review
         .tree()
         .ok()
         .and_then(|tree| records_from_tree(repo, &tree).ok())
@@ -1011,92 +1114,24 @@ fn completion_bound(
     if complete_at_review {
         return false;
     }
-    let unbound = |head: &str| -> bool {
-        let Ok(head_oid) = git2::Oid::from_str(head) else {
-            return true;
-        };
-        match completions_in_range(
-            repo,
-            reviewed,
-            head,
-            Some(tip),
-            &Criteria::Frozen,
-            &RunBases::new([tip, head_oid]),
-            None,
-            &[],
-        ) {
-            Ok(findings) => findings
-                .iter()
-                .any(|finding| !finding.note && finding.message.starts_with(task_id)),
-            Err(_) => true,
-        }
+    let Ok(head) = git2::Oid::from_str(&introduced) else {
+        return false;
     };
-    // A completion made directly on the line binds at the tip.
-    if !unbound(&tip.to_string()) {
-        return true;
+    match completions_in_range(
+        repo,
+        reviewed,
+        &introduced,
+        Some(tip),
+        &Criteria::Frozen,
+        &RunBases::new([tip, head]),
+        None,
+        &[],
+    ) {
+        Ok(findings) => !findings
+            .iter()
+            .any(|finding| !finding.note && finding.message.starts_with(task_id)),
+        Err(_) => false,
     }
-    // A completion that landed by a merge binds as its pull request bound
-    // it: at the head the merge brought in, which holds the reviewed commit,
-    // for a merge on the tip's first-parent line.
-    // The head must carry this completion: the task complete there with the
-    // same active block. A head that still holds the task todo, or an empty
-    // completion range, is no proof.
-    let carries = |head: &str| -> bool {
-        git2::Oid::from_str(head)
-            .and_then(|oid| repo.find_commit(oid))
-            .and_then(|commit| commit.tree())
-            .ok()
-            .and_then(|tree| records_from_tree(repo, &tree).ok())
-            .and_then(|records| {
-                records.get(task_id).map(|record| {
-                    record.status == "complete" && record.reviewed.as_deref() == Some(reviewed)
-                })
-            })
-            .unwrap_or(false)
-    };
-    landing_heads(repo_root, tip)
-        .into_iter()
-        .find(|head| {
-            crate::git::commit_reachable_from(repo_root, reviewed, std::slice::from_ref(head))
-                .unwrap_or(false)
-        })
-        .is_some_and(|head| carries(&head) && !unbound(&head))
-}
-
-/// The second parents of the merges on `tip`'s first-parent line, newest
-/// first, read through Git with replace refs and grafts disabled.
-fn landing_heads(repo_root: &Path, tip: git2::Oid) -> Vec<String> {
-    let output = crate::git::judging_command()
-        .arg("-C")
-        .arg(repo_root)
-        .args([
-            "--no-replace-objects",
-            "-c",
-            "core.commitGraph=false",
-            "-c",
-            "core.useReplaceRefs=false",
-            "log",
-            "--first-parent",
-            "--merges",
-            "--max-count=500",
-            "--format=%P",
-        ])
-        .arg(tip.to_string())
-        .env(
-            "GIT_GRAFT_FILE",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .output();
-    let Ok(output) = output else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|parents| parents.split(' ').nth(1).map(str::to_string))
-        .collect()
 }
 
 /// Every task's state on its own target tip, from the refs as last fetched,
@@ -1122,11 +1157,19 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
     // `origin`. Another remote never stands in, and a target whose tracking
     // ref is absent stays unknown.
     let tracking = |declared: &str| -> Option<(String, String)> {
-        let remote = target_fetch_remote(&repo, declared).ok()??;
         let name = declared
             .strip_prefix("refs/remotes/")
             .or_else(|| declared.strip_prefix("refs/heads/"))
             .unwrap_or(declared);
+        // A target that names a configured remote reads that remote; a bare
+        // name reads `origin`, the remote `target_fetch_remote` takes for a
+        // target with no local branch. A local branch's upstream setting is
+        // mutable local state and never chooses the remote here.
+        let named = target_fetch_remote(&repo, declared)
+            .ok()
+            .flatten()
+            .filter(|remote| name.starts_with(&format!("{remote}/")));
+        let remote = named.unwrap_or_else(|| "origin".to_string());
         let branch = name
             .strip_prefix(remote.as_str())
             .and_then(|rest| rest.strip_prefix('/'))
@@ -1202,7 +1245,9 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                         tip: tip.to_string(),
                         claimed: active.contains(&record.id),
                         accepted: record.reviewed.as_deref().is_some_and(|reviewed| {
-                            completion_bound(repo_root, &repo, tip, &record.id, reviewed)
+                            record_path(&tree, &record.id).is_some_and(|path| {
+                                completion_bound(repo_root, &repo, tip, &record.id, &path, reviewed)
+                            })
                         }),
                     },
                 );

@@ -861,10 +861,16 @@ fn check_cmd(
 fn purge_cmd(paths: &Paths, actor: &Actor, id: &str) -> Result<(), CoordError> {
     // Authorization is judged under the lock, inside the store.
     let purged = store::purge(paths, &actor.recorded_by, id, COMMAND_WAIT)?;
-    println!(
-        "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} of its quarantined lines removed, other items' kept; recorded as sequence {}",
-        purged.lines, purged.quarantine_removed, purged.sequence
-    );
+    match purged.sequence {
+        Some(sequence) => println!(
+            "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} of its quarantined lines removed, other items' kept; recorded as sequence {sequence}",
+            purged.lines, purged.quarantine_removed
+        ),
+        None => println!(
+            "{id}: not in the ledger; {} of its quarantined lines removed, other items' kept; no event was recorded",
+            purged.quarantine_removed
+        ),
+    }
     for path in &purged.retained {
         eprintln!(
             "follow: warning: {} still names {id} in a line whose subject cannot be read; it was kept, not purged: inspect it and remove it by hand if it is {id}'s",

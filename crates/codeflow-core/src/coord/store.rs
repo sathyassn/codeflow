@@ -725,9 +725,9 @@ pub struct Purged {
     /// Quarantine files that still hold the item's id in a line whose
     /// subject could not be established; reported, never claimed purged.
     pub retained: Vec<PathBuf>,
-    /// The purge event's sequence (the last sequence when only quarantine
-    /// was purged).
-    pub sequence: u64,
+    /// The purge event's sequence; `None` when the item was not in the
+    /// ledger and only its quarantined lines were purged, with no event.
+    pub sequence: Option<u64>,
 }
 
 /// Fields that hold structure, not free text: ids, kinds, times, holders,
@@ -826,7 +826,7 @@ pub fn purge(
             lines: 0,
             quarantine_removed,
             retained,
-            sequence: ledger.last_sequence,
+            sequence: None,
         });
     };
     if !super::transition::holds(&bound, item) {
@@ -922,7 +922,7 @@ pub fn purge(
         lines: usize::try_from(lines).unwrap_or(usize::MAX),
         quarantine_removed,
         retained,
-        sequence: envelope.sequence,
+        sequence: Some(envelope.sequence),
     })
 }
 
@@ -938,35 +938,47 @@ fn names_subject(line: &[u8], subject: &str) -> Option<bool> {
     {
         return Some(value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject));
     }
+    // A line that does not parse may hold one event or, after a lost line
+    // break, several. Every readable `subject_id` value is collected: the
+    // line is the subject's only when each one names it, and it belongs to
+    // another item when none does and the id is not mentioned.
     let field = b"\"subject_id\"";
+    let skip = |bytes: &[u8]| -> usize {
+        bytes
+            .iter()
+            .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+            .count()
+    };
+    let mut values: Vec<&[u8]> = Vec::new();
+    let mut unreadable = false;
     let mut start = 0;
     while let Some(found) = line[start..]
         .windows(field.len())
         .position(|window| window == field)
     {
-        let mut rest = &line[start + found + field.len()..];
-        let skip = |bytes: &[u8]| -> usize {
-            bytes
-                .iter()
-                .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
-                .count()
-        };
-        rest = &rest[skip(rest)..];
-        if let Some(after) = rest.strip_prefix(b":") {
+        let rest = &line[start + found + field.len()..];
+        let rest = &rest[skip(rest)..];
+        let value = rest.strip_prefix(b":").and_then(|after| {
             let after = &after[skip(after)..];
-            if let Some(value) = after.strip_prefix(b"\"") {
-                let end = value.iter().position(|byte| *byte == b'"');
-                if let Some(end) = end {
-                    return Some(&value[..end] == subject.as_bytes());
-                }
-            }
+            let value = after.strip_prefix(b"\"")?;
+            let end = value.iter().position(|byte| *byte == b'"')?;
+            Some(&value[..end])
+        });
+        match value {
+            Some(value) => values.push(value),
+            None => unreadable = true,
         }
         start += found + field.len();
     }
     let mentions = line
         .windows(subject.len())
         .any(|window| window == subject.as_bytes());
-    if mentions {
+    let all_subject = !values.is_empty() && values.iter().all(|value| *value == subject.as_bytes());
+    if all_subject && !unreadable {
+        Some(true)
+    } else if mentions {
+        // Another subject beside this one, a field that cannot be read, or
+        // the id named outside any field: ambiguous, kept and reported.
         None
     } else {
         Some(false)

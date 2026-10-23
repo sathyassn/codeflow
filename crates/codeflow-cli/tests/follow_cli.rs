@@ -1828,3 +1828,286 @@ fn the_operator_purges_an_item_that_survives_only_in_quarantine() {
     let kept = std::fs::read_to_string(&fragment).unwrap();
     assert!(!kept.contains("PRIVATE") && kept.contains("KEEP"), "{kept}");
 }
+
+// ---------------------------------------------------------------------------
+// Review round 4 reproductions; each failed at 8f5b4c9bb.
+// ---------------------------------------------------------------------------
+
+/// Codex T1: the current completion episode is what is bound. A landed
+/// completion closes; reopening the task reopens the item; restoring the
+/// old completion and its acceptance over changed work stays open; a new
+/// reviewed completion closes again.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn only_the_current_completion_episode_is_bound() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("review each completion", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+    let rel = "project-management/tasks/TSK-001.md";
+    let old = std::fs::read_to_string(f.root.join(rel)).unwrap();
+    write(
+        &f.root,
+        rel,
+        &old.replacen("status: complete", "status: todo", 1),
+    );
+    write(
+        &f.root,
+        "src/TSK-001.txt",
+        "unreviewed replacement implementation\n",
+    );
+    git(
+        &f.root,
+        &[
+            "commit",
+            "-qam",
+            "fix: reopen task and change implementation",
+        ],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(out.contains("FU-001 reopened"), "{out}");
+    write(&f.root, rel, &old);
+    git(
+        &f.root,
+        &[
+            "commit",
+            "-qam",
+            "docs: re-complete with obsolete acceptance",
+        ],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Open,
+        "stale re-completion closed"
+    );
+    // A proper reopen keeps the old block superseded; a new review of the
+    // current work, completed and landed, closes again.
+    git(&f.root, &["checkout", "-qb", "task/TSK-001-again"]);
+    let reopened = old
+        .replacen("status: complete", "status: todo", 1)
+        .replacen(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: the work changed\n",
+            1,
+        );
+    write(&f.root, rel, &reopened);
+    git(
+        &f.root,
+        &["commit", "-qam", "docs(tasks): reopen for the new review"],
+    );
+    let reviewed = reviewed_work(&f.root, "TSK-001");
+    let block = format!(
+        "\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: \"reviewed again\"\n  criteria:\n    AC-1: verified | the fixture ran the command\n  journey: verified | the fixture journey\n  not_verified: \"nothing\"\n  follow_ups: \"none: nothing left\"\n  verdict: approved\n```\n"
+    );
+    write(
+        &f.root,
+        rel,
+        &format!(
+            "{}{block}",
+            reopened.replacen("status: todo", "status: complete", 1)
+        ),
+    );
+    git(
+        &f.root,
+        &[
+            "commit",
+            "-qam",
+            "docs(tasks): complete after the new review",
+        ],
+    );
+    git(&f.root, &["checkout", "-q", "main"]);
+    git(
+        &f.root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge the new review",
+            "task/TSK-001-again",
+        ],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(
+        out.contains("FU-001 closed on machine-verified evidence"),
+        "{out}"
+    );
+}
+
+/// Codex T3: a later merge of unrelated work, forked before the completion,
+/// leaves a valid closure closed.
+#[test]
+fn an_unrelated_later_merge_keeps_a_valid_closure() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("keep correct proof", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+    let reviewed = git(&f.root, &["rev-parse", "task/TSK-001-landing~1"]);
+    git(&f.root, &["checkout", "-qb", "task/unrelated", &reviewed]);
+    write(&f.root, "src/unrelated.txt", "unrelated later work\n");
+    git(&f.root, &["add", "."]);
+    git(&f.root, &["commit", "-qm", "feat: unrelated change"]);
+    git(&f.root, &["checkout", "-q", "main"]);
+    git(
+        &f.root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge unrelated work",
+            "task/unrelated",
+        ],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+}
+
+/// Codex T2: two events joined by a lost line break are kept whole and
+/// reported, whichever of the two subjects is purged, in either order.
+#[test]
+fn a_joined_quarantined_line_is_kept_for_either_subject() {
+    for (first, second, purged) in [
+        ("FU-001", "FU-002", "FU-001"),
+        ("FU-001", "FU-002", "FU-002"),
+        ("FU-002", "FU-001", "FU-001"),
+        ("FU-002", "FU-001", "FU-002"),
+    ] {
+        let f = fixture();
+        let paths = bind(&f.root);
+        let by = coordinator("WS-001", "c1");
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args("one", &["--no-link-reason", "unlinked"]),
+        ));
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args("two", &["--no-link-reason", "unlinked"]),
+        ));
+        let prefix = std::fs::read(&paths.events).unwrap();
+        ok(&cli(
+            &f.root,
+            &by,
+            &[
+                "follow",
+                "check",
+                first,
+                "--observed",
+                "FIRST-TEXT",
+                "--offline",
+            ],
+        ));
+        let middle = std::fs::read(&paths.events).unwrap();
+        ok(&cli(
+            &f.root,
+            &by,
+            &[
+                "follow",
+                "check",
+                second,
+                "--observed",
+                "SECOND-TEXT",
+                "--offline",
+            ],
+        ));
+        let all = std::fs::read(&paths.events).unwrap();
+        let mut damaged = prefix.clone();
+        damaged.extend_from_slice(&middle[prefix.len()..middle.len() - 1]);
+        damaged.extend_from_slice(&all[middle.len()..]);
+        std::fs::write(&paths.events, damaged).unwrap();
+        let quarantined = store::repair(&paths, store::COMMAND_WAIT)
+            .unwrap()
+            .quarantined
+            .unwrap();
+        let before = std::fs::read(&quarantined).unwrap();
+        let out = cli(&f.root, &by, &["follow", "purge", purged]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert!(text(&out).contains("kept, not purged"), "{}", text(&out));
+        assert_eq!(
+            before,
+            std::fs::read(&quarantined).unwrap(),
+            "{first} {second} purge {purged}"
+        );
+    }
+}
+
+/// Codex N1: purging an item that survives only in quarantine says that no
+/// event was recorded.
+#[test]
+fn a_quarantine_only_purge_says_no_event_was_recorded() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    std::fs::create_dir_all(&paths.quarantine).unwrap();
+    std::fs::write(
+        paths.quarantine.join("damaged-1-x.bin"),
+        "{\"subject_id\":\"FU-009\",\"data\":\"X\"}\n",
+    )
+    .unwrap();
+    let purged = store::purge(&paths, &fixture::operator(), "FU-009", store::COMMAND_WAIT).unwrap();
+    assert_eq!(purged.sequence, None);
+    assert_eq!(purged.quarantine_removed, 1);
+}
+
+/// Security R4-1: a bare `main` target reads `origin`'s line; setting the
+/// local branch's upstream to another remote changes nothing.
+#[test]
+fn a_bare_target_never_follows_a_changed_upstream() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("land on origin", &["--link", "fulfils:TSK-001"]),
+    ));
+    let evil = f.root.parent().unwrap().join("evil.git");
+    git(
+        f.root.parent().unwrap(),
+        &["init", "-q", "--bare", "-b", "main", evil.to_str().unwrap()],
+    );
+    git(&f.root, &["remote", "add", "evil", evil.to_str().unwrap()]);
+    git(&f.root, &["checkout", "-qb", "task/TSK-001-evil"]);
+    let reviewed = reviewed_work(&f.root, "TSK-001");
+    write(
+        &f.root,
+        "project-management/tasks/TSK-001.md",
+        &accepted("TSK-001", "ship the cache warmer", &reviewed),
+    );
+    git(&f.root, &["commit", "-qam", "docs: complete"]);
+    git(&f.root, &["push", "-q", "evil", "HEAD:refs/heads/main"]);
+    git(&f.root, &["checkout", "-q", "main"]);
+    git(&f.root, &["fetch", "-q", "evil"]);
+    git(&f.root, &["branch", "-q", "-u", "evil/main", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
