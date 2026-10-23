@@ -1,0 +1,11 @@
+id = "TSK-447"
+uid = "d7a3ba81-fe2e-4fa2-b3b2-9e080b12b49e"
+kind = "TSK"
+title = "Cargo takes the fixed tokio release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-23T15:59:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
