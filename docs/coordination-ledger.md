@@ -306,13 +306,13 @@ No fields. Recorded by the holder or the operator.
   link is done on its target and every prerequisite and `waits_on` id it
   declares is met: the task `complete`, with an acceptance block that passes
   the acceptance rules and is bound to its reviewed commit as CI binds a
-  completion at the head that carried it, on the tip of the landing line its
+  completion at the commit that introduced the current completion (a
+  reopen and re-completion is judged again), on the tip of the landing line its
   record declares, with the UID the link pinned. A landing line is the one
   remote-tracking ref the declared target names, by the same remote rules
   `work start` uses (`origin/main` is origin's, never another remote's; a
-  bare name is its local branch's upstream remote, or `origin` when there
-  is no local branch; an absent tracking ref, or a local branch with no
-  upstream, is unknown), for `main`, `master` or an `integration/`
+  bare name is `origin`'s, never chosen by a local branch's upstream
+  setting; an absent tracking ref is unknown), for `main`, `master` or an `integration/`
   line that a task record on the default target names as its target. A
   local branch never counts, nor a pushed line no record on the default
   target names. A pull request counts when the host reports it merged into
@@ -388,7 +388,11 @@ No fields. Recorded by the holder or the operator.
   spacing, even beside a damaged byte; other items' lines stay byte for
   byte), names any fragment it cannot judge instead of claiming it purged,
   and records an `item_purged` event with who and when, never the text. The
-  operator may also purge an item that survives only in quarantine.
+  operator may also purge an item that survives only in quarantine; that
+  item is not in the log, so only its quarantined lines change and no event
+  is recorded. A quarantined line that holds another item's `subject_id`
+  beside this one (two events joined by a lost line break) is kept and
+  named, not split.
 - On a write, an existing ledger directory or file must belong to the user;
   group and other access is removed. A failed directory sync is reported,
   never ignored.
