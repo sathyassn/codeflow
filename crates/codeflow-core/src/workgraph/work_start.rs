@@ -214,6 +214,8 @@ pub struct WorkStartReport {
 #[derive(Debug, Clone)]
 pub(crate) struct Record {
     pub(crate) id: String,
+    /// The hidden record identity, when the record carries one.
+    pub(crate) uid: Option<String>,
     pub(crate) kind: RecordKind,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -2999,6 +3001,7 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
     }
     Ok(Record {
         id,
+        uid: string(&data, "uid"),
         kind,
         status: string(&data, "status").unwrap_or_default(),
         epic_id: string(&data, "epic_id"),

@@ -878,6 +878,84 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     Ok(out)
 }
 
+/// A task's state as its target tip holds it: the record status on the
+/// ref its declared target resolves to, never a feature branch's copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetTask {
+    /// `todo`, `blocked`, `complete` or `cancelled`, as the target holds it.
+    pub status: String,
+    /// The record's hidden identity on the target, when it carries one.
+    pub uid: Option<String>,
+    /// The declared target (`main`, `integration/EPC-NNN-<slug>`).
+    pub target: String,
+    /// The ref read (`origin/main`).
+    pub reference: String,
+    /// The tip commit read.
+    pub tip: String,
+    /// A visible, unlanded branch carries the task (claimed, advisory).
+    pub claimed: bool,
+}
+
+/// Every task's state on its own target tip, from the refs as last fetched,
+/// with the same target resolution `work next` and `work start` use. Makes
+/// no network call and writes nothing.
+///
+/// # Errors
+///
+/// Returns the reason when the repository or a target tip cannot be read.
+pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, String> {
+    let _judgment = history::judgment();
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
+    let mut resolved = Targets::new(repo_root, &repo);
+    let mut snapshots = Vec::new();
+    let tips = read_tips(
+        &repo,
+        &mut resolved,
+        declared_targets(repo_root)?,
+        &mut snapshots,
+    )?;
+    let active: BTreeSet<String> = backlog(repo_root)
+        .map(|backlog| {
+            backlog
+                .in_state(State::Active)
+                .map(|entry| entry.task_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = BTreeMap::new();
+    for (_, reference, tip, records) in &tips {
+        for record in records
+            .values()
+            .filter(|record| record.kind == RecordKind::Task)
+        {
+            let Some(declared) = record
+                .integration_target
+                .clone()
+                .or_else(|| default.clone())
+            else {
+                continue;
+            };
+            let here = matches!(resolved.resolve(&declared), Ok(Some((seen, oid))) if seen == *reference && oid == *tip);
+            if !here || out.contains_key(&record.id) {
+                continue;
+            }
+            out.insert(
+                record.id.clone(),
+                TargetTask {
+                    status: record.status.clone(),
+                    uid: record.uid.clone(),
+                    target: declared,
+                    reference: shown(reference),
+                    tip: tip.to_string(),
+                    claimed: active.contains(&record.id),
+                },
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// What `work claim` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
