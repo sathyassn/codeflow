@@ -277,6 +277,8 @@ class GateContracts(unittest.TestCase):
         for name in ['rust-doctest', 'rustdoc']:
             self.assertIn('codeflow-bin', closure(name), name)
         self.assertEqual(targets['rust-clippy']['env']['CARGO_TARGET_DIR'], 'target/clippy')
+        for name in ['rust-build', 'codeflow-bin', 'rust-clippy', 'rustdoc', 'rust-doctest', 'repository-update-noop', 'contract-scans', 'present-binary-delta']:
+            self.assertEqual(targets[name]['workers'], cfg['execution']['worker_budget'], name)
         # Quick keeps its membership and does not pull in the web build.
         # Its Cargo checks declare their need for heavy admission.
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}

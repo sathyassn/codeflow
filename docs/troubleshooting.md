@@ -137,6 +137,8 @@ otherwise it shares the available workers with other ready heavy targets.
 Light targets can run beside them. Omit the budget to retain tool
 defaults. This repository sets eight workers and gives clippy a separate
 `target/clippy` directory; its binary build waits for the all-target build.
+Each Cargo producer takes the full budget to avoid package-cache and
+build-directory waits; light checks still run beside it.
 
 The unchanged lock names also exclude full runs of a 3.1 binary. Essential
 runs of 3.1 take no lock and can still overlap. Direct commands outside the
