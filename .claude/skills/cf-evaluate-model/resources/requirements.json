@@ -2959,7 +2959,7 @@
         {
           "path": ".agents/skills/cf-herdr/SKILL.md",
           "markers": [
-            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
+            "Trust this task's worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]

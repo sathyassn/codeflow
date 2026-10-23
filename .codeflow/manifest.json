@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "4fea464644d4ec030c754bcabd6ac36a659517114a4e7057ca7846f976dc4fc5",
+      "sha256": "f2544ef34f5ec769a88dd36b25f4a5033bbde3bd963c9ba6e051f9aebeb8bb9f",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -389,7 +389,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "badfff18f68788fefe43f3f5f5a46c7868cb8564ff7e9017b4a1f0a5f772ca58",
+      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "b011f82ab50e0f7cfc68f1b45d196b20ce86b5c49e47e3fe3a7c405c855dd705",
+      "sha256": "96afcce42de3fe5725344bd22738aaf474051ddf8bec7b618723b746edb66d6d",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "4fea464644d4ec030c754bcabd6ac36a659517114a4e7057ca7846f976dc4fc5",
+      "sha256": "f2544ef34f5ec769a88dd36b25f4a5033bbde3bd963c9ba6e051f9aebeb8bb9f",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1229,7 +1229,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "badfff18f68788fefe43f3f5f5a46c7868cb8564ff7e9017b4a1f0a5f772ca58",
+      "sha256": "17885692903758cf1b69bd18b8f4ba615034aea6ebcf917b01caeaf716c4a404",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
@@ -1253,7 +1253,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "b011f82ab50e0f7cfc68f1b45d196b20ce86b5c49e47e3fe3a7c405c855dd705",
+      "sha256": "96afcce42de3fe5725344bd22738aaf474051ddf8bec7b618723b746edb66d6d",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {

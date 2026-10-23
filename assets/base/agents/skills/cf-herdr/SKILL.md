@@ -124,7 +124,7 @@ Herdr pane, and its lifecycle records remain the completion signal.
 A new seat can stop at folder trust, then project hook trust (Grok:
 `/hooks-trust` or `--trust`), or a self-update offer; delivery exits 5
 until they are answered. Folder trust:
-Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).
+Trust this task's worktree or this run's sample; ask for others (`autonomy.md`).
 Hook trust is the operator's: never answer it; tell the operator the seat
 waits in its tab. Skip a self-update offer. The transport rule's
 "First-run prompts" is the authority.
