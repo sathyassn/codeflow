@@ -453,7 +453,8 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         default_target,
         super::acceptance::Transport::Direct,
         None,
-    );
+    )
+    .findings;
     if at_head.is_empty() {
         return Vec::new();
     }
@@ -483,18 +484,21 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                 Ok(run) => run,
                 Err(error) => return vec![error],
             };
-            shown(super::acceptance::bind_completion_with_amendment(
-                &repo,
-                task,
-                graph,
-                landing,
-                default_target,
-                super::acceptance::Transport::TaskLanding,
-                None,
-                own_range_base,
-                &run.stacking(),
-                &run.criteria(),
-            ))
+            shown(
+                super::acceptance::bind_completion_with_amendment(
+                    &repo,
+                    task,
+                    graph,
+                    landing,
+                    default_target,
+                    super::acceptance::Transport::TaskLanding,
+                    None,
+                    own_range_base,
+                    &run.stacking(),
+                    &run.criteria(),
+                )
+                .findings,
+            )
         }
         Err(error) => {
             let mut refused = shown(at_head);
