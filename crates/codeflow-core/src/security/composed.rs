@@ -498,7 +498,7 @@ impl Lexer {
                         self.toks.push(Tok::Op("("));
                     }
                 }
-                '<' | '>' if self.peek_at(1) == Some('(') => {
+                '<' | '>' | '=' if self.peek_at(1) == Some('(') => {
                     self.at += 2;
                     let body = self.balanced(1)?;
                     let mut word = Word::default();
@@ -3415,7 +3415,7 @@ impl Run<'_> {
                         at += 1;
                     }
                 }
-                "noglob" | "nocorrect" | "-" | "!" => at += 1,
+                name if name == "!" || crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
                 "time" => {
                     at += 1;
                     if args.get(at).and_then(Arg::literal).as_deref() == Some("-p") {

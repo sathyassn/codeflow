@@ -1502,13 +1502,7 @@ mod tests {
         assert_public_refused(&repo, &owned, false);
         let authority = source("python3 tool.py config");
         assert_public_refused(&repo, &[authority.as_str()], true);
-        // TSK-406 round 3: unread shell code now refuses near a checkout,
-        // independently of the known operands following it.
-        assert_public_refused(
-            &repo,
-            &[source("python3 tool.py notes.txt").as_str()],
-            false,
-        );
+        assert_public_allowed(&repo, &[source("python3 tool.py notes.txt").as_str()]);
         // Codex R3-1: options that consume values, attached spellings,
         // clusters and outer launchers.
         assert_public_refused(
@@ -2142,11 +2136,9 @@ mod tests {
                 "echo \"$settings.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
             ],
         );
-        // The round 3 shell-input rule supersedes the external-code allowance.
-        assert_public_refused(
+        assert_public_allowed(
             &repo,
             &["source venv/bin/activate && echo ok && python3 src/app.py"],
-            false,
         );
     }
 }

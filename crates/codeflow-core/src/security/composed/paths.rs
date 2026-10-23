@@ -102,7 +102,10 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
                 crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
                     (program.rsplit('/').next() == Some("git")
                         && args.iter().any(|arg| arg == "worktree"))
-                        || matches!(program, "ln" | "link" | "cp")
+                        || matches!(
+                            program.rsplit('/').next(),
+                            Some("ln" | "gln" | "link" | "cp" | "gcp")
+                        )
                 });
             if !declares_checkout {
                 *last_position = position;
@@ -145,10 +148,18 @@ pub(crate) fn created_links(text: &str, cwd: &Path) -> Vec<Link> {
         return Vec::new();
     };
     let name = program.rsplit('/').next().unwrap_or(program);
+    let name = match name {
+        "gln" => "ln",
+        "gcp" => "cp",
+        _ => name,
+    };
     let symbolic = args.iter().any(|a| {
         a == "--symbolic-link" || (a.starts_with('-') && !a.starts_with("--") && a.contains('s'))
     });
-    if !(matches!(name, "ln" | "link") || name == "cp" && symbolic) {
+    let hard_link = args
+        .iter()
+        .any(|a| a == "--link" || (a.starts_with('-') && !a.starts_with("--") && a.contains('l')));
+    if !(matches!(name, "ln" | "link") || name == "cp" && (symbolic || hard_link)) {
         return Vec::new();
     }
     let Some(effects) = crate::security::unresolved::writer_effects(
@@ -284,8 +295,8 @@ pub(crate) fn eval_body(args: &[String]) -> String {
 /// branch checks. The position-aware reader resolves variables separately.
 pub(crate) fn literal_input_script(line: &str) -> Option<String> {
     let words = crate::hooks::git_guard::command_argv(line);
-    let (_, args) = crate::hooks::git_guard::script_reader(&words)?;
-    if crate::hooks::git_guard::shell_c_argument(args).is_some() {
+    let (name, args) = crate::hooks::git_guard::script_reader(&words)?;
+    if crate::hooks::git_guard::shell_inline_code(name, args).is_some() {
         return None;
     }
     if let Some(script) = crate::security::outward::here_string(line) {
@@ -625,11 +636,20 @@ fn walk(
                                     crate::hooks::git_guard::launched_script(&words, script);
                                 let after =
                                     reparse(&script, state, dialect, output, depth, reparses);
-                                states.push(after);
+                                if !states.contains(&after) {
+                                    // A pipeline tail may run in this shell or
+                                    // a child. Join differing results once;
+                                    // later tails cannot multiply those forks.
+                                    let mut joined = after;
+                                    joined.state.directory = None;
+                                    joined.state.world = Some(TOO_MANY_STATES);
+                                    joined.stack.clear();
+                                    set_pwd(&mut joined.state);
+                                    states = vec![joined];
+                                    break;
+                                }
                             }
                             bound(&mut states);
-                        } else {
-                            output.push(unread_code("shell pipeline input cannot be read"));
                         }
                     }
                     output.push(command);
@@ -902,14 +922,6 @@ fn simple(
     }
     let words = crate::hooks::git_guard::command_argv(&text);
     let launched = crate::hooks::git_guard::strip_launchers(&words);
-    let assignments_only = tokens
-        .iter()
-        .all(|token| matches!(token, Tok::Word(word) if super::assignment_shape(word).is_some()));
-    if !assignments_only
-        && launched.is_some_and(|(program, _)| crate::hooks::git_guard::unresolved_word(program))
-    {
-        output.push(unread_code("shell command word cannot be read"));
-    }
     let stdout = launched
         .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
         .and_then(|_| {
@@ -945,9 +957,8 @@ fn simple(
     let reader = crate::hooks::git_guard::script_reader(&words);
     let script = if let Some(("eval", args)) = reader {
         Some(eval_body(args))
-    } else if let Some((_, args)) = reader {
-        crate::hooks::git_guard::shell_c_argument(args)
-            .cloned()
+    } else if let Some((name, args)) = reader {
+        crate::hooks::git_guard::shell_inline_code(name, args)
             .or_else(|| crate::security::outward::here_string(&text))
             .or_else(|| {
                 tokens.iter().find_map(|token| match token {
@@ -980,17 +991,16 @@ fn simple(
     } else {
         None
     };
-    let requires_code = reader.is_some_and(|(name, args)| {
-        crate::hooks::git_guard::is_shell(name)
-            || (matches!(name, "source" | ".") && !args.is_empty())
-            || args.iter().any(|a| matches!(a.as_str(), "-c" | "-s" | "--command"))
-            || args.iter().any(|a| crate::security::outward::descriptor_program(a))
-            || tokens.iter().any(|token| matches!(token, Tok::Redir { op, .. }
-                if matches!(op.as_str(), "<" | "0<" | "<<" | "0<<" | "<<-" | "0<<-" | "<<<" | "0<<<"))
-                || matches!(token, Tok::Word(w) if w.parts.iter().any(|p| matches!(p, Part::ProcSubst(_)))))
+    // Only supplied inline code needs a complete reading. File operands,
+    // file redirects and unread external producers keep best-effort handling.
+    let requires_code = reader.is_some_and(|(_, args)| {
+        crate::hooks::git_guard::has_shell_code_option(args)
+            || tokens
+                .iter()
+                .any(|token| matches!(token, Tok::Redir { op, .. } if op.contains("<<")))
     });
     if requires_code && script.is_none() && !piped {
-        output.push(unread_code("shell script input cannot be read"));
+        output.push(unread_code("inline shell code cannot be read"));
     }
     if reader.is_some() && script.is_some() {
         if let Some(word) = unread_script_word {

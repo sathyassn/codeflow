@@ -700,17 +700,18 @@ operands.
   another program or the network remain unresolved.
 - Single-quoted interpreter code and quoted heredocs remain literal.
   Shell `eval`, including leading `--` and zsh `-` markers, reparses its
-  argument with the current variable state. Each line permits at most 16 distinct code reparses per
-  shell reading; further code is refused as cannot-verify. Other leading eval
+  argument with the current variable state. Each line permits at most 16 distinct
+  code reparses per shell reading; further code is refused as cannot-verify. Other leading eval
   options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
   including BusyBox sh/ash applets, and `source`/`.` share the script-input
-  rule. Their `-c` arguments, stdin, here-strings, heredocs, pipes and process-substitution
-  script operands are judged as shell code. Words after `-s` are positional
-  arguments. Unknown programs given code through these routes take the same
-  rule; unread code, including sourced files the guard does not read, refuses
-  near a checkout. Known data readers and interpreter families retain their
-  own input rules. Every route uses the bounded reparse
-  cache.
+  rule. Their `-c` arguments, here-strings, heredocs and resolved builtin output
+  supplied through pipes or process substitutions are judged as shell code. Words after `-s` are positional
+  arguments. Unknown programs are not treated as shells. Script-file operands,
+  file redirects and unread external producers retain best-effort reading
+  and the existing script-bypass policy; they do not cause a new integrity
+  refusal. Supplied inline code uses the bounded reparse cache. Unresolved
+  expansions retain the cannot-verify rule. Known data readers and interpreter
+  families keep their own input rules.
   Resolved builtin output piped into an interpreter is read as code; unread
   external producers retain the trailing-component checks described above.
   Literal loop word lists and earlier ordinary assignments stay resolvable
@@ -727,7 +728,9 @@ operands.
   receive the same verdict. An inline Git alias that could create or move a
   worktree refuses when that prospective location cannot be verified.
   Writers and interpreter paths follow possible same-line links made by `ln`,
-  `ln -s`, `cp -s` and `link`; ordinary targets remain allowed. Add-then-status
+  `ln -s`, `cp -s`, `cp -l` and `link`, including path-qualified program names
+  and GNU spellings. This includes `dd of=` destinations. Ordinary targets
+  remain allowed. Add-then-status
   is allowed
   when the source configuration proves it needs no callback that the guard
   cannot judge before the new checkout exists.

@@ -702,17 +702,21 @@ fn expanded_integrity(
                 }
             },
         );
-        for segment in expand_shell_commands(&step.text).segments {
+        // The position reader already emitted each shell body with its own
+        // resolved operands. Reopening the wrapper would judge its quoted,
+        // unresolved source again and bypass the shared reparse budget.
+        let segments = if script_reader(&command_argv(&step.text)).is_some() {
+            vec![step.text.clone()]
+        } else {
+            expand_shell_commands(&step.text).segments
+        };
+        for segment in segments {
             let mut tokens = shell_tokens(&segment);
             strip_reserved_words(&mut tokens);
             let redirects = redirect_writes(&segment);
             let here = step.cwd.as_deref().unwrap_or(cwd);
-            if let Some((program, args)) = strip_launchers(&tokens) {
-                if program == "__unresolved_shell_code"
-                    || (((matches!(program, "source" | ".") && !args.is_empty())
-                        || (reads_shell_stdin(&command_argv(&segment)) && segment.contains("<<<")))
-                        && !step.unresolved.is_empty())
-                {
+            if let Some((program, _)) = strip_launchers(&tokens) {
+                if program == "__unresolved_shell_code" {
                     violations.push(hook_integrity_violation(
                         level,
                         format!(
@@ -720,9 +724,7 @@ fn expanded_integrity(
                             step.unresolved.join(", ")
                         ),
                     ));
-                    if program == "__unresolved_shell_code" {
-                        continue;
-                    }
+                    continue;
                 }
                 if prospective_alias_unknown(&tokens) {
                     violations.push(hook_integrity_violation(
@@ -736,7 +738,7 @@ fn expanded_integrity(
             {
                 for word in tokens.iter().chain(redirects.targets.iter()) {
                     let paths = match crate::security::composed::paths::linked_paths(
-                        word,
+                        word.strip_prefix("of=").unwrap_or(word),
                         here,
                         &step.links,
                     ) {
@@ -755,7 +757,11 @@ fn expanded_integrity(
                                 .iter()
                                 .map(|w| {
                                     if w == word {
-                                        path.to_owned()
+                                        if word.starts_with("of=") {
+                                            format!("of={path}")
+                                        } else {
+                                            path.to_owned()
+                                        }
                                     } else {
                                         w.clone()
                                     }
@@ -896,14 +902,22 @@ fn evaluate_report_with_runners(
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
     let expanded_operands = command.contains(['$', '`', '~'])
-        || command.contains("<(")
+        || (command.contains("<(") || command.contains("=("))
         || command.contains("<<<")
         || segments.iter().any(|segment| {
             let words = command_argv(segment);
             strip_launchers(&words).is_some_and(|(program, args)| {
                 matches!(
-                    program,
-                    "cd" | "chdir" | "pushd" | "popd" | "eval" | "ln" | "cp" | "link"
+                    basename(program),
+                    "cd" | "chdir"
+                        | "pushd"
+                        | "popd"
+                        | "eval"
+                        | "ln"
+                        | "gln"
+                        | "cp"
+                        | "gcp"
+                        | "link"
                 ) || basename(program) == "git"
                     || is_shell(basename(program))
                     || (matches!(basename(program), "source" | ".") && !args.is_empty())
@@ -1073,7 +1087,7 @@ fn evaluate_report_with_runners(
                 violations.extend(unclassifiable_violation(
                     ctx.policy,
                     None,
-                    &substitution_reason("its program name"),
+                    "a command substitution in the program name decides which program runs",
                     &crate::remedy::GUARD_UNCLASSIFIABLE,
                 ));
             }
@@ -1951,16 +1965,17 @@ fn integrity_write_in_dirs(
     line: &str,
     run: &RunDirs,
 ) -> Option<Violation> {
-    // These builtins cannot write an operand. Their nested substitutions and
-    // state effects are visited separately; only their redirections can write.
+    // These programs cannot write an operand. Their nested substitutions and
+    // script bodies are visited separately; only their redirections can write.
     if redirects.targets.is_empty()
         && redirects.unread.is_empty()
-        && tokens.first().is_some_and(|word| {
-            matches!(
-                word.as_str(),
-                "cd" | "chdir" | "pushd" | "popd" | "true" | "false" | "eval"
-            )
-        })
+        && (read_only_program(tokens)
+            || tokens.first().is_some_and(|word| {
+                matches!(
+                    word.as_str(),
+                    "cd" | "chdir" | "pushd" | "popd" | "true" | "false" | "eval" | "source" | "."
+                )
+            }))
     {
         return None;
     }
@@ -6815,82 +6830,18 @@ impl Literals {
     }
 }
 
-/// A shell, source builtin, or an unknown program that could execute code.
-/// Known data consumers and interpreter families keep their own input grammar.
+/// Known shells and shell builtins that consume inline code. Unknown programs
+/// and file operands retain their own best-effort input rules.
 pub(crate) fn script_reader(words: &[String]) -> Option<(&str, &[String])> {
     let (program, args) = strip_launchers(words)?;
     let name = basename(program);
-    if is_shell(name)
-        && args
-            .first()
-            .is_some_and(|arg| matches!(arg.as_str(), "--version" | "--help"))
+    if args
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "--version" | "--help"))
     {
         return None;
     }
-    if is_shell(name) || matches!(name, "source" | "." | "eval") {
-        return Some((name, args));
-    }
-    if HEREDOC_DATA_READERS.contains(&name)
-        || crate::security::outward::interpreter_family(name).is_some()
-        || crate::security::unresolved::has_writer_entry(name)
-        || READ_ONLY_PROGRAMS.contains(&name)
-        || matches!(
-            name,
-            "git"
-                | "gh"
-                | "cargo"
-                | "rustc"
-                | "curl"
-                | "wget"
-                | "rg"
-                | "find"
-                | "xargs"
-                | "print"
-                | "pwd"
-                | "set"
-                | "read"
-                | "export"
-                | "declare"
-                | "typeset"
-                | "local"
-                | "unset"
-                | "true"
-                | "false"
-                | "cd"
-                | "chdir"
-                | "pushd"
-                | "popd"
-                | "ln"
-                | "link"
-                // These have dedicated command/input grammars. Their -c
-                // flags, stdin and operands are not generic shell scripts.
-                | "sed"
-                | "awk"
-                | "gawk"
-                | "mawk"
-                | "flock"
-                | "script"
-                | "watch"
-                | "parallel"
-                | "setsid"
-                | "unbuffer"
-                | "npm"
-                | "pnpm"
-                | "yarn"
-                | "bun"
-                | "npx"
-                | "bunx"
-                | "pnpx"
-                | "pnx"
-                | "pn"
-                | "php"
-                | "deno"
-        )
-    {
-        None
-    } else {
-        Some((name, args))
-    }
+    (is_shell(name) || matches!(name, "source" | "." | "eval")).then_some((name, args))
 }
 
 /// Words after -s are positional arguments, even when they look like filenames.
@@ -6899,11 +6850,8 @@ pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
         if matches!(name, "source" | ".") {
             return args.first().is_some_and(|a| a == "/dev/stdin");
         }
-        if name == "eval" || shell_c_argument(args).is_some() {
+        if name == "eval" || has_shell_code_option(args) {
             return false;
-        }
-        if !is_shell(name) {
-            return true;
         }
         let mut at = 0;
         let mut stdin = false;
@@ -6953,10 +6901,10 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
         // sh -c ...`), which the body carries as its own leading `cd`
         // so every check that follows directories sees it (TSK-216
         // round 5).
-        let Some(inner) = shell_c_argument(args) else {
+        let Some(inner) = shell_inline_code(name, args) else {
             return Vec::new();
         };
-        vec![launched_script(toks, inner)]
+        vec![launched_script(toks, &inner)]
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
         vec![crate::security::composed::paths::eval_body(args)]
@@ -7471,28 +7419,85 @@ fn env_split_command(tokens: &[String]) -> Option<String> {
     }
 }
 
-/// The command-string argument of a shell invocation: the token after a `-c`,
-/// `--command`, or a clustered short flag that contains `c` (`-lc`, `-ec`).
-pub(crate) fn shell_c_argument(args: &[String]) -> Option<&String> {
-    let mut i = 0;
-    while i < args.len() {
-        let a = args[i].as_str();
-        if a == "--" || !a.starts_with(['-', '+']) {
-            break;
+/// Shells continue reading options after -c; the first operand is the code.
+/// In particular, -o/+o and -O/+O consume an option name, not the script.
+fn shell_code_option(args: &[String]) -> (bool, Option<&String>) {
+    let mut at = 0;
+    let mut code = false;
+    while let Some(arg) = args.get(at) {
+        if matches!(arg.as_str(), "--" | "-") {
+            return (code, code.then(|| args.get(at + 1)).flatten());
         }
-        let is_c_flag = a == "-c"
-            || a == "--command"
-            || (!a.starts_with("--") && a.len() > 1 && a.contains('c'));
-        if is_c_flag {
-            return args.get(i + 1);
+        if !arg.starts_with(['-', '+']) {
+            return (code, code.then_some(arg));
         }
-        i += if matches!(a, "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file") {
-            2
+        let mut consumes_next = matches!(arg.as_str(), "--rcfile" | "--init-file");
+        if arg.starts_with("--") {
+            code |= arg == "--command";
         } else {
-            1
-        };
+            let mut flags = arg[1..].chars().peekable();
+            while let Some(flag) = flags.next() {
+                code |= arg.starts_with('-') && flag == 'c';
+                if matches!(flag, 'o' | 'O') {
+                    consumes_next = flags.peek().is_none();
+                    break;
+                }
+            }
+        }
+        at += if consumes_next { 2 } else { 1 };
     }
-    None
+    (code, None)
+}
+
+pub(crate) fn shell_c_argument(args: &[String]) -> Option<&String> {
+    shell_code_option(args).1
+}
+
+pub(crate) fn has_shell_code_option(args: &[String]) -> bool {
+    shell_code_option(args).0
+}
+
+/// Shell-specific inline forms share the same body reader and reparse budget.
+/// Fish's initialization commands execute before its main command.
+pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String> {
+    let mut bodies = Vec::new();
+    let program = program.strip_suffix(".exe").unwrap_or(program);
+    if program.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-')) == "fish" {
+        let mut at = 0;
+        while let Some(arg) = args.get(at) {
+            if matches!(arg.as_str(), "-C" | "--init-command") {
+                let Some(body) = args.get(at + 1) else {
+                    return Some("__unresolved_shell_code".into());
+                };
+                bodies.push(body.clone());
+                at += 2;
+                continue;
+            }
+            if arg == "--command"
+                || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('c'))
+            {
+                bodies.push(
+                    shell_c_argument(&args[at..])
+                        .cloned()
+                        .unwrap_or_else(|| "__unresolved_shell_code".into()),
+                );
+                break;
+            }
+            if let Some(body) = arg
+                .strip_prefix("--init-command=")
+                .or_else(|| arg.strip_prefix("--command="))
+                .or_else(|| arg.strip_prefix("-C").filter(|s| !s.is_empty()))
+            {
+                bodies.push(body.into());
+            } else if !arg.starts_with('-') || arg == "--" {
+                break;
+            }
+            at += 1;
+        }
+    } else {
+        bodies.extend(shell_c_argument(args).cloned());
+    }
+    (!bodies.is_empty()).then(|| bodies.join("; "))
 }
 
 /// Split a command into simple-command segments, recursing into `$(…)` and
@@ -7606,7 +7611,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
-        if c == '<' && chars.get(i + 1) == Some(&'(') {
+        if matches!(c, '<' | '=') && chars.get(i + 1) == Some(&'(') {
             let (inner, _) = capture_balanced(&chars, i + 2);
             if let Some(script) =
                 crate::security::composed::paths::literal_input_script(&format!("{cur}<({inner})"))
@@ -12889,7 +12894,11 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 None => return Some((t, &tokens[idx + 1..])),
             }
         }
-        if basename(t) == "busybox" && tokens.get(idx + 1).is_some_and(|a| is_shell(a)) {
+        if basename(t) == "busybox"
+            && tokens
+                .get(idx + 1)
+                .is_some_and(|a| is_shell(a) || matches!(a.as_str(), "ln" | "link" | "cp" | "dd"))
+        {
             idx += 1;
             continue;
         }
@@ -13085,27 +13094,33 @@ pub(crate) fn gnu_prefixed(t: &str) -> bool {
     launcher_name(t) != basename(t)
 }
 
+/// Zsh precommand modifiers shared by the shell readers.
+pub(crate) fn is_shell_modifier(name: &str) -> bool {
+    matches!(name, "noglob" | "nocorrect" | "-")
+}
+
 /// `true` for the launchers that run the simple command after them: the
 /// `command`, `builtin` and `exec` builtins, `nohup`, `time` in its
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
 /// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
 /// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
 fn is_prefix_launcher(t: &str) -> bool {
-    matches!(
-        launcher_name(t),
-        "command"
-            | "builtin"
-            | "exec"
-            | "nohup"
-            | "time"
-            | "nice"
-            | "timeout"
-            | "stdbuf"
-            | "ionice"
-            | "caffeinate"
-            | "xcrun"
-            | "arch"
-    )
+    is_shell_modifier(t)
+        || matches!(
+            launcher_name(t),
+            "command"
+                | "builtin"
+                | "exec"
+                | "nohup"
+                | "time"
+                | "nice"
+                | "timeout"
+                | "stdbuf"
+                | "ionice"
+                | "caffeinate"
+                | "xcrun"
+                | "arch"
+        )
 }
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
@@ -13117,6 +13132,9 @@ fn is_prefix_launcher(t: &str) -> bool {
 /// so a non-executing form such as `nohup --help git push` is judged as the
 /// command after it and may be refused, which fails closed.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+    if is_shell_modifier(launcher) {
+        return Some(idx);
+    }
     let launcher = launcher_name(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if a == "--" {
@@ -13178,11 +13196,28 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
     flags.find(valued).is_some_and(|at| at + 1 == flags.len())
 }
 
-/// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
+/// Known shell names, including versioned and Windows executable spellings.
 pub(crate) fn is_shell(name: &str) -> bool {
+    let name = name.strip_suffix(".exe").unwrap_or(name);
+    let name = name.trim_end_matches(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-'));
     matches!(
         name,
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "mksh" | "yash" | "fish" | "ash"
+        "bash"
+            | "rbash"
+            | "sh"
+            | "zsh"
+            | "dash"
+            | "ksh"
+            | "mksh"
+            | "lksh"
+            | "oksh"
+            | "posh"
+            | "yash"
+            | "fish"
+            | "ash"
+            | "csh"
+            | "tcsh"
+            | "pwsh"
     )
 }
 
@@ -18625,13 +18660,8 @@ mod tests {
         // Normal operations that MUST stay allowed (reviewer's FP set).
         assert!(evaluate("git config user.email you@example.com", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("git config --global user.name 'A B'", &ctx(&p, "feat/x")).is_empty());
-        // TSK-406 round 3 requires unread shell scripts to refuse near a checkout.
-        for command in ["bash script.sh", "bash -x script.sh"] {
-            assert!(has_rule(
-                &evaluate(command, &ctx(&p, "main")),
-                "git.hook_integrity"
-            ));
-        }
+        assert!(evaluate("bash script.sh", &ctx(&p, "main")).is_empty());
+        assert!(evaluate("bash -x script.sh", &ctx(&p, "main")).is_empty());
         assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
         // `git -C <subdir>` resolving to a feature branch stays allowed.
         let dir = tempfile::tempdir().unwrap();

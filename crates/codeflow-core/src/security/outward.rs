@@ -823,7 +823,7 @@ fn launcher_changes(
         "popd" | "dirs" => {}
         "source" | "." | "sudo" | "doas" => found.push(DirChange::Unknown),
         // zsh precommands run the command after them in this shell.
-        "noglob" | "nocorrect" | "-" => inner(Some(0), found),
+        name if crate::hooks::git_guard::is_shell_modifier(name) => inner(Some(0), found),
         "builtin" => inner(
             Some(usize::from(rest.first().is_some_and(|w| w == "--"))),
             found,
@@ -1084,7 +1084,7 @@ fn argv(
         "command" | "builtin" | "exec" | "nohup" | "setsid" | "caffeinate" | "unbuffer"
         | "time" => Some(skip_options(rest, &["-a", "-t", "-w"])),
         // zsh precommands run the command after them in this shell.
-        "noglob" | "nocorrect" | "-" => Some(rest),
+        name if crate::hooks::git_guard::is_shell_modifier(name) => Some(rest),
         "xcrun" => Some(skip_options(rest, &["--sdk", "--toolchain"])),
         "ionice" => Some(skip_options(rest, &["-c", "-n", "-p", "-P", "-u"])),
         "nice" => Some(skip_options(rest, &["-n", "--adjustment"])),

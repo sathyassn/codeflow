@@ -474,15 +474,7 @@ pub(crate) fn skip_env(args: &[String]) -> Option<&[String]> {
 
 /// The string after `-c` (or a cluster holding `c`, such as `-lc`).
 pub(crate) fn shell_command_string(args: &[String]) -> Option<&str> {
-    let at = args.iter().position(|arg| {
-        arg == "-c"
-            || arg == "--command"
-            || (arg.starts_with('-')
-                && !arg.starts_with("--")
-                && arg[1..].chars().all(|c| c.is_ascii_alphabetic())
-                && arg.contains('c'))
-    })?;
-    args.get(at + 1).map(String::as_str)
+    crate::hooks::git_guard::shell_c_argument(args).map(String::as_str)
 }
 
 /// How a peer CLI reads its arguments, from its `--help`.

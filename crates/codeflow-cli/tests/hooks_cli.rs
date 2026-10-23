@@ -8842,7 +8842,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
         "cd .codeflow/git-hooks && python3 -c 'print(1)'",
-        // Unread source files are refusals in the round-three matrix below.
+        "source go.sh && python3 tool.py notes.txt",
         "nice python3 tool.py data.json",
         "timeout 5 node x.js out.json",
         "noglob cd .claude && python3 tool.py notes.txt",
@@ -10454,10 +10454,19 @@ fn shell_expansion_chains_have_bounded_guard_time() {
         ("git-guard", 80, " && ", "rm -rf $PWD/x", 2),
         ("git-guard", 80, "eval", "rm -rf $PWD/x", 2),
         ("git-guard", 80, "here", "rm -rf $PWD/x", 2),
+        ("git-guard", 80, "process", "rm -rf $PWD/x", 2),
+        ("git-guard", 80, "pipe", "rm -rf $PWD/x", 2),
+        ("git-guard", 80, "source", "rm -rf $PWD/x", 2),
     ] {
         let chain = (0..count)
             .map(|i| {
-                if join == "here" {
+                if join == "process" {
+                    format!("bash <(echo \"cd d{i}\")")
+                } else if join == "pipe" {
+                    format!("echo \"cd d{i}\" | bash")
+                } else if join == "source" {
+                    format!("source <(echo \"cd d{i}\")")
+                } else if join == "here" {
                     format!("bash <<< \"cd d{i}\"")
                 } else if join == "eval" {
                     format!("eval \"cd d{i} || cd e{i}\"")
@@ -10466,11 +10475,13 @@ fn shell_expansion_chains_have_bounded_guard_time() {
                 }
             })
             .collect::<Vec<_>>()
-            .join(if matches!(join, "eval" | "here") {
-                "; "
-            } else {
-                join
-            });
+            .join(
+                if matches!(join, "eval" | "here" | "process" | "pipe" | "source") {
+                    "; "
+                } else {
+                    join
+                },
+            );
         let payload = serde_json::json!({
             "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
             "cwd": tmp.path()
@@ -10592,7 +10603,6 @@ fn shell_expansions_round_two_review_matrix() {
         ". <(echo 'git commit -m x')",
         "echo 'rm -rf $PWD/.worktrees/w' | source /dev/stdin",
         "echo 'git commit -m x' | source /dev/stdin",
-        "source <(cat script.sh)",
         "source /dev/stdin <<< \"$UNSET\"",
         "bash <<< \"$UNSET\"",
         "sh <<< \"$(cat body.txt)\"",
@@ -10697,8 +10707,8 @@ fn shell_expansions_round_three_review_matrix() {
     std::os::unix::fs::symlink(".worktrees", root.join("lnk")).unwrap();
     std::os::unix::fs::symlink("docs", root.join("sl")).unwrap();
     let mut cases = [
-        ("exec-guard", "source venv/bin/activate && echo ok && python3 src/app.py", 2),
-        ("exec-guard", "source go.sh && python3 tool.py notes.txt", 2),
+        ("exec-guard", "source venv/bin/activate && echo ok && python3 src/app.py", 0),
+        ("exec-guard", "source go.sh && python3 tool.py notes.txt", 0),
         ("git-guard", "bash < <(printf %s 'printf ok')", 0),
         ("git-guard", "ln .claude/settings.json L && printf x > L", 2),
         ("exec-guard", "link .claude/settings.json L && python3 -c \"open('L','w').write('x')\"", 2),
@@ -10712,14 +10722,14 @@ fn shell_expansions_round_three_review_matrix() {
         ("git-guard", "printf %s 'rm -rf w' | env -C .worktrees bash", 2),
         ("git-guard", "env -C .worktrees bash <<'EOF'\nrm -rf w\nEOF", 2),
         ("git-guard", "printf %s 'rm -rf .worktrees/w' | bash -o pipefail", 2),
-        ("git-guard", "bash -s -- a <(printf %s 'printf ok')", 2),
+        ("git-guard", "bash -s -- a <(printf %s 'printf ok')", 0),
         ("git-guard", "bash -c 'printf ok' <<< 'rm -rf .worktrees/w'", 0),
         ("git-guard", "bash -s a <<< 'rm -rf .worktrees/w'", 2),
         ("git-guard", "bash -s a <<< 'git commit -m x'", 2),
         ("git-guard", "bash < <(printf %s 'rm -rf .worktrees/w')", 2),
         ("exec-guard", "bash < <(printf %s 'python3 tool.py $PWD/.worktrees/w')", 2),
-        ("git-guard", "bash /dev/fd/9", 2),
-        ("exec-guard", "bash /dev/fd/9", 2),
+        ("git-guard", "bash /dev/fd/9", 0),
+        ("exec-guard", "bash /dev/fd/9", 0),
         ("git-guard", "ln -s .worktrees L; ln -s L M; rm -rf M/w", 2),
         ("exec-guard", "ln -s .worktrees L; ln -s L M; python3 tool.py M/w", 2),
         ("git-guard", "eval - 'rm -rf .worktrees/w'", 2),
@@ -10879,7 +10889,7 @@ fn shell_expansions_round_three_review_matrix() {
         ("exec-guard", "link src L && python3 tool.py L/app.py", 0),
         ("git-guard", "ln -s src L && cat L/app.py", 0),
     ].into_iter().map(|(guard, line, expected)| (guard, line.to_owned(), expected)).collect::<Vec<_>>();
-    // The same input routes apply to every shell, launcher and unknown reader.
+    // Inline routes apply to known shells and launchers. Unknown programs are not shells.
     for shell in [
         "bash",
         "sh",
@@ -10892,7 +10902,6 @@ fn shell_expansions_round_three_review_matrix() {
         "ash",
         "busybox sh",
         "busybox ash",
-        "mystery-shell",
         "env bash",
         "command sh",
     ] {
@@ -10913,10 +10922,7 @@ fn shell_expansions_round_three_review_matrix() {
         }
         for line in [
             format!("{shell} -s -- a <<< \"$UNSET\""),
-            format!("{shell} <(cat script.sh)"),
-            format!("cat script.sh | {shell}"),
             format!("{shell} -c \"$UNSET\""),
-            format!("{shell} -s < script.sh"),
         ] {
             for guard in ["git-guard", "exec-guard"] {
                 cases.push((guard, line.clone(), 2));
@@ -10924,10 +10930,15 @@ fn shell_expansions_round_three_review_matrix() {
         }
         for line in [
             format!("{shell} -c 'printf ok'"),
+            format!("{shell} <(cat script.sh)"),
+            format!("cat script.sh | {shell}"),
+            format!("{shell} -s < script.sh"),
             format!("{shell} -s -- a <<< 'printf ok'"),
             format!("{shell} <(printf %s 'printf ok')"),
         ] {
-            cases.push(("git-guard", line, 0));
+            for guard in ["git-guard", "exec-guard"] {
+                cases.push((guard, line.clone(), 0));
+            }
         }
     }
     let mut failures = Vec::new();
@@ -10970,6 +10981,82 @@ fn shell_expansions_round_three_review_matrix() {
         );
         if output.status.code() != Some(expected) {
             failures.push(format!("{guard}: expected={expected}: {line}\n{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Round 4 keeps file/data input ordinary and judges supplied inline code.
+/// The ordinary fixture transcribes Fable's 161 physical lines (155 commands).
+/// A null verdict leaves ownership to the other guard; payloads are never run.
+#[cfg(unix)]
+#[test]
+fn shell_expansions_round_four_review_matrix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    for name in ["src", "docs/sub", "scripts", "data"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+    }
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    for file in [
+        "script.sh",
+        "scripts/build.sh",
+        "scripts/clean.sh",
+        "env.sh",
+    ] {
+        std::fs::write(root.join(file), "echo ok\n").unwrap();
+    }
+    for file in ["src/app.py", "tool.py", "data/in.txt"] {
+        std::fs::write(root.join(file), "print(1)\n").unwrap();
+    }
+    let mut failures = Vec::new();
+    for (matrix, source) in [
+        (
+            "ordinary",
+            include_str!("fixtures/shell-ordinary-review.json"),
+        ),
+        (
+            "security",
+            include_str!("fixtures/shell-round-four-review.json"),
+        ),
+    ] {
+        let cases: Vec<(String, Option<i32>, Option<i32>)> = serde_json::from_str(source).unwrap();
+        for (line, git_expected, exec_expected) in cases {
+            for (guard, expected) in [("git-guard", git_expected), ("exec-guard", exec_expected)] {
+                let Some(expected) = expected else { continue };
+                let payload = serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root}).to_string();
+                let output = run_with_stdin(
+                    expansion_codeflow()
+                        .args(["hook", guard, "--contract", "3"])
+                        .current_dir(&root)
+                        .env("PWD", tmp.path())
+                        .env("HOME", tmp.path())
+                        .env("INPUT", "src/app.py")
+                        .env_remove("CDPATH")
+                        .env_remove("OLDPWD")
+                        .env_remove("UNSET")
+                        .env_remove("CMD")
+                        .env_remove("TOOL"),
+                    &payload,
+                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!(
+                    "{matrix} {guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+                    output.status.code()
+                );
+                if line.contains("$(brew shellenv)")
+                    && stderr.contains("what this git command does")
+                {
+                    failures
+                        .push("the command substitution diagnostic misnames the program".into());
+                }
+                if output.status.code() != Some(expected) {
+                    failures.push(format!(
+                        "{matrix} {guard}: expected={expected}: {line}\n{stderr}"
+                    ));
+                }
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

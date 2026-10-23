@@ -6142,7 +6142,7 @@ fn builtin_prefix(argv: &[String]) -> Option<(usize, bool)> {
                     at += 1;
                 }
             }
-            Some("noglob" | "nocorrect" | "-") => at += 1,
+            Some(name) if crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
             _ => return Some((at, functions)),
         }
     }
