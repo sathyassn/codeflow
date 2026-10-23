@@ -108,8 +108,18 @@ pub(crate) fn evaluate_at(
     violations
 }
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) enum PositionalSource {
+    #[default]
+    Unresolved,
+    Supplier,
+}
+
 #[derive(Default)]
 struct Parsed {
+    resolve_shell: bool,
+    positional_source: PositionalSource,
+    shell_home: Option<PathBuf>,
     config_trigger: Option<String>,
     config_reasons: Vec<(Option<PathBuf>, String)>,
     unreadable: Vec<String>,
@@ -137,6 +147,9 @@ struct Parsed {
 /// arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterpreterCall {
+    pub(crate) positional_source: PositionalSource,
+    /// Shell expansions the shared resolver could not establish.
+    pub(crate) unresolved: Vec<String>,
     /// The words the interpreter hands its program, read by the family's
     /// own option grammar: the values of its options, a script, and every
     /// word after the code or script boundary. Inline code is left out.
@@ -289,8 +302,25 @@ pub(crate) fn interpreter_bodies(command: &str) -> Vec<String> {
 
 /// Every interpreter call on the line, read through the launchers,
 /// wrappers and `cd` changes this parser follows, starting in `cwd`.
+#[cfg(test)]
 pub(crate) fn interpreter_calls(command: &str, cwd: &Path) -> Vec<InterpreterCall> {
-    let mut parsed = Parsed::default();
+    interpreter_calls_with_home(
+        command,
+        cwd,
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    )
+}
+
+pub(crate) fn interpreter_calls_with_home(
+    command: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Vec<InterpreterCall> {
+    let mut parsed = Parsed {
+        resolve_shell: true,
+        shell_home: home.map(Path::to_path_buf),
+        ..Parsed::default()
+    };
     visit(command, Some(cwd), 0, &mut parsed);
     let mut calls = Vec::new();
     for call in parsed.calls {
@@ -316,13 +346,44 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
+    if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
+        for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
+            let first_call = out.calls.len();
+            let first_code = out.code.len();
+            visit_literal(&step.text, step.cwd.as_deref(), depth, out);
+            for call in &mut out.calls[first_call..] {
+                call.unresolved.extend(step.unresolved.iter().cloned());
+                if call.code.is_empty() && step.text.contains("<<") {
+                    call.code = out.code[first_code..].to_vec();
+                }
+            }
+        }
+    } else {
+        visit_literal(command, cwd, depth, out);
+    }
+}
+
+fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
+    if depth > 16 {
+        return;
+    }
     shell_inputs(command, out);
     let inherited = out.config_trigger.clone();
     let mut persistent = inherited
         .clone()
         .or_else(|| crate::hooks::git_guard::configuration_line_backstop(command));
     let mut directories = vec![cwd.map(Path::to_path_buf)];
-    for segment in expand_commands(command) {
+    // argv walks find's child with its supplier attached. Flattening that
+    // same child here would lose the evidence for its positional arguments.
+    let words = command_argv(command);
+    let segments = if out.resolve_shell
+        && strip_launchers(&words).is_some_and(|(program, _)| program == "find")
+    {
+        vec![command.to_owned()]
+    } else {
+        expand_commands(command)
+    };
+    for segment in segments {
         let (mut words, mut patterns) = crate::hooks::git_guard::command_argv_patterns(&segment);
         let before = words.len();
         strip_reserved_words(&mut words);
@@ -1002,7 +1063,22 @@ fn argv(
         )),
         "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" => {
             if let Some(script) = shell_command_string(rest) {
+                let previous = out.positional_source;
+                // Only this exact calling convention proves that every
+                // positional argument comes from the enclosing supplier.
+                out.positional_source = if out.supplier.is_some()
+                    && rest
+                        .iter()
+                        .position(|word| std::ptr::eq(word.as_str(), script))
+                        .and_then(|at| rest.get(at + 2..))
+                        .is_some_and(|tail| matches!(tail, [word] if word == "{}"))
+                {
+                    PositionalSource::Supplier
+                } else {
+                    PositionalSource::Unresolved
+                };
                 visit(script, cwd, depth + 1, out);
+                out.positional_source = previous;
             }
             None
         }
@@ -1296,6 +1372,8 @@ fn record_interpreter(
         let (arguments, chdir) = interpreter_arguments(name, rest, patterns);
         let (args, patterns) = arguments.into_iter().unzip();
         out.calls.push(InterpreterCall {
+            positional_source: out.positional_source,
+            unresolved: Vec::new(),
             args,
             patterns,
             cwd: cwd.map(Path::to_path_buf),

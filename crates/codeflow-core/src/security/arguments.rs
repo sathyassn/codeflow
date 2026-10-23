@@ -95,7 +95,7 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
 ) -> Vec<Violation> {
     let _scope = edit_guard::RepoFactsScope::enter();
-    let calls = outward::interpreter_calls(line, payload_cwd);
+    let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
     let (opaque, runs) = outward::code_sources(line);
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
@@ -648,6 +648,28 @@ fn call_reaches(
 ) -> Vec<Reach> {
     let dirs = dir_options(&call_dirs(call, line_dirs, facts));
     let mut found = Vec::new();
+    if !call.unresolved.is_empty()
+        && (!facts.names.checkouts.is_empty()
+            || facts.names.unknown
+            || dirs
+                .iter()
+                .flatten()
+                .any(|dir| crate::hooks::repo::open(dir).is_ok_and(|repo| repo.is_some())))
+    {
+        for word in &call.unresolved {
+            // A supplier can prove a script argument's paths. It cannot
+            // prove interpreter code supplied through a shell parameter.
+            let positional = git_guard::command_argv(word);
+            if call.positional_source == outward::PositionalSource::Supplier
+                && call.code.is_empty()
+                && matches!(positional.as_slice(), [value]
+                if matches!(value.as_str(), "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}"))
+            {
+                continue;
+            }
+            found.push(Reach::Enforcement(format!("cannot verify interpreter expansion `{word}` where a checkout or enforcement path is reachable")));
+        }
+    }
     for (word, pattern) in call.args.iter().zip(&call.patterns) {
         // `find` and `xargs -I {}` fill in `{}`; what they supply is judged
         // below.

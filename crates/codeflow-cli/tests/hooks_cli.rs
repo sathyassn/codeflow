@@ -8832,7 +8832,6 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 edit.py notes.txt out.json",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
-        "python3 tool.py \"$INPUT\"",
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
@@ -10214,4 +10213,139 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         assert_eq!(shadowed.status.code(), Some(1), "{shadow}: {text}");
         assert!(text.contains("git.commit_format"), "{shadow}: {text}");
     }
+}
+
+/// TSK-406: judge expansions without executing any planted write.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shell_expansions_preserve_checkout_protection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    let mut cases: Vec<(&str, String, bool)> = Vec::new();
+    for word in [
+        "$PWD/.worktrees/w",
+        "${PWD}/.worktrees/w",
+        "$(pwd)/.worktrees/w",
+        "`pwd`/.worktrees/w",
+        "$HOME/repo/.worktrees/w",
+        "${HOME}/repo/.worktrees/w",
+        "$(printf %s .worktrees/w)",
+        "$UNSET",
+        "$INPUT",
+        "$(cat path.txt)",
+    ] {
+        cases.push(("exec-guard", format!("python3 tool.py {word}"), true));
+    }
+    for line in [
+        "W=.worktrees/w; python3 tool.py $W",
+        "export W=.worktrees/w; python3 tool.py $W",
+        r#"python3 -c "import shutil; shutil.rmtree('$PWD/.worktrees/w')""#,
+        "python3 <<EOF\nimport shutil; shutil.rmtree(\"$PWD/.worktrees/w\")\nEOF",
+        r#"node -e "$(printf %s 'require("fs").rmSync(".worktrees/w",{recursive:true,force:true})')""#,
+        r#"python3 -c "open('$PWD/.claude/settings.json','w')""#,
+        "python3 <<EOF\nopen(\"$PWD/.claude/settings.json\",'w')\nEOF",
+        "python3 tool.py $PWD/.claude/settings.json",
+        r#"node -e "$(printf %s 'require("fs").rmSync(".worktrees/w/.claude/settings.json")')""#,
+        r#"python3 -c "$UNSET""#,
+        r#"find src -name '*.py' -exec sh -c 'python3 tool.py "$1"' sh .worktrees/w {} \;"#,
+        r#"find src -name '*.py' -exec sh -c 'python3 -c "$1"' sh {} \;"#,
+    ] {
+        cases.push(("exec-guard", line.into(), true));
+    }
+    for line in [
+        "D=src; python3 tool.py $D/app.py",
+        "python3 tool.py $PWD/src/app.py",
+        "python3 tool.py $HOME/notes.txt",
+        r#"node -e "$(printf %s 'console.log(1)')""#,
+        r#"python3 -c 'import shutil; shutil.rmtree("$PWD/.worktrees/w")'"#,
+        "python3 <<'EOF'\nimport shutil; shutil.rmtree(\"$PWD/.worktrees/w\")\nEOF",
+    ] {
+        cases.push(("exec-guard", line.into(), false));
+    }
+    for line in [
+        "rm -rf $PWD/.worktrees/w",
+        "rm -rf ${PWD}/.worktrees/w",
+        "cd docs && rm -rf $PWD/../.worktrees/w",
+        "cd docs && rm -rf ../.worktrees/w",
+        "{ cd docs; } && rm -rf $PWD/../.worktrees/w",
+        "{ cd docs; } && rm -rf ../.worktrees/w",
+        "(cd docs) && rm -rf $PWD/.worktrees/w",
+        "cd docs || true; rm -rf $PWD/../.worktrees/w",
+        "PWD=/private/tmp; rm -rf .worktrees/w",
+        "printf x > $PWD/.claude/settings.json",
+        "git worktree move .worktrees/w ../outside && rm -rf ../outside",
+    ] {
+        cases.push(("git-guard", line.into(), true));
+    }
+    for flags in ["", "-b task/n ", "-B task/n ", "--detach "] {
+        cases.push(("git-guard", format!("git worktree add {flags}.worktrees/n && printf x > .worktrees/n/.claude/settings.json"), true));
+        cases.push((
+            "git-guard",
+            format!("git worktree add {flags}.worktrees/n && git -C .worktrees/n status"),
+            false,
+        ));
+    }
+    for line in [
+        "printf x > $PWD/src/a.txt",
+        "cd docs && printf x > $PWD/notes.txt",
+        "{ cd docs; } && printf x > $PWD/notes.txt",
+        "(cd docs && printf x > $PWD/notes.txt)",
+    ] {
+        cases.push(("git-guard", line.into(), false));
+    }
+    let mut wrong = Vec::new();
+    for (guard, line, refuse) in cases {
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        let output = run_with_stdin(
+            codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("PWD", tmp.path())
+                .env("HOME", tmp.path())
+                .env("INPUT", "src/app.py")
+                .env_remove("UNSET")
+                .env_remove("CDPATH"),
+            &payload,
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let expected = if refuse { 2 } else { 0 };
+        println!(
+            "{guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+            output.status.code()
+        );
+        if output.status.code() != Some(expected)
+            || (refuse && !stderr.contains("git.hook_integrity"))
+        {
+            wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn same_line_worktree_status_requires_known_callbacks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    enforced_repo(&root);
+    git(&root, &["config", "core.fsmonitor", "./monitor"]);
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git worktree add -b task/n .worktrees/n && git -C .worktrees/n status"},
+        "cwd": root
+    }).to_string();
+    let output = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard", "--contract", "3"])
+            .current_dir(&root),
+        &payload,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("cannot verify status callbacks before the new worktree exists"));
 }

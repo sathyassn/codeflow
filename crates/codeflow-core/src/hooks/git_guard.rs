@@ -494,6 +494,131 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     evaluate_report_with_runners(command, ctx, cwd, true)
 }
 
+thread_local! {
+    /// Prospective checkouts exist only while judging this command line.
+    static PLANNED_CHECKOUTS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct PlannedCheckouts(Vec<PathBuf>);
+impl PlannedCheckouts {
+    fn enter() -> Self {
+        Self(PLANNED_CHECKOUTS.with(|paths| std::mem::take(&mut *paths.borrow_mut())))
+    }
+}
+impl Drop for PlannedCheckouts {
+    fn drop(&mut self) {
+        PLANNED_CHECKOUTS.with(|paths| *paths.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+/// Worktree destinations are relative to Git's command directory.
+fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
+    let Some((program, args)) = strip_launchers(words) else {
+        return Vec::new();
+    };
+    if basename(program) != "git" {
+        return Vec::new();
+    }
+    let Some(("worktree", rest)) = git_subcommand(args) else {
+        return Vec::new();
+    };
+    let mut dir = launcher_effects(words)
+        .0
+        .iter()
+        .fold(cwd.to_path_buf(), |dir, value| {
+            integrity_shell_path(value, &dir)
+        });
+    let mut at = 0;
+    while at < args.len() && args[at] != "worktree" {
+        if args[at] == "-C" {
+            if let Some(value) = args.get(at + 1) {
+                dir = integrity_shell_path(value, &dir);
+            }
+            at += 1;
+        }
+        at += 1;
+    }
+    let Some(action) = rest.first() else {
+        return Vec::new();
+    };
+    if !matches!(action.as_str(), "add" | "move") {
+        return Vec::new();
+    }
+    let mut operands = Vec::new();
+    let mut args = rest[1..].iter();
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "-b" | "-B" | "--reason") {
+            args.next();
+        } else if arg == "--" {
+            operands.extend(args);
+            break;
+        } else if !arg.starts_with('-') {
+            operands.push(arg);
+        }
+    }
+    operands
+        .into_iter()
+        .take(if action == "move" { 2 } else { 1 })
+        .filter(|word| !unresolved_word(word) && !has_glob(word))
+        .map(|word| crate::security::outward::lexical_join(&dir, Path::new(word)))
+        .collect()
+}
+
+fn expanded_integrity(
+    command: &str,
+    cwd: &Path,
+    level: PolicyLevel,
+    run: &RunDirs,
+) -> Vec<Violation> {
+    let _planned = PlannedCheckouts::enter();
+    let mut violations = Vec::new();
+    for step in
+        crate::security::composed::paths::commands(command, cwd, line_home::home().as_deref())
+    {
+        let dirs = step.cwd.as_ref().map_or_else(
+            || Cwd::Unknown("unresolved shell directory".into()),
+            |dir| {
+                let name = crate::git::GitName::from_os_str(dir.as_os_str());
+                match name.rule_text() {
+                    Ok(text) => Cwd::Paths(vec![text.to_owned()]),
+                    Err(error) => Cwd::Unknown(error.to_string()),
+                }
+            },
+        );
+        for segment in expand_shell_commands(&step.text).segments {
+            let mut tokens = shell_tokens(&segment);
+            strip_reserved_words(&mut tokens);
+            if let Some(mut violation) = integrity_write_in_dirs(
+                &tokens,
+                &redirect_writes(&segment),
+                level,
+                cwd,
+                &dirs,
+                &step.text,
+                run,
+            ) {
+                let authority = violation
+                    .message
+                    .contains(super::edit_guard::AUTHORITY_PATH)
+                    || violation
+                        .message
+                        .contains(super::edit_guard::GIT_CONFIG_AUTHORITY);
+                if authority {
+                    violation.level = PolicyLevel::Block;
+                    violation.level_fixed = true;
+                }
+                if authority || level.is_active() {
+                    violations.push(violation);
+                }
+            }
+            let added =
+                planned_worktrees(&command_argv(&segment), step.cwd.as_deref().unwrap_or(cwd));
+            PLANNED_CHECKOUTS.with(|paths| add_unique(&mut paths.borrow_mut(), added));
+        }
+    }
+    violations
+}
+
 #[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 fn evaluate_report_with_runners(
     command: &str,
@@ -529,6 +654,12 @@ fn evaluate_report_with_runners(
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
+    violations.extend(expanded_integrity(
+        command,
+        cwd,
+        ctx.policy.hook_integrity,
+        &run,
+    ));
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -2005,6 +2136,21 @@ fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> 
         return None;
     }
     let path = integrity_shell_path(token, cwd);
+    if let Some(protected) = PLANNED_CHECKOUTS.with(|roots| {
+        roots.borrow().iter().find_map(|root| {
+            let relative = path.strip_prefix(root).ok()?;
+            let name = crate::git::GitName::from_os_str(relative.as_os_str());
+            let relative = match name.rule_text() {
+                Ok(text) => normalize_path(text),
+                Err(_) => return Some("unreadable prospective checkout path".into()),
+            };
+            enforcement_text(&relative)
+                .or_else(|| integrity_target(&relative))
+                .map(str::to_string)
+        })
+    }) {
+        return Some(protected);
+    }
     if super::edit_guard::global_git_config_target(&path, payload_cwd) {
         return Some(super::edit_guard::GIT_CONFIG_AUTHORITY.to_string());
     }
@@ -4087,7 +4233,7 @@ fn read_only_program(tokens: &[String]) -> bool {
 /// A variable the line does not set, read from the guard's own
 /// environment: every other occurrence of the name on the line must be an
 /// expansion of it.
-fn environment_value(name: &str, line: &str) -> Option<std::ffi::OsString> {
+fn environment_value(name: &str, line: &str, cwd: &Path) -> Option<std::ffi::OsString> {
     let bare = line.match_indices(name).any(|(at, _)| {
         let before = &line[..at];
         let after = &line[at + name.len()..];
@@ -4104,7 +4250,11 @@ fn environment_value(name: &str, line: &str) -> Option<std::ffi::OsString> {
     if bare {
         return None;
     }
-    std::env::var_os(name)
+    if name == "PWD" {
+        Some(cwd.as_os_str().to_os_string())
+    } else {
+        std::env::var_os(name)
+    }
 }
 
 /// The paths a destructive command's target word names, or `None` when
@@ -4135,7 +4285,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Ok(None);
         }
-        let Some(value) = environment_value(name, line) else {
+        let Some(value) = environment_value(name, line, cwd) else {
             return Ok(None);
         };
         text.push_str(
@@ -4221,6 +4371,16 @@ fn checkout_under(
     payload_cwd: &Path,
     except: Option<&Path>,
 ) -> Option<CheckoutReach> {
+    let absolute = crate::security::outward::lexical_join(cwd, path);
+    if let Some(root) = PLANNED_CHECKOUTS.with(|roots| {
+        roots
+            .borrow()
+            .iter()
+            .find(|root| root.starts_with(&absolute) && except != Some(root.as_path()))
+            .cloned()
+    }) {
+        return Some(CheckoutReach::Path(root));
+    }
     for root in [cwd, payload_cwd] {
         match super::edit_guard::registered_checkout_under(path, root, except) {
             Ok(Some(super::edit_guard::Checkout::Registered(path))) => {
@@ -7741,6 +7901,7 @@ impl Checkouts {
 struct BranchTracker {
     /// Where the current command could find things.
     now: Checkouts,
+    planned: Vec<PathBuf>,
     /// Everywhere the current and-list could leave things, at whichever
     /// member it stops.
     list: Checkouts,
@@ -7767,6 +7928,7 @@ impl BranchTracker {
         };
         Self {
             now: start.clone(),
+            planned: Vec::new(),
             list: start,
             config_changed: false,
             discard_state_changed: false,
@@ -7983,6 +8145,7 @@ fn check_authority(
     cwd: &Path,
     ctx: &GuardContext<'_>,
     violations: &mut Vec<Violation>,
+    planned: &[PathBuf],
 ) {
     let transport = git_subcommand(args).is_some_and(|(sub, rest)| {
         matches!(sub, "fetch" | "pull" | "push")
@@ -8010,9 +8173,16 @@ fn check_authority(
         }
     };
     for spec in specs {
-        let target = spec
+        let mut target = spec
             .as_ref()
             .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
+        // Status on a same-line creation uses its source's authority.
+        // Mutations still require a readable target and all branch checks.
+        if git_subcommand(args).is_some_and(|(sub, _)| sub == "status")
+            && planned.contains(&crate::security::outward::lexical_join(cwd, &target))
+        {
+            target = cwd.to_path_buf();
+        }
         if let Err(reason) = super::landed_policy::load(&target) {
             let recovery = super::ref_authority::recovery_args(&target, args);
             if !recovery {
@@ -8056,7 +8226,8 @@ fn check_git(
     depth: usize,
     cwd: &Path,
 ) {
-    check_authority(args, moved, cwd, ctx, out);
+    check_authority(args, moved, cwd, ctx, out, &branches.planned);
+    add_unique(&mut branches.planned, planned_worktrees(moved.tokens, cwd));
     let policy = ctx.policy;
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c

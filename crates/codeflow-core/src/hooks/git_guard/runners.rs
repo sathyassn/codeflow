@@ -1179,6 +1179,8 @@ fn unchanged(source: &Path, earlier: &[PathBuf]) -> Result<(), String> {
 /// name: a recursive copy, move or sync, a link, an archive extraction or a
 /// clone. `None` is a placement the guard cannot resolve.
 struct Landing {
+    /// A worktree creation inherits this repository's configuration.
+    worktree_source: Option<PathBuf>,
     path: Option<PathBuf>,
     places: bool,
     /// Repository metadata a Git command creates (a new worktree's
@@ -1194,6 +1196,7 @@ fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing
     if expands(target) {
         if places {
             landings.push(Landing {
+                worktree_source: None,
                 path: None,
                 places,
                 metadata: false,
@@ -1203,6 +1206,7 @@ fn land(target: &str, places: bool, dirs: &[PathBuf], landings: &mut Vec<Landing
     }
     for dir in dirs {
         landings.push(Landing {
+            worktree_source: None,
             path: Some(integrity_shell_path(target, dir)),
             places,
             metadata: false,
@@ -1337,7 +1341,12 @@ fn note_git_landings(
         "worktree" if rest.first().is_some_and(|word| word == "add") => {
             let parsed = checked_mode(&rest[1..], &catalog::WORKTREE_ADD_OPTIONS, true)?;
             match parsed.operands.first() {
-                Some(path) if parsed.unread.is_empty() => land(path, true, &start, landings),
+                Some(path) if parsed.unread.is_empty() => {
+                    land(path, true, &start, landings);
+                    if let Some(landing) = landings.last_mut() {
+                        landing.worktree_source = Some(start[0].clone());
+                    }
+                }
                 _ => {
                     for word in &rest[1..] {
                         land(word, true, &start, landings);
@@ -1348,6 +1357,7 @@ fn note_git_landings(
             // Git directory is created too.
             if let Some(repo) = super::super::repo::open(&start[0])? {
                 landings.push(Landing {
+                    worktree_source: None,
                     path: Some(repo.commondir().join("worktrees")),
                     places: true,
                     metadata: true,
@@ -1535,6 +1545,15 @@ fn new_worktree_configuration(
     if rest.first().is_none_or(|word| word != "add") {
         return Ok(());
     }
+    future_worktree_configuration(args, at, env, "worktree")
+}
+
+fn future_worktree_configuration(
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+    verb: &str,
+) -> Result<(), String> {
     let environment = config_environment(env);
     let config = crate::security::git_config::read(at, globals(args)?, &environment)?;
     // Each file is read by the spelling Git reads it by, so a relative
@@ -1563,7 +1582,7 @@ fn new_worktree_configuration(
                 || catalog::SOURCES.iter().any(|source| {
                     matches!(source,
                         catalog::Source::Config(pattern, verbs) | catalog::Source::ConfigList(pattern, verbs)
-                            if catalog::config_matches(key, pattern) && catalog::active(verbs, "worktree"))
+                            if catalog::config_matches(key, pattern) && catalog::active(verbs, verb))
                 });
             if !runs {
                 continue;
@@ -1657,6 +1676,58 @@ struct Runner<'a> {
     depth: usize,
 }
 
+/// Status in a checkout created earlier on the line can read the source
+/// configuration. Do not infer a future callback's cwd or conditional config.
+fn future_status(
+    args: &[String],
+    at: &Path,
+    env: &crate::security::git_config::Environment,
+    landings: &[Landing],
+) -> Result<Option<Vec<String>>, String> {
+    if git_subcommand(args).is_none_or(|(verb, _)| verb != "status") {
+        return Ok(None);
+    }
+    let target = starting_directory(args, at)?;
+    let target = crate::security::outward::lexical_join(at, &target);
+    let source = landings.iter().find_map(|landing| {
+        (landing
+            .path
+            .as_ref()
+            .map(|path| crate::security::outward::lexical_join(at, path))
+            .as_ref()
+            == Some(&target))
+        .then_some(landing.worktree_source.as_ref())
+        .flatten()
+    });
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let source_name = crate::git::GitName::from_os_str(source.as_os_str());
+    let source_text = source_name.rule_text().map_err(|error| error.to_string())?;
+    let mut relocated = vec!["-C".to_string(), source_text.to_owned()];
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "-C" {
+            words.next();
+        } else if word.starts_with("--git-dir") || word.starts_with("--work-tree") {
+            return Err(
+                "cannot verify a new worktree status with an explicit Git directory".into(),
+            );
+        } else {
+            relocated.push(word.clone());
+        }
+    }
+    fresh_runner(&relocated, at, env, landings)?;
+    future_worktree_configuration(&relocated, at, env, "status")?;
+    if !configured_commands(&relocated, at, env, &[])?.is_empty() {
+        return Err(
+            "cannot verify status callbacks before the new worktree exists; run status separately"
+                .into(),
+        );
+    }
+    Ok(Some(relocated))
+}
+
 impl Runner<'_> {
     /// Check the runner state against earlier writes, note this segment's
     /// own writes, and resolve its aliases.
@@ -1666,6 +1737,9 @@ impl Runner<'_> {
         landings: &[Landing],
         pending: &mut Vec<Landing>,
     ) -> Result<Vec<String>, String> {
+        if let Some(status) = future_status(args, self.at, self.env, landings)? {
+            return Ok(status);
+        }
         fresh_runner(args, self.at, self.env, landings)?;
         new_worktree_configuration(args, self.at, self.env)?;
         note_git_landings(self.segment, args, self.at, self.env, pending)?;

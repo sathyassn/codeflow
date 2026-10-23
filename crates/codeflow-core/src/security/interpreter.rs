@@ -988,7 +988,7 @@ mod tests {
         );
         let refusal = integrity_refusal(&findings).unwrap();
         assert!(
-            refusal.message.contains("filled in at run time"),
+            refusal.message.contains(".codeflow/policy.json"),
             "{}",
             refusal.message
         );
@@ -1002,9 +1002,7 @@ mod tests {
         assert_allowed(
             &repo,
             &[
-                "python3 tool.py \"$INPUT\"",
                 "python3 tool.py \"$HOME/notes.md\"",
-                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "W=@ROOT@; python3 tool.py \"$W/src/app.py\"",
             ],
         );
@@ -1215,7 +1213,7 @@ mod tests {
 
     /// TSK-302 review F3: authority metadata refuses in every operand form,
     /// supplied, filled in at run time or globbed, whatever the integrity
-    /// level; ordinary unresolved input stays allowed.
+    /// level. Unresolved shell input near a checkout is covered by TSK-406.
     #[test]
     fn authority_refuses_in_every_operand_form_at_every_level() {
         let repo = repo();
@@ -1239,15 +1237,35 @@ mod tests {
                 level,
             );
             for command in [
-                "python3 tool.py \"$INPUT\"",
                 "ls | xargs python3 tool.py",
                 "find src -exec python3 tool.py {} \\;",
-                "for f in src/*.py; do python3 lint.py \"$f\"; done",
             ] {
                 let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
                 assert!(findings.is_empty(), "{level:?}: {command}: {findings:?}");
             }
         }
+    }
+
+    /// TSK-406 AC-3 supersedes the old allowances for unresolved shell input.
+    #[test]
+    fn unresolved_shell_expansions_refuse_near_a_checkout() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 tool.py \"$INPUT\"",
+                "python3 tool.py \"$ROOT/$NAME\"",
+                "python3 tool.py \"$ROOT/notes.txt\"",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
+                "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
+                "while read f; do python3 lint.py \"$f\"; done < files.txt",
+                "python3 lint.py \"$(echo src/*.py)\"",
+                "python3 lint.py \"$(echo ok src/*.py)\"",
+                "python3 -c 'import sys; print(sys.argv[1:])' \"$config\"",
+                "cd \"$D\" && python3 -c 'import sys; open(sys.argv[1])' \"$IN\"",
+            ],
+            false,
+        );
     }
 
     /// TSK-302 review F4: a line with several suppliers reads what the line
@@ -1547,7 +1565,6 @@ mod tests {
             &[
                 "D=src; cd \"$D\" && python3 -c 'print(1)'",
                 "D=src; cd \"$D\" && python3 -c 'open(\"out.txt\",\"w\")'",
-                "cd \"$D\" && python3 -c 'import sys; open(sys.argv[1])' \"$IN\"",
             ],
         );
     }
@@ -2027,8 +2044,6 @@ mod tests {
                 "print -r '.cla\\x75de/settings.json'",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
-                "python3 tool.py \"$ROOT/$NAME\"",
-                "python3 tool.py \"$ROOT/notes.txt\"",
             ],
         );
     }
@@ -2095,32 +2110,25 @@ mod tests {
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "echo -e \"python3 tool.py .claude/settings.json\"",
                 "print -r '.cla\\x75de/settings.json'",
-                "python3 tool.py \"$ROOT/$NAME\"",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
                 "export a=notes.txt; python3 tool.py \"$a\"",
                 "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
-                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 // Program output is outside text (operator boundary, 2026-10-15).
-                "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
                 "source venv/bin/activate && echo ok && python3 src/app.py",
                 "echo \"Done $(date)\"; python3 src/app.py",
-                "while read f; do python3 lint.py \"$f\"; done < files.txt",
                 // Ordinary globs an output builtin writes.
                 "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo *.txt; python3 src/app.py",
-                "python3 lint.py \"$(echo src/*.py)\"",
                 "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$TAG\" *.txt; python3 src/app.py",
-                "python3 lint.py \"$(echo ok src/*.py)\"",
                 "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo notes.txt \"$(/bin/cat /dev/null)\"; python3 src/app.py",
                 // Round 16: a quoted parameter named like a protected
                 // component is a name, not spelled text.
                 "echo \"$config\" | python3 -c 'import sys; print(sys.stdin.read())'",
-                "python3 -c 'import sys; print(sys.argv[1:])' \"$config\"",
                 "echo \"$hooks\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$policy.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$settings.json\" | python3 -c 'import sys; print(sys.stdin.read())'",

@@ -665,6 +665,38 @@ and `git diff --output=out.diff` remain available.
 Source-removing rsync spellings protect the checkout's gitfile as well
 as its directory.
 
+### Shell expansions and checkout paths
+
+Exec-guard resolves shell expansions in interpreter arguments, double-quoted
+code and unquoted heredocs before checking checkout roots and enforcement
+files. Git-guard uses the same resolver for shell writer operands.
+
+- The resolver reads plain and exported assignments earlier on the line,
+  `$PWD`, `${PWD}`, `$(pwd)`, backtick `pwd`, `$HOME` and `${HOME}`.
+  It also reads static substitutions such as `$(printf %s '<literal>')`.
+  It never executes a substitution to discover its output.
+- The working directory starts at the hook payload's directory. Directory
+  changes update it and `PWD`; assigning `PWD` changes only the parameter.
+  Relative operands resolve from the working directory, regardless of the
+  hook process's `PWD`. Brace groups carry their state forward; subshells,
+  substitutions and background jobs keep their changes local. When a
+  directory change or pipeline scope is uncertain, all reachable states
+  remain candidates.
+- An unresolved shell expansion in interpreter arguments or code refuses
+  as cannot-verify where a checkout or enforcement path is reachable.
+  The message names the unread word. This includes inherited variables
+  other than the modeled home and directory values, and substitutions
+  that depend on a file, another program or the network.
+- Single-quoted code and quoted heredocs remain literal. Paths constructed
+  inside interpreter code at run time, including concatenation, formatting
+  and encoding, remain outside this reading. The OS sandbox and permission
+  preset provide the backstop.
+- A checkout named by an earlier `git worktree add`, including `-b`, `-B`
+  and `--detach`, stays protected for the rest of the line. Both paths of
+  `git worktree move` receive that protection. Add-then-status is allowed
+  when the source configuration proves it needs no callback that the guard
+  cannot judge before the new checkout exists.
+
 ### Git settings that can run a program
 
 git-guard refuses a user- or system-scope git setting that is not known to

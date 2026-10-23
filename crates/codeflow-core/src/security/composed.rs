@@ -75,6 +75,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod paths;
+
 /// The shell grammar a line is read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialect {
@@ -1274,6 +1276,8 @@ enum Positional {
 
 #[derive(Clone, Debug, Default)]
 struct State {
+    /// Known working directory for filesystem consumers, independent of PWD.
+    directory: Option<std::path::PathBuf>,
     vars: BTreeMap<String, Var>,
     /// Names an assignment cannot change: `readonly`, or set by a trap
     /// that may run again.
@@ -1846,7 +1850,7 @@ impl Run<'_> {
     fn store(&mut self, name: &str, var: Var, certain: bool) {
         let var = if !certain {
             Var::Unknown(MAY_ASSIGN)
-        } else if SPECIAL.contains(&name) {
+        } else if SPECIAL.contains(&name) && !(name == "PWD" && self.state.directory.is_some()) {
             Var::Unknown("an assignment to a special shell variable")
         } else if self.state.readonly.contains(name) {
             Var::Unknown("an assignment to a read-only variable")
@@ -3441,6 +3445,15 @@ impl Run<'_> {
                 && (DECLARERS.contains(&program.as_str())
                     || matches!(program.as_str(), "set" | "shopt" | "trap" | "alias")));
         match program.as_str() {
+            "pwd" if rest.is_empty() && self.state.directory.is_some() => {
+                let directory = crate::git::GitName::from_os_str(
+                    self.state.directory.as_ref().unwrap().as_os_str(),
+                );
+                self.output(match directory.rule_text() {
+                    Ok(text) => Ok(Value::text(&format!("{text}\n"))),
+                    Err(_) => Err("working directory is not UTF-8"),
+                });
+            }
             "printf" => self.printf(rest, certain),
             "echo" => {
                 let value = match self.state.opt_echo {
