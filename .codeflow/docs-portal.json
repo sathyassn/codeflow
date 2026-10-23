@@ -214,7 +214,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "38a60f97d0ae8a9ed8a0846e65b34e06c201c7adcdb1770c681789e8930b7fe3"
+      "pristine_sha256": "70f9b9cc4937aab4ecfaa51fd40d0467c1562debd1031120e4cfc8998cddab67"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",

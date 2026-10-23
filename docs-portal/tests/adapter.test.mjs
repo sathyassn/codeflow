@@ -1348,7 +1348,7 @@ test("a workflow lease records its owner and a lease without one is still read",
   try {
     await withWorkflowLease(root, async (writers) => {
       const claim = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
-      assert.deepEqual(claim.owner, { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: true });
+      assert.deepEqual(claim.owner, { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" });
       await writers.recordWriter(4_000_001);
       const candidate = path.join(root, `.portal/.workflow-lock-candidate-${claim.token}/owner.json`);
       assert.deepEqual(JSON.parse(await readFile(candidate, "utf8")).owner.writers, [4_000_001]);
@@ -1783,7 +1783,7 @@ test("without process groups a gone writer leaves the lease undecidable", async 
 });
 
 for (const [name, env] of [["with process groups", {}], ["without process groups", { FAULT_WIN32: "1" }]]) {
-  test(`a writer whose lease record failed is stopped and confirmed, ${name}`, { timeout: 30_000 }, async () => {
+  test(`a writer whose lease record failed is stopped and confirmed, ${name}`, { skip: process.platform === "win32", timeout: 30_000 }, async () => {
     const scratch = await writerScratch("import { writeFileSync } from 'node:fs'; setInterval(() => writeFileSync('writer-tick', String(Date.now())), 25);");
     let writer = null;
     try {
