@@ -20,6 +20,13 @@ async function fixture(action) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
+// Where writers cannot be followed to their descendants (Windows) the workflow
+// keeps its lease after a writer ran, so a contender waits for the age rule.
+async function leaseAfterRun(root) {
+  if (process.platform === 'win32') await access(join(root, '.portal/workflow.lock'));
+  else await assert.rejects(access(join(root, '.portal/workflow.lock')));
+}
+
 test('verify runs adapter once and check build evidence under one lease', async () => {
   await fixture(async root => {
     const result = spawnSync(process.execPath, ['scripts/workflow.mjs', 'verify'], { cwd: root, encoding: 'utf8' });
@@ -27,17 +34,17 @@ test('verify runs adapter once and check build evidence under one lease', async 
     const rows = (await readFile(join(root, 'sequence.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.deepEqual(rows.map(r => r.stage), ['adapter', 'check', 'build', 'evidence']);
     assert.equal(new Set(rows.map(r => r.token)).size, 1);
-    await assert.rejects(access(join(root, '.portal/workflow.lock')));
+    await leaseAfterRun(root);
   });
 });
 
-test('verify stops on build failure and releases its lease', async () => {
+test('verify stops on build failure and releases its lease, except where Windows keeps it', async () => {
   await fixture(async root => {
     await writeFile(join(root, 'fail-build'), 'fail');
     const result = spawnSync(process.execPath, ['scripts/workflow.mjs', 'verify'], { cwd: root, encoding: 'utf8' });
     assert.notEqual(result.status, 0);
     const rows = (await readFile(join(root, 'sequence.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.deepEqual(rows.map(r => r.stage), ['adapter', 'check', 'build']);
-    await assert.rejects(access(join(root, '.portal/workflow.lock')));
+    await leaseAfterRun(root);
   });
 });
