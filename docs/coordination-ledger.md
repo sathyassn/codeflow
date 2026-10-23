@@ -289,16 +289,25 @@ No fields. Recorded by the holder or the operator.
   that can run `codeflow` can claim to be any actor. The checks catch stale
   and mistaken writers, not a hostile one; nothing in the ledger is a
   security boundary.
-- **The operator.** The operator role fails closed: it is accepted only from
-  an interactive terminal (standard input and error both a terminal) in a
-  shell no harness marks as an agent's. An agent records an operator's
+- **The operator.** The operator role is accepted only when standard input
+  and standard error are both a terminal and no harness marker
+  (`CLAUDECODE`, `CODEX_SESSION_ID`, `CODEX_THREAD_ID`, `CODEX_CI`,
+  `GROK_SESSION_ID`) is set. This stops an ordinary agent shell, which has
+  no terminal and carries its marker. It does not stop a process that
+  unsets the marker and runs `codeflow` under a pseudo-terminal (`script`,
+  a pty library): nothing tells a person from an agent working in the same
+  account. Treat an operator-recorded event as stated by whoever ran the
+  command, not as proof that a person did. An agent records an operator's
   answer under its own role with `--answer-source operator`.
 - **Closing.** `follow check` closes an item only when every `fulfils`
   link is done on its target and every prerequisite and `waits_on` id it
   declares is met: the task `complete`, with an acceptance block that passes
-  the acceptance rules, on the tip of the landing line its record declares
-  (`main`, `master` or an `integration/` line), with the UID the link
-  pinned; a pull request merged into a landing line; a commit in the
+  the acceptance rules and is bound to its reviewed commit as CI binds a
+  completion, on the tip of the landing line its record declares, with the
+  UID the link pinned. A landing line is the remote-tracking ref of a remote
+  this clone configures, for `main`, `master` or an `integration/EPC-NNN-...`
+  line whose epic the default target holds; a local branch never counts,
+  whatever its name. A pull request counts when merged into such a line; a commit in the
   target; a branch shown deleted by a remote this clone configures. A link
   to another repository, a completion on a work branch and an observation
   that cannot be made never count. The `done_when` text is for people; the
@@ -306,12 +315,19 @@ No fields. Recorded by the holder or the operator.
 - **Reopening.** A later `follow check` reopens a machine-verified closure
   whose condition is now definitely unmet: the task reverted, replaced or no
   longer accepted, the pull request reopened, the commit gone from the
-  target, the branch recreated. The old proof stays in history.
+  target, the branch recreated, or a prerequisite or `waits_on` follow-up
+  or lane open again. The old proof stays in history.
 - **Observations.** `gh` and `git ls-remote` each run with a 20 second
-  limit; one that does not answer counts as unknown.
+  limit that covers the process, its output and any descendant holding its
+  output open (killed with its process group); output is capped at 1 MiB.
+  One that does not answer counts as unknown. A branch link contacts only a
+  remote this clone configures, over https or ssh, with the stock upload
+  pack.
 - **Idempotency.** A key is bound to the operation's kind, subject, actor
-  and content. The same key and content again records nothing; the same key
-  with other content or another actor is refused (exit 7). An operation of
+  and content (only fields a retry recomputes, such as an add's default
+  schedule, are left out). The same key and content again records nothing;
+  the same key with other content or another actor is refused (exit 7). A
+  key whose item was purged is acknowledged without writing anything. An operation of
   several events gives each its own key, so a retry after an interruption
   writes exactly the missing events.
 - **Reads.** `follow list` and `follow snapshot` never write, take a lock or
@@ -345,10 +361,12 @@ No fields. Recorded by the holder or the operator.
   (the operator) moves the damaged suffix to `quarantine/`.
 - `codeflow follow purge FU-NNN` (the holder or the operator, judged under
   the lock) replaces every free-text string of the item's events with
-  `[purged]`, its source reference with `[purged FU-NNN]` and its
-  idempotency keys with opaque ones, keeping ids, link identities, times and
-  order; it removes quarantined fragments that name the item, and records
-  an `item_purged` event with who and when, never the text.
+  `[purged]`, and its source reference and idempotency keys with digests
+  that keep their identity without their text, so a stale retry is still
+  recognised and the same source is still a duplicate. It keeps ids, link
+  identities, times and order, removes only the item's own lines from
+  quarantined fragments (other items' lines stay), and records an
+  `item_purged` event with who and when, never the text.
 - On a write, an existing ledger directory or file must belong to the user;
   group and other access is removed. A failed directory sync is reported,
   never ignored.

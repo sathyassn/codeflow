@@ -311,7 +311,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--output <PATH>` | Write here instead of standard output; an existing file is refused. |
 | `codeflow follow purge <ID>` | | Replace a follow-up's free text with `[purged]` in the live log, keeping its ids, links and history. The holder or the operator |
 | | `<ID>` | The follow-up, FU-NNN. |
-| `codeflow follow repair` | | Move a damaged suffix of the log to quarantine so the ledger is writable again. The operator only; nothing is deleted |
+| `codeflow follow repair` | | Move a damaged suffix of the log to quarantine so the ledger is writable again. The operator only; nothing is deleted here (a later purge removes only the purged item's lines from quarantine) |
 
 ### Delegate
 
