@@ -3,7 +3,7 @@ id: ADR-0086
 uid: 6be2c341-340f-4add-9d89-ecd41ae5994b              # hidden record identity, written once by `new`; never edit
 title: The orchestration ledger and lanes live in the clone
 date: 2026-10-22
-status: proposed          # proposed | accepted | superseded
+status: accepted          # proposed | accepted | superseded
 superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: "docs/architecture.md gains one line, the clone's git directory holds CodeFlow's coordination working state (codeflow/coord/) beside its ledger, locks and registry state"
 ---
@@ -201,6 +201,13 @@ the coordinator's running state lives in the ledger. ADR-0076 (one pull
 request per task, planning once per epic) is unchanged.
 
 Open, for the operator: the Codex hook route, established by TSK-440.
+
+Accepted by the operator on 2026-10-23: the coordination ledger design
+was approved with notes in the cf-present session `dac94188` (verdict
+`approve_with_notes` at revision 9, the three notes folded into EPC-025
+and this record), and the operator said work on the coordination
+system can proceed. The Codex hook route stays the one open choice,
+settled by TSK-440.
 
 ## Consequences
 
