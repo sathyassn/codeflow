@@ -155,9 +155,13 @@ An ordinary merge can bring completed work from `main` or a verified epic
 line. CI and pre-push bind an unchanged imported completion at its home,
 so later receiving-line commits do not require that source task to reopen.
 A task branch can carry the same imports while delivering its own work.
+A receiver's first push still proves its own task landings.
 
 - The guarded history reader checks the source line, record identity, exact
   contents, ancestry and home landing. Equal record text alone is not proof.
+  With a remote configured, the home must be published at
+  `refs/remotes/origin/<home>`; a local branch ahead of that ref supplies no
+  authority. Local homes are usable only in a repository with no remotes.
 - A source task that merged its home after review retains its binding only
   when that merge was clean and came from the home line. A task reopened
   before its first landing keeps the criteria accepted at that landing.
@@ -167,7 +171,9 @@ A task branch can carry the same imports while delivering its own work.
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home or an overlaid history supplies no import proof.
-  The receiver's own completion still binds all its product work.
+  The receiver's own completion still binds all its product work. A line
+  merge that adds product changes outside verified source history and
+  reviewed task heads refuses even when no task completes in that range.
 
 When the source proof refuses, fetch the named home and its full history.
 Repair invalid source acceptance through that task's pull request on its

@@ -972,7 +972,7 @@ fn binding_lines(result: &(i32, String)) -> Vec<&str> {
 /// judged where it was introduced, not at the line tip.
 #[test]
 fn the_line_into_main_binds_each_completion_where_it_was_made() {
-    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003"]);
+    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003", "TSK-004"]);
     let root = dir.path();
     let first = build(root, "task/TSK-001-one", "src/one.rs");
     write_done(root, "TSK-001", "complete", &first);
@@ -984,7 +984,9 @@ fn the_line_into_main_binds_each_completion_where_it_was_made() {
     land(root, "task/TSK-001-one");
     land(root, "task/TSK-002-two");
     land(root, "task/TSK-003-three");
-    build(root, "feat/other", "src/other.rs");
+    let other = build(root, "feat/other", "src/other.rs");
+    write_done(root, "TSK-004", "complete", &other);
+    commit(root, "docs: complete the other reviewed task");
     land(root, "feat/other");
     git(root, &["switch", "-C", "plan/complete-tsk003", LINE]);
     write_done(root, "TSK-003", "complete", &third);
@@ -2090,7 +2092,7 @@ fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
 
 /// Complete a task after its first reviewed work has landed on its line.
 fn late_completed_line() -> (tempfile::TempDir, String, String) {
-    let dir = line_repo(&["TSK-001"]);
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
     let root = dir.path();
     let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
     land(root, "task/TSK-001-work");
@@ -2175,7 +2177,9 @@ fn a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion() {
         let fixed = commit(root, "fix: repair the reopened work");
         git(root, &["switch", "-c", "other/change", LINE]);
         write(root, "src/other.rs", "pub fn other() {}\n");
-        commit(root, "feat: other line work");
+        let other = commit(root, "feat: other line work");
+        write_done(root, "TSK-002", "complete", &other);
+        commit(root, "docs: complete the other reviewed task");
         land(root, "other/change");
         land(root, "task/TSK-001-fix");
         if direct {
@@ -3972,7 +3976,9 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
         let reviewed = build(root, BRANCH, "src/reviewed.rs");
         git(root, &["switch", "-q", "-c", "feat/side", LINE]);
         write(root, "src/side.rs", "pub fn side() {}\n");
-        commit(root, "feat: work on the line");
+        let side = commit(root, "feat: work on the line");
+        write_done(root, "TSK-002", "complete", &side);
+        commit(root, "docs: complete the other reviewed task");
         let line_tip = land(root, "feat/side");
         git(root, &["switch", "-q", BRANCH]);
         git(
@@ -3995,7 +4001,8 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
                 &[
                     "work.acceptance_binding",
                     "TSK-001",
-                    "src/side.rs changed after the reviewed commit",
+                    "project-management/tasks/TSK-002.md changed after the reviewed commit",
+                    "not on the first-parent line of the target tip",
                 ],
             );
         } else {

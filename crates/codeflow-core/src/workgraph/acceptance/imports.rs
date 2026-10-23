@@ -10,7 +10,7 @@ use super::{
 };
 
 /// A record whose exact contents arrived from a verified home landing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImportedRecord {
     /// The exact imported record path.
     pub path: String,
@@ -20,6 +20,18 @@ pub struct ImportedRecord {
     pub landing: Oid,
     /// The binding of a completed task; absent for other record states.
     pub completion: Option<CompletionProof>,
+}
+
+type Imports = BTreeMap<String, ImportedRecord>;
+// The outer history judgment and an object fetch clear this cache. A graph's
+// contents distinguish callers that have removed records from the same head.
+type ImportKey = (std::path::PathBuf, Oid, Oid, String);
+thread_local! {
+    static IMPORTS: std::cell::RefCell<BTreeMap<ImportKey, Result<Imports, String>>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+pub(crate) fn clear_cache() {
+    IMPORTS.with(|memo| memo.borrow_mut().clear());
 }
 
 /// Prove imports without granting authority to the receiving head. Each
@@ -38,33 +50,48 @@ pub fn imported_records(
 ) -> Result<BTreeMap<String, ImportedRecord>, String> {
     let _judgment = history::judgment();
     history::check(repo).map_err(|error| error.to_string())?;
-    let before = Graph::from_revision(repo, &base.to_string())?;
-    let changed: Vec<_> = graph
+    let contents: Vec<_> = graph
         .records
         .values()
-        .filter(|record| {
-            !before
-                .records
-                .get(&record.id)
-                .is_some_and(|old| old.path == record.path && old.content == record.content)
-        })
+        .map(|record| (&record.path, &record.content))
         .collect();
-    let mut merged = Vec::new();
-    for record in changed {
-        if arrived_by_merge(repo, record, head)? {
-            merged.push(record);
-        }
+    let digest = crate::scaffold::sha256_hex(
+        &serde_json::to_vec(&contents).map_err(|error| error.to_string())?,
+    );
+    let key = (repo.path().to_path_buf(), base, head, digest);
+    if let Some(result) = IMPORTS.with(|memo| memo.borrow().get(&key).cloned()) {
+        return result;
     }
-    let changed = merged;
+    let result = compute_imports(repo, base, head, graph);
+    IMPORTS.with(|memo| memo.borrow_mut().insert(key, result.clone()));
+    result
+}
+
+fn compute_imports(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    graph: &Graph,
+) -> Result<Imports, String> {
+    #[cfg(test)]
+    COMPUTATIONS.with(|count| count.set(count.get() + 1));
+    let changed = merged_records(repo, base, head, graph)?;
     if changed.is_empty() {
         return Ok(BTreeMap::new());
     }
     let root = repo.workdir().unwrap_or_else(|| repo.path());
     let default = default_target_name(repo)?;
-    let default_tip = super::super::work_start::target_reference(repo, &default.name)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("fetch the default target {}", default.name))?
-        .id();
+    let default_tip =
+        home_tip(repo, &default.name)?.ok_or_else(|| unavailable_home(&default.name))?;
+    for record in &changed {
+        let home = record.integration_target.as_deref().map_or(
+            default.name.as_str(),
+            super::super::work_start::logical_target,
+        );
+        if home == default.name || home.starts_with("integration/") {
+            refuse_unpublished(repo, record, home, base, head)?;
+        }
+    }
     let mut homes = BTreeMap::from([(default.name.clone(), default_tip)]);
     for record in &changed {
         let Some(home) = record.integration_target.as_deref() else {
@@ -74,12 +101,20 @@ pub fn imported_records(
         if homes.contains_key(home) || !home.starts_with("integration/") {
             continue;
         }
-        let Some(tip) = super::super::work_start::target_reference(repo, home)
-            .map_err(|error| error.to_string())?
-        else {
+        let Some(tip) = home_tip(repo, home)? else {
+            // A first push still judges its own landings. A planning merge
+            // shared by sibling lines need not have landed on the other home.
+            // Neither case receives import authority from the local branch.
+            if let Some(local) = reference_tip(repo, &format!("refs/heads/{home}"))? {
+                if on_home_chain(repo, head, local)?
+                    || matching_landing(repo, record, local, head, Some(base))?.is_none()
+                {
+                    continue;
+                }
+            }
             return Err(format!("{}: blocks come from target history, but home `{home}` is unavailable; fetch that home and its full history, then rerun the range", record.id));
         };
-        if is_ancestor_or_same(repo, tip.id(), base)? || on_home_chain(repo, head, tip.id())? {
+        if is_ancestor_or_same(repo, tip, base)? || on_home_chain(repo, head, tip)? {
             continue;
         }
         match super::super::work_start::check_epic_line(
@@ -87,10 +122,10 @@ pub fn imported_records(
             home,
             &default.name,
             &default_tip.to_string(),
-            &tip.id().to_string(),
+            &tip.to_string(),
         ) {
             Ok(_) => {
-                homes.insert(home.to_string(), tip.id());
+                homes.insert(home.to_string(), tip);
             }
             Err(reason) => {
                 return Err(format!("{}: blocks come from target history on unverified home `{home}`: {reason}; repair the home through its classified pull requests, then merge its reviewed result", record.id));
@@ -122,7 +157,7 @@ pub fn imported_records(
             {
                 continue;
             }
-            let Some(landed) = matching_landing(repo, record, tip, head)? else {
+            let Some(landed) = matching_landing(repo, record, tip, head, Some(base))? else {
                 continue;
             };
             if is_ancestor_or_same(repo, landed, base)? {
@@ -134,6 +169,103 @@ pub fn imported_records(
         }
     }
     Ok(imported)
+}
+
+fn merged_records<'a>(
+    repo: &Repository,
+    base: Oid,
+    head: Oid,
+    graph: &'a Graph,
+) -> Result<Vec<&'a RecordView>, String> {
+    let before = Graph::from_revision(repo, &base.to_string())?;
+    let changed: Vec<_> = graph
+        .records
+        .values()
+        .filter(|record| {
+            !before
+                .records
+                .get(&record.id)
+                .is_some_and(|old| old.path == record.path && old.content == record.content)
+        })
+        .collect();
+    let mut merged = Vec::new();
+    for record in changed {
+        if arrived_by_merge(repo, record, head, base)? {
+            merged.push(record);
+        }
+    }
+    Ok(merged)
+}
+
+fn unavailable_home(home: &str) -> String {
+    format!("blocks come from target history, but published home `{home}` is unavailable; fetch refs/remotes/origin/{home} and its full history, then rerun")
+}
+
+/// Local branches are authority only in an offline repository with no remotes.
+pub(super) fn home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, String> {
+    let remote = format!("refs/remotes/origin/{home}");
+    if let Some(tip) = reference_tip(repo, &remote)? {
+        return Ok(Some(tip));
+    }
+    if !repo
+        .remotes()
+        .map_err(|error| error.to_string())?
+        .is_empty()
+    {
+        return Ok(None);
+    }
+    reference_tip(repo, &format!("refs/heads/{home}"))
+}
+
+fn reference_tip(repo: &Repository, name: &str) -> Result<Option<Oid>, String> {
+    match repo.find_reference(name) {
+        Ok(reference) => reference
+            .peel_to_commit()
+            .map(|commit| Some(commit.id()))
+            .map_err(|error| error.to_string()),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn refuse_unpublished(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    base: Oid,
+    head: Oid,
+) -> Result<(), String> {
+    if repo
+        .remotes()
+        .map_err(|error| error.to_string())?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    let Ok(reference) = repo.find_reference(&format!("refs/heads/{home}")) else {
+        return Ok(());
+    };
+    let local = reference
+        .peel_to_commit()
+        .map_err(|error| error.to_string())?
+        .id();
+    if on_home_chain(repo, head, local)? {
+        return Ok(());
+    }
+    let published = home_tip(repo, home)?;
+    if published == Some(local) {
+        return Ok(());
+    }
+    if let Some(landing) = matching_landing(repo, record, local, head, Some(base))? {
+        if !published
+            .map(|tip| is_ancestor_or_same(repo, landing, tip))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            return Err(format!("{}: blocks come from target history on home `{home}`, but its exact record exists only on unpublished local history; land the reviewed work through the home's pull request, fetch refs/remotes/origin/{home}, then merge that published result", record.id));
+        }
+    }
+    Ok(())
 }
 
 /// A line cannot supply import authority to its own current or historical head.
@@ -154,8 +286,16 @@ fn on_home_chain(repo: &Repository, head: Oid, mut tip: Oid) -> Result<bool, Str
 
 /// Whether the current record was introduced by a merge's other parent,
 /// rather than written on the receiver's first-parent path.
-fn arrived_by_merge(repo: &Repository, record: &RecordView, mut at: Oid) -> Result<bool, String> {
+fn arrived_by_merge(
+    repo: &Repository,
+    record: &RecordView,
+    mut at: Oid,
+    base: Oid,
+) -> Result<bool, String> {
     loop {
+        if is_ancestor_or_same(repo, at, base)? {
+            return Ok(false);
+        }
         let commit = repo.find_commit(at).map_err(|error| error.to_string())?;
         let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
         let Some(first) = parents.first() else {
@@ -180,9 +320,24 @@ fn matching_landing(
     record: &RecordView,
     mut at: Oid,
     head: Oid,
+    base: Option<Oid>,
 ) -> Result<Option<Oid>, String> {
     let mut found = None;
     loop {
+        if base
+            .map(|base| is_ancestor_or_same(repo, at, base))
+            .transpose()?
+            .unwrap_or(false)
+        {
+            // A contiguous matching version that began before the range is not a new import.
+            return if found.is_some()
+                && record_at(repo, at, record)?.is_some_and(|old| old.content == record.content)
+            {
+                Ok(None)
+            } else {
+                Ok(found)
+            };
+        }
         let same =
             record_at(repo, at, record)?.is_some_and(|other| other.content == record.content);
         if same && is_ancestor_or_same(repo, at, head)? {
@@ -228,7 +383,7 @@ fn prove_record(
         }
         let original = record_at(repo, source, record)?
             .ok_or("the redaction source has no original record")?;
-        let origin = matching_landing(repo, &original, tip, source)?
+        let origin = matching_landing(repo, &original, tip, source, None)?
             .ok_or("the original record has no landing on the home")?;
         prove_record(
             repo,
@@ -395,4 +550,33 @@ pub fn imported_record_paths(
             .map(|record| record.path)
             .collect(),
     )
+}
+
+#[cfg(test)]
+thread_local! { static COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imports_are_computed_once_per_judgment_and_recomputed_for_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(dir.path(), &[(b"README.md", b"fixture")]);
+        let graph = Graph::from_revision(&repo, &head.to_string()).unwrap();
+        COMPUTATIONS.with(|count| count.set(0));
+        {
+            let _run = history::judgment();
+            for _ in 0..3 {
+                assert!(imported_records(&repo, head, head, &graph)
+                    .unwrap()
+                    .is_empty());
+            }
+            assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 1);
+        }
+        assert!(imported_records(&repo, head, head, &graph)
+            .unwrap()
+            .is_empty());
+        assert_eq!(COMPUTATIONS.with(std::cell::Cell::get), 2);
+    }
 }

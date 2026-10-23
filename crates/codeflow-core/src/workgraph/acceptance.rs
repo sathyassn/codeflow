@@ -347,6 +347,8 @@ mod authority {
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
 mod imports;
+mod receiving_merges;
+pub(crate) use imports::clear_cache as clear_import_cache;
 pub use imports::{imported_record_paths, imported_records, ImportedRecord};
 
 /// The source and completion endpoints established by the binding.
@@ -3172,6 +3174,7 @@ pub fn completions_in_range(
         &local,
         *criteria == Criteria::Amendable,
     );
+    let mut reviewed = Vec::new();
     for task in after
         .records
         .values()
@@ -3245,11 +3248,17 @@ pub fn completions_in_range(
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
                 &run.criteria(),
             );
+            if let Some(proof) = bound.proof {
+                reviewed.push(proof.reviewed);
+            }
             findings.extend(bound.findings);
         }
     }
     findings.extend(epic_completions_in_range(
         repo, &before, &local, head_oid, amendable,
+    )?);
+    findings.extend(receiving_merges::findings(
+        repo, base_oid, head_oid, line, &after, &reviewed,
     )?);
     Ok(findings)
 }
@@ -3480,6 +3489,7 @@ pub fn pull_request_findings_judged(
     branch: Option<&str>,
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Vec<Finding>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let stacked = stacked_heads(&repo, pins)?;
     let oid = |revision: &str| {
@@ -3493,6 +3503,7 @@ pub fn pull_request_findings_judged(
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
+    let imported = imported_records(&repo, target_tip, head_tip, &at_head)?;
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;
     let (redacted, _) = super::redaction::judge_range(
@@ -3506,7 +3517,6 @@ pub fn pull_request_findings_judged(
     for id in redacted {
         at_head.records.remove(&id);
     }
-    let imported = imported_records(&repo, target_tip, head_tip, &at_head)?;
     let mut local_head = at_head.clone();
     for id in imported.keys() {
         local_head.records.remove(id);

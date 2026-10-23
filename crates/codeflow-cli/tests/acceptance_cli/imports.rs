@@ -659,3 +659,116 @@ fn independently_introduced_receiving_criteria_still_compete() {
     assert_ne!(result.0, 0, "{}", result.1);
     assert!(result.1.contains("criteria"), "{}", result.1);
 }
+
+fn refuses_unpublished_home(case: &str) {
+    let home = if case == "sibling" {
+        "integration/EPC-003-source"
+    } else {
+        "main"
+    };
+    let dir = imported_from_home(home, false, false);
+    let root = dir.path();
+    publish_sources(root, "main");
+    if case == "landing" {
+        let planned = git_out(root, &["merge-base", LINE, "main"]);
+        git(
+            root,
+            &[
+                "--git-dir",
+                ".git/destination.git",
+                "update-ref",
+                "refs/heads/main",
+                &planned,
+            ],
+        );
+        git(root, &["update-ref", "refs/remotes/origin/main", &planned]);
+    } else if case != "sibling" {
+        git(root, &["switch", "main"]);
+        let old = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+        let changed = if case == "criteria" {
+            old.replace("the system shall work", "the system may work")
+        } else {
+            old.replace("verified | unit", "verified | local evidence")
+        };
+        assert_ne!(old, changed);
+        write(root, &record_path("TSK-001"), &changed);
+        commit(root, "docs: change only the local home record");
+        git(root, &["switch", RECEIVER]);
+        merge(root, "main");
+    }
+    let ci = check(root, LINE, Some(RECEIVER), true);
+    let push = pre_push(root, RECEIVER, &"0".repeat(40));
+    for (name, result) in [("ci", ci), ("pre-push", push)] {
+        assert_blocks(&result, &format!("{case}: {name}"), &[home, "fetch"]);
+    }
+}
+
+#[test]
+fn unpublished_main_landing_is_not_import_authority() {
+    refuses_unpublished_home("landing");
+}
+
+#[test]
+fn local_only_sibling_is_not_import_authority() {
+    refuses_unpublished_home("sibling");
+}
+
+#[test]
+fn unpublished_home_evidence_edit_is_not_import_authority() {
+    refuses_unpublished_home("evidence");
+}
+
+#[test]
+fn unpublished_home_criteria_edit_is_not_import_authority() {
+    refuses_unpublished_home("criteria");
+}
+
+fn unowned_line_merge(resolution: bool) {
+    let dir = repo(
+        &[("TSK-002", OWN_JOURNEY)],
+        ",\"test_gate_on_push\":\"block\"",
+    );
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    commit(root, "docs: plan receiver work");
+    git(root, &["branch", LINE]);
+    write(root, "docs/source-note.md", "Published source planning.\n");
+    commit(root, "docs: advance source");
+    publish_sources(root, "main");
+    if !resolution {
+        git(root, &["switch", "-c", "unreviewed-side"]);
+        write(root, "src/unowned.rs", "pub fn unreviewed() {}\n");
+        commit(root, "feat: unreviewed side work");
+    }
+    git(root, &["switch", LINE]);
+    let base = head(root);
+    if resolution {
+        git(root, &["merge", "--no-ff", "--no-commit", "main"]);
+        write(root, "src/unowned.rs", "pub fn unreviewed() {}\n");
+        commit(root, "chore: resolve the sync");
+    } else {
+        merge(root, "unreviewed-side");
+    }
+    let ci = check(root, &base, Some(LINE), false);
+    let push = pre_push(root, LINE, &base);
+    for (name, result) in [("ci", ci), ("pre-push", push)] {
+        assert_blocks(&result, name, &["receiving line", "src/unowned.rs"]);
+    }
+}
+
+#[test]
+fn a_sync_resolution_without_a_completion_stays_receiver_work() {
+    unowned_line_merge(true);
+}
+
+#[test]
+fn a_non_target_product_merge_without_a_completion_stays_receiver_work() {
+    unowned_line_merge(false);
+}

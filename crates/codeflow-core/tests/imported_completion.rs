@@ -95,3 +95,37 @@ fn import_proof_names_home_landing_and_original_completion_tail() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn home_search_does_not_read_record_versions_before_the_range_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-qb", "main"]);
+    git(root, &["config", "user.name", "Test"]);
+    git(root, &["config", "user.email", "test@example.test"]);
+    write(root, PATH, "old malformed record\n");
+    std::fs::write(root.join(PATH), [0xff, 0xfe]).unwrap();
+    commit(root);
+    git(root, &["rm", "-f", PATH]);
+    write(
+        root,
+        "README.md",
+        "Range starts after the old record was removed.\n",
+    );
+    let base = commit(root);
+    git(root, &["switch", "-qc", "side"]);
+    write(root, PATH, TASK);
+    commit(root);
+    git(root, &["switch", "main"]);
+    git(root, &["merge", "--no-ff", "--no-commit", "side"]);
+    git(root, &["rm", "-f", PATH]);
+    commit(root);
+    git(root, &["switch", "-qc", "receiver", &base.to_string()]);
+    git(root, &["merge", "--no-ff", "-qm", "bring side", "side"]);
+    let head = Oid::from_str(&git(root, &["rev-parse", "HEAD"])).unwrap();
+    let repo = Repository::open(root).unwrap();
+    let graph = Graph::from_revision(&repo, "HEAD").unwrap();
+    assert!(imported_records(&repo, base, head, &graph)
+        .unwrap()
+        .is_empty());
+}
