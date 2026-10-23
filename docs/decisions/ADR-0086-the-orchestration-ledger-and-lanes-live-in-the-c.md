@@ -108,8 +108,9 @@ claims stay advisory. Cross-stream waits are allowed by id and are
 read-only. A coordinator's digest shows its own stream in detail plus
 one summary line per other stream; `codeflow coord status` shows every
 stream, its coordinator's liveness, lanes, owed follow-ups and operator
-items, and flags more than one epic built at once in a stream (issue
-280). A lone session gets a default stream automatically. Adoption and
+items, and flags, as an advisory, more than one distinct epic with
+active build attempts in a stream unless the earlier epic's lane
+records an outside wait (issue 280's rule with its allowance). A lone session gets a default stream automatically. Adoption and
 harness switching are per stream. Events: `stream_opened`,
 `stream_scope_changed`, `stream_closed`, `lane_handed_over`; every
 coordinator event carries its stream.
@@ -179,7 +180,7 @@ The ledger is a coordination aid, never a safety control: it never
 blocks git, records, CI or landing; a missing or damaged ledger only
 warns; coupling is one way (the ledger reads task, epic and ADR state
 and never writes a record; records, pull request bodies and
-`codeflow ci` never cite FU or LN ids and never read the ledger, which
+`codeflow ci` never cite FU, LN or WS ids and never read the ledger, which
 is clone-local and absent in CI); an item that becomes real work
 becomes a task through normal planning citing its real origin.
 
