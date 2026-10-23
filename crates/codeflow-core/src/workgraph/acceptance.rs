@@ -586,6 +586,7 @@ pub(crate) fn bind_completion_with_amendment(
                     carried,
                     stacking,
                     default_target,
+                    anchor,
                 ) {
                     Ok(bound) => {
                         proof = Some(bound);
@@ -840,6 +841,7 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<crate::git::GitName>, g
 /// when the source and completion do not share a directly reviewed span.
 /// `stacking` holds the target tips a clean merge after the review must
 /// come from.
+#[allow(clippy::too_many_arguments)] // Reviewed-span inputs and the landed adoption anchor.
 fn binding_source(
     repo: &Repository,
     task: &RecordView,
@@ -848,6 +850,7 @@ fn binding_source(
     transport: Transport,
     stacking: &StackingTips,
     default_target: Option<Oid>,
+    anchor: Option<Oid>,
 ) -> Result<CompletionProof, String> {
     let proof = CompletionProof {
         reviewed,
@@ -866,7 +869,7 @@ fn binding_source(
     if transport == Transport::Direct {
         return Err(direct);
     }
-    match task_landing(repo, task, landing, reviewed, default_target) {
+    match task_landing(repo, task, landing, reviewed, default_target, anchor) {
         Landed::NoMerge => Err(direct),
         Landed::Span { merge, head } => {
             if let Some(problem) =
@@ -1126,6 +1129,7 @@ fn task_landing(
     landing: Landing<'_>,
     reviewed: Oid,
     default_target: Option<Oid>,
+    anchor: Option<Oid>,
 ) -> Landed {
     let _judgment = history::judgment();
     if let Err(error) = history::check(repo) {
@@ -1214,7 +1218,7 @@ fn task_landing(
         repo,
         task,
         merge.id(),
-        start.unwrap_or(merge.id()),
+        anchor.or(start).unwrap_or(merge.id()),
         default_target,
         reviewed,
         &after_merge,
@@ -1289,8 +1293,9 @@ fn landed_adoptions(
     else {
         return Ok(Vec::new());
     };
-    // Without a default target, the landing's first parent is a conservative
-    // history bound. Never use the completion branch itself as landed authority.
+    // `head` is the landed range anchor, or the pre-completion head when
+    // no anchor exists. The default target bounds the line's history; without it,
+    // start that history at the task landing's first parent.
     let target = match default_target {
         Some(target) => target,
         None => first_parent(repo, merge)?.ok_or("the landing merge has no first parent")?,
@@ -4628,7 +4633,7 @@ mod tests {
                 Landing::Commit(self.head()),
                 Some(self.base),
                 Transport::TaskLanding,
-                Some(self.base),
+                None, // This fixture completes on its checked-out branch, without a PR range.
             )
         }
     }

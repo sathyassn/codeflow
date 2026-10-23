@@ -1093,12 +1093,27 @@ fn refused_adoption(what: &str) {
             },
         );
         commit(root, "docs: adopt exemption");
-        if what != "branch only" {
+        if !matches!(what, "branch only" | "branch merge") {
             land(root, "plan/adopt");
         }
     }
+    if what == "branch merge" {
+        git(root, &["switch", LINE]);
+    }
     // Keep an unlanded entry in the completion branch for the forgery case.
     git(root, &["switch", "-c", "plan/complete-tsk001"]);
+    if what == "branch merge" {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "merge: unlanded adoption",
+                "plan/adopt",
+            ],
+        );
+    }
     write_done(root, "TSK-001", "complete", &reviewed);
     commit(root, "docs: complete task");
     let result = ci_on(root, LINE, "plan/complete-tsk001", "");
@@ -1118,6 +1133,11 @@ fn a_direct_commit_without_an_adoption_refuses_binding() {
 #[test]
 fn an_adoption_only_on_the_completion_branch_refuses_binding() {
     refused_adoption("branch only");
+}
+
+#[test]
+fn an_adoption_merged_only_into_the_completion_branch_refuses_binding() {
+    refused_adoption("branch merge");
 }
 
 #[test]
@@ -1164,6 +1184,22 @@ fn a_late_completion_binds_after_a_landed_line_adoption() {
         "{}",
         result.1
     );
+}
+
+#[test]
+fn status_on_the_line_binds_after_a_landed_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status on the line");
 }
 
 /// A late completion fails when the landing merge is not the clean

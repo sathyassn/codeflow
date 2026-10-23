@@ -123,6 +123,7 @@ control = ["codeflow-cli --test acceptance_cli a_late_completion_binds_after_a_l
 fault = [
   "codeflow-cli --test acceptance_cli a_direct_commit_without_an_adoption_refuses_binding",
   "codeflow-cli --test acceptance_cli an_adoption_only_on_the_completion_branch_refuses_binding",
+  "codeflow-cli --test acceptance_cli an_adoption_merged_only_into_the_completion_branch_refuses_binding",
   "codeflow-cli --test acceptance_cli an_adoption_of_another_commit_refuses_binding",
   "codeflow-cli --test acceptance_cli an_adopted_commit_that_changes_acceptance_refuses_binding",
 ]
