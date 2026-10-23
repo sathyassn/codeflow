@@ -1494,7 +1494,8 @@ fn judge(
                                 default_tip,
                                 Transport::TaskLanding,
                                 super::acceptance::source_landing_base(&repo, source, introduced)?,
-                            );
+                            )
+                            .findings;
                             // Where the task's own line landed it, when the
                             // import brings it from that line.
                             let target = now
@@ -1612,6 +1613,7 @@ fn judge(
                     Transport::Direct,
                     Some(anchor),
                 )
+                .findings
                 .into_iter()
                 .map(|mut found| {
                     if let Some(rest) = found.message.strip_prefix(&prefix) {
@@ -1659,15 +1661,18 @@ fn judge(
             }
             [owner] if owner.status == "complete" => {
                 if !direct_completions.contains_key(&owner.id) {
-                    findings.extend(bind_completion(
-                        &repo,
-                        owner,
-                        &graph,
-                        Landing::Commit(head_oid),
-                        default_tip,
-                        Transport::Direct,
-                        Some(anchor),
-                    ));
+                    findings.extend(
+                        bind_completion(
+                            &repo,
+                            owner,
+                            &graph,
+                            Landing::Commit(head_oid),
+                            default_tip,
+                            Transport::Direct,
+                            Some(anchor),
+                        )
+                        .findings,
+                    );
                 }
             }
             [owner] => {
