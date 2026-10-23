@@ -1570,9 +1570,11 @@ fn new_worktree_configuration(
             }
             let hooks = key.eq_ignore_ascii_case("core.hookspath");
             for value in config_values(&file, key)? {
-                if value.is_empty()
-                    || (!hooks
-                        && crate::security::git::config_kind(key, value)
+                // An empty command runs nothing, but an empty hooks path is
+                // still a hooks location Git uses (TSK-379 review round 13).
+                if !hooks
+                    && (value.is_empty()
+                        || crate::security::git::config_kind(key, value)
                             == crate::security::git::ConfigKind::Safe)
                 {
                     continue;

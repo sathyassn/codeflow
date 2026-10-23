@@ -2573,6 +2573,32 @@ fn worktree_add_reads_includes_of_every_admin_name() {
             assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
         }
     }
+    // Round 13 (R13-1): a conditional include that sets a hooks path, even
+    // an empty one, changes where Git looks for hooks in the new worktree.
+    for hooks in ["", "hooks-elsewhere"] {
+        let f = Fixture::new();
+        let root = shell_path(&f.root);
+        let conf = f.temp.path().join("hooks.conf");
+        std::fs::write(&conf, format!("[core]\n\thooksPath = \"{hooks}\"\n")).unwrap();
+        git(
+            &f.root,
+            &[
+                "config",
+                &format!("includeIf.gitdir:{root}/.git/worktrees/hookswt.path"),
+                &shell_path(&conf),
+            ],
+        );
+        for hook in ["exec-guard", "git-guard"] {
+            let out = f.command(
+                &f.root,
+                hook,
+                "git worktree add --detach .worktrees/hookswt",
+            );
+            assert!(refused(&out), "{hook} hooksPath={hooks:?}: {out:?}");
+            let out = f.command(&f.root, hook, "git worktree list");
+            assert_eq!(out.status.code(), Some(0), "{hook}: {out:?}");
+        }
+    }
 }
 
 // Codex round 12, R11-1: Git reads an include by the spelling it was given,

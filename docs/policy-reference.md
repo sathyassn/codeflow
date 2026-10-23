@@ -649,7 +649,8 @@ count; an option the tables do not know, where its value could be the
 output, refuses. An alias that expands to one of these is judged the same
 way. `git worktree add` reads the conditional includes (`includeIf`),
 which can apply to the new worktree though not where the guard reads, and
-refuses when one sets a setting Git can run during the add or a hooks path. Which conditions hold
+refuses when one sets a setting Git can run during the add or a hooks path,
+even an empty one. Which conditions hold
 depends on the Git directory Git creates (its sanitized and numbered name,
 its spelling through any alias) and the new branch, so the guard does not
 decide it: every conditional include, of any kind, is read for every add.
