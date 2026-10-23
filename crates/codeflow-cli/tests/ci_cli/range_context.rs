@@ -196,7 +196,7 @@ fn unknown_commit_target_uses_repository_default() {
 }
 
 #[test]
-fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
+fn explicit_head_reports_context_without_blame_for_imported_work() {
     let (f, base, head) = sync_merge();
     for source in ["GITHUB_HEAD_REF", "checkout HEAD"] {
         let env = if source == "checkout HEAD" {
@@ -212,8 +212,11 @@ fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
             "{text}"
         );
         let guidance = text.find("pass --branch").expect(&text);
-        let finding = text.find("reopen").expect(&text);
-        assert!(guidance < finding, "{text}");
+        assert!(!text.contains("reopen"), "{text}");
+        assert!(!text.contains("work.acceptance_binding"), "{text}");
+        if let Some(finding) = text.find("BLOCKED") {
+            assert!(guidance < finding, "{text}");
+        }
     }
 }
 

@@ -5974,3 +5974,6 @@ fn the_acceptance_help_names_the_key_and_its_fields() {
         }
     }
 }
+
+#[path = "acceptance_cli/imports.rs"]
+mod imports;

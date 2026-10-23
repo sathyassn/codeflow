@@ -275,7 +275,9 @@ mod authority {
     /// pre-push hook's candidate authority, or, in the status verb, the task's
     /// target as `work start` anchors it. They come from the run, never from
     /// the range under judgement, and they are the only source of both sets
-    /// below, so neither can be built from anything else.
+    /// below. An imported record gets a separate source judgment only after
+    /// `imported_records` proves its home landing; the receiving head never
+    /// supplies that authority.
     #[derive(Clone, Debug, Default)]
     pub struct RunBases(Vec<Oid>);
 
@@ -308,8 +310,9 @@ mod authority {
     }
 
     /// Stacking authority: target tips whose first-parent lines may carry a
-    /// clean merge after a review. Only [`RunBases::stacking`] builds it and
-    /// only `with_own_line` extends it; it never supplies criteria.
+    /// clean merge after a review. [`RunBases::stacking`] builds it;
+    /// `with_own_line` or a verified import's home extends it. It never
+    /// supplies criteria.
     #[derive(Clone, Debug, Default)]
     pub struct StackingTips(Vec<Oid>);
 
@@ -342,6 +345,9 @@ mod authority {
     }
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
+
+mod imports;
+pub use imports::{imported_record_paths, imported_records, ImportedRecord};
 
 /// The source and completion endpoints established by the binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3119,6 +3125,7 @@ fn reopened_judged(
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
 #[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn completions_in_range(
     repo: &Repository,
     base: &str,
@@ -3149,6 +3156,11 @@ pub fn completions_in_range(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
+    let imported = imported_records(repo, base_oid, head_oid, &after)?;
+    let mut local = after.clone();
+    for id in imported.keys() {
+        local.records.remove(id);
+    }
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after)?;
 
@@ -3157,7 +3169,7 @@ pub fn completions_in_range(
         anchor,
         head_oid,
         &before,
-        &after,
+        &local,
         *criteria == Criteria::Amendable,
     );
     for task in after
@@ -3165,7 +3177,7 @@ pub fn completions_in_range(
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
     {
-        if redacted.contains(&task.id) {
+        if redacted.contains(&task.id) || imported.contains_key(&task.id) {
             continue;
         }
         let block = active_block(task);
@@ -3237,7 +3249,7 @@ pub fn completions_in_range(
         }
     }
     findings.extend(epic_completions_in_range(
-        repo, &before, &after, head_oid, amendable,
+        repo, &before, &local, head_oid, amendable,
     )?);
     Ok(findings)
 }
@@ -3458,6 +3470,7 @@ pub fn pull_request_findings(
 ///
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn pull_request_findings_judged(
     repo_root: &std::path::Path,
     base: &str,
@@ -3493,11 +3506,17 @@ pub fn pull_request_findings_judged(
     for id in redacted {
         at_head.records.remove(&id);
     }
+    let imported = imported_records(&repo, target_tip, head_tip, &at_head)?;
+    let mut local_head = at_head.clone();
+    for id in imported.keys() {
+        local_head.records.remove(id);
+    }
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
-    let mut found = reopened_criteria(&repo, base, head, &at_head)?;
+    let mut found = reopened_criteria(&repo, base, head, &local_head)?;
     if *criteria != Criteria::Amendable {
-        let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        paths.retain(|path| !imported.values().any(|source| source.path == *path));
         let at_target = Graph::from_revision(&repo, base)?;
         let range = Range {
             anchor,
@@ -3506,7 +3525,7 @@ pub fn pull_request_findings_judged(
         let mut judging = Judging::new(&repo, range, run.criteria());
         // ADR-0080: the named task, or the task it follows up, may have the
         // text of its completed standalone criteria corrected.
-        let reopened = reopened_ids(&repo, base, head, &at_head)?;
+        let reopened = reopened_ids(&repo, base, head, &local_head)?;
         let correcting = |named: &str| {
             correctable(
                 &repo,

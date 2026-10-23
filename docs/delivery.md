@@ -149,6 +149,33 @@ pull request cites the full gate by run id and revision, and the review
 verdict lives on the pull request, so the evidence survives the cleanup of
 worktrees and build directories.
 
+### Completed work imported from another line
+
+An ordinary merge can bring completed work from `main` or a verified epic
+line. CI and pre-push bind an unchanged imported completion at its home,
+so later receiving-line commits do not require that source task to reopen.
+A task branch can carry the same imports while delivering its own work.
+
+- The guarded history reader checks the source line, record identity, exact
+  contents, ancestry and home landing. Equal record text alone is not proof.
+- A source task that merged its home after review retains its binding only
+  when that merge was clean and came from the home line. A task reopened
+  before its first landing keeps the criteria accepted at that landing.
+- Criteria amendments, reopenings and records brought unchanged from the
+  target stay attributed to its history. A task PR does not claim those
+  records as its own additions.
+- Receiving-line record edits and competing criteria introductions still
+  need their own judgment. A source landing with an unreviewed resolution,
+  an unavailable home or an overlaid history supplies no import proof.
+  The receiver's own completion still binds all its product work.
+
+When the source proof refuses, fetch the named home and its full history.
+Repair invalid source acceptance through that task's pull request on its
+home, then merge the reviewed result. A refusal naming target history does
+not ask the receiver to reopen an unrelated task. Pass the intended
+`--branch` and `--base` when checking a detached or historical range; naming
+the same base by ref or commit id does not change the proof.
+
 ### Acceptance waivers and redactions
 
 A completed task can have personal or customer names removed from its
