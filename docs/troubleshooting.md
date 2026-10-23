@@ -135,7 +135,7 @@ heavy targets and records their Cargo, nextest, Rust-test and shell-oracle
 counts. A heavy target can set `workers` to wait until that share is free;
 otherwise it shares the available workers with other ready heavy targets.
 Light targets can run beside them. Omit the budget to retain tool
-defaults. This repository sets eight workers and gives clippy a separate
+defaults. This repository sets nine workers and gives clippy a separate
 `target/clippy` directory; its binary build waits for the all-target build.
 Each Cargo producer takes the full budget to avoid package-cache and
 build-directory waits; light checks still run beside it.

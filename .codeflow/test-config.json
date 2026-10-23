@@ -55,7 +55,7 @@
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
     ],
-    "worker_budget": 8,
+    "worker_budget": 9,
     "heavy_wait_seconds": 0
   },
   "defaults": {
@@ -100,7 +100,7 @@
       "exclusive": false,
       "timeout_seconds": 1200,
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "codeflow-bin",
@@ -123,7 +123,7 @@
       "exclusive": false,
       "timeout_seconds": 600,
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "rust-format",
@@ -161,7 +161,7 @@
       },
       "shell": "sh",
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "repository-update-noop",
@@ -174,7 +174,7 @@
       },
       "requires": [],
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "contract-scans",
@@ -187,7 +187,7 @@
       },
       "requires": [],
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "rust-doctest",
@@ -202,7 +202,7 @@
         "codeflow-bin"
       ],
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "rust-clippy",
@@ -224,7 +224,7 @@
       "env": {
         "CARGO_TARGET_DIR": "target/clippy"
       },
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "rustdoc",
@@ -242,7 +242,7 @@
         "codeflow-bin"
       ],
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "rust-coverage",
@@ -262,7 +262,7 @@
         "path": "target/nextest/codeflow/junit.xml"
       },
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "release-automation",
@@ -519,7 +519,7 @@
       "exclusive": true,
       "timeout_seconds": 900,
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "prose-exhaustive",
@@ -537,7 +537,7 @@
       "exclusive": false,
       "timeout_seconds": 7200,
       "heavy": true,
-      "workers": 8
+      "workers": 9
     },
     {
       "name": "present-supply-chain",
@@ -587,7 +587,7 @@
       "exclusive": false,
       "timeout_seconds": 2400,
       "heavy": true,
-      "workers": 8
+      "workers": 9
     }
   ],
   "_description": "Candidate gate: model-eval-kit is a structural and tooling check, not native behavioural qualification."

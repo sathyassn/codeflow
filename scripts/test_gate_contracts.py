@@ -249,8 +249,8 @@ class GateContracts(unittest.TestCase):
         profiles = nextest['profile']
         self.assertEqual(nextest['test-groups']['serial']['max-threads'], 1)
         self.assertNotIn('test-threads', profiles['essential'])
-        self.assertEqual(json.loads(read('.codeflow/test-config.json'))['execution']['worker_budget'], 8)
-        self.assertEqual(workspace['workers'], 8)
+        self.assertEqual(json.loads(read('.codeflow/test-config.json'))['execution']['worker_budget'], 9)
+        self.assertEqual(workspace['workers'], 9)
         self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
