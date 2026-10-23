@@ -26,17 +26,11 @@ pub fn run(args: &ReserveArgs) -> i32 {
         }
     };
     let config_path = root.join(".codeflow/test-config.json");
-    let workers = match config_path.try_exists() {
-        Ok(false) => None,
-        Ok(true) => match codeflow_core::testing::config::load_test_config(&config_path) {
-            Ok(config) => config.execution.worker_budget,
-            Err(error) => {
-                eprintln!("codeflow reserve: {error}");
-                return 1;
-            }
-        },
+    let workers = match codeflow_core::testing::config::load_test_config(&config_path) {
+        Ok(config) => config.execution.worker_budget,
+        Err(codeflow_core::testing::error::TestingError::ConfigNotFound(_)) => None,
         Err(error) => {
-            eprintln!("codeflow reserve: cannot read test config: {error}");
+            eprintln!("codeflow reserve: {error}");
             return 1;
         }
     };

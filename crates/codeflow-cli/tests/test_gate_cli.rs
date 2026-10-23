@@ -1620,3 +1620,50 @@ fn reserve_keeps_the_calling_binary_for_git_hook_dispatch() {
         expected.to_str().unwrap()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_dangling_config_links_before_starting_the_command() {
+    for ancestor in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+        let path = if ancestor {
+            root.path().join(".codeflow")
+        } else {
+            root.path().join(".codeflow/test-config.json")
+        };
+        if ancestor {
+            std::fs::remove_dir_all(&path).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::os::unix::fs::symlink("missing-config", &path).unwrap();
+        let output = run(
+            root.path(),
+            home.path(),
+            &["reserve", "--", "sh", "-c", "touch started"],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(!root.path().join("started").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_status_refuses_dangling_record_links_instead_of_reporting_an_empty_record() {
+    for ancestor in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let root = repo(r#"{"schema_version":"1.0","targets":[]}"#);
+        let path = if ancestor {
+            home.path().join("locks")
+        } else {
+            std::fs::create_dir(home.path().join("locks")).unwrap();
+            home.path().join("locks/full-gate.lock")
+        };
+        std::os::unix::fs::symlink("missing-record", &path).unwrap();
+        let output = run(root.path(), home.path(), &["test", "--lock-status"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains("cannot read gate lock"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("no recorded holder"));
+    }
+}

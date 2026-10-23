@@ -185,7 +185,9 @@
           "command": "python3 -B scripts/contract-scans.py"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "workers": 4
     },
     {
       "name": "rust-doctest",

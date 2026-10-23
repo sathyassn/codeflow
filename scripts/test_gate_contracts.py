@@ -283,6 +283,8 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'contract-scans', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:
             self.assertLessEqual(closure(name), quick, name)
+        for name in ['rust-clippy', 'repository-update-noop', 'contract-scans']:
+            self.assertTrue(targets[name]['heavy'], name)
         # TSK-256: the push set replays `codeflow update` on this repository, so a
         # shipped asset changed without a resync fails before review. The replay
         # runs from the quick mode only (essential and full already reach it
@@ -291,7 +293,7 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
         self.assertEqual(replay.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
-        # TSK-385: preserve one light target while discovering core repository
+        # TSK-385: preserve one target while discovering core repository
         # contracts and checking the remedy catalogue and derived lookups.
         # Its runner controls use real Cargo and run in gate-parity too.
         scans = targets['contract-scans']

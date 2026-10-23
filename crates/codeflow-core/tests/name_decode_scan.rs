@@ -3961,7 +3961,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats owner PID/directory and stale-lock notes after lock authority has been decided using the lock itself.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "acquire_full_gate_lock",
+        "acquire_gate_lock",
         "trim",
         1,
         "display",
@@ -3980,6 +3980,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "describe_holder",
         "trim",
         1,
+        "display",
+    ),
+    // Displays a holder snapshot and start time only; neither admission nor process-group identity uses these values.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "gate_lock_status",
+        "lines",
+        1,
+        "display",
+    ),
+    // Displays empty records and a numeric start time; this query never acquires or reclaims a lock.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "gate_lock_status",
+        "trim",
+        2,
         "display",
     ),
     // Explicit LF records and exact decimal group= values preserve the lock format; whitespace cannot change a process group identity.

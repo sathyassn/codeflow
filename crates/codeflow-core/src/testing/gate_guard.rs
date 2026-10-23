@@ -224,17 +224,20 @@ pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
     dirs.into_iter()
         .map(|dir| {
             let path = dir.join(LOCK_FILE);
-            let record = match File::open(&path) {
-                Ok(mut file) => read_record(&mut file),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-                Err(error) => Err(error),
-            }
-            .map_err(|error| {
-                format!(
-                    "cannot read gate lock {}: {error}",
-                    crate::git::display_path(&path)
-                )
-            })?;
+            let record = crate::absence::proven_absent(&path)
+                .and_then(|absent| {
+                    if absent {
+                        Ok(String::new())
+                    } else {
+                        read_record(&mut File::open(&path)?)
+                    }
+                })
+                .map_err(|error| {
+                    format!(
+                        "cannot read gate lock {}: {error}",
+                        crate::git::display_path(&path)
+                    )
+                })?;
             let description = if record.trim().is_empty() {
                 "no recorded holder".to_string()
             } else {
