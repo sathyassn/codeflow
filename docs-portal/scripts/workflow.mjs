@@ -8,6 +8,7 @@ import { lockDigestFailure } from "./runtime-scripts.mjs";
 // A writer leads its own process group where the platform has one, so the
 // workers it leaves behind stay visible to a contender and a stop reaches them.
 const GROUPS = process.platform !== "win32";
+let windowsNoticeGiven = false;
 
 const workflow = process.argv[2];
 if (!["build", "check", "dev", "preview", "verify"].includes(workflow)) throw new Error("workflow must be build, check, dev, preview, or verify");
@@ -95,7 +96,17 @@ function start(lifecycle, writers, command, args, resolve, reject) {
 // caller keeps the lease. Without groups (Windows) the workers cannot be seen,
 // so the writer stays recorded and a contender treats the lease as undecidable.
 async function retireWriter(writers, pid, signalGroup) {
-  if (!GROUPS) return true;
+  if (!GROUPS) {
+    // The workers a writer left behind cannot be seen, so its exit proves
+    // nothing about them: the lease stays recorded and a contender waits for
+    // the age rule.
+    if (!windowsNoticeGiven) {
+      windowsNoticeGiven = true;
+      process.stderr.write("portal: workers a writer started cannot be checked on this platform, so the workflow lease is kept until it expires; remove .portal/workflow.lock once no portal process runs to start sooner\n");
+    }
+    writers.keepLease();
+    return true;
+  }
   const groupAlive = () => { try { process.kill(-pid, 0); return true; } catch (error) { return error?.code !== "ESRCH"; } };
   if (groupAlive()) {
     signalGroup("SIGKILL");

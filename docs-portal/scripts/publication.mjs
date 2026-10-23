@@ -70,15 +70,17 @@ export async function withWorkflowLease(portalRoot, action, testHooks = {}) {
       if (owner.state === "unstable") {
         throw new Error("portal build/check workflow already in progress (its owner record kept changing, so no stable proof of exit exists; retry, or remove .portal/workflow.lock once no portal process runs)");
       }
+      // The decision rests on the lease the verdict was settled on, not the first read.
+      const decided = owner.lease ?? existing.lease;
       if (owner.state === "dead") {
-        const age = Math.max(0, Math.round((Date.now() - existing.lease.created_at_ms) / 1000));
-        process.stderr.write(`portal workflow lease owner (process ${existing.lease.owner.pid} on ${existing.lease.owner.host}) has exited with no writer running; reclaiming its ${age}s old lease\n`);
+        const age = Math.max(0, Math.round((Date.now() - decided.created_at_ms) / 1000));
+        process.stderr.write(`portal workflow lease owner (process ${decided.owner.pid} on ${decided.owner.host}) has exited with no writer running; reclaiming its ${age}s old lease\n`);
       } else if (owner.state === "live") {
         // Proven liveness blocks whatever the lease age.
         throw new Error(`portal build/check workflow already in progress (live process ids: ${owner.live.join(", ")})`);
-      } else if (Date.now() - existing.lease.heartbeat_at_ms <= WORKFLOW_LEASE_MAX_AGE_MS) {
-        const starting = owner.starting
-          ? ` (its owner exited while starting a writer, so a running writer cannot be ruled out; wait for the lease to expire, or remove .portal/workflow.lock once no portal process runs)`
+      } else if (Date.now() - decided.heartbeat_at_ms <= WORKFLOW_LEASE_MAX_AGE_MS) {
+        const starting = owner.starting || owner.untracked
+          ? ` (its owner exited while starting a writer, or workers a writer left behind cannot be seen here, so a running writer cannot be ruled out; wait for the lease to expire, or remove .portal/workflow.lock once no portal process runs)`
           : "";
         throw new Error(`portal build/check workflow already in progress${starting}`);
       }
@@ -189,7 +191,7 @@ async function judgeWorkflowOwner(lease, probe) {
   // Without groups the workers a writer left behind cannot be seen, so a
   // recorded writer that is gone proves nothing about them.
   const untracked = owner.writers.length > 0 && !grouped;
-  return { state: undecided || starting || untracked ? "unknown" : "dead", live, starting };
+  return { state: undecided || starting || untracked ? "unknown" : "dead", live, starting, untracked };
 }
 
 // A verdict that allows a reclaim, a dead owner or an expired unknown one, is
@@ -210,7 +212,8 @@ async function workflowOwnerVerdict(portalDirectory, lease, probe) {
       if (error?.code === "ENOENT" || (now !== undefined && now !== judged.token)) return { state: "gone", live: [], starting: false };
       throw error;
     }
-    if (final.token === judged.token && JSON.stringify(final.owner) === JSON.stringify(judged.owner)) return verdict;
+    // Every field the decision uses must hold still, the heartbeat included.
+    if (final.token === judged.token && JSON.stringify(final.owner) === JSON.stringify(judged.owner) && final.heartbeat_at_ms === judged.heartbeat_at_ms) return { ...verdict, lease: final };
     judged = final;
   }
   return { state: "unstable", live: [], starting: false };
@@ -332,7 +335,7 @@ async function retireWorkflowClaim(portalDirectory, claim, expected, reason, tes
     throw await quarantineSuspectWorkflowClaim(portalDirectory, retired, expected.lease.token,
       new Error("portal workflow retired claim inode does not match the expected owner"));
   }
-  await restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved);
+  await restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved, testHooks.probeProcess ?? probeProcess);
   return null;
 }
 
@@ -351,8 +354,8 @@ async function quarantineSuspectWorkflowClaim(portalDirectory, retired, expected
   return error;
 }
 
-async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved) {
-  const candidateBefore = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token);
+async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, moved, probe = probeProcess) {
+  const candidateBefore = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token, probe);
   if (candidateBefore === null) {
     await removeMovedWorkflowClaim(retired, moved);
     return false;
@@ -365,25 +368,31 @@ async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, mo
     const current = await readWorkflowClaimIdentity(claim, "portal workflow replacement claim");
     if (current.lease.token !== moved.lease.token || !sameFile(current.stat, moved.stat)) return false;
   }
-  const candidateAfter = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token);
+  const candidateAfter = await liveWorkflowCandidateIdentity(portalDirectory, moved.lease.token, probe);
   if (candidateAfter !== null && sameFile(candidateBefore.stat, candidateAfter.stat)) {
     await removeMovedWorkflowClaim(retired, moved);
     return true;
   }
-  await removeLiveWorkflowClaimIdentity(portalDirectory, claim, moved);
+  await removeLiveWorkflowClaimIdentity(portalDirectory, claim, moved, probe);
   await removeMovedWorkflowClaim(retired, moved);
   return false;
 }
 
-async function liveWorkflowCandidateIdentity(portalDirectory, token) {
+// A displaced holder is kept unless it is proven gone: a holder that is alive,
+// or whose liveness cannot be decided and whose heartbeat is still within the
+// age rule, is preserved whatever its heartbeat age says about a live one.
+async function liveWorkflowCandidateIdentity(portalDirectory, token, probe = probeProcess) {
   try {
     const candidate = await readWorkflowLeaseDirectoryIdentity(workflowCandidate(portalDirectory, token));
-    if (candidate.lease.token !== token || Date.now() - candidate.lease.heartbeat_at_ms > WORKFLOW_LEASE_MAX_AGE_MS) return null;
-    return candidate;
+    if (candidate.lease.token !== token) return null;
+    const verdict = await judgeWorkflowOwner(candidate.lease, probe);
+    if (verdict.state === "live") return candidate;
+    if (verdict.state === "dead") return null;
+    return Date.now() - candidate.lease.heartbeat_at_ms > WORKFLOW_LEASE_MAX_AGE_MS ? null : candidate;
   } catch (error) { if (error?.code === "ENOENT") return null; throw error; }
 }
 
-async function removeLiveWorkflowClaimIdentity(portalDirectory, claim, expected) {
+async function removeLiveWorkflowClaimIdentity(portalDirectory, claim, expected, probe = probeProcess) {
   const cleanup = path.join(portalDirectory, `.workflow-lock-release-${expected.lease.token}-${randomBytes(12).toString("hex")}.json`);
   try { await rename(claim, cleanup); }
   catch (error) { if (error?.code === "ENOENT") return; throw error; }
@@ -393,7 +402,7 @@ async function removeLiveWorkflowClaimIdentity(portalDirectory, claim, expected)
     await removeMovedWorkflowClaim(cleanup, moved);
     return;
   }
-  await restoreDisplacedWorkflowClaim(portalDirectory, claim, cleanup, moved);
+  await restoreDisplacedWorkflowClaim(portalDirectory, claim, cleanup, moved, probe);
 }
 
 async function removeMovedWorkflowClaim(file, expected) {
@@ -475,7 +484,7 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
       try { retired = await readWorkflowClaimIdentity(target, "portal workflow recovery claim"); }
       catch (error) { throw await quarantineSuspectWorkflowClaim(portalDirectory, target, match[2], error); }
       if (retired.lease.token !== match[2]) {
-        await restoreDisplacedWorkflowClaim(portalDirectory, path.join(portalDirectory, "workflow.lock"), target, retired);
+        await restoreDisplacedWorkflowClaim(portalDirectory, path.join(portalDirectory, "workflow.lock"), target, retired, testHooks.probeProcess ?? probeProcess);
         continue;
       }
       await removeVerifiedWorkflowClaim(target, match[2]);

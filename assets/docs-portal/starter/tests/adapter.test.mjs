@@ -1656,7 +1656,10 @@ async function writerScratch(astroSource) {
         if (String(to).endsWith("owner.json")) {
           let named = false;
           try { named = JSON.parse(readFileSync(from, "utf8")).owner?.writers?.includes(spawned) === true; } catch { /* not a lease record */ }
-          if (named) throw Object.assign(new Error("EIO"), { code: "EIO" });
+          if (named) {
+            await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAULT_RECORD_DELAY ?? 0)));
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }
         }
         return rename.call(fsp, from, to);
       };
@@ -1769,7 +1772,7 @@ test("without process groups a gone writer leaves the lease undecidable", async 
   try {
     await plantWorkflowLease(root, { owner });
     const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
-    assert.match(String(refused), /workflow already in progress$/);
+    assert.match(String(refused), /workflow already in progress \(its owner exited while starting a writer, or workers a writer left behind cannot be seen here/);
     await rm(root, treeRemoval);
     await mkdir(root, { recursive: true });
     await plantWorkflowLease(root, { created_at_ms: Date.now() - 6 * 3_600_000, heartbeat_at_ms: Date.now() - 5 * 3_600_000, owner });
@@ -1792,9 +1795,107 @@ for (const [name, env] of [["with process groups", {}], ["without process groups
       writer = Number(await readFile(path.join(scratch.root, "spawned-pid"), "utf8"));
       assert.notEqual(code, 0);
       assert.equal(processAlive(writer), false);
-      assert.equal(await withWorkflowLease(scratch.root, async () => "free"), "free");
+      if (env.FAULT_WIN32) {
+        // Without groups the workers a writer left behind cannot be seen: the lease stays.
+        const refused = await withWorkflowLease(scratch.root, async () => "unexpected").catch((error) => error);
+        assert.match(String(refused), /workflow already in progress/);
+      } else {
+        assert.equal(await withWorkflowLease(scratch.root, async () => "free"), "free");
+      }
     } finally {
       if (writer !== null) { try { process.kill(writer, "SIGKILL"); } catch { /* gone */ } }
+      await rm(scratch.root, treeRemoval);
+    }
+  });
+}
+
+test("a displaced holder with an old heartbeat is kept while its owner lives", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-live-"));
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" } });
+    let swapped = false;
+    let replacement = null;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        replacement = await plantWorkflowLease(root, {
+          created_at_ms: Date.now() - 6 * 3_600_000,
+          heartbeat_at_ms: Date.now() - 5 * 3_600_000,
+          owner: { pid: process.pid, host: os.hostname(), writers: [], starting: 0, groups: process.platform !== "win32" },
+        });
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${process.pid}\\)`));
+    assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, replacement.token);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("a heartbeat refreshed after the first read keeps an undecidable lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-heartbeat-race-"));
+  const script = path.join(root, "refreshing-owner.mjs");
+  let coordinator = null;
+  try {
+    await writeFile(script, `
+      import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+      const realNow = Date.now;
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      Date.now = () => realNow() - 5 * 3_600_000;
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        Date.now = realNow;
+        process.send("ready");
+        await new Promise((resolve) => process.once("message", resolve));
+        beat();
+        await writers.forgetWriter(0);
+        process.send("refreshed");
+        interval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise((resolve) => coordinator.once("message", resolve));
+    let first = true;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      probeProcess: async () => {
+        if (first) {
+          first = false;
+          const refreshed = new Promise((resolve) => coordinator.once("message", resolve));
+          coordinator.send("beat");
+          await refreshed;
+        }
+        return "unknown";
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    assert.equal(processAlive(coordinator.pid), true);
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+for (const [name, astro, env, expectNonzero] of [
+  ["after a normal exit", "import { spawn } from 'node:child_process'; spawn(process.execPath, ['-e', \"const fs = require('node:fs'); fs.writeFileSync('descendant-pid', String(process.pid)); setInterval(() => fs.writeFileSync('tick', String(Date.now())), 25);\"], { stdio: 'ignore' }).unref(); setTimeout(() => process.exit(0), 300);", {}, false],
+  ["after an unrecordable writer is stopped", "import { spawn } from 'node:child_process'; spawn(process.execPath, ['-e', \"const fs = require('node:fs'); fs.writeFileSync('descendant-pid', String(process.pid)); setInterval(() => fs.writeFileSync('tick', String(Date.now())), 25);\"], { stdio: 'ignore' }).unref(); setInterval(() => {}, 1000);", { FAULT_RECORD: "1", FAULT_RECORD_DELAY: "1500" }, true],
+]) {
+  test(`without process groups the lease is kept with a surviving descendant, ${name}`, { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+    const scratch = await writerScratch(astro);
+    let descendant = null;
+    try {
+      const run = runWorkflow(scratch, { ...env, FAULT_WIN32: "1" });
+      const code = await run.exited;
+      descendant = Number(await readFile(path.join(scratch.root, "descendant-pid"), "utf8"));
+      if (expectNonzero) assert.notEqual(code, 0); else assert.equal(code, 0);
+      assert.equal(processAlive(descendant), true);
+      await readFile(path.join(scratch.root, ".portal/workflow.lock"));
+      const refused = await withWorkflowLease(scratch.root, async () => "unexpected").catch((error) => error);
+      assert.match(String(refused), /workflow already in progress/);
+    } finally {
+      if (descendant !== null) { try { process.kill(descendant, "SIGKILL"); } catch { /* gone */ } }
       await rm(scratch.root, treeRemoval);
     }
   });
