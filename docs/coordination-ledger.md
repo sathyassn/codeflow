@@ -313,10 +313,13 @@ No fields. Recorded by the holder or the operator.
   not complete to complete, or changes its acceptance block while complete.
   A move that changes neither is no transition. A direct transition is
   judged at its own commit; a merge at the head it brought in, which must
-  hold the same completion (a merge that edits the record is judged at the
-  merge and cannot bind). The review must be on the judged head's
-  first-parent line, and for a merge no reopen of the task may lie on the
-  target's first-parent history between the review and the merge. A landing line is the one
+  hold the same completion and be the clean re-merge of its parents (a
+  merge that edits the record or anything else inherits no proof). The
+  review must be on the judged head's first-parent line, and for a merge no
+  reopen of the task may lie on the target's first-parent history between
+  the review and the merge. After the completion, the criteria check a pull
+  request gets (with its correction route for a completed standalone task)
+  must find nothing for the task up to the tip. A landing line is the one
   remote-tracking ref the declared target names, by the same remote rules
   `work start` uses (`origin/main` is origin's, never another remote's; a
   bare name is `origin`'s, never chosen by a local branch's upstream
