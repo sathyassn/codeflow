@@ -73,7 +73,9 @@ full: `schema_version`, `event`, `subject_id`, `sequence`,
 model and session when known) and optional `comment`; a mutation that
 depends on ownership carries the expected generation.
 
-Follow-ups: `FU-NNN`, a full record for a cold reader (`title`,
+Follow-ups: `FU-NNN`, held by a lane or by the stream's coordinator
+itself with no lane (direct work by the coordinator is tracked and
+closed on the same proof), a full record for a cold reader (`title`,
 `description`, `done_when`, `source` and its reference, `holder`,
 `links` typed context, prerequisite or fulfils, or a `no_link_reason`,
 an effective schedule; `awaiting_operator` is a condition, not a
@@ -89,7 +91,8 @@ permission matrix covers add, update, check, hand-over, close, drop and
 adopt; agents never record as the operator. Only exact duplicates (same
 source identity or idempotency key) are refused; similar ones are
 suggested. Every free-text field is scanned and bounded, the files are
-private, an explicit purge path exists.
+private, an explicit purge path exists. A field-level schema reference with a figure of
+the entities ships with the store (TSK-422).
 
 Streams: several coordinating sessions can run at once, within one
 harness and across harnesses, each managing its own lanes for a
@@ -158,7 +161,15 @@ Switching harnesses and models: a new coordinator on any harness keeps
 the same lane for the same work and attaches a new seat that continues
 from disk; external seats carry on after Herdr's live checks; resumable
 seats resume in their harness; in-process seats are lost and their
-attempts inventoried; a lane closes as superseded only when its scope
+attempts inventoried; a seat the new harness cannot reach (lanes that
+ran as Claude desktop sessions, the coordinator restarted in Codex) is
+judged by its own recorded heartbeat and reports, since the shared file
+is the channel: fresh, it is left running and its reports read with no
+duplicate writer on its worktree; silent past the heartbeat timeout,
+the recovery inventory runs, `seat_detached` is recorded and a new seat
+in the current harness continues from the task record, branch and
+worktree in its own attempt, and the old seat on return finds the lane
+adopted and stops; a lane closes as superseded only when its scope
 changes, its state cannot be recovered or the operator restarts it;
 review independence is judged against the work's author, not the
 coordinator; native task lists stay private aids.
