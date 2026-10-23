@@ -145,8 +145,11 @@ reason and keeps its live identity checks. The recovery inventory
 Timing: `check interval` (default 10 minutes) and `heartbeat timeout`
 (default 30 minutes) are configurable advisory defaults, the timeout
 longer than the interval because one long command refreshes no
-heartbeat; every hook firing and every `codeflow` command refreshes the
-caller's status file; expiry means contact overdue, never death;
+heartbeat; the caller's status file is refreshed by every bound
+mutating operation and by the turn-end check of a bound session, never
+by a read-only surface (`follow list`, `coord status`, the session-start
+report), and an unbound observer reads only and gets no heartbeat;
+expiry means contact overdue, never death;
 takeover is only by explicit `adopt`, and a returning session that
 finds its role or lane adopted stops and says so.
 
