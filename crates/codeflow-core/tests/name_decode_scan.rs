@@ -719,17 +719,17 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-422: git prints commit ids, which are ASCII hex; nothing is replaced.
     (
         "codeflow-core/src/workgraph/readiness.rs",
-        "record_history",
+        "first_parent_record_changes",
         "from_utf8_lossy",
         1,
         "format-contract",
     ),
-    // TSK-422: A tree entry name compared with a record's ASCII file name (`TSK-NNN.md`, `project-management`); a name that is not UTF-8 is never one of them.
+    // TSK-422: An epic folder name joined into a record path the reader's layout accepts; a name that is not UTF-8 is never an epic folder.
     (
         "codeflow-core/src/workgraph/readiness.rs",
-        "record_path",
+        "task_record_at",
         "name",
-        2,
+        1,
         "format-contract",
     ),
 ];
@@ -5822,10 +5822,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // TSK-422: git log prints one line of commit ids per commit that changed the record.
+    // TSK-422: git log prints one line of commit ids per first-parent commit that changed a record.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "record_history",
+        "first_parent_record_changes",
         "lines",
         1,
         "format-contract",
@@ -5833,30 +5833,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-422: A record that cannot be read at a commit does not hold the completion there; the completion found is still bound by the CI judge, which refuses on its own.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "record_at",
+        "task_record_at",
         "obtain-absent:find_blob",
         1,
         "unproven",
     ),
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "record_at",
+        "task_record_at",
         "obtain-absent:from_str",
         1,
         "unproven",
     ),
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "record_at",
+        "task_record_at",
         "obtain-absent:from_utf8",
         1,
         "unproven",
     ),
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "record_at",
+        "task_record_at",
         "obtain-absent:get_path",
-        1,
+        2,
         "unproven",
     ),
 ];

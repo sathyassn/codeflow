@@ -220,6 +220,8 @@ pub(crate) struct Record {
     /// structural acceptance rules against its own criteria, the block's
     /// `reviewed` commit; its binding is judged separately.
     pub(crate) reviewed: Option<String>,
+    /// The text of the record's one active acceptance block, valid or not.
+    pub(crate) acceptance: Option<String>,
     pub(crate) kind: RecordKind,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -3013,6 +3015,7 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
         id,
         uid: string(&data, "uid"),
         reviewed,
+        acceptance: active_block_text(content),
         kind,
         status,
         epic_id: string(&data, "epic_id"),
@@ -3030,6 +3033,14 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
             Vec::new()
         },
     })
+}
+
+/// The text of the record's one active acceptance block.
+fn active_block_text(content: &str) -> Option<String> {
+    let blocks = super::record_text::acceptance_blocks(content);
+    let mut active = blocks.iter().filter(|block| !block.is_superseded());
+    let block = active.next()?;
+    active.next().is_none().then(|| block.inner.clone())
 }
 
 /// The `reviewed` commit of the record's one active acceptance block, when

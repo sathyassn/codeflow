@@ -2111,3 +2111,246 @@ fn a_bare_target_never_follows_a_changed_upstream() {
     ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
     assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
 }
+
+// ---------------------------------------------------------------------------
+// Review round 5: the completion lookup redesigned from four rules (see
+// target/build-TSK-422.md). Each case failed at c699f5789.
+// ---------------------------------------------------------------------------
+
+/// U1: after the target reopens the task and changes its work, a merge of a
+/// branch that completed it earlier with the old review is stale: a reopen
+/// on the first-parent line between the review and the merge voids it.
+#[test]
+fn a_stale_completion_merged_after_a_reopen_stays_open() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("current proof", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+    let rel = "project-management/tasks/TSK-001.md";
+    let completed = std::fs::read_to_string(f.root.join(rel)).unwrap();
+    let reviewed = git(&f.root, &["rev-parse", "task/TSK-001-landing~1"]);
+    // A second branch from the old review completes it again.
+    git(
+        &f.root,
+        &["checkout", "-qb", "task/TSK-001-stale", &reviewed],
+    );
+    write(&f.root, rel, &completed);
+    git(
+        &f.root,
+        &[
+            "commit",
+            "-qam",
+            "docs(tasks): complete again with the old review",
+        ],
+    );
+    git(&f.root, &["checkout", "-q", "main"]);
+    // The target reopens the task and changes its work.
+    let reopened = completed
+        .replacen("status: complete", "status: todo", 1)
+        .replacen(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: the work changed\n",
+            1,
+        );
+    write(&f.root, rel, &reopened);
+    write(
+        &f.root,
+        "src/TSK-001.txt",
+        "UNREVIEWED replacement implementation\n",
+    );
+    git(
+        &f.root,
+        &["commit", "-qam", "fix: reopen and change the work"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(out.contains("FU-001 reopened"), "{out}");
+    // Merging the stale branch restores the old completion record.
+    let merged = Command::new("git")
+        .args([
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge the stale branch",
+            "task/TSK-001-stale",
+        ])
+        .current_dir(&f.root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    if !merged.status.success() {
+        write(&f.root, rel, &completed);
+        git(&f.root, &["add", "."]);
+        git(&f.root, &["commit", "-qm", "merge the stale branch"]);
+    }
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
+
+/// Resolution-edited record: a merge whose resolution writes the completion
+/// itself is judged as a direct transition at the merge, which cannot bind.
+#[test]
+fn a_merge_that_edits_the_record_is_no_proof() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("current proof", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    let rel = "project-management/tasks/TSK-001.md";
+    let old = std::fs::read_to_string(f.root.join(rel)).unwrap();
+    git(&f.root, &["branch", "task/stale-side"]);
+    write(
+        &f.root,
+        rel,
+        &old.replacen("status: complete", "status: todo", 1),
+    );
+    write(
+        &f.root,
+        "src/TSK-001.txt",
+        "UNREVIEWED replacement implementation\n",
+    );
+    git(&f.root, &["commit", "-qam", "fix: reopen and change work"]);
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    git(&f.root, &["checkout", "-q", "task/stale-side"]);
+    write(&f.root, "src/side.txt", "unrelated side change\n");
+    git(&f.root, &["add", "."]);
+    git(&f.root, &["commit", "-qm", "feat: side work"]);
+    git(&f.root, &["checkout", "-q", "main"]);
+    git(
+        &f.root,
+        &["merge", "-q", "--no-ff", "--no-commit", "task/stale-side"],
+    );
+    write(&f.root, rel, &old);
+    git(&f.root, &["add", "."]);
+    git(
+        &f.root,
+        &["commit", "-qm", "docs: restore stale completion in merge"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
+
+/// U2: a file with the task's name outside the record layouts is never the
+/// record, so it supplies no completion history.
+#[test]
+fn a_same_named_file_outside_the_layouts_is_never_the_record() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args(
+            "only real completion counts",
+            &["--link", "fulfils:TSK-001"],
+        ),
+    ));
+    let reviewed = reviewed_work(&f.root, "TSK-001");
+    let old = accepted("TSK-001", "ship the cache warmer", &reviewed);
+    write(&f.root, "project-management/notes/TSK-001.md", &old);
+    git(&f.root, &["add", "."]);
+    git(
+        &f.root,
+        &["commit", "-qm", "docs: save proposed completion as notes"],
+    );
+    write(&f.root, "src/TSK-001.txt", "UNREVIEWED implementation\n");
+    write(&f.root, "project-management/tasks/TSK-001.md", &old);
+    git(&f.root, &["commit", "-qam", "feat: unreviewed completion"]);
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
+
+/// U3: moving a completed record between supported layouts, byte for byte,
+/// is no transition; the item stays closed.
+#[test]
+fn moving_a_completed_record_keeps_its_completion() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("move keeps identity", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+    let from = f.root.join("project-management/tasks/TSK-001.md");
+    let to = f
+        .root
+        .join("project-management/epics/EPC-001/tasks/TSK-001.md");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::rename(from, to).unwrap();
+    git(&f.root, &["add", "-A"]);
+    git(
+        &f.root,
+        &["commit", "-qm", "docs: relocate record without changing it"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
+}
+
+/// A changed acceptance block while complete is a new transition: new
+/// criteria and results under the old review never bind.
+#[test]
+fn a_changed_acceptance_block_under_the_old_review_reopens() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("current acceptance", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    let rel = "project-management/tasks/TSK-001.md";
+    let old = std::fs::read_to_string(f.root.join(rel)).unwrap();
+    let changed = old
+        .replace("(journey)\n", "(journey)\n- AC-2 The command shall implement an unreviewed second feature.\n")
+        .replace(
+            "AC-1: verified | the fixture ran the command\n",
+            "AC-1: verified | the fixture ran the command\n    AC-2: verified | unreviewed assertion\n",
+        );
+    write(&f.root, rel, &changed);
+    git(
+        &f.root,
+        &[
+            "commit",
+            "-qam",
+            "docs: add unreviewed criterion and acceptance result",
+        ],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(out.contains("FU-001 reopened"), "{out}");
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
