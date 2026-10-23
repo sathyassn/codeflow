@@ -111,20 +111,46 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   `crates/codeflow-present`;
   `scaffold` = `assets/` (base scaffold with its test-config templates, and
   the docs-portal starter); `docs` = `docs/`.
-- **Rust gates:** before every push, `cargo fmt --all -- --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`,
-  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted
-  tests (`cargo test -p <crate> --test <name>`; for a `crates/**` change
-  `codeflow test --mode essential`, which owes every empty-`narrow` target
-  including `rust-workspace`; for a `docs/**` change `codeflow test --only
-  docs-portal` on the default full mode, whose figure fidelity check an
-  essential run also makes; that portal check refuses until the files it
-  reads, `docs/`, its figures, config and published records, match HEAD, so
-  commit those edits first) and `codeflow test --mode quick`; the pre-push
-  hook's quick run is that evidence when it covers the same tree. The full
-  gate runs on the landing candidate (workspace lints: clippy all = deny,
-  pedantic = warn). Edition 2021, workspace-managed dependency versions in
-  the root `Cargo.toml`.
+- **Rust gates and builder evidence:**
+  - Before every push: `cargo fmt --all -- --check`, `cargo clippy
+    --workspace --all-targets -- -D warnings`, `RUSTDOCFLAGS="-D warnings"
+    cargo doc --workspace --no-deps`, targeted tests (`cargo test -p <crate>
+    --test <name>`) and `codeflow test --mode quick`. The pre-push hook's
+    quick run is that evidence when it covers the same tree.
+  - Builders do not run routine whole essential or full gates. A check that
+    exists only in a heavier mode runs as a targeted check, such as `codeflow
+    test --mode essential --only <target>` (`rust-workspace` is defined only
+    in essential). Measurement trials a task authorizes stay allowed.
+  - For a `docs/**` change run `codeflow test --only docs-portal` on the
+    default full mode, whose figure fidelity check an essential run also
+    makes. That portal check refuses until the files it reads, `docs/`, its
+    figures, config and published records, match HEAD, so commit those edits
+    first.
+  - The primary runs one full gate on each landing candidate. That gate does
+    not cover a target defined only in essential. Workspace lints: clippy all
+    = deny, pedantic = warn. Edition 2021, workspace-managed dependency
+    versions in the root `Cargo.toml`.
+- **Hosted green before the next landing.** An ordinary landing on an
+  integration line waits until the line's current tip has green hosted
+  "codeflow gates" and "windows" verdicts.
+  - Recovery exception: while the tip is red or lacks evidence, the only
+    landings allowed are the repair of the failure and work needed to produce
+    the evidence, such as a workflow fix without which the jobs cannot run.
+    Such a fix does not skip, weaken or remove the failing check, and it
+    still takes its own review and its landing candidate's full gate. After
+    such a landing, ordinary landings wait for green verdicts on the new tip.
+  - Pending (a run still in progress) is not green: wait for it.
+  - Cancelled, skipped and missing (no run for the tip) are not green: start
+    or rerun the run. A skip counts only when it is a reuse that names a
+    green run (TSK-359).
+  - Stale (a green verdict for an earlier tip) is not evidence for the
+    current tip.
+  - A failure shown to come from runner infrastructure is rerun, never read
+    as a pass. A failure shown to be unrelated to the next landing still
+    blocks it until repaired, under the recovery exception.
+  - Once TSK-358 lands, a pull request into a line also needs its own green
+    "codeflow gates" and "windows" verdicts at the exact head that lands;
+    TSK-358 updates this sentence when it lands.
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
   (or `PATH`) at the worktree's `target/debug/codeflow`; never build inside

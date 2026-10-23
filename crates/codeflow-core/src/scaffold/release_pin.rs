@@ -30,7 +30,7 @@ use regex::Regex;
 
 use super::hash::sha256_hex;
 use super::state::{read_beneath_root, state_text, write_record, PROJECT_TOML};
-use super::version::is_older;
+use super::version::{is_older, is_parseable};
 
 /// The release triples `CodeFlow` publishes for macOS and Linux, the ones the
 /// CI installers download, in the order the table lists them.
@@ -337,15 +337,6 @@ fn is_digest(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// A version the installers read from `scaffold_version`: a leading digit,
-/// then digits, letters, `.`, `+` and `-` only.
-fn is_version(text: &str) -> bool {
-    text.starts_with(|c: char| c.is_ascii_digit())
-        && text
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
-}
-
 /// The release URL base: `CODEFLOW_RELEASE_URL` when set, else GitHub.
 ///
 /// # Errors
@@ -400,9 +391,9 @@ pub fn pin_release(
     base: &str,
     fetch: &dyn Fn(&str) -> Result<Vec<u8>, String>,
 ) -> Result<PinReport, String> {
-    if !is_version(version) {
+    if !is_parseable(version) {
         return Err(format!(
-            "`{version}` is not a codeflow version: it starts with a digit and holds only digits, letters, `.`, `+` and `-`"
+            "`{version}` is not a codeflow version: it must read as MAJOR.MINOR.PATCH, with an optional -prerelease and +build; nothing was downloaded or written"
         ));
     }
     let text = read_beneath_root(root, PROJECT_TOML)
@@ -415,10 +406,18 @@ pub fn pin_release(
         .and_then(toml::Value::as_str)
         .map(str::to_string);
     if let Some(previous) = previous.as_deref() {
-        if is_older(version, previous) {
-            return Err(format!(
-                "{version} is older than the pinned {previous}; the pin only rises"
-            ));
+        match is_older(version, previous) {
+            Ok(true) => {
+                return Err(format!(
+                    "{version} is older than the pinned {previous}; the pin only rises"
+                ))
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return Err(format!(
+                    "scaffold_version {error} in {PROJECT_TOML}, so it cannot be compared with {version}; correct it and retry; nothing was downloaded or written"
+                ))
+            }
         }
     }
 
@@ -596,6 +595,66 @@ mod tests {
             std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap(),
             before
         );
+    }
+
+    #[test]
+    fn refuses_a_version_the_strict_parser_rejects_before_fetching() {
+        let dir = project("1.2.3");
+        let before = std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap();
+        let fetched = std::cell::Cell::new(0);
+        let fetch = |_: &str| {
+            fetched.set(fetched.get() + 1);
+            Err("unreachable".to_string())
+        };
+        for version in ["3.2", "10.0", "3.2.0x", "1.2.3-", "01.2.3"] {
+            let error = pin_release(dir.path(), version, "base", &fetch).unwrap_err();
+            assert!(
+                error.contains(&format!("`{version}` is not a codeflow version")),
+                "{error}"
+            );
+        }
+        assert_eq!(fetched.get(), 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn an_unparseable_pinned_version_is_named_not_compared() {
+        // As strings "9.9.9" is not older than "10.0", so a text order would
+        // accept a pin that numerically lowers; the pinned value is named
+        // instead and nothing is fetched.
+        let dir = project("10.0");
+        let before = std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap();
+        let files = release("9.9.9");
+        let error = pin_release(dir.path(), "9.9.9", "base", &served(&files)).unwrap_err();
+        assert!(
+            error.contains("\"10.0\" is not a parseable version"),
+            "{error}"
+        );
+        assert!(
+            error.contains("nothing was downloaded or written"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(PROJECT_TOML)).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn prerelease_and_build_pins_compare_by_the_parser() {
+        let dir = project("1.3.0-rc.2");
+        let files = release("1.3.0-rc.10");
+        assert!(pin_release(dir.path(), "1.3.0-rc.10", "base", &served(&files)).is_ok());
+        let dir = project("1.3.0+build.9");
+        let files = release("1.3.0+build.1");
+        assert!(pin_release(dir.path(), "1.3.0+build.1", "base", &served(&files)).is_ok());
+        let dir = project("1.3.0");
+        let files = release("1.3.0-rc.1");
+        let error = pin_release(dir.path(), "1.3.0-rc.1", "base", &served(&files)).unwrap_err();
+        assert!(error.contains("older than the pinned 1.3.0"), "{error}");
     }
 
     #[test]
