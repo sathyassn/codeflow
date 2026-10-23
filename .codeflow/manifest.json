@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "c1d20cc282e052028677b1e7265c2d3528ef075b61f0d156bf4d6928ca28307a",
+      "sha256": "dba8753a6d80f303f40d09a5f5f002720ac876c60186b8a9c24900be31f73ee5",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -1253,7 +1253,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "c1d20cc282e052028677b1e7265c2d3528ef075b61f0d156bf4d6928ca28307a",
+      "sha256": "dba8753a6d80f303f40d09a5f5f002720ac876c60186b8a9c24900be31f73ee5",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
@@ -1829,13 +1829,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "cd846d8099a88f7ed35039bb3190687f5ca54fdbfc0fde32eb9a83f80cd8399b",
+      "sha256": "a1bea7f6c311dc2ca36c6ae2798f27fd928b3cdfec4bc58b6e0abf75fe00e02d",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "9356bd8252eca6e0e7e4f47ebe77c742158382ba95a4a396ed90e736b3298205",
+      "sha256": "cde3514996eb37cb7c88d233f3a4ecff2c65c8e3efd829c7c9d98d0fad76b7cf",
       "exec": false
     },
     "docs/architecture.md": {
