@@ -465,8 +465,16 @@ fn fold_clean(paths: &Paths, events: &mut fs::File) -> Result<Ledger, CoordError
 /// events against the fresh state, judge each by the schema and the
 /// transition rules, append them in one write and sync before returning.
 ///
-/// When the first draft's idempotency key is already recorded, nothing is
-/// written and [`Committed::duplicate_of`] names the earlier sequence.
+/// Idempotency is per event. When the first draft carries a key, every event
+/// of the operation gets its own (`key#0`, `key#1`, ... for several), and
+/// each is judged alone: an event whose key is recorded with the same
+/// content is skipped, one recorded with other content or by another actor
+/// is a [`CoordError::KeyConflict`], and the rest are written. A retry must
+/// therefore build the same events in the same order; a retry after an
+/// interrupted operation writes exactly the missing ones. A key recorded
+/// before its item was purged is acknowledged without writing anything, so
+/// a stale retry cannot restore purged text. When nothing is left to write,
+/// [`Committed::duplicate_of`] names the first recorded sequence.
 ///
 /// # Errors
 ///
@@ -497,6 +505,11 @@ where
             kept.push(draft);
             continue;
         };
+        let purged = super::transition::purged_key(key);
+        if let Some((sequence, _)) = ledger.keys.get(&purged) {
+            duplicate_of.get_or_insert(*sequence);
+            continue;
+        }
         match ledger.keys.get(key) {
             None => kept.push(draft),
             Some((sequence, digest)) => {
@@ -706,7 +719,8 @@ pub fn liveness(paths: &Paths) -> Vec<Liveness> {
 pub struct Purged {
     /// Events whose free text was replaced.
     pub lines: usize,
-    /// Quarantine files that held the item and were removed.
+    /// Quarantined lines of the item that were removed; other items' lines
+    /// stay.
     pub quarantine_removed: usize,
     /// The purge event's sequence.
     pub sequence: u64,
@@ -808,21 +822,38 @@ pub fn purge(
         if value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject) {
             let added =
                 value.get("event").and_then(serde_json::Value::as_str) == Some("item_added");
-            let sequence = value.get("sequence").cloned().unwrap_or_default();
             if let Some(object) = value.as_object_mut() {
                 if object.contains_key("comment") {
                     object.insert("comment".into(), "[purged]".into());
                 }
-                if object.contains_key("idempotency_key") {
-                    object.insert(
-                        "idempotency_key".into(),
-                        format!("purged:{subject}:{sequence}").into(),
-                    );
+                // Identity stays, as a digest: a retry of the purged
+                // operation is still recognised, and two purged items stay
+                // distinct, without any of their text.
+                if let Some(key) = object
+                    .get("idempotency_key")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                {
+                    let opaque = if key.starts_with(super::transition::PURGED_KEY) {
+                        key
+                    } else {
+                        super::transition::purged_key(&key)
+                    };
+                    object.insert("idempotency_key".into(), opaque.into());
                 }
                 if let Some(data) = object.get_mut("data") {
+                    let reference = data
+                        .get("source_reference")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
                     purge_value(data, added);
-                    if let Some(reference) = data.get_mut("source_reference") {
-                        *reference = format!("[purged {subject}]").into();
+                    if let Some(reference) = reference {
+                        let opaque = if reference.starts_with(super::transition::PURGED_REFERENCE) {
+                            reference
+                        } else {
+                            super::transition::purged_reference(&reference)
+                        };
+                        data["source_reference"] = opaque.into();
                     }
                 }
             }
@@ -867,7 +898,29 @@ pub fn purge(
     })
 }
 
-/// Remove every quarantined fragment that names the subject.
+/// Whether one quarantined line belongs to `subject`: by its parsed
+/// `subject_id` where it parses, otherwise by a `subject_id` field naming it
+/// in any spacing (a torn or damaged line holds one event).
+fn names_subject(line: &str, subject: &str) -> bool {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+        return value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject);
+    }
+    let Some(position) = line.find("\"subject_id\"") else {
+        return false;
+    };
+    let rest = line[position + "\"subject_id\"".len()..].trim_start();
+    rest.strip_prefix(':')
+        .map(str::trim_start)
+        .and_then(|rest| rest.strip_prefix('"'))
+        .is_some_and(|rest| {
+            rest.strip_prefix(subject)
+                .is_some_and(|after| after.starts_with('"'))
+        })
+}
+
+/// Remove the subject's lines from every quarantined fragment, keeping every
+/// other item's lines; a fragment left empty is removed. Returns how many
+/// lines were removed.
 fn purge_quarantine(paths: &Paths, subject: &str) -> Result<usize, CoordError> {
     if crate::absence::proven_absent(&paths.quarantine)
         .map_err(|error| unwritten(&paths.quarantine, &error))?
@@ -876,19 +929,32 @@ fn purge_quarantine(paths: &Paths, subject: &str) -> Result<usize, CoordError> {
     }
     let entries =
         fs::read_dir(&paths.quarantine).map_err(|error| unwritten(&paths.quarantine, &error))?;
-    let needle = format!("\"subject_id\":\"{subject}\"");
     let mut removed = 0;
     for entry in entries {
         let path = entry
             .map_err(|error| unwritten(&paths.quarantine, &error))?
             .path();
         let bytes = fs::read(&path).map_err(|error| unwritten(&path, &error))?;
-        if bytes
-            .windows(needle.len())
-            .any(|window| window == needle.as_bytes())
-        {
+        // Bytes, line by line: other items' lines are kept exactly as they
+        // were, whatever they hold.
+        let mut kept: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut dropped = 0;
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let body = line.strip_suffix(b"\n").unwrap_or(line);
+            if std::str::from_utf8(body).is_ok_and(|text| names_subject(text, subject)) {
+                dropped += 1;
+            } else {
+                kept.extend_from_slice(line);
+            }
+        }
+        if dropped == 0 {
+            continue;
+        }
+        removed += dropped;
+        if kept.iter().all(u8::is_ascii_whitespace) {
             fs::remove_file(&path).map_err(|error| unwritten(&path, &error))?;
-            removed += 1;
+        } else {
+            durable_write(&path, &kept)?;
         }
     }
     if removed > 0 {

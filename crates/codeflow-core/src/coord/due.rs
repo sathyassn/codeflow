@@ -55,6 +55,11 @@ pub trait Observer {
     fn repository(&self) -> Option<String> {
         None
     }
+    /// Whether a pull request's base (a bare branch name) is a landing line
+    /// this project recognises.
+    fn landing_base(&mut self, base: &str) -> bool {
+        matches!(base, "main" | "master")
+    }
 }
 
 /// The observer over a checkout: records on target tips, git, and, when
@@ -68,6 +73,7 @@ pub struct RepoObserver {
     tasks: Option<BTreeMap<String, TaskView>>,
     pulls: BTreeMap<(String, u64), Option<PullView>>,
     branches: BTreeMap<(String, String), Option<bool>>,
+    epics: Option<std::collections::BTreeSet<String>>,
 }
 
 impl RepoObserver {
@@ -83,6 +89,7 @@ impl RepoObserver {
             tasks: None,
             pulls: BTreeMap::new(),
             branches: BTreeMap::new(),
+            epics: None,
         }
     }
 }
@@ -130,10 +137,17 @@ impl Observer for RepoObserver {
                 command
                     .current_dir(&root)
                     .env("GIT_TERMINAL_PROMPT", "0")
+                    // Only https and ssh transports, and the stock upload
+                    // pack: a remote's configured command is never run.
                     .args([
                         "-c",
-                        "protocol.ext.allow=never",
+                        "protocol.allow=never",
+                        "-c",
+                        "protocol.https.allow=always",
+                        "-c",
+                        "protocol.ssh.allow=always",
                         "ls-remote",
+                        "--upload-pack=git-upload-pack",
                         "--heads",
                         "--",
                         remote,
@@ -168,37 +182,68 @@ impl Observer for RepoObserver {
     fn repository(&self) -> Option<String> {
         Some(self.repository.clone())
     }
+
+    fn landing_base(&mut self, base: &str) -> bool {
+        let root = self.root.clone();
+        let epics = self.epics.get_or_insert_with(|| {
+            crate::workgraph::readiness::landing_epics(&root).unwrap_or_default()
+        });
+        crate::workgraph::readiness::is_recognised_landing(base, epics)
+    }
 }
 
 /// How long one network observation may take before it counts as unknown.
 pub const OBSERVATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// Run `command` with its output captured, killing it at `limit`; `None`
-/// when it cannot start or does not finish in time.
+/// The most output one observation keeps from each stream.
+const OUTPUT_LIMIT: u64 = 1 << 20;
+
+/// Run `command` with its output captured, everything bounded by `limit`:
+/// the process, its output being drained, and any descendant that inherited
+/// its pipes. On unix the command runs in its own process group, which is
+/// killed at the deadline; output beyond [`OUTPUT_LIMIT`] is dropped. `None`
+/// when it cannot start, fails to read, or does not finish in time.
 fn bounded(
     mut command: std::process::Command,
     limit: std::time::Duration,
 ) -> Option<std::process::Output> {
     use std::process::Stdio;
+    use std::sync::mpsc;
+    let deadline = std::time::Instant::now() + limit;
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let mut stderr = child.stderr.take()?;
-    let readers = (
+    let reader = |stream: Box<dyn std::io::Read + Send>| {
+        let (send, receive) = mpsc::channel();
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
-            std::io::Read::read_to_end(&mut stdout, &mut bytes).map(|_| bytes)
-        }),
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            std::io::Read::read_to_end(&mut stderr, &mut bytes).map(|_| bytes)
-        }),
-    );
-    let deadline = std::time::Instant::now() + limit;
+            let read = std::io::Read::read_to_end(
+                &mut std::io::Read::take(stream, OUTPUT_LIMIT),
+                &mut bytes,
+            );
+            let _ = send.send(read.map(|_| bytes));
+        });
+        receive
+    };
+    let stdout = reader(Box::new(child.stdout.take()?));
+    let stderr = reader(Box::new(child.stderr.take()?));
+    let stop = |child: &mut std::process::Child| {
+        #[cfg(unix)]
+        if let Ok(group) = i32::try_from(child.id()) {
+            // SAFETY: kill has no memory preconditions; a negative pid names
+            // the process group this command was started in.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -206,18 +251,34 @@ fn bounded(
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop(&mut child);
                 return None;
             }
         }
     };
+    let collect = |receive: &mpsc::Receiver<std::io::Result<Vec<u8>>>| {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        receive.recv_timeout(left).ok()?.ok()
+    };
+    // A descendant holding the pipes past the deadline makes the observation
+    // unknown and is killed with the group; a failed read is unknown too,
+    // never an empty answer (which `ls-remote` would mean as "deleted").
+    let (Some(out), Some(err)) = (collect(&stdout), collect(&stderr)) else {
+        stop(&mut child);
+        return None;
+    };
+    #[cfg(unix)]
+    if let Ok(group) = i32::try_from(child.id()) {
+        // SAFETY: as above; the group's leader has exited, so this only
+        // reaches descendants left behind.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+    }
     Some(std::process::Output {
         status,
-        // A failed read makes the whole observation unknown, never an empty
-        // answer (which `ls-remote` would mean as "deleted").
-        stdout: readers.0.join().ok()?.ok()?,
-        stderr: readers.1.join().ok()?.ok()?,
+        stdout: out,
+        stderr: err,
     })
 }
 
@@ -608,7 +669,7 @@ fn judge(link: &Link, observer: &mut dyn Observer) -> Judged {
             if view.state != "merged" {
                 return Judged::Unmet(format!("PR#{number} is {}", view.state));
             }
-            if !crate::workgraph::readiness::is_landing_target(&view.base) {
+            if !observer.landing_base(&view.base) {
                 return Judged::Unmet(format!(
                     "PR#{number} merged into a work branch, not a landing line"
                 ));
@@ -673,26 +734,52 @@ fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
 
-/// Why a machine-verified closure no longer holds: one of its `fulfils`
-/// conditions is now definitely unmet (a task reverted or replaced, a pull
-/// request reopened, a commit gone from the target, a branch recreated). An
+/// Why a machine-verified closure no longer holds: any part of the
+/// condition that authorized it is now definitely unmet. That is a `fulfils`
+/// condition (a task reverted, replaced or no longer accepted, a pull
+/// request reopened, a commit gone from the target, a branch recreated), a
+/// prerequisite link, or a `waits_on` follow-up or lane reopened. An
 /// observation that cannot be made is not invalidation.
-pub fn reverted(item: &Item, observer: &mut dyn Observer) -> Option<String> {
+pub fn reverted(item: &Item, ledger: &Ledger, observer: &mut dyn Observer) -> Option<String> {
     let ItemState::Closed(evidence) = &item.state else {
         return None;
     };
     if evidence.kind != EvidenceKind::MachineVerified {
         return None;
     }
-    for link in &item.record.links {
-        if link.kind != LinkKind::Fulfils {
-            continue;
+    let local_open = |id: &str| -> Option<String> {
+        if super::actor::is_lane_id(id) {
+            ledger
+                .lanes
+                .get(id)
+                .filter(|lane| lane.closed.is_none())
+                .map(|_| format!("{id} is open again"))
+        } else {
+            ledger
+                .items
+                .get(id)
+                .filter(|other| other.state == ItemState::Open)
+                .map(|_| format!("{id} is open again"))
         }
-        if let Judged::Unmet(reason) = judge(link, observer) {
+    };
+    for link in &item.record.links {
+        let unmet = match (&link.kind, &link.target) {
+            (LinkKind::Context, _) | (_, Target::Time { .. }) => None,
+            (_, Target::FollowUp { id } | Target::Lane { id }) => local_open(id),
+            _ => match judge(link, observer) {
+                Judged::Unmet(reason) => Some(reason),
+                Judged::Met(_) | Judged::Unknown => None,
+            },
+        };
+        if let Some(reason) = unmet {
             return Some(format!("the proof no longer holds: {reason}"));
         }
     }
-    None
+    item.record
+        .waits_on
+        .iter()
+        .find_map(|id| local_open(id))
+        .map(|reason| format!("the proof no longer holds: {reason}"))
 }
 
 /// The schedule of a check: the requested time, capped for an item that

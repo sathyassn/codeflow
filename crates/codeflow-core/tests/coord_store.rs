@@ -983,12 +983,12 @@ fn only_a_fulfils_link_done_on_the_target_closes_and_a_revert_reopens() {
     assert!(proof.source.contains("origin/main"));
     act(&paths, &lead, &item.id, Data::ItemClosed(proof.clone())).unwrap();
     let closed = ledger(&paths).ledger.items[&item.id].clone();
-    assert!(due::reverted(&closed, &mut fake).is_none());
+    assert!(due::reverted(&closed, &ledger(&paths).ledger, &mut fake).is_none());
     // The task is reverted on the target: the proof no longer holds; the
     // reopen keeps the old proof in history.
     fake.tasks
         .insert("TSK-001".into(), task_view("todo", false, "d"));
-    let reason = due::reverted(&closed, &mut fake).unwrap();
+    let reason = due::reverted(&closed, &ledger(&paths).ledger, &mut fake).unwrap();
     act(
         &paths,
         &lead,
@@ -1309,11 +1309,11 @@ fn every_invalidated_machine_proof_reopens_and_unknown_does_not() {
     let closed = ledger(&paths).ledger.items[&branch.id].clone();
     fake.branch = None;
     assert!(
-        due::reverted(&closed, &mut fake).is_none(),
+        due::reverted(&closed, &ledger(&paths).ledger, &mut fake).is_none(),
         "unknown is not invalidation"
     );
     fake.branch = Some(false);
-    let reason = due::reverted(&closed, &mut fake).unwrap();
+    let reason = due::reverted(&closed, &ledger(&paths).ledger, &mut fake).unwrap();
     assert!(reason.contains("present"), "{reason}");
     // A pull request reopened after its merge, and one merged into a work
     // branch, are unmet.
@@ -1344,7 +1344,7 @@ fn every_invalidated_machine_proof_reopens_and_unknown_does_not() {
         base: "main".into(),
         merge_commit: None,
     });
-    assert!(due::reverted(&closed, &mut fake).is_some());
+    assert!(due::reverted(&closed, &ledger(&paths).ledger, &mut fake).is_some());
     fake.pull = Some(PullView {
         state: "merged".into(),
         checks: "passed".into(),
@@ -1353,7 +1353,7 @@ fn every_invalidated_machine_proof_reopens_and_unknown_does_not() {
     });
     let reopened = ledger(&paths).ledger.items[&pr.id].clone();
     assert!(
-        due::reverted(&reopened, &mut fake).is_some(),
+        due::reverted(&reopened, &ledger(&paths).ledger, &mut fake).is_some(),
         "a work-branch merge is no proof"
     );
 }
@@ -1549,6 +1549,13 @@ fn a_work_branch_named_as_target_is_never_a_target() {
     .unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "docs: plan"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
     git(root, &["checkout", "-qb", "fix/TSK-001-fixture"]);
     std::fs::write(
         root.join("project-management/tasks/TSK-001.md"),
@@ -1565,6 +1572,122 @@ fn a_work_branch_named_as_target_is_never_a_target() {
         "fix/TSK-001-fixture"
     ));
     assert!(codeflow_core::workgraph::readiness::is_landing_target(
-        "origin/integration/EPC-025-x"
+        "integration/EPC-025-x"
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Review round 2 (Codex R2, R3, R7); each failed at 03bc5a13f.
+// ---------------------------------------------------------------------------
+
+/// Codex R2: a pull request merged into `fix/main` is not merged into a
+/// landing line.
+#[test]
+fn a_pull_request_into_a_feature_branch_named_like_main_is_no_proof() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let mut fake = Fake {
+        now: coord::now_secs(),
+        ..Fake::default()
+    };
+    fake.pull = Some(PullView {
+        state: "merged".into(),
+        checks: "passed".into(),
+        base: "fix/main".into(),
+        merge_commit: Some("a".repeat(40)),
+    });
+    let item = observed_item(
+        &paths,
+        &lead,
+        linked(
+            LinkKind::Fulfils,
+            Target::PullRequest {
+                number: 1,
+                repository: "local".into(),
+            },
+        ),
+        &mut fake,
+    );
+    assert!(due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).is_none());
+    assert!(!codeflow_core::workgraph::readiness::is_landing_target(
+        "fix/main"
+    ));
+}
+
+/// Codex R3: reopening a follow-up the closure waited on reopens the
+/// dependent closure.
+#[test]
+fn reopening_a_required_follow_up_reopens_the_dependent_closure() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let mut fake = Fake {
+        now: coord::now_secs(),
+        branch: Some(true),
+        ..Fake::default()
+    };
+    let prior = add(
+        &paths,
+        &lead,
+        item("prior condition", "WS-001", "coordinator"),
+    )
+    .unwrap();
+    act(&paths, &lead, &prior, Data::ItemClosed(asserted())).unwrap();
+    let mut record = linked(
+        LinkKind::Fulfils,
+        Target::Branch {
+            name: "absent".into(),
+            remote: "origin".into(),
+            repository: "local".into(),
+        },
+    );
+    record.waits_on = vec![prior.clone()];
+    let dependent = observed_item(&paths, &lead, record, &mut fake);
+    let proof = due::fulfilment(&dependent, &ledger(&paths).ledger, &mut fake).unwrap();
+    act(&paths, &lead, &dependent.id, Data::ItemClosed(proof)).unwrap();
+    let closed = ledger(&paths).ledger.items[&dependent.id].clone();
+    assert!(due::reverted(&closed, &ledger(&paths).ledger, &mut fake).is_none());
+    act(
+        &paths,
+        &lead,
+        &prior,
+        Data::ItemReopened(codeflow_core::coord::schema::Reason {
+            reason: "invalidated".into(),
+        }),
+    )
+    .unwrap();
+    let reason = due::reverted(&closed, &ledger(&paths).ledger, &mut fake).unwrap();
+    assert!(
+        reason.contains(&format!("{prior} is open again")),
+        "{reason}"
+    );
+}
+
+/// Codex R7: a key reused for a check with another observation is refused;
+/// the user's observation is content, not a recomputed field.
+#[test]
+fn a_reused_key_with_another_observation_is_refused() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let id = add(&paths, &lead, item("watch result", "WS-001", "coordinator")).unwrap();
+    let next = coord::format_time(coord::now_secs() + 300);
+    let check = |observed: &str| Draft {
+        idempotency_key: Some("check-key".into()),
+        ..Draft::new(
+            SubjectId::Given(id.clone()),
+            Data::ItemChecked(codeflow_core::coord::schema::ItemCheck {
+                observed: observed.into(),
+                next_check: next.clone(),
+                observations: vec![],
+                answer_source: None,
+            }),
+        )
+    };
+    store::commit(&paths, &lead, WAIT, |_| Ok(vec![check("passed")])).unwrap();
+    let error = store::commit(&paths, &lead, WAIT, |_| {
+        Ok(vec![check("FAILED; operator action required")])
+    })
+    .unwrap_err();
+    assert!(matches!(error, CoordError::KeyConflict(_)), "{error:?}");
+    let again = store::commit(&paths, &lead, WAIT, |_| Ok(vec![check("passed")])).unwrap();
+    assert!(again.duplicate_of.is_some());
 }

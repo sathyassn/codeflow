@@ -109,6 +109,21 @@ pub fn shown(value: &str) -> String {
     }
 }
 
+/// Whether a value holds a secret, judged on the value with every control
+/// and format character removed and on its percent-decoded form, so a
+/// planted control character cannot hide a token from the scan.
+#[must_use]
+pub fn secret_shaped(value: &str) -> bool {
+    let cleaned: String = value.chars().filter(|c| !refused_char(*c, false)).collect();
+    let decoded = percent_decoded(&cleaned);
+    std::iter::once(cleaned.as_str())
+        .chain(decoded.as_deref())
+        .any(|text| {
+            text.lines()
+                .any(|line| crate::hooks::scan::scan_line(line).is_some())
+        })
+}
+
 /// Replace every secret-shaped word of a message (split on spaces, quotes,
 /// backticks, brackets and commas) with `[redacted]`, so a diagnostic built
 /// from a parser's or the log's own text never carries one.
@@ -118,9 +133,7 @@ pub fn scrub(message: &str) -> String {
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {
         if !word.is_empty() {
-            let secret = check("word", word, usize::MAX, true)
-                .err()
-                .is_some_and(|reason| reason.contains("secret"));
+            let secret = secret_shaped(word);
             out.push_str(if secret { "[redacted]" } else { word });
             word.clear();
         }
@@ -237,6 +250,9 @@ mod tests {
         );
         let url = format!("https://x:{token}@github.com/o/r");
         assert!(!scrub(&url).contains(&token));
+        // A control character before the token does not hide it.
+        let hidden = format!("unknown variant `\u{1b}{token}`");
+        assert!(!scrub(&hidden).contains(&token), "{}", scrub(&hidden).len());
     }
 
     #[test]

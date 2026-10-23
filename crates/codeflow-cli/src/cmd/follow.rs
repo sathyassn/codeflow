@@ -63,7 +63,8 @@ pub enum FollowCommand {
     /// keeping its ids, links and history. The holder or the operator.
     Purge(PurgeArgs),
     /// Move a damaged suffix of the log to quarantine so the ledger is
-    /// writable again. The operator only; nothing is deleted.
+    /// writable again. The operator only; nothing is deleted here (a later
+    /// purge removes only the purged item's lines from quarantine).
     Repair,
 }
 
@@ -762,7 +763,7 @@ fn check_cmd(
     for item in selected {
         let expected = Some(check.expect_revision.unwrap_or(item.revision));
         if item.state != ItemState::Open {
-            if let Some(reason) = due::reverted(item, &mut watcher) {
+            if let Some(reason) = due::reverted(item, ledger, &mut watcher) {
                 drafts.push(Draft {
                     subject: SubjectId::Given(item.id.clone()),
                     data: Data::ItemReopened(Reason { reason }),
@@ -859,7 +860,7 @@ fn purge_cmd(paths: &Paths, actor: &Actor, id: &str) -> Result<(), CoordError> {
     // Authorization is judged under the lock, inside the store.
     let purged = store::purge(paths, &actor.recorded_by, id, COMMAND_WAIT)?;
     println!(
-        "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} quarantined fragments removed; recorded as sequence {}",
+        "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} of its quarantined lines removed, other items' kept; recorded as sequence {}",
         purged.lines, purged.quarantine_removed, purged.sequence
     );
     Ok(())

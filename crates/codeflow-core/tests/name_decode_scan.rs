@@ -716,6 +716,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // TSK-422: git prints commit ids, which are ASCII hex; nothing is replaced.
+    (
+        "codeflow-core/src/workgraph/readiness.rs",
+        "landing_heads",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -5773,6 +5781,46 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "is_whitespace",
         1,
         "display",
+    ),
+    // TSK-422: A quarantined line is judged by its parsed subject; one that does not parse is matched by its subject_id field, and an unmatched line is kept.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "names_subject",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-422: JSON whitespace around a subject_id field of a quarantined line; the subject itself is compared exactly.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "names_subject",
+        "trim_start",
+        2,
+        "format-contract",
+    ),
+    // TSK-422: Free text scanned line by line for secrets; it decides only what is withheld.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "secret_shaped",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: The default target's epics name recognised landing lines; an unreadable tip recognises none, so nothing counts as landed.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "default_tip_epics",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-422: git log prints one line of commit ids per merge.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "landing_heads",
+        "lines",
+        1,
+        "format-contract",
     ),
 ];
 

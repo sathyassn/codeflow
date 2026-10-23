@@ -214,21 +214,48 @@ fn add_args<'a>(title: &'a str, link: &'a [&'a str]) -> Vec<&'a str> {
 /// Land TSK-001 on `main`: mark it complete there and push.
 /// A task record complete with an acceptance block that passes the
 /// acceptance rules, as a landed task's record is.
-fn accepted(id: &str, title: &str) -> String {
+fn accepted(id: &str, title: &str, reviewed: &str) -> String {
     format!(
         "{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {}\n  review: \"reviewed by the fixture\"\n  criteria:\n    AC-1: verified | the fixture ran the command\n  journey: verified | the fixture journey\n  not_verified: \"nothing\"\n  follow_ups: \"none: nothing left\"\n  verdict: approved\n```\n",
         task(id, title, "complete"),
-        "0".repeat(40)
+        reviewed
     )
 }
 
+/// The work of a task, reviewed: a commit on its branch in `dir`, whose id
+/// the completion's acceptance block names.
+fn reviewed_work(dir: &Path, id: &str) -> String {
+    write(dir, &format!("src/{id}.txt"), "the reviewed work\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "feat: the reviewed work"]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+/// Land a task as a pull request does: reviewed work and its bound
+/// completion on a task branch, merged into `main` and pushed.
 fn land(root: &Path, id: &str) {
+    let branch = format!("task/{id}-landing");
+    git(root, &["checkout", "-qb", &branch]);
+    let reviewed = reviewed_work(root, id);
+    // Only the status and the Closeout change after the review.
+    let path = root.join(format!("project-management/tasks/{id}.md"));
+    let record = std::fs::read_to_string(&path).unwrap();
+    let title = record
+        .lines()
+        .find_map(|line| line.strip_prefix("title: "))
+        .unwrap()
+        .to_string();
     write(
         root,
         &format!("project-management/tasks/{id}.md"),
-        &accepted(id, "landed"),
+        &accepted(id, &title, &reviewed),
     );
     git(root, &["commit", "-qam", "docs(tasks): complete the task"]);
+    git(root, &["checkout", "-q", "main"]);
+    git(
+        root,
+        &["merge", "-q", "--no-ff", "-m", "Merge the task", &branch],
+    );
     git(root, &["push", "-q", "origin", "main"]);
 }
 
@@ -857,10 +884,11 @@ fn journey_two_worktrees_two_actors_and_a_landing() {
     refused(&out, "only the holder");
     println!("journey: refused as expected: {}", text(&out).trim());
     // Completion on the feature branch closes nothing.
+    let reviewed = reviewed_work(&second, "TSK-001");
     write(
         &second,
         "project-management/tasks/TSK-001.md",
-        &accepted("TSK-001", "ship the cache warmer"),
+        &accepted("TSK-001", "ship the cache warmer", &reviewed),
     );
     git(
         &second,
@@ -984,16 +1012,33 @@ fn completion_without_acceptance_does_not_close() {
     assert!(!out.contains("closed"), "{out}");
 }
 
-/// Codex F3: a closure on a branch deletion reopens when the branch is
-/// recreated on the remote.
+/// Security F10 (round 2): a branch link is observed only over https or
+/// ssh with the stock upload pack. A local-path remote is never contacted,
+/// so its configured upload-pack command never runs and nothing closes.
+/// (A recreated branch reopening its closure is covered with an observer
+/// in `coord_store.rs`.)
+#[cfg(unix)]
 #[test]
-fn a_recreated_branch_reopens_its_closure() {
+fn a_local_transport_remote_is_never_run_or_trusted() {
     let f = fixture();
     let paths = bind(&f.root);
     let one = lane("LN-001", "s1");
     git(
         &f.root,
         &["push", "-q", "origin", "main:refs/heads/task/old"],
+    );
+    git(&f.root, &["push", "-q", "origin", "--delete", "task/old"]);
+    let marker = f.root.parent().unwrap().join("upload-pack-ran");
+    git(
+        &f.root,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!(
+                "sh -c 'touch {}; exec git-upload-pack \"$@\"' x",
+                marker.display()
+            ),
+        ],
     );
     ok(&cli(
         &f.root,
@@ -1005,21 +1050,8 @@ fn a_recreated_branch_reopens_its_closure() {
     ));
     let out = ok(&cli(&f.root, &one, &["follow", "check"]));
     assert!(!out.contains("closed"), "{out}");
-    git(&f.root, &["push", "-q", "origin", "--delete", "task/old"]);
-    let out = ok(&cli(&f.root, &one, &["follow", "check"]));
-    assert!(
-        out.contains("FU-001 closed on machine-verified evidence"),
-        "{out}"
-    );
-    git(
-        &f.root,
-        &["push", "-q", "origin", "main:refs/heads/task/old"],
-    );
-    let out = ok(&cli(&f.root, &one, &["follow", "check"]));
-    assert!(out.contains("FU-001 reopened"), "{out}");
-    let item = &folded(&paths).items["FU-001"];
-    assert_eq!(item.state, ItemState::Open);
-    assert_eq!(item.proofs.len(), 1, "the old proof is kept");
+    assert!(!marker.exists(), "the remote's upload-pack command ran");
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
 }
 
 /// Codex F6: an update that adds a dependency records its baseline, so a
@@ -1143,4 +1175,238 @@ fn a_check_with_nothing_to_record_refreshes_liveness() {
     ));
     assert!(out.contains("nothing due"), "{out}");
     assert!(status.is_file(), "the check refreshed no liveness");
+}
+
+// ---------------------------------------------------------------------------
+// Review round 2 reproductions; each failed at 03bc5a13f.
+// ---------------------------------------------------------------------------
+
+/// Codex R1: an acceptance block whose reviewed commit does not exist is
+/// not bound, so it never closes as machine-verified.
+#[test]
+fn an_unbound_acceptance_block_does_not_close() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("verify accepted work", &["--link", "fulfils:TSK-001"]),
+    ));
+    write(
+        &f.root,
+        "project-management/tasks/TSK-001.md",
+        &accepted("TSK-001", "ship the cache warmer", &"0".repeat(40)),
+    );
+    git(
+        &f.root,
+        &["commit", "-qam", "docs: add syntactic acceptance"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
+
+/// Codex R2, security F3-r: a work branch named `fix/main`, and an
+/// `integration/` line the agent made locally, are never landing lines,
+/// even with a bound acceptance block.
+#[test]
+fn a_made_up_landing_line_never_closes() {
+    for branch in ["fix/main", "integration/EPC-999-fake"] {
+        let f = fixture();
+        let paths = bind(&f.root);
+        let by = coordinator("WS-001", "c1");
+        // A new task whose record exists only on the made-up line, as a
+        // task does before its planning pull request lands.
+        git(&f.root, &["checkout", "-qb", branch]);
+        let todo = task("TSK-003", "a new task", "todo").replace(
+            "integration_target: main",
+            &format!("integration_target: \"{branch}\""),
+        );
+        write(&f.root, "project-management/tasks/TSK-003.md", &todo);
+        git(&f.root, &["add", "."]);
+        git(
+            &f.root,
+            &["commit", "-qm", "docs(tasks): plan off the line"],
+        );
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args("verify the new task", &["--link", "fulfils:TSK-003"]),
+        ));
+        let reviewed = reviewed_work(&f.root, "TSK-003");
+        let record = accepted("TSK-003", "a new task", &reviewed).replace(
+            "integration_target: main",
+            &format!("integration_target: \"{branch}\""),
+        );
+        write(&f.root, "project-management/tasks/TSK-003.md", &record);
+        git(
+            &f.root,
+            &["commit", "-qam", "docs(tasks): complete off the line"],
+        );
+        // Pushed, it is still no landing line: a work branch, or an
+        // integration line no epic on the default target names.
+        git(&f.root, &["push", "-q", "origin", branch]);
+        let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+        assert!(!out.contains("closed"), "{branch}: {out}");
+        assert_eq!(
+            folded(&paths).items["FU-001"].state,
+            ItemState::Open,
+            "{branch}"
+        );
+    }
+}
+
+/// Codex R4, security F11: purging one item removes only its own lines
+/// from a repaired damaged suffix; another item's recovery event stays.
+#[test]
+fn purge_keeps_other_items_quarantined_lines() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    for title in ["first", "second"] {
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args(title, &["--no-link-reason", "unlinked"]),
+        ));
+    }
+    let prefix = std::fs::read(&paths.events).unwrap();
+    ok(&cli(
+        &f.root,
+        &by,
+        &[
+            "follow",
+            "check",
+            "FU-001",
+            "--observed",
+            "PRIVATE-ONE",
+            "--offline",
+        ],
+    ));
+    ok(&cli(
+        &f.root,
+        &by,
+        &[
+            "follow",
+            "check",
+            "FU-002",
+            "--observed",
+            "KEEP-TWO-RECOVERY",
+            "--offline",
+        ],
+    ));
+    let all = std::fs::read(&paths.events).unwrap();
+    let mut damaged = prefix.clone();
+    damaged.extend_from_slice(b"damaged interior line\n");
+    damaged.extend_from_slice(&all[prefix.len()..]);
+    std::fs::write(&paths.events, damaged).unwrap();
+    let quarantined = store::repair(&paths, store::COMMAND_WAIT)
+        .unwrap()
+        .quarantined
+        .unwrap();
+    ok(&cli(&f.root, &by, &["follow", "purge", "FU-001"]));
+    let kept = std::fs::read_to_string(&quarantined).unwrap();
+    assert!(
+        kept.contains("KEEP-TWO-RECOVERY"),
+        "the other item's line was lost"
+    );
+    assert!(
+        !kept.contains("PRIVATE-ONE"),
+        "the purged item's line stayed"
+    );
+    assert!(kept.contains("damaged interior line"));
+}
+
+/// Codex R5: after a purge, a retry of the same keyed, source-identified
+/// add is recognised and never restores the purged text.
+#[test]
+fn a_retry_after_purge_never_restores_text() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    let args = add_args(
+        "PRIVATE review content",
+        &[
+            "--no-link-reason",
+            "unlinked",
+            "--source-reference",
+            "review-identity",
+            "--idempotency-key",
+            "review-retry",
+        ],
+    );
+    ok(&cli(&f.root, &by, &args));
+    ok(&cli(&f.root, &by, &["follow", "purge", "FU-001"]));
+    let out = ok(&cli(&f.root, &by, &args));
+    assert!(out.contains("already recorded"), "{out}");
+    assert_eq!(folded(&paths).items.len(), 1);
+    assert!(!std::fs::read_to_string(&paths.events)
+        .unwrap()
+        .contains("PRIVATE"));
+    // Without the key, the same source is still an exact duplicate.
+    let keyless = add_args(
+        "PRIVATE again",
+        &[
+            "--no-link-reason",
+            "unlinked",
+            "--source-reference",
+            "review-identity",
+        ],
+    );
+    refused(&cli(&f.root, &by, &keyless), "exact duplicate");
+}
+
+/// Codex R6: a control character before a token in a damaged line does not
+/// hide the token from the damage warning's redaction.
+#[test]
+fn a_control_character_does_not_hide_a_token_in_a_damage_warning() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let token = format!("ghp_{}", "z".repeat(36));
+    let raw = std::fs::read_to_string(&paths.events).unwrap();
+    let raw = raw.replacen(
+        "\"event\":\"stream_opened\"",
+        &format!("\"event\":\"\\u001b{token}\""),
+        1,
+    );
+    std::fs::write(&paths.events, raw).unwrap();
+    let out = cli(&f.root, &[], &["follow", "list"]);
+    assert!(!text(&out).contains(&token), "the token was echoed");
+}
+
+/// Codex R8: a `gh` that exits at once but leaves a descendant holding its
+/// output open is cut off at the observation limit.
+#[cfg(unix)]
+#[test]
+fn a_descendant_holding_the_pipes_cannot_outlast_the_limit() {
+    use codeflow_core::coord::due::{Observer, RepoObserver, OBSERVATION_TIMEOUT};
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let bin = f.root.parent().unwrap().join("fake-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let script = bin.join("gh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n/bin/sleep 40 &\nprintf '%s' '{\"state\":\"MERGED\",\"baseRefName\":\"main\",\"mergeCommit\":{\"oid\":\"abc\"},\"statusCheckRollup\":[]}'\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let old = std::env::var_os("PATH").unwrap();
+    std::env::set_var(
+        "PATH",
+        format!("{}:{}", bin.display(), old.to_string_lossy()),
+    );
+    let started = std::time::Instant::now();
+    let out = RepoObserver::new(&f.root, true).pull_request("github.com/example/project", 1);
+    let elapsed = started.elapsed();
+    std::env::set_var("PATH", old);
+    assert!(
+        elapsed < OBSERVATION_TIMEOUT + std::time::Duration::from_secs(3),
+        "{elapsed:?}"
+    );
+    assert!(
+        out.is_none(),
+        "an observation cut off at the limit is unknown"
+    );
 }

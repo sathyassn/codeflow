@@ -524,12 +524,19 @@ impl Ledger {
     #[must_use]
     pub fn exact_duplicate(&self, record: &FollowUp) -> Option<String> {
         let reference = record.source_reference.as_ref()?;
+        // A purged item keeps its identity as a digest: the same source is
+        // still a duplicate of it.
+        let purged = purged_reference(reference);
         self.items
             .values()
             .find(|item| {
                 item.state == ItemState::Open
                     && item.record.source == record.source
-                    && item.record.source_reference.as_ref() == Some(reference)
+                    && item
+                        .record
+                        .source_reference
+                        .as_ref()
+                        .is_some_and(|existing| existing == reference || *existing == purged)
             })
             .map(|item| item.id.clone())
     }
@@ -875,10 +882,37 @@ impl Ledger {
     }
 }
 
+/// The prefix of an idempotency key kept, as a digest, after its item was
+/// purged.
+pub const PURGED_KEY: &str = "purged:";
+/// The prefix of a source reference kept, as a digest, after its item was
+/// purged.
+pub const PURGED_REFERENCE: &str = "[purged ";
+
+fn digest_of(text: &str) -> String {
+    crate::scaffold::sha256_hex(text.as_bytes())[..32].to_string()
+}
+
+/// The opaque key a purged event keeps: a retry of the original operation
+/// maps to it, its text does not survive.
+#[must_use]
+pub fn purged_key(key: &str) -> String {
+    format!("{PURGED_KEY}{}", digest_of(key))
+}
+
+/// The opaque source reference a purged item keeps.
+#[must_use]
+pub fn purged_reference(reference: &str) -> String {
+    format!("{PURGED_REFERENCE}{}]", digest_of(reference))
+}
+
 /// The digest an idempotency key is bound to: the event kind, the subject
 /// (except for an event that reserves its subject), the actor instance and
-/// the data, without the fields a retry recomputes (schedules and
-/// observations).
+/// the data, without only the fields a retry recomputes for that kind: an
+/// add's default schedule and observed link states, a check's observed link
+/// states, an update's observed link states and a closure's observation
+/// time. What the user wrote (a check's `observed` text, an explicit
+/// schedule) is always part of the content.
 #[must_use]
 pub fn operation_digest(
     kind: super::schema::EventKind,
@@ -887,11 +921,17 @@ pub fn operation_digest(
     data: &serde_json::Value,
 ) -> String {
     use super::schema::EventKind;
-    const VOLATILE: [&str; 4] = ["next_check", "observed", "observations", "observed_at"];
+    let volatile: &[&str] = match kind {
+        EventKind::ItemAdded => &["next_check", "observed"],
+        EventKind::ItemChecked => &["observations"],
+        EventKind::ItemUpdated => &["observed"],
+        EventKind::ItemClosed => &["observed_at"],
+        _ => &[],
+    };
     let mut data = data.clone();
     if let Some(object) = data.as_object_mut() {
-        for key in VOLATILE {
-            object.remove(key);
+        for key in volatile {
+            object.remove(*key);
         }
     }
     let subject = match kind {

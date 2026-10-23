@@ -895,50 +895,225 @@ pub struct TargetTask {
     /// A visible, unlanded branch carries the task (claimed, advisory).
     pub claimed: bool,
     /// Complete with an acceptance block that passes the structural
-    /// acceptance rules against the record's criteria, on this tip.
+    /// acceptance rules against the record's criteria, on this tip, and
+    /// bound to its reviewed commit as CI binds a completion.
     pub accepted: bool,
 }
 
-/// Whether a declared target names a landing line (`main`, `master` or an
-/// `integration/` line), with or without a remote prefix. A task's
-/// completion counts only there, never on a work branch.
+/// Whether a bare branch name is a landing line: `main`, `master` or an
+/// `integration/` line. Nothing is stripped: `fix/main` is a work branch.
 #[must_use]
-pub fn is_landing_target(declared: &str) -> bool {
-    let name = declared
-        .strip_prefix("refs/remotes/")
-        .or_else(|| declared.strip_prefix("refs/heads/"))
-        .unwrap_or(declared);
+pub fn is_landing_target(name: &str) -> bool {
     crate::ids::inventory::is_landing_branch(name)
-        || name
-            .split_once('/')
-            .is_some_and(|(_, rest)| crate::ids::inventory::is_landing_branch(rest))
+}
+
+/// The epic ids whose records the default work target's tip holds; an
+/// `integration/EPC-NNN-...` line counts as a landing line only for one of
+/// these. Empty when the default target cannot be read.
+fn default_tip_epics(repo_root: &Path, repo: &Repository) -> BTreeSet<String> {
+    let Ok(Some(default)) = super::default_work_target(repo_root) else {
+        return BTreeSet::new();
+    };
+    let Ok(Some((_, tip))) = resolve_target(repo_root, repo, &default) else {
+        return BTreeSet::new();
+    };
+    repo.find_commit(tip)
+        .and_then(|commit| commit.tree())
+        .ok()
+        .and_then(|tree| records_from_tree(repo, &tree).ok())
+        .map(|records| {
+            records
+                .values()
+                .filter(|record| record.kind == RecordKind::Epic)
+                .map(|record| record.id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a bare branch name is a landing line this project recognises:
+/// `main`, `master`, or an `integration/EPC-NNN-...` line whose epic the
+/// default target holds. A line an agent made up names no such epic.
+#[must_use]
+pub fn is_recognised_landing(name: &str, epics: &BTreeSet<String>) -> bool {
+    if matches!(name, "main" | "master") {
+        return true;
+    }
+    name.strip_prefix(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX)
+        .and_then(|rest| {
+            let digits: String = rest
+                .strip_prefix("EPC-")?
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            (digits.len() >= 3).then(|| format!("EPC-{digits}"))
+        })
+        .is_some_and(|epic| epics.contains(&epic))
+}
+
+/// The landing lines a pull request base may name, for the observer.
+///
+/// # Errors
+///
+/// Returns the reason when the repository cannot be opened.
+pub fn landing_epics(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    Ok(default_tip_epics(repo_root, &repo))
+}
+
+/// Whether a completion is bound to its review as CI binds it: the
+/// `reviewed` commit exists, is in the tip's history, does not already hold
+/// the task complete, and the completions between it and the tip carry no
+/// binding finding for this task.
+fn completion_bound(
+    repo_root: &Path,
+    repo: &Repository,
+    tip: git2::Oid,
+    task_id: &str,
+    reviewed: &str,
+) -> bool {
+    use super::acceptance::{completions_in_range, Criteria, RunBases};
+    let Ok(oid) = git2::Oid::from_str(reviewed) else {
+        return false;
+    };
+    let Ok(commit) = repo.find_commit(oid) else {
+        return false;
+    };
+    if !crate::git::commit_reachable_from(repo_root, reviewed, &[tip.to_string()]).unwrap_or(false)
+    {
+        return false;
+    }
+    let complete_at_review = commit
+        .tree()
+        .ok()
+        .and_then(|tree| records_from_tree(repo, &tree).ok())
+        .and_then(|records| {
+            records
+                .get(task_id)
+                .map(|record| record.status == "complete")
+        })
+        .unwrap_or(false);
+    if complete_at_review {
+        return false;
+    }
+    let unbound = |head: &str| -> bool {
+        let Ok(head_oid) = git2::Oid::from_str(head) else {
+            return true;
+        };
+        match completions_in_range(
+            repo,
+            reviewed,
+            head,
+            Some(tip),
+            &Criteria::Frozen,
+            &RunBases::new([tip, head_oid]),
+            None,
+            &[],
+        ) {
+            Ok(findings) => findings
+                .iter()
+                .any(|finding| !finding.note && finding.message.starts_with(task_id)),
+            Err(_) => true,
+        }
+    };
+    // A completion made directly on the line binds at the tip.
+    if !unbound(&tip.to_string()) {
+        return true;
+    }
+    // A completion that landed by a merge binds as its pull request bound
+    // it: at the head the merge brought in, which holds the reviewed commit,
+    // for a merge on the tip's first-parent line.
+    landing_heads(repo_root, tip)
+        .into_iter()
+        .find(|head| {
+            crate::git::commit_reachable_from(repo_root, reviewed, std::slice::from_ref(head))
+                .unwrap_or(false)
+        })
+        .is_some_and(|head| !unbound(&head))
+}
+
+/// The second parents of the merges on `tip`'s first-parent line, newest
+/// first, read through Git with replace refs and grafts disabled.
+fn landing_heads(repo_root: &Path, tip: git2::Oid) -> Vec<String> {
+    let output = crate::git::judging_command()
+        .arg("-C")
+        .arg(repo_root)
+        .args([
+            "--no-replace-objects",
+            "-c",
+            "core.commitGraph=false",
+            "-c",
+            "core.useReplaceRefs=false",
+            "log",
+            "--first-parent",
+            "--merges",
+            "--max-count=500",
+            "--format=%P",
+        ])
+        .arg(tip.to_string())
+        .env(
+            "GIT_GRAFT_FILE",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|parents| parents.split(' ').nth(1).map(str::to_string))
+        .collect()
 }
 
 /// Every task's state on its own target tip, from the refs as last fetched,
 /// with the same target resolution `work next` and `work start` use. Only a
-/// landing line counts as a target: a record that declares a work branch is
-/// left out, and a task that two landing tips each hold as their own is left
+/// landing line counts as a target (a configured remote's tracking ref of
+/// `main`, `master` or an epic's integration line): a record that declares
+/// a work branch or a local-only line is left out, and a task that two landing tips each hold as their own is left
 /// out as ambiguous rather than judged by the first name. Makes no network
 /// call and writes nothing.
 ///
 /// # Errors
 ///
 /// Returns the reason when the repository or a target tip cannot be read.
+#[allow(clippy::too_many_lines)]
 pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, String> {
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
-    let mut resolved = Targets::new(repo_root, &repo);
-    let mut snapshots = Vec::new();
-    let tips = read_tips(
-        &repo,
-        &mut resolved,
-        declared_targets(repo_root)?
-            .into_iter()
-            .filter(|declared| is_landing_target(declared))
-            .collect(),
-        &mut snapshots,
-    )?;
+    let epics = default_tip_epics(repo_root, &repo);
+    let remotes: Vec<String> = repo
+        .remotes()
+        .map(|names| {
+            (0..names.len())
+                .filter_map(|index| names.get(index).ok().flatten().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    // A declared target as a bare branch name: a configured remote's prefix
+    // is removed (`origin/main` is `main`); any other prefix is part of the
+    // name (`fix/main` stays a work branch).
+    let branch_of = |declared: &str| -> String {
+        let name = declared.strip_prefix("refs/heads/").unwrap_or(declared);
+        let name = name.strip_prefix("refs/remotes/").unwrap_or(name);
+        remotes
+            .iter()
+            .find_map(|remote| {
+                name.strip_prefix(remote.as_str())
+                    .and_then(|rest| rest.strip_prefix('/'))
+            })
+            .unwrap_or(name)
+            .to_string()
+    };
+    let landing: BTreeSet<String> = declared_targets(repo_root)?
+        .iter()
+        .chain(default.iter())
+        .map(|declared| branch_of(declared))
+        .filter(|branch| is_recognised_landing(branch, &epics))
+        .collect();
     let active: BTreeSet<String> = backlog(repo_root)
         .map(|backlog| {
             backlog
@@ -947,45 +1122,65 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                 .collect()
         })
         .unwrap_or_default();
+    let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
     let mut out: BTreeMap<String, TargetTask> = BTreeMap::new();
     let mut ambiguous = BTreeSet::new();
-    for (_, reference, tip, records) in &tips {
-        for record in records
-            .values()
-            .filter(|record| record.kind == RecordKind::Task)
-        {
-            let Some(declared) = record
-                .integration_target
-                .clone()
-                .or_else(|| default.clone())
+    // Only the remote-tracking refs of configured remotes are read: a
+    // completion counts on a line the remote holds, never on a local branch.
+    for branch in &landing {
+        for remote in &remotes {
+            let reference = format!("refs/remotes/{remote}/{branch}");
+            let Ok(commit) = repo
+                .find_reference(&reference)
+                .and_then(|found| found.peel_to_commit())
             else {
                 continue;
             };
-            if !is_landing_target(&declared) {
-                continue;
-            }
-            let here = matches!(resolved.resolve(&declared), Ok(Some((seen, oid))) if seen == *reference && oid == *tip);
-            if !here {
-                continue;
-            }
-            if let Some(seen) = out.get(&record.id) {
-                if seen.reference != shown(reference) || seen.tip != tip.to_string() {
-                    ambiguous.insert(record.id.clone());
+            let tip = commit.id();
+            let tree = commit.tree().map_err(|error| error.to_string())?;
+            let records = if let Some(records) = parsed.get(&tree.id()) {
+                Rc::clone(records)
+            } else {
+                let records =
+                    Rc::new(records_from_tree(&repo, &tree).map_err(|error| error.to_string())?);
+                parsed.insert(tree.id(), Rc::clone(&records));
+                records
+            };
+            for record in records
+                .values()
+                .filter(|record| record.kind == RecordKind::Task)
+            {
+                let Some(declared) = record
+                    .integration_target
+                    .clone()
+                    .or_else(|| default.clone())
+                else {
+                    continue;
+                };
+                if branch_of(&declared) != *branch {
+                    continue;
                 }
-                continue;
+                if let Some(seen) = out.get(&record.id) {
+                    if seen.tip != tip.to_string() {
+                        ambiguous.insert(record.id.clone());
+                    }
+                    continue;
+                }
+                out.insert(
+                    record.id.clone(),
+                    TargetTask {
+                        status: record.status.clone(),
+                        uid: record.uid.clone(),
+                        target: branch.clone(),
+                        reference: shown(&reference),
+                        tip: tip.to_string(),
+                        claimed: active.contains(&record.id),
+                        accepted: record.reviewed.as_deref().is_some_and(|reviewed| {
+                            completion_bound(repo_root, &repo, tip, &record.id, reviewed)
+                        }),
+                    },
+                );
             }
-            out.insert(
-                record.id.clone(),
-                TargetTask {
-                    status: record.status.clone(),
-                    uid: record.uid.clone(),
-                    target: declared,
-                    reference: shown(reference),
-                    tip: tip.to_string(),
-                    claimed: active.contains(&record.id),
-                    accepted: record.accepted,
-                },
-            );
         }
     }
     for id in ambiguous {
