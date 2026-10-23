@@ -1003,6 +1003,7 @@ mod tests {
             &repo,
             &[
                 "python3 tool.py \"$HOME/notes.md\"",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "W=@ROOT@; python3 tool.py \"$W/src/app.py\"",
             ],
         );
@@ -1041,6 +1042,7 @@ mod tests {
                 "find src -name '*.py' -exec python3 -m py_compile {} +",
                 "find . -name '*.py' -exec python3 -m py_compile {} +",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "ls | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
@@ -1238,6 +1240,7 @@ mod tests {
             );
             for command in [
                 "ls | xargs python3 tool.py",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -exec python3 tool.py {} \\;",
             ] {
                 let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
@@ -1256,7 +1259,6 @@ mod tests {
                 "python3 tool.py \"$INPUT\"",
                 "python3 tool.py \"$ROOT/$NAME\"",
                 "python3 tool.py \"$ROOT/notes.txt\"",
-                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
                 "while read f; do python3 lint.py \"$f\"; done < files.txt",
                 "python3 lint.py \"$(echo src/*.py)\"",
@@ -2116,6 +2118,7 @@ mod tests {
                 "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 // Program output is outside text (operator boundary, 2026-10-15).
                 "source venv/bin/activate && echo ok && python3 src/app.py",
                 "echo \"Done $(date)\"; python3 src/app.py",

@@ -556,12 +556,63 @@ fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
             operands.push(arg);
         }
     }
-    operands
+    let mut paths: Vec<_> = operands
         .into_iter()
         .take(if action == "move" { 2 } else { 1 })
         .filter(|word| !unresolved_word(word) && !has_glob(word))
         .map(|word| crate::security::outward::lexical_join(&dir, Path::new(word)))
-        .collect()
+        .collect();
+    if action == "move" && paths.len() == 2 {
+        if let Some(name) = paths[0].file_name() {
+            // Git appends the source basename when the destination is a
+            // directory. Keep both outcomes, including directories made earlier.
+            paths.push(paths[1].join(name));
+        }
+    }
+    paths
+}
+
+/// Distinguish an unread output operand from unread data sent to a known file.
+fn unresolved_writer_word<'a>(
+    tokens: &[String],
+    redirects: &Redirects,
+    unresolved: &'a [String],
+    line: &str,
+) -> Option<&'a str> {
+    if unresolved.is_empty() {
+        return None;
+    }
+    let mut targets = redirects.targets.clone();
+    targets.extend(redirects.unread.iter().cloned());
+    if let Some((program, args)) = strip_launchers(tokens) {
+        let name = basename(program);
+        if let Some(effects) = crate::security::unresolved::writer_effects(name, args, &[]) {
+            targets.extend(effects.writes);
+            targets.extend(effects.read.dirs);
+            if let Some(copy) = effects.copy {
+                targets.extend(copy.dest);
+                if name == "mv" {
+                    targets.extend(copy.sources);
+                }
+            }
+            if let Some(places) = effects.places {
+                targets.extend(places.dirs);
+            }
+        } else if let UnknownDirUse::Words(words) = unknown_dir_use(name, args, line) {
+            targets.extend(words);
+        }
+    }
+    unresolved.iter().find_map(|word| {
+        let decoded = command_argv(word);
+        decoded
+            .iter()
+            .any(|value| {
+                targets
+                    .iter()
+                    .any(|target| canonical_text(target).contains(&canonical_text(value)))
+            })
+            .then_some(word.as_str())
+    })
 }
 
 fn expanded_integrity(
@@ -588,15 +639,34 @@ fn expanded_integrity(
         for segment in expand_shell_commands(&step.text).segments {
             let mut tokens = shell_tokens(&segment);
             strip_reserved_words(&mut tokens);
-            if let Some(mut violation) = integrity_write_in_dirs(
-                &tokens,
-                &redirect_writes(&segment),
-                level,
-                cwd,
-                &dirs,
-                &step.text,
-                run,
-            ) {
+            let redirects = redirect_writes(&segment);
+            if redirects.targets.is_empty()
+                && redirects.unread.is_empty()
+                && strip_launchers(&tokens).is_some_and(|(program, _)| {
+                    matches!(
+                        program,
+                        "cd" | "chdir" | "pushd" | "popd" | "true" | "false"
+                    )
+                })
+            {
+                continue;
+            }
+            if let Some(word) =
+                unresolved_writer_word(&tokens, &redirects, &step.unresolved, &segment)
+            {
+                // The session checkout stays reachable after an unknown cd.
+                if level.is_active() && super::edit_guard::checkout_root_of(cwd).is_some() {
+                    violations.push(hook_integrity_violation(
+                        level,
+                        format!("cannot verify shell word `{word}` in a filesystem writer"),
+                    ));
+                    // Still check other operands for fixed authority violations,
+                    // even when this policy level only warns about uncertainty.
+                }
+            }
+            if let Some(mut violation) =
+                integrity_write_in_dirs(&tokens, &redirects, level, cwd, &dirs, &step.text, run)
+            {
                 let authority = violation
                     .message
                     .contains(super::edit_guard::AUTHORITY_PATH)
@@ -654,12 +724,22 @@ fn evaluate_report_with_runners(
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
-    violations.extend(expanded_integrity(
-        command,
-        cwd,
-        ctx.policy.hook_integrity,
-        &run,
-    ));
+    if command.contains(['$', '`', '~'])
+        || segments.iter().any(|segment| {
+            let words = command_argv(segment);
+            strip_launchers(&words).is_some_and(|(program, args)| {
+                matches!(program, "cd" | "chdir" | "pushd" | "popd" | "eval")
+                    || (basename(program) == "git" && args.iter().any(|a| a == "worktree"))
+            })
+        })
+    {
+        violations.extend(expanded_integrity(
+            command,
+            cwd,
+            ctx.policy.hook_integrity,
+            &run,
+        ));
+    }
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -1677,6 +1757,19 @@ fn integrity_write_in_dirs(
     line: &str,
     run: &RunDirs,
 ) -> Option<Violation> {
+    // These builtins cannot write an operand. Their nested substitutions and
+    // state effects are visited separately; only their redirections can write.
+    if redirects.targets.is_empty()
+        && redirects.unread.is_empty()
+        && tokens.first().is_some_and(|word| {
+            matches!(
+                word.as_str(),
+                "cd" | "chdir" | "pushd" | "popd" | "true" | "false"
+            )
+        })
+    {
+        return None;
+    }
     if let Some(v) = dot_glob_option_violation(tokens, redirects, level, line) {
         return Some(v);
     }
@@ -2135,7 +2228,9 @@ fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> 
     if token.is_empty() {
         return None;
     }
-    let path = integrity_shell_path(token, cwd);
+    let path = crate::security::outward::lexical_join(cwd, &integrity_shell_path(token, cwd));
+    // Populated only in expanded_integrity's command-position scope; the
+    // original literal pass deliberately cannot see future worktrees.
     if let Some(protected) = PLANNED_CHECKOUTS.with(|roots| {
         roots.borrow().iter().find_map(|root| {
             let relative = path.strip_prefix(root).ok()?;
@@ -4233,7 +4328,7 @@ fn read_only_program(tokens: &[String]) -> bool {
 /// A variable the line does not set, read from the guard's own
 /// environment: every other occurrence of the name on the line must be an
 /// expansion of it.
-fn environment_value(name: &str, line: &str, cwd: &Path) -> Option<std::ffi::OsString> {
+fn environment_value(name: &str, line: &str, _cwd: &Path) -> Option<std::ffi::OsString> {
     let bare = line.match_indices(name).any(|(at, _)| {
         let before = &line[..at];
         let after = &line[at + name.len()..];
@@ -4250,8 +4345,10 @@ fn environment_value(name: &str, line: &str, cwd: &Path) -> Option<std::ffi::OsS
     if bare {
         return None;
     }
-    if name == "PWD" {
-        Some(cwd.as_os_str().to_os_string())
+    // Shell-managed values belong to the consuming command's state, never
+    // to the hook process. HOME is resolved by line_home and the shared reader.
+    if matches!(name, "PWD" | "OLDPWD" | "DIRSTACK" | "dirstack") {
+        None
     } else {
         std::env::var_os(name)
     }
@@ -4372,6 +4469,7 @@ fn checkout_under(
     except: Option<&Path>,
 ) -> Option<CheckoutReach> {
     let absolute = crate::security::outward::lexical_join(cwd, path);
+    // Prospective roots are available only in expanded_integrity's scoped pass.
     if let Some(root) = PLANNED_CHECKOUTS.with(|roots| {
         roots
             .borrow()

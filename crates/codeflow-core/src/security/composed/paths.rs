@@ -4,6 +4,7 @@ use super::{
     lex, new_run, Ctx, Dialect, Heredoc, Part, Run, State, Tok, Value, Var, Word, GRAMMAR,
 };
 use crate::security::outward::lexical_join;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -11,9 +12,13 @@ pub(crate) struct Command {
     pub(crate) text: String,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) unresolved: Vec<String>,
+    /// Literal builtin output, captured without executing a program.
+    stdout: Option<String>,
+    /// Code a preceding pipeline producer supplies to this command.
+    pub(crate) input_code: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct Position {
     state: State,
     stack: Vec<PathBuf>,
@@ -27,6 +32,8 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
             text: line.into(),
             cwd: None,
             unresolved: vec![line.into()],
+            stdout: None,
+            input_code: None,
         }];
     };
     let mut result = Vec::new();
@@ -56,8 +63,38 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
             0,
         );
     }
-    result.dedup_by(|a, b| a.text == b.text && a.cwd == b.cwd && a.unresolved == b.unresolved);
-    result
+    // A command can be reached by several branches and by both dialects.
+    // Judge each directory/text pair once, retaining every unresolved reason.
+    let mut indices = HashMap::new();
+    let mut unique: Vec<(usize, Command)> = Vec::new();
+    for (position, command) in result.into_iter().enumerate() {
+        let key = (command.cwd.clone(), command.text.clone());
+        if let Some(&index) = indices.get(&key) {
+            let (last_position, prior): &mut (usize, Command) = &mut unique[index];
+            // Prospective checkout declarations take effect at their first
+            // occurrence. Other repeated commands are judged at their last
+            // occurrence, after every checkout declaration that preceded one.
+            let words = crate::hooks::git_guard::command_argv(&prior.text);
+            let declares_checkout =
+                crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
+                    program.rsplit('/').next() == Some("git")
+                        && args.iter().any(|arg| arg == "worktree")
+                });
+            if !declares_checkout {
+                *last_position = position;
+            }
+            for word in command.unresolved {
+                if !prior.unresolved.contains(&word) {
+                    prior.unresolved.push(word);
+                }
+            }
+        } else {
+            indices.insert(key, unique.len());
+            unique.push((position, command));
+        }
+    }
+    unique.sort_by_key(|(position, _)| *position);
+    unique.into_iter().map(|(_, command)| command).collect()
 }
 
 fn plain(tok: &Tok) -> Option<&str> {
@@ -68,10 +105,29 @@ fn plain(tok: &Tok) -> Option<&str> {
     }
 }
 
+const TOO_MANY_STATES: &str = "too many reachable shell states";
+
 fn bound(states: &mut Vec<Position>) {
+    // Once the bounded reading is fully unknown, concrete alternatives add
+    // no information. Do not grow them again on the rest of an OR chain.
+    if let Some(index) = states
+        .iter()
+        .position(|state| state.state.world == Some(TOO_MANY_STATES))
+    {
+        let unknown = states.swap_remove(index);
+        *states = vec![unknown];
+        return;
+    }
+    let mut unique = Vec::new();
+    for state in states.drain(..) {
+        if !unique.contains(&state) {
+            unique.push(state);
+        }
+    }
+    *states = unique;
     if states.len() > 64 {
         let mut state = State {
-            world: Some("too many reachable shell states"),
+            world: Some(TOO_MANY_STATES),
             ..State::default()
         };
         state
@@ -103,7 +159,34 @@ fn walk(
     let mut at = 0;
     let mut list_start = states.clone();
     let mut pipeline: Option<Vec<Position>> = None;
+    let mut alternatives = Vec::new();
+    let mut failures = Vec::new();
+    let mut producers: Vec<Command> = Vec::new();
+    let mut compounds: Vec<Vec<String>> = Vec::new();
     while at < tokens.len() {
+        let keyword = plain(&tokens[at]);
+        if matches!(keyword, Some("if" | "for" | "while" | "until" | "case")) {
+            compounds.push(
+                super::assigned_names(&tokens[at..])
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect(),
+            );
+        } else if matches!(keyword, Some("else" | "elif" | "fi" | "done" | "esac")) {
+            if let Some(names) = compounds.last() {
+                for position in &mut states {
+                    for name in names {
+                        position.state.vars.insert(
+                            name.clone(),
+                            Var::Unknown("a compound command may assign this value"),
+                        );
+                    }
+                }
+            }
+            if matches!(keyword, Some("fi" | "done" | "esac")) {
+                compounds.pop();
+            }
+        }
         if (matches!(tokens.get(at), Some(Tok::Word(_)))
             && matches!(tokens.get(at + 1), Some(Tok::Op("(")))
             && matches!(tokens.get(at + 2), Some(Tok::Op(")"))))
@@ -112,13 +195,107 @@ fn walk(
                 Some("if" | "for" | "while" | "until" | "case" | "function")
             )
         {
+            let moves = tokens[at..]
+                .iter()
+                .any(|token| matches!(plain(token), Some("cd" | "chdir" | "pushd" | "popd")));
             for state in &mut states {
                 state.state.directory = None;
-                state.state.world = Some(GRAMMAR);
-                set_pwd(&mut state.state);
+                if moves {
+                    for name in ["PWD", "OLDPWD"] {
+                        state.state.vars.insert(
+                            name.into(),
+                            Var::Unknown("directory values may change in control flow"),
+                        );
+                    }
+                    state.stack.clear();
+                }
+            }
+        }
+        let function = if plain(&tokens[at]) == Some("function") {
+            tokens.get(at + 1).and_then(plain)
+        } else if matches!(tokens.get(at + 1), Some(Tok::Op("(")))
+            && matches!(tokens.get(at + 2), Some(Tok::Op(")")))
+        {
+            plain(&tokens[at])
+        } else {
+            None
+        };
+        if let Some(name) = function {
+            for position in &mut states {
+                let mut events = Vec::new();
+                let mut run = new_run(dialect, position.state.clone(), &mut events, 0, 0);
+                run.define_function(name, &tokens[at..], true);
+                position.state = run.state;
+            }
+            if let Some(open) = tokens[at..].iter().position(|t| plain(t) == Some("{")) {
+                let start = at + open + 1;
+                let mut end = start;
+                let mut nesting = 1;
+                while end < tokens.len() {
+                    match plain(&tokens[end]) {
+                        Some("{") => nesting += 1,
+                        Some("}") => nesting -= 1,
+                        _ => {}
+                    }
+                    if nesting == 0 {
+                        break;
+                    }
+                    end += 1;
+                }
+                let mut body_states = states.clone();
+                for position in &mut body_states {
+                    position.state.world = Some("function body executes with later shell values");
+                }
+                walk(
+                    &tokens[start..end],
+                    docs,
+                    body_states,
+                    dialect,
+                    output,
+                    depth + 1,
+                );
+                at = end + usize::from(end < tokens.len());
+                continue;
+            }
+        }
+        if plain(&tokens[at]) == Some("for") {
+            if let (Some(name), Some("in")) = (
+                tokens.get(at + 1).and_then(plain),
+                tokens.get(at + 2).and_then(plain),
+            ) {
+                let end = tokens[at..]
+                    .iter()
+                    .position(|t| matches!(t, Tok::Op(_)))
+                    .map_or(tokens.len(), |n| at + n);
+                let mut choices = Vec::new();
+                for state in &states {
+                    for token in &tokens[at + 3..end] {
+                        if let Tok::Word(word) = token {
+                            let mut events = Vec::new();
+                            let mut run = new_run(dialect, state.state.clone(), &mut events, 0, 0);
+                            if let Ok(values) = run.word(word, Ctx::Fields).fields {
+                                for value in values {
+                                    let mut choice = state.clone();
+                                    choice
+                                        .state
+                                        .vars
+                                        .insert(name.to_string(), Var::Scalar(value));
+                                    choices.push(choice);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !choices.is_empty() {
+                    states = choices;
+                    bound(&mut states);
+                }
+                at = end;
+                continue;
             }
         }
         let before = states.clone();
+        let first_output = output.len();
         if matches!(plain(&tokens[at]), Some("(" | "{")) {
             let open = plain(&tokens[at]).unwrap_or_default();
             let close = if open == "(" { ")" } else { "}" };
@@ -166,12 +343,50 @@ fn walk(
             }
             states = states
                 .into_iter()
-                .map(|state| simple(&tokens[start..at], docs, state, dialect, output))
+                .map(|state| simple(&tokens[start..at], docs, state, dialect, output, depth))
                 .collect();
+        }
+        if !producers.is_empty() {
+            let consumers = output.split_off(first_output);
+            for consumer in consumers {
+                let before = output.len();
+                for producer in producers.iter().filter(|producer| {
+                    producer.cwd == consumer.cwd || producer.cwd.is_none() || consumer.cwd.is_none()
+                }) {
+                    let mut command = consumer.clone();
+                    command.text = format!("{} | {}", producer.text, command.text);
+                    if crate::security::outward::reads_stdin_code(&consumer.text) {
+                        command
+                            .unresolved
+                            .extend(producer.unresolved.iter().cloned());
+                        command.input_code.clone_from(&producer.stdout);
+                        if command.input_code.is_none() {
+                            command.unresolved.push("pipeline input".into());
+                        }
+                    }
+                    output.push(command);
+                }
+                if output.len() == before {
+                    let mut command = consumer;
+                    command.unresolved.push("pipeline directory state".into());
+                    output.push(command);
+                }
+            }
+            producers.clear();
         }
         let term = tokens.get(at).and_then(plain).unwrap_or(";");
         match term {
             "|" | "|&" => {
+                producers = output[first_output..].to_vec();
+                if producers.len() > 64 {
+                    producers = vec![Command {
+                        text: String::new(),
+                        cwd: None,
+                        unresolved: vec!["pipeline input with too many reachable states".into()],
+                        stdout: None,
+                        input_code: None,
+                    }];
+                }
                 pipeline.get_or_insert_with(|| before.clone());
                 states = before;
             }
@@ -180,7 +395,20 @@ fn walk(
                 pipeline = None;
             }
             "||" => {
-                states.extend(before);
+                // Only failure enters the next alternative. Preserve changed
+                // variables as well as directories on the successful branch;
+                // unchanged alternatives collapse instead of doubling state.
+                if states != before {
+                    alternatives.extend(states);
+                    states = before;
+                    states.append(&mut failures);
+                    bound(&mut alternatives);
+                }
+            }
+            "&&" => {
+                failures.extend(before.clone());
+                bound(&mut failures);
+                states.append(&mut alternatives);
             }
             ";" | "\n" => {
                 // A directory change may fail. On && only success reaches the
@@ -200,6 +428,10 @@ fn walk(
                 states.extend(parent);
             }
         }
+        if matches!(term, ";" | "\n" | "&") {
+            states.append(&mut alternatives);
+            states.append(&mut failures);
+        }
         bound(&mut states);
         if matches!(term, ";" | "\n" | "&") {
             list_start.clone_from(&states);
@@ -215,7 +447,48 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+fn unresolved_word(word: &Word) -> String {
+    if word.raw.is_empty() {
+        "process substitution".into()
+    } else {
+        word.raw.clone()
+    }
+}
+
 fn resolve(run: &mut Run<'_>, word: &Word, ctx: Ctx, unresolved: &mut Vec<String>) -> String {
+    if run.state.world.is_some()
+        && matches!(word.parts.first(), Some(Part::Lit { text, quoted: false }) if text.starts_with('~'))
+    {
+        unresolved.push(unresolved_word(word));
+        return word.raw.clone();
+    }
+    if let Some(raw) = word.plain().filter(|raw| raw.starts_with('~')) {
+        let (head, tail) = raw.split_once('/').unwrap_or((raw, ""));
+        let name = match head {
+            "~" => "HOME".to_string(),
+            "~+" => "PWD".to_string(),
+            "~-" => "OLDPWD".to_string(),
+            _ => format!("__directory_stack_{}", &head[1..]),
+        };
+        if let Some(Var::Scalar(value)) = run.state.vars.get(&name) {
+            if let Some(value) = value.exact() {
+                return if tail.is_empty() {
+                    quote(&value)
+                } else {
+                    format!("{}/{tail}", quote(&value))
+                };
+            }
+        }
+        unresolved.push(unresolved_word(word));
+        return raw.into();
+    }
+    if matches!(word.parts.first(), Some(Part::Lit { text, quoted: false }) if text.starts_with('~'))
+    {
+        // Mixed quoted/expanded tails still have an active leading tilde.
+        // Until that combination is modeled, it must not become a literal path.
+        unresolved.push(unresolved_word(word));
+        return word.raw.clone();
+    }
     // Keep literal syntax and glob provenance; only expansions need rendering.
     if word
         .parts
@@ -225,25 +498,47 @@ fn resolve(run: &mut Run<'_>, word: &Word, ctx: Ctx, unresolved: &mut Vec<String
         return word.raw.clone();
     }
     if run.state.world.is_some() {
-        unresolved.push(word.raw.clone());
+        unresolved.push(unresolved_word(word));
         return word.raw.clone();
     }
     run.approx.set(false);
     let eval = run.word(word, ctx);
     if run.approx.get() {
-        unresolved.push(word.raw.clone());
+        unresolved.push(unresolved_word(word));
         return word.raw.clone();
     }
     if let Ok(fields) = eval.fields {
-        if let Some(values) = fields.iter().map(Value::exact).collect::<Option<Vec<_>>>() {
-            return values
-                .iter()
-                .map(|value| quote(value))
-                .collect::<Vec<_>>()
-                .join(" ");
+        let values = fields
+            .iter()
+            .map(|value| {
+                if let Some(exact) = value.exact() {
+                    return Some(quote(&exact));
+                }
+                if value
+                    .0
+                    .iter()
+                    .all(|p| matches!(p, super::Piece::Text(_) | super::Piece::Glob(_)))
+                {
+                    return Some(
+                        value
+                            .0
+                            .iter()
+                            .map(|p| match p {
+                                super::Piece::Text(t) => quote(t),
+                                super::Piece::Glob(t) => t.clone(),
+                                _ => unreachable!(),
+                            })
+                            .collect::<String>(),
+                    );
+                }
+                None
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(values) = values {
+            return values.join(" ");
         }
     }
-    unresolved.push(word.raw.clone());
+    unresolved.push(unresolved_word(word));
     word.raw.clone()
 }
 
@@ -254,7 +549,37 @@ fn simple(
     mut position: Position,
     dialect: Dialect,
     output: &mut Vec<Command>,
+    depth: usize,
 ) -> Position {
+    position
+        .state
+        .vars
+        .retain(|name, _| !name.starts_with("__directory_stack_"));
+    for (index, path) in position
+        .state
+        .directory
+        .iter()
+        .chain(position.stack.iter().rev())
+        .enumerate()
+    {
+        position
+            .state
+            .vars
+            .insert(format!("__directory_stack_{index}"), path_value(path));
+        position
+            .state
+            .vars
+            .insert(format!("__directory_stack_+{index}"), path_value(path));
+    }
+    let tokens = &tokens[tokens
+        .iter()
+        .take_while(|t| {
+            matches!(
+                plain(t),
+                Some("then" | "do" | "else" | "elif" | "if" | "while" | "until" | "!")
+            )
+        })
+        .count()..];
     let mut events = Vec::new();
     let mut run = new_run(dialect, position.state.clone(), &mut events, 0, 0);
     let mut unresolved = Vec::new();
@@ -303,21 +628,74 @@ fn simple(
         text.push('\n');
         text.push_str(&body);
     }
+    let words = crate::hooks::git_guard::command_argv(&text);
+    let launched = crate::hooks::git_guard::strip_launchers(&words);
+    let stdout = launched
+        .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
+        .and_then(|_| {
+            run.approx.set(false);
+            let captured = run.capture(&text).0;
+            if run.approx.get() {
+                None
+            } else {
+                captured.ok().and_then(|value| value.exact())
+            }
+        });
     output.push(Command {
         text: text.clone(),
         cwd: position.state.directory.clone(),
         unresolved,
+        stdout,
+        input_code: None,
     });
-    let words = crate::hooks::git_guard::command_argv(&text);
-    let launched = crate::hooks::git_guard::strip_launchers(&words);
     // The existing evaluator owns assignments, exports, invalidation and static
     // substitutions. PWD is ordinary assignable state only for this consumer.
+    if let Some(("eval", args)) = launched {
+        if depth < 16 {
+            if let Ok((nested, nested_docs)) = lex(&args.join(" ")) {
+                let mut states = walk(
+                    &nested,
+                    &nested_docs,
+                    vec![position.clone()],
+                    dialect,
+                    output,
+                    depth + 1,
+                );
+                bound(&mut states);
+                if states.len() == 1 {
+                    return states.remove(0);
+                }
+            }
+        }
+    }
+    let directory_values =
+        ["PWD", "OLDPWD"].map(|name| (name, position.state.vars.get(name).cloned()));
     run.simple(tokens, docs, false, ";");
     position.state = run.state;
+    if launched.is_some_and(|(program, _)| matches!(program, "cd" | "chdir" | "pushd" | "popd")) {
+        // The text evaluator invalidates directory variables; this consumer
+        // owns their command-position state and applies the directory effect.
+        for (name, value) in directory_values {
+            if let Some(value) = value {
+                position.state.vars.insert(name.into(), value);
+            } else {
+                position.state.vars.remove(name);
+            }
+        }
+    }
     if let Some((program, args)) = launched {
         match program {
             "cd" | "chdir" | "pushd" => change_directory(&mut position, program, args),
+            "popd" if !args.is_empty() => {
+                // Indexed removals and -n differ from an ordinary pop.
+                // Keep them unresolved until both shell readings are modeled.
+                position.state.directory = None;
+                position.stack.clear();
+                set_oldpwd(&mut position.state);
+                set_pwd(&mut position.state);
+            }
             "popd" => {
+                set_oldpwd(&mut position.state);
                 position.state.directory = position.stack.pop().and_then(|next| {
                     position
                         .state
@@ -330,12 +708,31 @@ fn simple(
             "source" | "." | "eval" => {
                 position.state.directory = None;
                 position.state.world = Some("code may change shell state");
+                position.stack.clear();
                 set_pwd(&mut position.state);
             }
             _ => {}
         }
     }
     position
+}
+
+fn set_oldpwd(state: &mut State) {
+    let value =
+        state
+            .directory
+            .as_ref()
+            .map_or(Var::Unknown("unknown previous directory"), |path| {
+                let actual = path_value(path);
+                if state.vars.get("PWD") == Some(&actual) {
+                    actual
+                } else {
+                    // Shells need not agree when PWD was assigned independently.
+                    // Do not prove OLDPWD from a directory parameter that differs.
+                    Var::Unknown("PWD differs from the working directory")
+                }
+            });
+    state.vars.insert("OLDPWD".into(), value);
 }
 
 fn set_pwd(state: &mut State) {
@@ -370,10 +767,23 @@ fn change_directory(position: &mut Position, program: &str, args: &[String]) {
                 || (arg.starts_with('-') && arg[1..].chars().all(|c| c.is_ascii_digit()))
         })
     {
+        set_oldpwd(&mut position.state);
         position.state.directory = None;
+        position.stack.clear();
         set_pwd(&mut position.state);
         return;
     }
+    if program == "cd" && args == ["-"] {
+        let old = position.state.vars.get("OLDPWD").and_then(|v| match v {
+            Var::Scalar(v) => v.exact(),
+            _ => None,
+        });
+        set_oldpwd(&mut position.state);
+        position.state.directory = old.map(PathBuf::from);
+        set_pwd(&mut position.state);
+        return;
+    }
+    set_oldpwd(&mut position.state);
     let changes = crate::security::outward::dir_changes(
         &std::iter::once(program.to_string())
             .chain(args.iter().cloned())
@@ -410,6 +820,9 @@ fn change_directory(position: &mut Position, program: &str, args: &[String]) {
             _ => None,
         };
     }
+    if position.state.directory.is_none() {
+        position.stack.clear();
+    }
     set_pwd(&mut position.state);
 }
 
@@ -433,6 +846,104 @@ mod tests {
             .iter()
             .map(|step| crate::hooks::git_guard::command_argv(&step.text)[1..].to_vec())
             .collect()
+    }
+
+    #[test]
+    fn directory_alternatives_are_unique_and_rejoin_and_or_lists() {
+        let chain = (0..10)
+            .map(|i| format!("cd d{i}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let steps = probes(&format!("{chain}; probe $PWD"));
+        assert_eq!(steps.len(), 11);
+        assert!(values("W=.worktrees/w || W=src; probe $W").contains(&vec![".worktrees/w".into()]));
+        for i in 0..10 {
+            assert!(steps
+                .iter()
+                .any(|step| step.text.contains(&format!("/project/d{i}'"))));
+        }
+        assert!(values("cd a || cd b && probe $PWD").contains(&vec!["/project/a".into()]));
+        assert!(values("cd a && cd b || probe $PWD").contains(&vec!["/project".into()]));
+        let long = (0..80)
+            .map(|i| format!("cd d{i}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let bounded = probes(&format!("{long}; probe $PWD"));
+        assert_eq!(bounded.len(), 1);
+        assert!(!bounded[0].unresolved.is_empty());
+        let repeated = (0..80).map(|_| "true").collect::<Vec<_>>().join(" || ");
+        assert_eq!(probes(&format!("{repeated}; probe $PWD")).len(), 1);
+    }
+
+    #[test]
+    fn directory_names_use_command_position_state() {
+        for line in [
+            "cd docs && probe $OLDPWD ~- ~1",
+            "pushd docs && probe $OLDPWD ~- ~1",
+            "pushd docs && popd && probe $PWD ~+ ~0",
+            "cd docs && cd - && probe $PWD ~+ ~0",
+        ] {
+            let steps = probes(line);
+            assert!(!steps.is_empty(), "{line}");
+            for step in steps {
+                // ~1 after cd alone is not a portable, known stack entry.
+                if line.starts_with("cd docs && probe") {
+                    assert!(step.unresolved.iter().any(|word| word == "~1"));
+                } else {
+                    assert!(step.unresolved.is_empty(), "{line}: {step:?}");
+                    assert_eq!(
+                        crate::hooks::git_guard::command_argv(&step.text)[1..],
+                        ["/project", "/project", "/project"]
+                    );
+                }
+            }
+        }
+        for word in [
+            "~-",
+            "~99",
+            "~-1",
+            "~someone",
+            "$DIRSTACK",
+            "$dirstack[1]",
+            "$PWD:h",
+            "$PWD:a",
+        ] {
+            assert!(
+                probes(&format!("probe {word}"))
+                    .iter()
+                    .any(|step| !step.unresolved.is_empty()),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_control_values_keep_glob_provenance() {
+        for line in [
+            "D=src; if true; then probe $D/app.py; fi",
+            "for f in src/*.py; do probe \"$f\"; done",
+        ] {
+            let steps = probes(line);
+            assert!(!steps.is_empty(), "{line}");
+            assert!(
+                steps.iter().all(|s| s.unresolved.is_empty()),
+                "{line}: {steps:?}"
+            );
+        }
+        assert!(probes("while read f; do probe $f; done")
+            .iter()
+            .any(|s| !s.unresolved.is_empty()));
+        for list in ["src/app.py $EXTERNAL", "src/app.py $(cat paths.txt)"] {
+            assert!(
+                probes(&format!("for f in {list}; do probe $f; done"))
+                    .iter()
+                    .any(|s| !s.unresolved.is_empty()),
+                "unknown loop alternatives must survive: {list}"
+            );
+        }
+        assert!(probes("probe <(echo x)")
+            .iter()
+            .all(|s| s.unresolved.iter().all(|w| !w.is_empty())));
     }
 
     #[test]

@@ -108,7 +108,7 @@ pub(crate) fn evaluate_at(
     violations
 }
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PositionalSource {
     #[default]
     Unresolved,
@@ -145,7 +145,7 @@ struct Parsed {
 /// One interpreter call (TSK-302, issue 173): the words it receives other
 /// than its inline code, the directory it runs in, and what else gives it
 /// arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct InterpreterCall {
     pub(crate) positional_source: PositionalSource,
     /// Shell expansions the shared resolver could not establish.
@@ -171,7 +171,7 @@ pub(crate) struct InterpreterCall {
 
 /// A command that runs an interpreter with arguments the line does not
 /// spell.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Supplier {
     /// `xargs` adds words read from its input or an argument file.
     Xargs,
@@ -323,8 +323,9 @@ pub(crate) fn interpreter_calls_with_home(
     };
     visit(command, Some(cwd), 0, &mut parsed);
     let mut calls = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for call in parsed.calls {
-        if !calls.contains(&call) {
+        if seen.insert(call.clone()) {
             calls.push(call);
         }
     }
@@ -353,8 +354,12 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             visit_literal(&step.text, step.cwd.as_deref(), depth, out);
             for call in &mut out.calls[first_call..] {
                 call.unresolved.extend(step.unresolved.iter().cloned());
-                if call.code.is_empty() && step.text.contains("<<") {
-                    call.code = out.code[first_code..].to_vec();
+                if call.code.is_empty() {
+                    if let Some(code) = &step.input_code {
+                        call.code = vec![code.clone()];
+                    } else if step.text.contains("<<") {
+                        call.code = out.code[first_code..].to_vec();
+                    }
                 }
             }
         }
@@ -431,6 +436,18 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                 directories.extend(next);
                 directories.sort();
                 directories.dedup();
+                if directories.len() > DIR_SET_LIMIT {
+                    // The literal action reader also visits whole lines. Once
+                    // its alternatives exceed the shared bound, judge later
+                    // actions with an unknown directory instead of multiplying
+                    // every earlier cd combination again.
+                    directories = vec![None];
+                    // Configured aliases and tag pushes need a known repository.
+                    // Do not let the bound silently omit their configuration.
+                    out.unreadable.push(
+                        "cannot verify actions across too many shell directory alternatives".into(),
+                    );
+                }
             }
         }
     }
@@ -464,11 +481,12 @@ impl DirSet {
                     .collect();
                 for dir in next {
                     if !self.dirs.contains(&dir) {
+                        if self.dirs.len() == DIR_SET_LIMIT {
+                            self.unknown = true;
+                            break;
+                        }
                         self.dirs.push(dir);
                     }
-                }
-                if self.dirs.len() > DIR_SET_LIMIT {
-                    self.unknown = true;
                 }
             }
             DirChange::Unknown => self.unknown = true,
@@ -495,7 +513,7 @@ pub(crate) fn lexical_join(dir: &Path, target: &Path) -> PathBuf {
 }
 
 /// A directory change one simple command makes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum DirChange {
     To(PathBuf),
     Unknown,
@@ -903,11 +921,32 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         dirs: vec![cwd.to_path_buf()],
         unknown: false,
     };
-    for segment in expand_commands(command) {
-        let mut words = command_argv(&segment);
-        strip_reserved_words(&mut words);
-        for change in dir_changes(&words, home) {
-            set.change(&change);
+    // The shared walk supplies the directory before each command. Apply the
+    // legacy launcher reader locally, rather than combining every change with
+    // all earlier alternatives (which invents exponentially many directories).
+    let mut seen = std::collections::HashSet::from([cwd.to_path_buf()]);
+    for step in super::composed::paths::commands(command, cwd, home) {
+        let mut local = DirSet {
+            dirs: step.cwd.into_iter().collect(),
+            unknown: false,
+        };
+        local.unknown = local.dirs.is_empty();
+        for segment in expand_commands(&step.text) {
+            let mut words = command_argv(&segment);
+            strip_reserved_words(&mut words);
+            for change in dir_changes(&words, home) {
+                local.change(&change);
+            }
+        }
+        set.unknown |= local.unknown;
+        for dir in local.dirs {
+            if seen.insert(dir.clone()) {
+                if set.dirs.len() == DIR_SET_LIMIT {
+                    set.unknown = true;
+                } else {
+                    set.dirs.push(dir);
+                }
+            }
         }
     }
     set
@@ -2106,10 +2145,26 @@ fn here_string(segment: &str) -> Option<String> {
             if let Some(quoted) = body[start..].strip_prefix("$'") {
                 return Some(crate::hooks::git_guard::ansi_c_text(&mut quoted.chars()));
             }
-            return Some(body.to_string());
+            return command_argv(body).into_iter().next();
         }
     }
     None
+}
+
+/// Whether this program takes its executable code from stdin.
+pub(crate) fn reads_stdin_code(command: &str) -> bool {
+    let words = command_argv(command);
+    let Some((program, args)) = strip_launchers(&words) else {
+        return false;
+    };
+    let name = program.rsplit('/').next().unwrap_or(program);
+    interpreter_family(name).is_some_and(|family| family_program(family, args) == Program::Stdin)
+        || (matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash")
+            && shell_command_string(args).is_none()
+            && args
+                .iter()
+                .find(|arg| !arg.starts_with('-'))
+                .is_none_or(|arg| descriptor_program(arg)))
 }
 
 /// Read where a shell or interpreter in one pipeline segment takes its
@@ -2306,6 +2361,24 @@ mod tests {
     }
     use super::*;
     use crate::security::actions::{table, PatternToken};
+
+    #[test]
+    fn bounded_literal_directories_cannot_hide_configured_actions() {
+        let chain = (0..20)
+            .map(|i| format!("cd d{i}"))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        for action in ["git publish", "git push origin version-name"] {
+            let findings = evaluate_at(
+                &format!("{chain}; {action}"),
+                &SecuritySection::default(),
+                Some(Path::new("/project")),
+            );
+            assert!(findings.iter().any(|finding| {
+                finding.level_fixed && finding.message.contains("too many shell directory")
+            }));
+        }
+    }
 
     #[test]
     fn n1_tag_shorthand_matches_existing_and_new_tags() {

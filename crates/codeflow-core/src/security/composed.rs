@@ -1250,7 +1250,7 @@ fn decode_value(value: &Value, escapes: Escapes) -> Result<Value, &'static str> 
 // Evaluation
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Var {
     Scalar(Value),
     Array(Vec<Value>),
@@ -1260,7 +1260,7 @@ enum Var {
 }
 
 /// The positional parameters: `$0`, `$1` and on.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum Positional {
     /// Given from outside the line: unknown text.
     #[default]
@@ -1274,7 +1274,7 @@ enum Positional {
     Unknown(&'static str),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct State {
     /// Known working directory for filesystem consumers, independent of PWD.
     directory: Option<std::path::PathBuf>,

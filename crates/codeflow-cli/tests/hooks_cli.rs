@@ -47,7 +47,10 @@ mod process_folders;
 use process_folders::isolated_home;
 
 fn codeflow() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+    isolated_codeflow(Command::new(env!("CARGO_BIN_EXE_codeflow")))
+}
+
+fn isolated_codeflow(mut cmd: Command) -> Command {
     // Isolate from the developer's environment.
     cmd.env("CODEFLOW_HOME", isolated_home())
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
@@ -613,11 +616,12 @@ fn git_guard_holds_the_text_floor_for_wrapped_writes() {
             "sed -n '1,5p' .codeflow/policy.json",
             "git clean -ffdxn",
             "rm -rf .worktrees/v/target",
-            r#"rm -f "$d""#,
+            r#"d=build/a.o; rm -f "$d""#,
         ],
         "git.hook_integrity",
     );
-    // Keep this native environment expansion bounded, independent of host PATH.
+    // TSK-406: an external value cannot establish a writer's command-position
+    // target, even when the hook process happens to carry an ordinary value.
     let payload = serde_json::json!({"tool_name":"Bash","tool_input":{"command":r#"rm -rf "$CODEFLOW_R16_GUARD_PATH/codeflow-scratch-tsk216""#},"cwd":root}).to_string();
     let out = run_with_stdin(
         codeflow()
@@ -627,7 +631,8 @@ fn git_guard_holds_the_text_floor_for_wrapped_writes() {
         &payload,
     );
     assert!(
-        out.status.success(),
+        out.status.code() == Some(2)
+            && String::from_utf8_lossy(&out.stderr).contains("cannot verify shell word"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -954,8 +959,8 @@ const REVIEWER_ALLOWED: &[&str] = &[
     // Round sixteen: braces and run-time values in ordinary work.
     "rm build/{a,b}.o",
     "rm build/out{1..100}.o",
-    r#"rm "$tmpfile""#,
-    r#"cp README.md "$OUT"/notes.md"#,
+    r#"tmpfile=build/tmp; rm "$tmpfile""#,
+    r#"OUT=build; cp README.md "$OUT"/notes.md"#,
     "awk '{print $1}' README.md > build/out.txt",
     "git log --format='%H,%s' > build/log.txt",
     // Round eighteen: conditions in parentheses, and zsh qualifiers on
@@ -4809,12 +4814,9 @@ fn session_orient_survives_a_closed_stdout() {
             .spawn()
             .unwrap();
         drop(child.stdout.take());
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(payload.as_bytes()).unwrap();
+        drop(input);
         let out = child.wait_with_output().unwrap();
         assert_eq!(out.status.code(), Some(0), "{payload}: {out:?}");
     }
@@ -8830,6 +8832,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "python3 -m ruff check .",
         "node x.js .",
         "python3 edit.py notes.txt out.json",
+        "INPUT=src/app.py; python3 tool.py \"$INPUT\"",
         "python3 -c 'import json, sys; print(json.load(sys.stdin))' < .codeflow/policy.json",
         "cat .codeflow/policy.json | python3 -c 'import sys; print(sys.stdin.read())'",
         "find . -name '*.py' -exec python3 -m py_compile {} +",
@@ -10290,38 +10293,116 @@ fn shell_expansions_preserve_checkout_protection() {
     }
     for line in [
         "printf x > $PWD/src/a.txt",
+        "printf '%s' \"$UNKNOWN_DATA\" > src/a.txt",
+        "find src -name \"$UNKNOWN_PATTERN\" -print",
         "cd docs && printf x > $PWD/notes.txt",
         "{ cd docs; } && printf x > $PWD/notes.txt",
         "(cd docs && printf x > $PWD/notes.txt)",
     ] {
         cases.push(("git-guard", line.into(), false));
     }
+    // Round 1: shell-managed directory values must never come from the hook.
+    for line in [
+        "cd docs && rm -rf $OLDPWD/.worktrees/w",
+        "rm -rf $OLDPWD/.worktrees/w",
+        r#"rm -f "$d""#,
+        r#"rm "$tmpfile""#,
+        r#"cp README.md "$OUT"/notes.md"#,
+        r#"cd docs && rm -rf "$OLDPWD"/.worktrees/w"#,
+        "cd docs && rm -rf ~-/.worktrees/w",
+        "pushd docs; rm -rf ~1/.worktrees/w",
+        "cd docs && rm -rf $PWD:h/.worktrees/w",
+        "cd .worktrees/w && rm -rf $PWD:a",
+        "git worktree add -b t .worktrees/n && printf x > docs/../.worktrees/n/.claude/settings.json",
+        "printf x > ../outside/.claude/settings.json; git worktree move .worktrees/w ../outside; printf x > ../outside/.claude/settings.json",
+        "cd docs && git worktree add -b t ../.worktrees/n && printf x > ../.worktrees/n/.claude/settings.json",
+        "cd docs && git worktree add -b t ../.worktrees/n && rm -rf ../.worktrees/n/.claude",
+    ] {
+        cases.push(("git-guard", line.into(), true));
+    }
+    for line in [
+        "python3 tool.py ~+/.worktrees/w",
+        "python3 tool.py ~+/.worktrees/'w'",
+        "cd docs && python3 tool.py ~-/.worktrees/w",
+        "pushd docs; python3 tool.py ~1/.worktrees/w",
+        r#"python3 <<< "import shutil; shutil.rmtree('$PWD/.worktrees/w')""#,
+        r#"echo "import shutil; shutil.rmtree('$PWD/.worktrees/w')" | python3"#,
+        r#"printf %s "import shutil; shutil.rmtree('$PWD/.worktrees/w')" | python3 -"#,
+        r#"cd docs || true; echo "import shutil; shutil.rmtree('$PWD/../.worktrees/w')" | python3"#,
+        "eval 'python3 tool.py $PWD/.worktrees/w'",
+        "python3 tool.py <(echo x)",
+        "cd docs && python3 tool.py $OLDPWD/.worktrees/w",
+        "python3 tool.py ${DIRSTACK[1]}",
+        "python3 tool.py $dirstack[1]",
+        "python3 tool.py $(dirs -l +1)",
+        "python3 tool.py ~99/.worktrees/w",
+        "python3 tool.py ~-1/.worktrees/w",
+        "python3 tool.py ~someone/.worktrees/w",
+        "D=src; f() { python3 tool.py $D; }; D=.worktrees/w; f",
+        "D=.worktrees/w; if false; then D=src; fi; python3 tool.py $D",
+        "W=.worktrees/w || W=src; python3 tool.py $W",
+        "PWD=$PWD/.worktrees/w; cd docs && python3 tool.py $OLDPWD",
+        "D=.worktrees/w; if false; then D=src; else python3 tool.py $D; fi",
+    ] {
+        cases.push(("exec-guard", line.into(), true));
+    }
+    for line in [
+        r#"for f in src/*.py; do python3 lint.py "$f"; done"#,
+        "D=src; if true; then python3 tool.py $D/app.py; fi",
+        "if true; then python3 tool.py $PWD/src/app.py; fi",
+    ] {
+        cases.push(("exec-guard", line.into(), false));
+    }
+    let destination = tmp.path().join("existing");
+    std::fs::create_dir(&destination).unwrap();
+    for join in ["&&", ";"] {
+        cases.push((
+            "git-guard",
+            format!(
+                "git worktree move .worktrees/w '{}' {join} rm -rf '{}/w'",
+                destination.display(),
+                destination.display()
+            ),
+            true,
+        ));
+    }
     let mut wrong = Vec::new();
     for (guard, line, refuse) in cases {
-        let payload =
-            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
-                .to_string();
-        let output = run_with_stdin(
-            codeflow()
-                .args(["hook", guard, "--contract", "3"])
-                .current_dir(&root)
-                .env("PWD", tmp.path())
-                .env("HOME", tmp.path())
-                .env("INPUT", "src/app.py")
-                .env_remove("UNSET")
-                .env_remove("CDPATH"),
-            &payload,
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let expected = if refuse { 2 } else { 0 };
-        println!(
-            "{guard}: expected={expected} actual={:?}: {line}\n{stderr}",
-            output.status.code()
-        );
-        if output.status.code() != Some(expected)
-            || (refuse && !stderr.contains("git.hook_integrity"))
-        {
-            wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
+        for oldpwd in [None, Some("/private/tmp")] {
+            let payload =
+                serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                    .to_string();
+            let mut command = expansion_codeflow();
+            if let Some(value) = oldpwd {
+                command.env("OLDPWD", value);
+            } else {
+                command.env_remove("OLDPWD");
+            }
+            let output = run_with_stdin(
+                command
+                    .args(["hook", guard, "--contract", "3"])
+                    .current_dir(&root)
+                    .env("PWD", tmp.path())
+                    .env("HOME", tmp.path())
+                    .env("INPUT", "src/app.py")
+                    .env_remove("UNSET")
+                    .env_remove("CDPATH"),
+                &payload,
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let expected = if refuse { 2 } else { 0 };
+            if line == "python3 tool.py <(echo x)" && stderr.contains("expansion ``") {
+                wrong.push("process substitution diagnostic names an empty word".into());
+            }
+            println!(
+                "{guard}: OLDPWD={oldpwd:?}: expected={expected} actual={:?}: {line}\n{stderr}",
+                output.status.code()
+            );
+            if output.status.code() != Some(expected)
+                || (refuse && !stderr.contains("git.hook_integrity"))
+            {
+                wrong.push(format!("{guard}: expected {expected}: {line}: {stderr}"));
+            }
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
@@ -10340,7 +10421,7 @@ fn same_line_worktree_status_requires_known_callbacks() {
         "cwd": root
     }).to_string();
     let output = run_with_stdin(
-        codeflow()
+        expansion_codeflow()
             .args(["hook", "git-guard", "--contract", "3"])
             .current_dir(&root),
         &payload,
@@ -10348,4 +10429,79 @@ fn same_line_worktree_status_requires_known_callbacks() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr)
         .contains("cannot verify status callbacks before the new worktree exists"));
+}
+
+/// Bound the real CLI route, including both directory readers.
+#[test]
+fn shell_expansion_chains_have_bounded_guard_time() {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+    let tmp = tempfile::tempdir().unwrap();
+    enforced_repo(tmp.path());
+    // Load the binary before timing commands. A freshly linked executable can
+    // spend the first launch in the platform loader rather than in the guard.
+    assert!(expansion_codeflow()
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+    let mut failures = Vec::new();
+    for (guard, count, join, tail, seconds) in [
+        ("exec-guard", 10, " || ", "python3 tool.py $PWD/x", 1),
+        ("git-guard", 80, " || ", "rm -rf $PWD/x", 1),
+        ("exec-guard", 20, " || ", "python3 tool.py $PWD/x", 2),
+        ("git-guard", 300, " || ", "rm -rf $PWD/x", 5),
+        ("git-guard", 80, " && ", "rm -rf $PWD/x", 2),
+    ] {
+        let chain = (0..count)
+            .map(|i| format!("cd d{i}"))
+            .collect::<Vec<_>>()
+            .join(join);
+        let payload = serde_json::json!({
+            "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
+            "cwd": tmp.path()
+        })
+        .to_string();
+        let trace = tmp.path().join(format!("{guard}-{count}.stderr"));
+        let stderr = std::fs::File::create(&trace).unwrap();
+        let mut command = expansion_codeflow();
+        let start = Instant::now();
+        let mut child = command
+            .args(["hook", guard, "--contract", "3"])
+            .current_dir(tmp.path())
+            .env_remove("CDPATH")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        while child.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(seconds)
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if child.try_wait().unwrap().is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            failures.push(format!(
+                "{guard}: {count} commands joined by {join:?} exceeded {seconds}s\n{}",
+                std::fs::read_to_string(&trace).unwrap()
+            ));
+        }
+        child.wait().unwrap();
+        println!("{guard}: {:?}", start.elapsed());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn expansion_codeflow() -> Command {
+    // Run the identical regression matrix against a saved reviewed binary.
+    std::env::var_os("TSK406_BASELINE_BINARY")
+        .map_or_else(codeflow, |binary| isolated_codeflow(Command::new(binary)))
 }
