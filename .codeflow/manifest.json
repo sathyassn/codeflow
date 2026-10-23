@@ -125,7 +125,7 @@
     ".agents/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "5077e587c36ea3d14ad311a883e618357698e83280a79fdf82058e3105627d3f",
+      "sha256": "0c3cb6441226862718b0230ee9d9d8a84b43b94fcc73aa6afd198043310cea84",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/visual-craft.md": {
@@ -965,7 +965,7 @@
     ".claude/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "5077e587c36ea3d14ad311a883e618357698e83280a79fdf82058e3105627d3f",
+      "sha256": "0c3cb6441226862718b0230ee9d9d8a84b43b94fcc73aa6afd198043310cea84",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/visual-craft.md": {
