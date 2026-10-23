@@ -2321,6 +2321,39 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     })
 }
 
+fn checkout_config_violation(name: &str, args: &[String], line: &Line<'_>) -> Option<Violation> {
+    if let Some(finding) = crate::hooks::git_guard::xargs_git_write(name, args, line.integrity) {
+        return Some(finding);
+    }
+    if line.kind == Kind::GitConfig {
+        if let Some(finding) =
+            crate::hooks::git_guard::unread_editor_script(name, args, line.integrity)
+        {
+            return Some(finding);
+        }
+    }
+    if name != "git" {
+        return None;
+    }
+    for dir in &line.dirs {
+        if let Some(finding) = crate::hooks::git_guard::git_command_write_violation(
+            name,
+            args,
+            line.integrity,
+            dir,
+            dir,
+            line.text,
+        ) {
+            return Some(finding);
+        }
+    }
+    let filled: Vec<_> = args.iter().map(|arg| line.substitute(arg)).collect();
+    let ("config", rest) = git_subcommand(&filled)? else {
+        return None;
+    };
+    crate::hooks::git_guard::checkout_config_write(rest, line.integrity)
+}
+
 /// The writes one simple command makes.
 fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let noun = line.noun();
@@ -2338,33 +2371,14 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
             })
             .collect()
     };
-    // Redirects write their targets whatever the program.
-    let redirects = redirect_writes(segment);
-    for target in redirects.targets.iter().chain(&redirects.unread) {
-        match line.judge(target, &dirs) {
-            Judged::Class(label) => {
-                return Some(line.finding(format!("a redirect writes the {noun} `{label}`")))
-            }
-            Judged::Unresolved(word) => {
-                if let Some(why) = line.unresolved_near_class(&word, &dirs) {
-                    return Some(line.finding(format!(
-                        "a redirect writes `{word}`, which the guard cannot resolve, and {why}"
-                    )));
-                }
-            }
-            Judged::Placement(_) | Judged::Ordinary => {
-                if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
-                    if let Some(file) = line.names(target) {
-                        return Some(line.finding(format!(
-                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the {noun} `{file}`"
-                        )));
-                    }
-                }
-            }
-        }
+    if let Some(finding) = segment_redirect_violation(segment, line, &dirs) {
+        return Some(finding);
     }
     let (program, args) = strip_launchers(&tokens)?;
     let name = basename(program);
+    if let Some(finding) = checkout_config_violation(name, args, line) {
+        return Some(finding);
+    }
     if name == "git" {
         if let Some(why) = git_setting_violation(args, line) {
             return Some(line.finding(format!(
@@ -2438,6 +2452,40 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
         return None;
     }
     placing_violation(name, args, line, &dirs)
+}
+
+fn segment_redirect_violation(
+    segment: &str,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Option<Violation> {
+    let noun = line.noun();
+    // Redirects write their targets whatever the program.
+    let redirects = redirect_writes(segment);
+    for target in redirects.targets.iter().chain(&redirects.unread) {
+        match line.judge(target, dirs) {
+            Judged::Class(label) => {
+                return Some(line.finding(format!("a redirect writes the {noun} `{label}`")))
+            }
+            Judged::Unresolved(word) => {
+                if let Some(why) = line.unresolved_near_class(&word, dirs) {
+                    return Some(line.finding(format!(
+                        "a redirect writes `{word}`, which the guard cannot resolve, and {why}"
+                    )));
+                }
+            }
+            Judged::Placement(_) | Judged::Ordinary => {
+                if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
+                    if let Some(file) = line.names(target) {
+                        return Some(line.finding(format!(
+                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the {noun} `{file}`"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The words of a call the guard judges as paths it may write: every word
