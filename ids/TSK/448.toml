@@ -1,0 +1,11 @@
+id = "TSK-448"
+uid = "fc504e5c-b335-407d-93e3-ab376b8e8109"
+kind = "TSK"
+title = "The docs portal takes the fixed fast-uri release"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-23T22:18:08Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
