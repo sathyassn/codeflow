@@ -1392,6 +1392,19 @@ fn recorded_authority_and_host_recovery_name_verifiable_evidence() {
             "forge's merge record",
             "project's recorded merge authority",
             "review, comment or approval record that the forge attributes to the operator",
+            "An agent's \"Approved\" comment posted with the operator's login grants nothing.",
+            "Check `baseRepository` and `baseRefName` against the project's canonical repository and protected target.",
+            "`gh api` reports these as `base.repo.full_name` and `base.ref`",
+            "An agent-added fork remote never counts.",
+            "Any recorded merge authority must meet the same landed-record and human-approval rules.",
+            "Forge attribution counts as the operator only for an account no agent session uses.",
+            "The same account separation is required to identify a human merger.",
+            "When agents share the operator's forge login, require evidence an agent cannot produce",
+            "a review from a separate human account that no agent session uses",
+            "the operator confirming directly in this session",
+            "That evidence must establish the human merger and operator approval.",
+            "App and automation merges never count as a person.",
+            "If an identity or repository check fails, treat the record as absent and ask the operator.",
             "If the host cannot read that evidence",
             "ask the operator",
             "Never infer approval or a human merge from commit authorship or local history.",
@@ -1399,7 +1412,7 @@ fn recorded_authority_and_host_recovery_name_verifiable_evidence() {
             assert!(content.contains(clause), "{section} lost {clause}");
         }
     }
-    assert!(records.contains("`gh pr view <n> --json mergedBy,baseRefName`"));
+    assert!(records.contains("`gh api repos/<canonical-owner>/<repo>/pulls/<n>`"));
     assert!(records.contains("treat the record as absent"));
     assert!(recovery.contains("treat the route as absent"));
 }
