@@ -169,6 +169,18 @@ review or consult runs in Herdr, read
 [review and harvest](references/review-and-harvest.md): the reply harvest,
 its provenance, and the one way a review seat runs.
 
+## Blocked seats
+
+Before each status report or handoff, inspect the live agents and read the
+owned seat's current prompt or native turn evidence. Herdr `blocked`,
+`idle` and `done` do not say whether work is complete or waiting on process.
+Check for a command or trust prompt, a refusal, a gate-queue wait, an
+unharvested reply or a review follow-up. Use `cf-method/references/autonomy.md`
+"Seat prompts and refusals" to decide what the host can answer; record the
+prompt, scope evidence and response. Leave hook trust with the operator.
+Never send keys to a seat this run does not own. Report a foreign seat's
+blocker to its owner, and leave it untouched.
+
 ## Cleanup
 
 same topic / same review / follow-up: **resume this tab**. Do not mint a new

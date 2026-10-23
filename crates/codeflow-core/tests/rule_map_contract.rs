@@ -25,7 +25,7 @@ use codeflow_core::scaffold::{
 mod git_isolation;
 use git_isolation::isolate_git;
 
-/// TSK-184 AC-1: the 26 moments of the map, in rendered order. The first
+/// TSK-184 AC-1: the 27 moments of the map, in rendered order. The first
 /// [`DELIVERY_MOMENTS`] are the delivery stages in the order work moves; the
 /// rest are the situations that cut across stages.
 const MOMENT_KEYS: &[&str] = &[
@@ -44,6 +44,7 @@ const MOMENT_KEYS: &[&str] = &[
     "release",
     "cleanup",
     "status",
+    "standing-rule",
     "failure",
     "refusal",
     "secret",
@@ -85,6 +86,16 @@ const C1_HEADINGS: &[(&str, &str)] = &[
     (
         "rules/workflow-discipline.md",
         "Only the operator adds process",
+    ),
+    ("agents/skills/cf-herdr/SKILL.md", "Cleanup"),
+    ("agents/skills/cf-herdr/SKILL.md", "Blocked seats"),
+    (
+        "claude/skills/cf-method/references/autonomy.md",
+        "Recorded rules and delegations",
+    ),
+    (
+        "claude/skills/cf-method/references/autonomy.md",
+        "Multi-session coordination",
     ),
     ("rules/worktrees.md", "Work-start check"),
     ("rules/worktrees.md", "Cleanup"),
@@ -1227,5 +1238,76 @@ fn epic_line_adoption_rule_documents_push_refusal_and_landed_repair() {
         "(Amended 2026-10-06 by TSK-248",
     ] {
         assert!(r52.contains(phrase), "R-52 lacks: {phrase}");
+    }
+}
+
+/// Multi-session coordination must be discoverable in adopting projects.
+#[test]
+fn multi_session_map_routes_cleanup_reviews_and_handoffs() {
+    let kernel = Kernel::shipped();
+    for tier in [Tier::Standard, Tier::Full] {
+        let moments = kernel.moments_for(tier);
+        for (key, clauses) in [
+            (
+                "cleanup",
+                vec!["native resume id", "seat tabs this run created"],
+            ),
+            (
+                "standing-rule",
+                vec![
+                    "standing operator rule",
+                    "standing_reviews",
+                    "project-owned",
+                ],
+            ),
+            (
+                "status",
+                vec![
+                    "check live remote refs, PRs and checks",
+                    "sweep lanes and seats",
+                ],
+            ),
+            (
+                "pr",
+                vec!["standing reviews `codeflow models resolve` owes"],
+            ),
+            (
+                "review",
+                vec!["standing reviews `codeflow models resolve` owes"],
+            ),
+        ] {
+            let moment = moments.iter().find(|moment| moment.key == key).unwrap();
+            let row = format!("{} {}", moment.when, moment.action);
+            for clause in clauses {
+                assert!(row.contains(clause), "{tier}: {key} lost {clause}");
+            }
+        }
+    }
+}
+
+/// Authority examples must keep routine prompts separate from human gates.
+#[test]
+fn autonomy_keeps_seat_prompts_and_refusal_recovery_bounded() {
+    let text = normalized(&read(
+        &repo_root().join("assets/base/claude/skills/cf-method/references/autonomy.md"),
+    ));
+    for clause in [
+        "exact action",
+        "hook trust",
+        "never reroute a refused action",
+        "host-run recovery",
+        "proposal until the operator approves",
+        "one digest per lane",
+        "The host orders the shared machine's gate queue",
+        "reaching a count never parks authorized work",
+        "Before every status report or handoff, sweep lanes and seats",
+        "chat delegation is not a recorded delegation",
+        "No configuration silently grants hook trust.",
+        "Task scope alone never authorizes answering a prompt reserved to a person.",
+        "Both harnesses' effective rules and the project guards must permit that recovery",
+        "A hook-trust or policy refusal never qualifies.",
+        "leave that command held",
+    ] {
+        assert!(text.contains(clause), "autonomy lost {clause}");
     }
 }
