@@ -1902,6 +1902,100 @@ test("a displaced holder whose heartbeat becomes durable during the probe is kep
   }
 });
 
+async function startIdleCoordinator(root, writeTicks = false) {
+  const script = path.join(root, "idle-coordinator.mjs");
+  await writeFile(script, `
+    import { writeFileSync } from "node:fs";
+    import { withWorkflowLease } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)};
+    await withWorkflowLease(process.argv[2], async () => {
+      process.send("ready");
+      setInterval(() => ${writeTicks ? 'writeFileSync(process.argv[2] + "/tick", String(Date.now()))' : "{}"}, 25);
+      await new Promise(() => {});
+    });
+  `);
+  const coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  await once(coordinator, "message");
+  return coordinator;
+}
+
+test("a read error on a displaced holder's record keeps the holder and its claim", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-eio-"));
+  let coordinator = null;
+  const fsp = (await import("node:fs/promises")).default;
+  const realOpen = fsp.open;
+  const { syncBuiltinESMExports } = await import("node:module");
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    let swapped = false;
+    let probed = false;
+    let armed = false;
+    let target = null;
+    let injected = false;
+    fsp.open = async function (file, ...args) {
+      if (armed && String(file) === target) { armed = false; injected = true; throw Object.assign(new Error("injected EIO on candidate reread"), { code: "EIO" }); }
+      return realOpen.call(fsp, file, ...args);
+    };
+    syncBuiltinESMExports();
+    const first = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = await startIdleCoordinator(root);
+        const lease = JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8"));
+        target = path.join(root, ".portal", `.workflow-lock-candidate-${lease.token}`, "owner.json");
+      },
+      probeProcess: async (pid) => {
+        if (coordinator && pid === coordinator.pid) { if (!probed) { probed = true; armed = true; } return "unknown"; }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    fsp.open = realOpen;
+    syncBuiltinESMExports();
+    assert.equal(injected, true);
+    assert.notEqual(first, "unexpected");
+    assert.equal(processAlive(coordinator.pid), true);
+    const next = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(next), /workflow already in progress/);
+  } finally {
+    fsp.open = realOpen;
+    syncBuiltinESMExports();
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
+test("a reclaimer that exits after moving a live holder's claim does not lose that holder", { skip: process.platform === "win32", timeout: 30_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-crash-"));
+  let coordinator = null;
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    let swapped = false;
+    const stopped = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = await startIdleCoordinator(root, true);
+      },
+      afterClaimMoved: async ({ reason }) => { if (reason === "reclaim") throw new Error("simulated reclaimer exit after moving the replacement claim"); },
+    }).catch((error) => error);
+    assert.match(String(stopped), /simulated reclaimer exit/);
+    // Past the incomplete-candidate threshold, so cleanup would act on the live holder's candidate.
+    await new Promise((resolve) => setTimeout(resolve, 6100));
+    const refused = await withWorkflowLease(root, async () => "unexpected").catch((error) => error);
+    assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${coordinator.pid}\\)`));
+    const before = await readFile(path.join(root, "tick"), "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.notEqual(await readFile(path.join(root, "tick"), "utf8"), before);
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
+});
+
 test("a heartbeat refreshed after the first read keeps an undecidable lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-heartbeat-race-"));
   const script = path.join(root, "refreshing-owner.mjs");

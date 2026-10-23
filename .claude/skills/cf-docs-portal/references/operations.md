@@ -222,8 +222,10 @@ Windows a workflow that started a writer therefore leaves its lease in place
 when it ends, and the next run waits for the age rule; to start sooner, stop
 the named processes and remove `.portal/workflow.lock` once no portal process
 runs. Native Windows behavior is not verified. A displaced holder found during
-recovery is judged the same way, on its settled record, and is kept while its
-owner lives or its record cannot be settled. A workflow that cannot prove a writer's
+recovery is judged on its settled record and is kept while its owner lives. If
+its record cannot be read, recovery stops with the holder's claim still
+recoverable, and the next run judges it again; a candidate whose owner lives is
+never cleaned up as incomplete. A workflow that cannot prove a writer's
 group stopped, or cannot stop a writer it failed to record, fails and keeps the
 lease. A reused process id reads as live and blocks.
 Before Astro starts, the workflow rejects symlinks and non-regular entries in

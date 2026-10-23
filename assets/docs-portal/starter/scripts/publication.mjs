@@ -199,7 +199,7 @@ async function judgeWorkflowOwner(lease, probe) {
 // writer after the contender read the lease and die before it probes. Nothing
 // of such an owner runs, so its record cannot change; it is read again and
 // judged again until it stops changing. A record that never settles is no proof.
-async function workflowOwnerVerdict(portalDirectory, lease, probe) {
+async function workflowOwnerVerdict(portalDirectory, lease, probe, { restoring = false } = {}) {
   let judged = lease;
   for (let round = 0; round < 5; round += 1) {
     const verdict = await judgeWorkflowOwner(judged, probe);
@@ -208,8 +208,15 @@ async function workflowOwnerVerdict(portalDirectory, lease, probe) {
     try { final = await readWorkflowLeaseDirectory(workflowCandidate(portalDirectory, judged.token)); }
     catch (error) {
       // The holder was reclaimed or released while it was read: not a proof either way.
-      const now = await currentWorkflowClaimToken(portalDirectory).catch(() => undefined);
-      if (error?.code === "ENOENT" || (now !== undefined && now !== judged.token)) return { state: "gone", live: [], starting: false };
+      // Restoring a displaced holder: its claim is absent because this contender
+      // moved it, so a different or missing claim says nothing about the owner.
+      // Only a candidate proven absent counts; any other read error stops the
+      // restoration with the holder still recoverable.
+      if (error?.code === "ENOENT") return { state: "gone", live: [], starting: false };
+      if (!restoring) {
+        const now = await currentWorkflowClaimToken(portalDirectory).catch(() => undefined);
+        if (now !== undefined && now !== judged.token) return { state: "gone", live: [], starting: false };
+      }
       throw error;
     }
     // Every field the decision uses must hold still, the heartbeat included.
@@ -386,7 +393,7 @@ async function liveWorkflowCandidateIdentity(portalDirectory, token, probe = pro
   try {
     const candidate = await readWorkflowLeaseDirectoryIdentity(workflowCandidate(portalDirectory, token));
     if (candidate.lease.token !== token) return null;
-    const verdict = await workflowOwnerVerdict(portalDirectory, candidate.lease, probe);
+    const verdict = await workflowOwnerVerdict(portalDirectory, candidate.lease, probe, { restoring: true });
     if (verdict.state === "gone" || verdict.state === "dead") return null;
     if (verdict.state === "live" || verdict.state === "unstable") return candidate;
     const settled = verdict.lease ?? candidate.lease;
@@ -455,7 +462,9 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
   let candidates = 0;
   const activeToken = await currentWorkflowClaimToken(portalDirectory);
   if (testHooks.afterRecoverySnapshot) await testHooks.afterRecoverySnapshot({ activeToken, entries: entries.map((entry) => entry.name) });
-  for (const entry of entries) {
+  // Retired claims come first: one may identify a displaced live holder whose
+  // candidate must be judged by liveness before any cleanup touches it.
+  for (const entry of [...entries].sort((a, b) => Number(b.name.endsWith(".json")) - Number(a.name.endsWith(".json")))) {
     const suspect = entry.name.match(/^\.workflow-lock-suspect-([a-f0-9]{48})-([a-f0-9]{24})$/);
     if (suspect) {
       candidates += 1;
@@ -469,9 +478,14 @@ async function recoverWorkflowLeaseDebris(portalDirectory, testHooks = {}) {
     const target = path.join(portalDirectory, entry.name);
     if (match[1] === "candidate") {
       if (match[3] || match[4] || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
-      const lease = await readWorkflowLeaseDirectory(target);
+      // A retired claim handled first may have removed this candidate.
+      let lease;
+      try { lease = await readWorkflowLeaseDirectory(target); }
+      catch (error) { if (error?.code === "ENOENT") continue; throw error; }
       if (lease.token !== match[2]) throw new Error("portal workflow lease recovery identity does not match");
       if (activeToken === lease.token || Date.now() - lease.heartbeat_at_ms <= INCOMPLETE_WORKFLOW_LEASE_MAX_AGE_MS) continue;
+      // A candidate whose owner is alive is never cleaned up as incomplete.
+      if (lease.owner !== undefined && (await judgeWorkflowOwner(lease, testHooks.probeProcess ?? probeProcess)).state === "live") continue;
       await quarantineStaleWorkflowCandidate(portalDirectory, target, match[2]);
     } else if (match[1] === "recovery") {
       if (match[3] || match[4] || entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`unsafe portal workflow lease recovery entry: ${entry.name}`);
