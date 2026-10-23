@@ -9952,7 +9952,7 @@ fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hoo
             text.contains("uses advertised target 'main'"),
             "{case}: {text}"
         );
-        assert!(text.contains("work.criteria_frozen"), "{case}: {text}");
+        assert!(text.contains("work.import_authority"), "{case}: {text}");
         assert!(
             f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
                 .is_empty(),
@@ -9978,7 +9978,7 @@ fn local_origin_main_branch_cannot_bind_a_line_through_installed_hook() {
         assert!(!out.status.success(), "{text}");
         assert!(text.contains("is not a bound epic line"), "{text}");
         assert!(text.contains("uses advertised target 'main'"), "{text}");
-        assert!(text.contains("work.criteria_frozen"), "{text}");
+        assert!(text.contains("work.import_authority"), "{text}");
     }
     assert!(!text.contains(&format!("--into={LINE}")), "{text}");
     assert!(

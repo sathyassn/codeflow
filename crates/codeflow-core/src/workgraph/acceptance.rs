@@ -34,6 +34,8 @@ pub const BINDING_RULE: &str = "work.acceptance_binding";
 /// Criteria changes outside the own-task or planning allowance, including
 /// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
+/// An imported record lacks a verified source authority. Always blocks.
+pub const IMPORT_RULE: &str = "work.import_authority";
 /// The selected criteria version, distinct from the run's policy authority.
 pub const AUTHORITY_NOTE: &str = "work.criteria_authority";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
@@ -305,7 +307,10 @@ mod authority {
         /// The bases that alone may supply a reopened task's criteria.
         #[must_use]
         pub fn criteria(&self) -> CriteriaBases {
-            CriteriaBases(self.0.clone())
+            CriteriaBases {
+                bases: self.0.clone(),
+                imported_home: None,
+            }
         }
     }
 
@@ -336,11 +341,29 @@ mod authority {
     /// [`RunBases::criteria`] builds it, so a range's own line head, which
     /// stacks merges, can never join it.
     #[derive(Clone, Debug, Default)]
-    pub struct CriteriaBases(Vec<Oid>);
+    pub struct CriteriaBases {
+        bases: Vec<Oid>,
+        imported_home: Option<(String, Oid)>,
+    }
 
     impl CriteriaBases {
         pub(super) fn bases(&self) -> &[Oid] {
-            &self.0
+            &self.bases
+        }
+
+        /// The historical home tip already proved by an import landing.
+        /// It substitutes only for that missing ref, never another target
+        /// named by a retargeted record, and adds no criteria base.
+        pub(super) fn with_imported_home(mut self, home: &str, tip: Oid) -> Self {
+            self.imported_home = Some((home.to_string(), tip));
+            self
+        }
+
+        pub(super) fn imported_home(&self, name: &str) -> Option<Oid> {
+            self.imported_home
+                .as_ref()
+                .filter(|(home, _)| home == super::super::work_start::logical_target(name))
+                .map(|(_, tip)| *tip)
         }
     }
 }
@@ -1700,7 +1723,9 @@ enum Presence {
 /// this clone can move: one that shows a completion the judged points do
 /// not makes the landing unknown, which keeps the criteria and never
 /// supplies new ones. A required target with no tip here makes the whole
-/// judgement unreadable, never planned.
+/// judgement unreadable, never planned. An import already proved at a
+/// published landing can supply its historical home tip when that ref was
+/// deleted; that tip is still outside evidence, never a new criteria base.
 fn judge_reopened(
     repo: &Repository,
     task: &RecordView,
@@ -1729,10 +1754,15 @@ fn judge_reopened(
     }
     let mut tips: Vec<(String, Oid)> = Vec::new();
     for name in &targets {
-        let found = match target_tips(repo, name) {
+        let mut found = match target_tips(repo, name) {
             Ok(found) => found,
             Err(reason) => return TaskJudgement::unreadable(reason),
         };
+        if found.is_empty() {
+            if let Some(tip) = criteria.imported_home(name) {
+                found.push((name.clone(), tip));
+            }
+        }
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
                 "the target `{0}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {0}`)",
@@ -3158,7 +3188,10 @@ pub fn completions_in_range(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
-    let imported = imported_records(repo, base_oid, head_oid, &after)?;
+    let imported = match imported_records(repo, base_oid, head_oid, &after) {
+        Ok(imported) => imported,
+        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+    };
     let mut local = after.clone();
     for id in imported.keys() {
         local.records.remove(id);
@@ -3503,7 +3536,10 @@ pub fn pull_request_findings_judged(
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
-    let imported = imported_records(&repo, target_tip, head_tip, &at_head)?;
+    let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
+        Ok(imported) => imported,
+        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+    };
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;
     let (redacted, _) = super::redaction::judge_range(

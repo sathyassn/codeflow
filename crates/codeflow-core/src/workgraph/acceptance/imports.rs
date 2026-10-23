@@ -75,7 +75,11 @@ fn compute_imports(
 ) -> Result<Imports, String> {
     #[cfg(test)]
     COMPUTATIONS.with(|count| count.set(count.get() + 1));
-    let changed = merged_records(repo, base, head, graph)?;
+    // A target may independently have synced the same source after the
+    // receiver forked. Search imports since the shared anchor, while the
+    // actual target base still judges competing criteria below.
+    let anchor = history::merge_base(repo, base, head).map_err(|error| error.to_string())?;
+    let changed = merged_records(repo, anchor, head, graph)?;
     if changed.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -89,10 +93,11 @@ fn compute_imports(
             super::super::work_start::logical_target,
         );
         if home == default.name || home.starts_with("integration/") {
-            refuse_unpublished(repo, record, home, base, head)?;
+            refuse_unpublished(repo, record, home, default_tip, anchor, head)?;
         }
     }
     let mut homes = BTreeMap::from([(default.name.clone(), default_tip)]);
+    let mut retired = BTreeMap::new();
     for record in &changed {
         let Some(home) = record.integration_target.as_deref() else {
             continue;
@@ -102,19 +107,23 @@ fn compute_imports(
             continue;
         }
         let Some(tip) = home_tip(repo, home)? else {
-            // A first push still judges its own landings. A planning merge
-            // shared by sibling lines need not have landed on the other home.
-            // Neither case receives import authority from the local branch.
-            if let Some(local) = reference_tip(repo, &format!("refs/heads/{home}"))? {
-                if on_home_chain(repo, head, local)?
-                    || matching_landing(repo, record, local, head, Some(base))?.is_none()
-                {
-                    continue;
-                }
+            // A retired line's exact record can still be proved at its
+            // published default-target landing. The proof below judges the
+            // landing merge and the source span, not record equality alone.
+            if let Some(landing) = matching_landing(repo, record, default_tip, head, Some(anchor))?
+            {
+                retired.insert(record.id.clone(), landing);
+                continue;
             }
-            return Err(format!("{}: blocks come from target history, but home `{home}` is unavailable; fetch that home and its full history, then rerun the range", record.id));
+            // Unpublished local landings were refused above. A remaining
+            // local branch supplies no import authority (for example a first
+            // push of this very line, or a shared planning merge).
+            if reference_tip(repo, &format!("refs/heads/{home}"))?.is_some() {
+                continue;
+            }
+            return Err(format!("{}: blocks come from target history, but home `{home}` is unavailable and no exact record landing is proven on published default `{}`; fetch the home or default target and its full history, then rerun the range", record.id, default.name));
         };
-        if is_ancestor_or_same(repo, tip, base)? || on_home_chain(repo, head, tip)? {
+        if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
             continue;
         }
         match super::super::work_start::check_epic_line(
@@ -134,8 +143,8 @@ fn compute_imports(
     }
     let mut imported = BTreeMap::new();
     for (home, tip) in homes {
-        // A source already contained by the range base supplies no new imports.
-        if is_ancestor_or_same(repo, tip, base)? || on_home_chain(repo, head, tip)? {
+        // A source already contained by the shared anchor supplies no new imports.
+        if is_ancestor_or_same(repo, tip, anchor)? || on_home_chain(repo, head, tip)? {
             continue;
         }
         let owned = owned_paths(
@@ -148,6 +157,7 @@ fn compute_imports(
                 continue;
             }
             if record.kind == RecordKind::Task
+                && !(home == default.name && retired.contains_key(&record.id))
                 && record
                     .integration_target
                     .as_deref()
@@ -157,10 +167,14 @@ fn compute_imports(
             {
                 continue;
             }
-            let Some(landed) = matching_landing(repo, record, tip, head, Some(base))? else {
+            let landed = match retired.get(&record.id).filter(|_| home == default.name) {
+                Some(landing) => Some(*landing),
+                None => matching_landing(repo, record, tip, head, Some(anchor))?,
+            };
+            let Some(landed) = landed else {
                 continue;
             };
-            if is_ancestor_or_same(repo, landed, base)? {
+            if is_ancestor_or_same(repo, landed, anchor)? {
                 continue;
             }
             let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head)
@@ -198,23 +212,31 @@ fn merged_records<'a>(
 }
 
 fn unavailable_home(home: &str) -> String {
-    format!("blocks come from target history, but published home `{home}` is unavailable; fetch refs/remotes/origin/{home} and its full history, then rerun")
+    format!("blocks come from target history, but published home `{home}` is unavailable; fetch the configured remote for `{home}` and its full history, then rerun")
 }
 
 /// Local branches are authority only in an offline repository with no remotes.
 pub(super) fn home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, String> {
-    let remote = format!("refs/remotes/origin/{home}");
-    if let Some(tip) = reference_tip(repo, &remote)? {
-        return Ok(Some(tip));
+    let remotes = repo.remotes().map_err(|error| error.to_string())?;
+    if remotes.is_empty() {
+        return reference_tip(repo, &format!("refs/heads/{home}"));
     }
-    if !repo
-        .remotes()
-        .map_err(|error| error.to_string())?
-        .is_empty()
-    {
-        return Ok(None);
-    }
-    reference_tip(repo, &format!("refs/heads/{home}"))
+    let configured = remotes
+        .iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let remote = super::super::readiness::target_fetch_remote(repo, home)?;
+    let remote = match remote {
+        Some(remote) if configured.contains(&Some(remote.as_str())) => remote,
+        _ => {
+            // A deleted local line has no upstream setting. Use the default
+            // target's fetch remote, as an ordinary clone uses origin.
+            let default = default_target_name(repo)?;
+            super::super::readiness::target_fetch_remote(repo, &default.name)?
+                .unwrap_or_else(|| "origin".to_string())
+        }
+    };
+    reference_tip(repo, &format!("refs/remotes/{remote}/{home}"))
 }
 
 fn reference_tip(repo: &Repository, name: &str) -> Result<Option<Oid>, String> {
@@ -232,6 +254,7 @@ fn refuse_unpublished(
     repo: &Repository,
     record: &RecordView,
     home: &str,
+    default_tip: Oid,
     base: Oid,
     head: Oid,
 ) -> Result<(), String> {
@@ -252,17 +275,15 @@ fn refuse_unpublished(
     if on_home_chain(repo, head, local)? {
         return Ok(());
     }
-    let published = home_tip(repo, home)?;
-    if published == Some(local) {
+    // A deleted remote home may already be contained by the published
+    // default target. A retained local ref must not veto that proof.
+    let published = home_tip(repo, home)?.unwrap_or(default_tip);
+    if published == local {
         return Ok(());
     }
     if let Some(landing) = matching_landing(repo, record, local, head, Some(base))? {
-        if !published
-            .map(|tip| is_ancestor_or_same(repo, landing, tip))
-            .transpose()?
-            .unwrap_or(false)
-        {
-            return Err(format!("{}: blocks come from target history on home `{home}`, but its exact record exists only on unpublished local history; land the reviewed work through the home's pull request, fetch refs/remotes/origin/{home}, then merge that published result", record.id));
+        if !is_ancestor_or_same(repo, landing, published)? {
+            return Err(format!("{}: blocks come from target history on home `{home}`, but its exact record exists only on unpublished local history; land the reviewed work through the home's pull request, fetch the configured remote for `{home}`, then merge that published result", record.id));
         }
     }
     Ok(())
@@ -353,6 +374,110 @@ fn matching_landing(
     Ok(found)
 }
 
+#[allow(clippy::too_many_arguments)] // The same guarded landing inputs as prove_record.
+fn prove_retired_record(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    default_tip: Oid,
+    landed: Oid,
+    base: Oid,
+    head: Oid,
+    parents: &[Oid],
+) -> Result<Option<ImportedRecord>, String> {
+    let Some(declared) = record
+        .integration_target
+        .as_deref()
+        .map(super::super::work_start::logical_target)
+        .filter(|declared| record.kind == RecordKind::Task && *declared != home)
+    else {
+        return Ok(None);
+    };
+    let [_, source] = parents else {
+        return Err("the retired home's record has no default-target merge landing".into());
+    };
+    if record_at(repo, *source, record)?.is_none_or(|old| old.content != record.content) {
+        return Err("the default-target merge does not carry the exact retired-home record".into());
+    }
+    // The published default landing supplies authority for this historical
+    // source chain. Bind the task at its own landing on that chain, so
+    // later line work and closure do not become this task's completion.
+    let anchor = history::merge_base(repo, base, head).map_err(|error| error.to_string())?;
+    let origin = matching_landing(repo, record, *source, head, Some(anchor))?
+        .ok_or("the retired home's source chain has no exact record landing")?;
+    let proof = prove_record(
+        repo,
+        record,
+        declared,
+        *source,
+        default_tip,
+        origin,
+        base,
+        head,
+    )?;
+    Ok(Some(ImportedRecord {
+        path: record.path.clone(),
+        home: home.to_string(),
+        landing: landed,
+        completion: proof.completion,
+    }))
+}
+
+fn prove_task_completion(
+    repo: &Repository,
+    record: &RecordView,
+    home: &str,
+    tip: Oid,
+    default_tip: Oid,
+    landed: Oid,
+    parents: &[Oid],
+) -> Result<CompletionProof, String> {
+    let block = active_block(record).expect("active block checked");
+    let introduced = introduced_at(repo, record, &block, landed)?;
+    let anchor = source_landing_base(repo, landed, introduced)?.or(first_parent(repo, introduced)?);
+    // Judge the entire task head that landed, including changes made
+    // after its completion block was written. The block's introduction
+    // alone cannot prove that the home accepted the reviewed result.
+    let span = if parents.len() == 2 {
+        let second = parents[1];
+        if record_at(repo, second, record)?.is_none_or(|old| old.content != record.content) {
+            return Err("the home merge does not carry the exact source record".into());
+        }
+        second
+    } else {
+        landed
+    };
+    let run = RunBases::new([landed]);
+    let source_graph = Graph::from_revision(repo, &landed.to_string())?;
+    let bound = bind_completion_with_amendment(
+        repo,
+        record,
+        &source_graph,
+        Landing::Commit(span),
+        Some(default_tip),
+        Transport::TaskLanding,
+        anchor,
+        anchor,
+        &run.stacking().with_line_head(tip),
+        &run.criteria().with_imported_home(home, tip),
+    );
+    if !bound.findings.is_empty() {
+        return Err(bound
+            .findings
+            .iter()
+            .map(|found| found.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+    let mut proof = bound
+        .proof
+        .ok_or("the home completion has no binding proof")?;
+    if parents.len() == 2 {
+        proof.landing_merge = Some(landed);
+    }
+    Ok(proof)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -372,6 +497,18 @@ fn prove_record(
         return Err("the home landing contains an unreviewed merge resolution".into());
     }
     verify_record_home(repo, record, home, landed, &parents, base, head)?;
+    if let Some(proof) = prove_retired_record(
+        repo,
+        record,
+        home,
+        default_tip,
+        landed,
+        base,
+        head,
+        &parents,
+    )? {
+        return Ok(proof);
+    }
     let completion = if record.kind == RecordKind::Task
         && super::super::redaction::check_landed(repo, landed, record)? == Some(true)
     {
@@ -397,51 +534,15 @@ fn prove_record(
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
-        let block = active_block(record).expect("active block checked");
-        let introduced = introduced_at(repo, record, &block, landed)?;
-        let anchor =
-            source_landing_base(repo, landed, introduced)?.or(first_parent(repo, introduced)?);
-        // Judge the entire task head that landed, including changes made
-        // after its completion block was written. The block's introduction
-        // alone cannot prove that the home accepted the reviewed result.
-        let span = if parents.len() == 2 {
-            let second = parents[1];
-            if record_at(repo, second, record)?.is_none_or(|old| old.content != record.content) {
-                return Err("the home merge does not carry the exact source record".into());
-            }
-            second
-        } else {
-            landed
-        };
-        let run = RunBases::new([landed]);
-        let source_graph = Graph::from_revision(repo, &landed.to_string())?;
-        let bound = bind_completion_with_amendment(
+        Some(prove_task_completion(
             repo,
             record,
-            &source_graph,
-            Landing::Commit(span),
-            Some(default_tip),
-            Transport::TaskLanding,
-            anchor,
-            anchor,
-            &run.stacking().with_line_head(tip),
-            &run.criteria(),
-        );
-        if !bound.findings.is_empty() {
-            return Err(bound
-                .findings
-                .iter()
-                .map(|found| found.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; "));
-        }
-        let mut proof = bound
-            .proof
-            .ok_or("the home completion has no binding proof")?;
-        if parents.len() == 2 {
-            proof.landing_merge = Some(landed);
-        }
-        Some(proof)
+            home,
+            tip,
+            default_tip,
+            landed,
+            &parents,
+        )?)
     } else {
         if record.kind == RecordKind::Epic {
             let origin = active_block(record)
@@ -491,7 +592,11 @@ fn verify_record_home(
         if let Some(parent) = parents.first() {
             if record_at(repo, *parent, record)?.is_some_and(|old| {
                 old.integration_target.as_deref().is_some_and(|declared| {
-                    super::super::work_start::logical_target(declared) != home
+                    super::super::work_start::logical_target(declared)
+                        != record
+                            .integration_target
+                            .as_deref()
+                            .map_or(home, super::super::work_start::logical_target)
                 })
             }) {
                 return Err("the landing changes the task's declared home".into());
@@ -516,7 +621,9 @@ fn verify_record_home(
         match judged.criteria {
             Authority::Held(source)
                 if source.criteria.signature() == record.criteria.signature() => {}
-            Authority::Unknown(reason) => return Err(reason),
+            Authority::Unknown(reason) => {
+                return Err(format!("accepted criteria cannot be resolved: {reason}"))
+            }
             _ => {
                 return Err(
                     "the receiving base and home do not agree on the accepted criteria".into(),

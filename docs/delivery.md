@@ -160,8 +160,17 @@ A receiver's first push still proves its own task landings.
 - The guarded history reader checks the source line, record identity, exact
   contents, ancestry and home landing. Equal record text alone is not proof.
   With a remote configured, the home must be published at
-  `refs/remotes/origin/<home>`; a local branch ahead of that ref supplies no
-  authority. Local homes are usable only in a repository with no remotes.
+  the selected fetch remote. The gate uses the configured upstream; a
+  retired line can use the default target's fetch remote (normally
+  `origin`). A local branch ahead of the remote-tracking ref supplies no
+  authority.
+  Local homes are usable only in a repository with no remotes. The local
+  gate trusts local remote-tracking refs and remoteless clones; git-guard
+  and hosted CI are the backstop.
+- After a home line lands on the default target and is deleted, the exact
+  record's first-parent landing on the published default target supplies
+  the proof. The landing and its source span must still pass the guarded
+  checks; a missing home without that landing remains unavailable.
 - A source task that merged its home after review retains its binding only
   when that merge was clean and came from the home line. A task reopened
   before its first landing keeps the criteria accepted at that landing.
@@ -170,12 +179,16 @@ A receiver's first push still proves its own task landings.
   records as its own additions.
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
-  an unavailable home or an overlaid history supplies no import proof.
+  an unavailable home without a proven default-target landing, or an
+  overlaid history supplies no import proof.
   The receiver's own completion still binds all its product work. A line
   merge that adds product changes outside verified source history and
   reviewed task heads refuses even when no task completes in that range.
+  A line push after landing work whose completion is still pending waits
+  until the completion record lands, even if the work was reviewed earlier.
 
-When the source proof refuses, fetch the named home and its full history.
+When `work.import_authority` refuses, fetch the named home and its full
+history, or the default target's history if the home has been retired.
 Repair invalid source acceptance through that task's pull request on its
 home, then merge the reviewed result. A refusal naming target history does
 not ask the receiver to reopen an unrelated task. Pass the intended

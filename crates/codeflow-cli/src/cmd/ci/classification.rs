@@ -972,8 +972,13 @@ fn task_record_additions(
     ) {
         Ok(paths) => paths,
         Err(error) => {
-            push(tagged, RULE, error, HINT);
-            Vec::new()
+            push(
+                tagged,
+                codeflow_core::workgraph::acceptance::IMPORT_RULE,
+                error,
+                "fetch and verify the named source history before classifying imported records",
+            );
+            return;
         }
     };
     // Matched as bytes: an added record whose name is not valid UTF-8 is

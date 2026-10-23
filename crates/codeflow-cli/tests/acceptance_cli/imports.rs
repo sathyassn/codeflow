@@ -468,11 +468,15 @@ fn publish_sources(root: &Path, home: &str) {
 }
 
 fn pre_push(root: &Path, branch: &str, old: &str) -> (i32, String) {
+    pre_push_remote(root, branch, old, "origin")
+}
+
+fn pre_push_remote(root: &Path, branch: &str, old: &str, name: &str) -> (i32, String) {
     use std::io::Write;
     use std::process::Stdio;
     let remote = root.join(".git/destination.git");
     let mut child = codeflow()
-        .args(["git-hook", "pre-push", "origin", remote.to_str().unwrap()])
+        .args(["git-hook", "pre-push", name, remote.to_str().unwrap()])
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -771,4 +775,137 @@ fn a_sync_resolution_without_a_completion_stays_receiver_work() {
 #[test]
 fn a_non_target_product_merge_without_a_completion_stays_receiver_work() {
     unowned_line_merge(false);
+}
+
+#[test]
+fn deleted_home_imports_are_proven_at_the_published_default_landing() {
+    let home = "integration/EPC-003-source";
+    for (reopen, stack, keep_local) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let dir = imported_from_home(home, reopen, stack);
+        let root = dir.path();
+        git(root, &["switch", home]);
+        let reviewed = head(root);
+        write(
+            root,
+            "project-management/epics/EPC-003.md",
+            &format!(
+                "{}\n## Closeout\n\n{}",
+                EPIC.replace("EPC-001", "EPC-003")
+                    .replace("status: planning", "status: complete"),
+                block(
+                    &reviewed,
+                    &["AC-1: verified | source journey"],
+                    "verified | source journey",
+                    "none: fixture"
+                )
+            ),
+        );
+        commit(root, "docs: complete the source epic");
+        git(root, &["switch", "main"]);
+        merge(root, home);
+        publish_sources(root, home);
+        git(root, &["push", "origin", "--delete", home]);
+        if !keep_local {
+            git(root, &["branch", "-D", home]);
+        }
+        git(root, &["switch", "-C", RECEIVER, LINE]);
+        merge(root, "main");
+        write(root, "src/lib.rs", "pub fn receiving_work() {}\n");
+        commit(root, "feat: receiving work after the retired home sync");
+        let mut failures = Vec::new();
+        for branch in [None, Some(RECEIVER), Some(LINE)] {
+            let result = check(root, LINE, branch, false);
+            if result.0 != 0 {
+                failures.push(result.1);
+            }
+        }
+        for result in [
+            check(root, LINE, Some(RECEIVER), true),
+            pre_push(root, RECEIVER, &"0".repeat(40)),
+        ] {
+            if result.0 != 0 {
+                failures.push(result.1);
+            }
+        }
+        git(root, &["switch", LINE]);
+        let old = head(root);
+        merge(root, "main");
+        for result in [
+            check(root, &old, None, false),
+            check(root, &old, Some(LINE), false),
+            ci_on(root, &old, LINE, "Task: EPC-001"),
+            pre_push(root, LINE, &old),
+        ] {
+            if result.0 != 0 {
+                failures.push(result.1);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "reopen={reopen}, stack={stack}, keep_local={keep_local}: {}",
+            failures.join("\n")
+        );
+        git(root, &["switch", RECEIVER]);
+        complete_receiver_and_land(root);
+    }
+}
+
+#[test]
+fn imports_use_the_configured_upstream_remote() {
+    let home = "integration/EPC-003-source";
+    let dir = imported_from_home(home, false, false);
+    let root = dir.path();
+    publish_sources(root, home);
+    for branch in ["main", LINE, home] {
+        git(
+            root,
+            &[
+                "branch",
+                "--set-upstream-to",
+                &format!("origin/{branch}"),
+                branch,
+            ],
+        );
+    }
+    git(root, &["remote", "rename", "origin", "upstream"]);
+    assert_passes(
+        &check(root, LINE, Some(RECEIVER), true),
+        "configured upstream import",
+    );
+    assert_passes(
+        &pre_push_remote(root, RECEIVER, &"0".repeat(40), "upstream"),
+        "configured upstream pre-push",
+    );
+}
+
+#[test]
+fn import_authority_refusals_name_the_import_rule() {
+    let home = "integration/EPC-003-source";
+    let dir = imported_from_home(home, false, false);
+    let root = dir.path();
+    publish_sources(root, "main");
+    git(root, &["branch", "-D", home]);
+    for result in [
+        check(root, LINE, Some(RECEIVER), true),
+        pre_push(root, RECEIVER, &"0".repeat(40)),
+    ] {
+        assert_blocks(
+            &result,
+            "missing import authority",
+            &["work.import_authority", home, "unavailable", "fetch"],
+        );
+        assert!(
+            !result
+                .1
+                .contains("cannot read the range to check acceptance"),
+            "{}",
+            result.1
+        );
+        assert!(!result.1.contains("a task PR may add only"), "{}", result.1);
+    }
 }
