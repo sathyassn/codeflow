@@ -1361,7 +1361,7 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             (
                 "trust prompt rule",
-                "answer it yourself for a path inside your task's own authorized project or worktree",
+                "answer it yourself for a path inside your task's own worktree",
             ),
             ("trust prompt identity", "Decide by authorization and path identity"),
             (
