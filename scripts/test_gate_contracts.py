@@ -248,7 +248,9 @@ class GateContracts(unittest.TestCase):
         nextest = tomllib.loads(read('.config/nextest.toml'))
         profiles = nextest['profile']
         self.assertEqual(nextest['test-groups']['serial']['max-threads'], 1)
-        self.assertEqual(profiles['essential']['test-threads'], 8)
+        self.assertNotIn('test-threads', profiles['essential'])
+        self.assertEqual(json.loads(read('.codeflow/test-config.json'))['execution']['worker_budget'], 8)
+        self.assertEqual(workspace['workers'], 8)
         self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
@@ -271,8 +273,12 @@ class GateContracts(unittest.TestCase):
             return found
         for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
             self.assertIn('present-web-build', closure(name), name)
-        # The quick gate stays light: no quick target pulls in a build producer
-        # (fmt and clippy need no web build; there is no present build.rs).
+        self.assertIn('rust-build', closure('codeflow-bin'))
+        for name in ['rust-doctest', 'rustdoc']:
+            self.assertIn('codeflow-bin', closure(name), name)
+        self.assertEqual(targets['rust-clippy']['env']['CARGO_TARGET_DIR'], 'target/clippy')
+        # Quick keeps its membership and does not pull in the web build.
+        # Its Cargo checks declare their need for heavy admission.
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}
         self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'contract-scans', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:

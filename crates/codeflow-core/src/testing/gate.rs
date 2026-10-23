@@ -15,7 +15,7 @@ use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
 use crate::testing::error::TestingError;
 use crate::testing::report::{CanonicalTestReport, CtrfStatus};
-use crate::testing::runner::{run_dependency_targets, TargetRunResult};
+use crate::testing::runner::TargetRunResult;
 use crate::testing::setup::detect::detect_stacks;
 use crate::testing::validation;
 
@@ -304,14 +304,21 @@ fn run_gate_resolved(
         &run_dir,
         options.all,
     )?;
+    // Resolve fallback weight before scheduling; the original declarations remain evidence inputs.
+    for target in &mut targets {
+        if mode == "quick" && effective_mode == "essential" && target.heavy.is_none() {
+            target.heavy = Some(true);
+        }
+    }
     let before = delivery::tracked(project_dir)?;
-    let raw = run_dependency_targets(
+    let raw = crate::testing::runner::run_dependency_targets_with_admission(
         &targets,
         &effective_mode,
         project_dir,
         &execution,
         &run_dir,
         &declarations,
+        mode == "quick",
     );
     let after = delivery::tracked(project_dir)?;
     // Producers are complete now. This is the named candidate; a writer that
@@ -1045,11 +1052,12 @@ mod tests {
     fn quick_resolves_to_essential_on_template_config() {
         // Shipped templates (and stack detection) define `essential`/`full`,
         // never `quick`. A `--mode quick` run must resolve to `essential` and
-        // actually execute — the pre-push gate depends on this.
+        // actually execute. This no-op fixture is explicitly light so the
+        // enclosing gate's reservation does not prevent testing mode resolution.
         let dir = tempfile::tempdir().unwrap();
         write_config(
             dir.path(),
-            &format!("[{}]", essential_full_target("ok", "exit 0")),
+            r#"[{"name":"ok","runner":"custom","heavy":false,"modes":{"essential":{"command":"exit 0"},"full":{"command":"exit 0"}}}]"#,
         );
 
         let outcome = run_gate(dir.path(), "quick").unwrap();

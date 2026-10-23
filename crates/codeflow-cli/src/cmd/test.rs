@@ -6,7 +6,7 @@ use codeflow_core::testing::gate::{
     gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
-    acquire_full_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
+    acquire_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
 };
 use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
 use codeflow_core::testing::setup::{self, SetupError, SetupResult};
@@ -17,8 +17,13 @@ pub struct TestArgs {
     #[command(subcommand)]
     pub command: Option<TestCommand>,
 
-    /// Test mode: full (default), quick, or essential. `quick` is an alias
-    /// for `essential` — the lighter mode shipped test-configs define.
+    /// Full (default) and essential hold the shared heavy-work lock for the run.
+    /// Quick runs light targets beside gates; declared heavy targets wait up to
+    /// `execution.heavy_wait_seconds` (default zero), then refuse if still held.
+    /// With no quick targets, quick uses essential targets, heavy unless declared light.
+    /// Both the `CodeFlow` home and git common directory use `full-gate.lock`, also
+    /// excluding full gates from 3.1. Essential gates from 3.1 take no lock.
+    /// These locks do not make the rest of the machine quiet.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
@@ -198,7 +203,7 @@ fn evidence_suffix(executed: usize, skipped: usize, complete: bool) -> &'static 
 }
 
 /// TSK-134 guards, checked before any target runs: a gate that runs cargo
-/// warns about a `CARGO_TARGET_DIR` outside the worktree, and a full gate
+/// warns about a `CARGO_TARGET_DIR` outside the worktree, and essential or full mode
 /// takes the machine-wide gate lock (held until the returned value drops) or
 /// refuses naming the gate that holds it.
 fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, String> {
@@ -209,13 +214,13 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
             eprintln!("codeflow test: warning: {warning}");
         }
     }
-    if mode != "full" {
+    if mode != "full" && mode != "essential" {
         return Ok(None);
     }
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
         format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
     })?;
-    let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| {
+    let lock = acquire_gate_lock(&dirs, root, mode).map_err(|held| {
         let mut message = held.to_string();
         if message.contains("gate lock unavailable") {
             message.push_str(

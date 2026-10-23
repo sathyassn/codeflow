@@ -641,7 +641,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
         assert!(
-            err.contains("another full gate is running"),
+            err.contains("another heavy gate is running"),
             "{tier}: {err}"
         );
         drop(held);
