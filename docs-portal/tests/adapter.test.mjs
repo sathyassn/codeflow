@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { existsSync } from "node:fs";
 import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -1831,6 +1831,75 @@ test("a displaced holder with an old heartbeat is kept while its owner lives", a
     assert.match(String(refused), new RegExp(`workflow already in progress \\(live process ids: ${process.pid}\\)`));
     assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, replacement.token);
   } finally { await rm(root, treeRemoval); }
+});
+
+test("a displaced holder whose heartbeat becomes durable during the probe is kept", { skip: process.platform === "win32", timeout: 20_000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-workflow-displaced-heartbeat-"));
+  let coordinator = null;
+  try {
+    const dead = await exitedProcessId();
+    await plantWorkflowLease(root, { created_at_ms: Date.now(), heartbeat_at_ms: Date.now(), owner: { pid: dead, host: os.hostname(), writers: [], starting: 0, groups: true } });
+    const script = path.join(root, "pending-heartbeat-owner.mjs");
+    await writeFile(script, `
+      import fsp from "node:fs/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      const rename = fsp.rename;
+      let hold = true;
+      fsp.rename = async function (from, to) {
+        if (hold && String(to).endsWith("/owner.json")) {
+          hold = false;
+          process.send("write-pending");
+          await new Promise((resolve) => process.once("message", resolve));
+        }
+        return rename.call(fsp, from, to);
+      };
+      syncBuiltinESMExports();
+      const realNow = Date.now;
+      const interval = globalThis.setInterval;
+      let beat;
+      globalThis.setInterval = (callback, ms, ...args) => { if (ms === 30000) beat = callback; return interval(callback, ms, ...args); };
+      const { withWorkflowLease } = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, "../scripts/publication.mjs")).href)});
+      Date.now = () => realNow() - 5 * 3_600_000;
+      await withWorkflowLease(process.argv[2], async (writers) => {
+        Date.now = realNow;
+        beat();
+        await writers.forgetWriter(0);
+        process.send("written");
+        interval(() => {}, 1000);
+        await new Promise(() => {});
+      });
+    `);
+    let swapped = false;
+    let probed = false;
+    const refused = await withWorkflowLease(root, async () => "unexpected", {
+      beforeClaimRetirement: async ({ reason }) => {
+        if (reason !== "reclaim" || swapped) return;
+        swapped = true;
+        await rm(path.join(root, ".portal/workflow.lock"));
+        coordinator = spawn(process.execPath, [script, root], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+        const [message] = await once(coordinator, "message");
+        assert.equal(message, "write-pending");
+      },
+      probeProcess: async (pid) => {
+        if (coordinator && pid === coordinator.pid) {
+          if (!probed) {
+            probed = true;
+            const written = once(coordinator, "message");
+            coordinator.send("commit");
+            assert.equal((await written)[0], "written");
+          }
+          return "unknown";
+        }
+        try { process.kill(pid, 0); return "live"; } catch (error) { return error?.code === "ESRCH" ? "dead" : "unknown"; }
+      },
+    }).catch((error) => error);
+    assert.match(String(refused), /workflow already in progress/);
+    assert.equal(processAlive(coordinator.pid), true);
+    await readFile(path.join(root, ".portal/workflow.lock"));
+  } finally {
+    if (coordinator !== null) coordinator.kill("SIGKILL");
+    await rm(root, treeRemoval);
+  }
 });
 
 test("a heartbeat refreshed after the first read keeps an undecidable lease", { skip: process.platform === "win32", timeout: 20_000 }, async () => {

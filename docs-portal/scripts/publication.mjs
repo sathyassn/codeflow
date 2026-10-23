@@ -378,17 +378,19 @@ async function restoreDisplacedWorkflowClaim(portalDirectory, claim, retired, mo
   return false;
 }
 
-// A displaced holder is kept unless it is proven gone: a holder that is alive,
-// or whose liveness cannot be decided and whose heartbeat is still within the
-// age rule, is preserved whatever its heartbeat age says about a live one.
+// A displaced holder is kept unless it is proven gone. The owner is judged with
+// the same settle-and-rejudge loop as the main path, and expiry uses the lease
+// that settled, so a heartbeat that became durable during the probe counts. A
+// holder whose record cannot be settled is kept.
 async function liveWorkflowCandidateIdentity(portalDirectory, token, probe = probeProcess) {
   try {
     const candidate = await readWorkflowLeaseDirectoryIdentity(workflowCandidate(portalDirectory, token));
     if (candidate.lease.token !== token) return null;
-    const verdict = await judgeWorkflowOwner(candidate.lease, probe);
-    if (verdict.state === "live") return candidate;
-    if (verdict.state === "dead") return null;
-    return Date.now() - candidate.lease.heartbeat_at_ms > WORKFLOW_LEASE_MAX_AGE_MS ? null : candidate;
+    const verdict = await workflowOwnerVerdict(portalDirectory, candidate.lease, probe);
+    if (verdict.state === "gone" || verdict.state === "dead") return null;
+    if (verdict.state === "live" || verdict.state === "unstable") return candidate;
+    const settled = verdict.lease ?? candidate.lease;
+    return Date.now() - settled.heartbeat_at_ms > WORKFLOW_LEASE_MAX_AGE_MS ? null : candidate;
   } catch (error) { if (error?.code === "ENOENT") return null; throw error; }
 }
 
