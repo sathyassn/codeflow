@@ -3216,21 +3216,19 @@ pub fn completions_in_range(
                     note: true,
                 });
             }
-            findings.extend(
-                bind_completion_with_amendment(
-                    repo,
-                    task,
-                    &after,
-                    Landing::Commit(origin),
-                    default_target,
-                    Transport::TaskLanding,
-                    Some(source_base.unwrap_or(anchor)),
-                    (own_task == Some(task.id.as_str())).then_some(anchor),
-                    &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
-                    &run.criteria(),
-                )
-                .findings,
+            let bound = bind_completion_with_amendment(
+                repo,
+                task,
+                &after,
+                Landing::Commit(origin),
+                default_target,
+                Transport::TaskLanding,
+                Some(source_base.unwrap_or(anchor)),
+                (own_task == Some(task.id.as_str())).then_some(anchor),
+                &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                &run.criteria(),
             );
+            findings.extend(bound.findings);
         }
     }
     findings.extend(epic_completions_in_range(
