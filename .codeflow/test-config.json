@@ -449,6 +449,9 @@
           "command": "python3 -B scripts/journey-gate.py --part python"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "timeout_seconds": 900
     },
     {

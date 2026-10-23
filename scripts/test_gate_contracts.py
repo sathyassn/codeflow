@@ -274,7 +274,9 @@ class GateContracts(unittest.TestCase):
         for name in ['rust-build', 'codeflow-bin', 'rust-coverage', 'rust-doctest', 'rustdoc', 'docs-validation', 'docs-portal', 'journey-gate', 'cf-present-qualification', 'present-browser', 'read-benchmark']:
             self.assertIn('present-web-build', closure(name), name)
         self.assertIn('rust-build', closure('codeflow-bin'))
-        for name in ['rust-doctest', 'rustdoc']:
+        # The Python release journeys read PR bodies with the built binary at
+        # import time, so a cold checkout needs its producer too.
+        for name in ['rust-doctest', 'rustdoc', 'journey-python']:
             self.assertIn('codeflow-bin', closure(name), name)
         self.assertEqual(targets['rust-clippy']['env']['CARGO_TARGET_DIR'], 'target/clippy')
         for name in ['rust-build', 'codeflow-bin', 'rust-clippy', 'rustdoc', 'rust-doctest', 'repository-update-noop', 'contract-scans', 'present-binary-delta']:
