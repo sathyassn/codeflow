@@ -89,14 +89,6 @@ fn fixture() -> Fixture {
     }
 }
 
-const AGENT_MARKERS: [&str; 5] = [
-    "CLAUDECODE",
-    "CODEX_SESSION_ID",
-    "CODEX_THREAD_ID",
-    "CODEX_CI",
-    "GROK_SESSION_ID",
-];
-
 fn cli(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
     let mut cmd = Command::new(std::env::var_os("CODEFLOW_JOURNEY_BIN").map_or_else(
         || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
@@ -106,15 +98,30 @@ fn cli(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null");
-    for marker in AGENT_MARKERS {
-        cmd.env_remove(marker);
+    // Every name is literal, so the fixture-environment contract scan can
+    // read what the child inherits.
+    cmd.env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID")
+        .env_remove("CODEFLOW_COORD_ROLE")
+        .env_remove("CODEFLOW_COORD_INSTANCE")
+        .env_remove("CODEFLOW_COORD_GENERATION")
+        .env_remove("CODEFLOW_COORD_STREAM")
+        .env_remove("CODEFLOW_COORD_HARNESS")
+        .env_remove("CODEFLOW_COORD_MODEL")
+        .env_remove("CODEFLOW_COORD_SESSION");
+    for (name, value) in env {
+        match *name {
+            "CODEFLOW_COORD_ROLE" => cmd.env("CODEFLOW_COORD_ROLE", value),
+            "CODEFLOW_COORD_INSTANCE" => cmd.env("CODEFLOW_COORD_INSTANCE", value),
+            "CODEFLOW_COORD_GENERATION" => cmd.env("CODEFLOW_COORD_GENERATION", value),
+            "CODEFLOW_COORD_STREAM" => cmd.env("CODEFLOW_COORD_STREAM", value),
+            "CLAUDECODE" => cmd.env("CLAUDECODE", value),
+            other => panic!("the test sets no {other}"),
+        };
     }
-    for (name, _) in std::env::vars() {
-        if name.starts_with("CODEFLOW_COORD_") {
-            cmd.env_remove(name);
-        }
-    }
-    cmd.envs(env.iter().copied());
     cmd.output().unwrap()
 }
 

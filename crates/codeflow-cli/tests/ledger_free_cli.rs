@@ -118,15 +118,11 @@ fn run(root: &Path, args: &[&str], stdin: Option<String>) -> (Option<i32>, Strin
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for marker in [
-        "CLAUDECODE",
-        "CODEX_SESSION_ID",
-        "CODEX_THREAD_ID",
-        "CODEX_CI",
-        "GROK_SESSION_ID",
-    ] {
-        cmd.env_remove(marker);
-    }
+    cmd.env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID");
     let mut child = cmd.spawn().unwrap();
     if let Some(stdin) = stdin {
         child

@@ -230,9 +230,9 @@ impl Actor {
     ///
     /// [`Unbound::Observer`] with no role set, or the reason the role is
     /// refused.
-    pub fn from_env(env: EnvLookup<'_>) -> Result<Self, Unbound> {
+    pub fn from_env(lookup: EnvLookup<'_>) -> Result<Self, Unbound> {
         let read = |name: &str| {
-            env(name)
+            lookup(name)
                 .and_then(|value| value.into_string().ok())
                 .filter(|value| !value.is_empty())
         };
@@ -242,7 +242,7 @@ impl Actor {
         let role = Role::parse(&role_text).map_err(Unbound::Refused)?;
         let agent = AGENT_MARKERS
             .iter()
-            .find(|name| env(name).is_some_and(|value| !value.is_empty()));
+            .find(|name| lookup(name).is_some_and(|value| !value.is_empty()));
         if role == Role::Operator {
             if let Some(marker) = agent {
                 return Err(Unbound::Refused(format!(
