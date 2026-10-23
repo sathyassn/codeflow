@@ -40,8 +40,22 @@ fn valid_identifiers(value: &str, prerelease: bool) -> bool {
     })
 }
 
-fn is_parseable(version: &str) -> bool {
+/// Does `version` read as `MAJOR.MINOR.PATCH` with an optional prerelease
+/// and build? Every pin check goes through this one parser.
+#[must_use]
+pub fn is_parseable(version: &str) -> bool {
     parse(version).is_some()
+}
+
+/// A version the strict parser rejects. Two versions with one of these never
+/// compare, so no caller can fall back to a string order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unparseable(pub String);
+
+impl std::fmt::Display for Unparseable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} is not a parseable version", self.0)
+    }
 }
 
 /// Check an existing pin before init or update writes any project file.
@@ -74,7 +88,8 @@ pub(super) fn check_write_version(
             });
         }
     }
-    if is_older(binary, pinned) {
+    // Both values parsed above, so the comparison is always `Ok`.
+    if is_older(binary, pinned) == Ok(true) {
         return Err(super::ScaffoldError::InvalidState {
             what: format!("{command} version"),
             detail: format!(
@@ -98,21 +113,23 @@ fn prerelease_cmp(a: &str, b: &str) -> std::cmp::Ordering {
         }))
 }
 
-/// Is `a` strictly older than `b`? Unparseable versions compare as strings;
-/// callers that write state must validate their inputs first.
-#[must_use]
-pub fn is_older(a: &str, b: &str) -> bool {
-    let (Some((na, pa)), Some((nb, pb))) = (parse(a), parse(b)) else {
-        return a < b;
-    };
+/// Is `a` strictly older than `b`?
+///
+/// # Errors
+///
+/// The first of `a` and `b` the strict parser rejects; an unparseable
+/// version is never ordered, as text or otherwise.
+pub fn is_older(a: &str, b: &str) -> Result<bool, Unparseable> {
+    let (na, pa) = parse(a).ok_or_else(|| Unparseable(a.to_string()))?;
+    let (nb, pb) = parse(b).ok_or_else(|| Unparseable(b.to_string()))?;
     if na != nb {
-        return na < nb;
+        return Ok(na < nb);
     }
-    match (pa, pb) {
+    Ok(match (pa, pb) {
         (Some(_), None) => true, // pre-release < release
         (None, _) => false,
         (Some(x), Some(y)) => prerelease_cmp(x, y).is_lt(),
-    }
+    })
 }
 
 /// One-line warning when the project's scaffold is behind the binary.
@@ -120,7 +137,9 @@ pub fn is_older(a: &str, b: &str) -> bool {
 #[must_use]
 pub fn version_skew_warning(root: &Path, binary_version: &str) -> Option<String> {
     let state = super::state::ProjectState::load(root).ok()?;
-    is_older(&state.scaffold_version, binary_version).then(|| {
+    // An unparseable pin stays quiet here: this runs on every invocation,
+    // and `init`, `update` and `doctor` already name it where it matters.
+    (is_older(&state.scaffold_version, binary_version) == Ok(true)).then(|| {
         format!(
             "codeflow: scaffold {} is behind binary {} — run `codeflow update`",
             crate::git::display_line(&state.scaffold_version),
@@ -135,15 +154,111 @@ mod tests {
 
     #[test]
     fn semver_ordering() {
-        assert!(is_older("1.9.0", "2.0.0"));
-        assert!(is_older("2.0.0-dev", "2.0.0"));
-        assert!(!is_older("2.0.0", "2.0.0"));
-        assert!(!is_older("2.1.0", "2.0.9"));
-        assert!(is_older("2.0.0-alpha", "2.0.0-beta"));
-        assert!(is_older("2.0.0-rc.2", "2.0.0-rc.10"));
-        assert!(is_older("2.0.0-1", "2.0.0-alpha"));
-        assert!(is_older("2.0.0-alpha", "2.0.0-alpha.1"));
-        assert!(!is_older("2.0.0+one", "2.0.0+two"));
-        assert!(is_older("2.0.0+two", "2.0.1+one"));
+        assert!(is_older("1.9.0", "2.0.0").unwrap());
+        assert!(is_older("2.0.0-dev", "2.0.0").unwrap());
+        assert!(!is_older("2.0.0", "2.0.0").unwrap());
+        assert!(!is_older("2.1.0", "2.0.9").unwrap());
+        assert!(is_older("2.0.0-alpha", "2.0.0-beta").unwrap());
+        assert!(is_older("2.0.0-rc.2", "2.0.0-rc.10").unwrap());
+        assert!(is_older("2.0.0-1", "2.0.0-alpha").unwrap());
+        assert!(is_older("2.0.0-alpha", "2.0.0-alpha.1").unwrap());
+        assert!(!is_older("2.0.0+one", "2.0.0+two").unwrap());
+        assert!(is_older("2.0.0+two", "2.0.1+one").unwrap());
+    }
+
+    #[test]
+    fn unparseable_versions_are_never_ordered() {
+        for bad in [
+            "3.10", "10.0", "3.2.0x", "3.2", "v3.2.0", "", "3.2.0-", "01.0.0",
+        ] {
+            assert_eq!(is_older(bad, "9.0.0"), Err(Unparseable(bad.to_string())));
+            assert_eq!(is_older("9.0.0", bad), Err(Unparseable(bad.to_string())));
+        }
+        // As strings "10.0" < "9.0"; neither order is answered.
+        assert!(is_older("10.0", "9.0").is_err());
+        assert!(is_older("9.0", "10.0").is_err());
+    }
+
+    #[test]
+    fn skew_warning_is_quiet_for_an_unparseable_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        for pin in ["10.0", "3.2.0x"] {
+            std::fs::write(
+                dir.path().join(".codeflow/project.toml"),
+                format!("schema_version = 1\ntier = \"minimal\"\nscaffold_version = \"{pin}\"\n"),
+            )
+            .unwrap();
+            assert_eq!(version_skew_warning(dir.path(), "9.0.0"), None, "{pin}");
+        }
+    }
+
+    /// The shipped CI templates order pins with a shell function. It must
+    /// agree with `is_older` on every row, and refuse what the parser rejects.
+    #[cfg(unix)]
+    #[test]
+    fn the_ci_shell_function_orders_versions_as_is_older_does() {
+        const CI: &str = include_str!("../../../../assets/base/ci/ci-generic.sh");
+        let start = CI.find("codeflow_older() {").expect("function");
+        let end = start + CI[start..].find("\n}\n").expect("end") + 3;
+        let function = &CI[start..end];
+        let max = "18446744073709551615.0.0";
+        let rows = [
+            ("3.2.0-rc.2", "3.2.0-rc.10"),
+            ("3.2.0-rc.10", "3.2.0-rc.2"),
+            ("3.2.0+build-1", "3.2.0"),
+            ("3.2.0", "3.2.0+build-1"),
+            ("18446744073709551614.0.0", max),
+            ("18446744073709551615.0.0", "18446744073709551614.0.0"),
+            ("1.9.0", "2.0.0"),
+            ("2.0.0", "1.9.0"),
+            ("2.0.0", "2.0.0"),
+            ("2.0.0-dev", "2.0.0"),
+            ("2.0.0", "2.0.0-dev"),
+            ("2.0.0-alpha", "2.0.0-beta"),
+            ("2.0.0-1", "2.0.0-alpha"),
+            ("2.0.0-alpha", "2.0.0-1"),
+            ("2.0.0-alpha", "2.0.0-alpha.1"),
+            ("2.0.0-alpha.1", "2.0.0-alpha"),
+            ("2.0.0+two", "2.0.1+one"),
+            (
+                "2.0.0-rc.99999999999999999999999",
+                "2.0.0-rc.100000000000000000000000",
+            ),
+            ("2.10.0", "2.9.0"),
+            ("2.9.0", "2.10.0"),
+        ];
+        let run = |a: &str, b: &str| {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("{function}\ncodeflow_older \"$1\" \"$2\""))
+                .arg("sh")
+                .args([a, b])
+                .output()
+                .unwrap()
+                .status
+                .code()
+        };
+        for (a, b) in rows {
+            let expect = i32::from(!is_older(a, b).unwrap());
+            assert_eq!(run(a, b), Some(expect), "{a} vs {b}");
+        }
+        for bad in [
+            "3.2",
+            "10.0",
+            "3.2.0x",
+            "v3.2.0",
+            "",
+            "3.2.0-",
+            "01.0.0",
+            "3.2.0-01",
+            "18446744073709551616.0.0",
+            "3.2.0+",
+            "3.2.0+a+b",
+        ] {
+            assert!(!is_parseable(bad), "{bad}");
+            assert_eq!(run(bad, "9.0.0"), Some(2), "{bad:?} left");
+            assert_eq!(run("9.0.0", bad), Some(2), "{bad:?} right");
+        }
     }
 }
