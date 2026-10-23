@@ -166,10 +166,14 @@ ran as Claude desktop sessions, the coordinator restarted in Codex) is
 judged by its own recorded heartbeat and reports, since the shared file
 is the channel: fresh, it is left running and its reports read with no
 duplicate writer on its worktree; silent past the heartbeat timeout,
-the recovery inventory runs, `seat_detached` is recorded and a new seat
-in the current harness continues from the task record, branch and
-worktree in its own attempt, and the old seat on return finds the lane
-adopted and stops; a lane closes as superseded only when its scope
+the timeout triggers investigation, not replacement: the recovery
+inventory runs, and a new seat continues on the same branch and
+worktree in its own attempt, with `seat_detached` recorded, only with
+stopped-work evidence or an explicit resolution of the overlap (the
+lease is not an execution lock); with neither, the seat is kept as
+unresolved and possibly live, no duplicate writer starts, and the
+coordinator says so; an old seat on return finds the lane adopted and
+stops; a lane closes as superseded only when its scope
 changes, its state cannot be recovered or the operator restarts it;
 review independence is judged against the work's author, not the
 coordinator; native task lists stay private aids.
