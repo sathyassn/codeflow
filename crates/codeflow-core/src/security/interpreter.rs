@@ -1502,7 +1502,13 @@ mod tests {
         assert_public_refused(&repo, &owned, false);
         let authority = source("python3 tool.py config");
         assert_public_refused(&repo, &[authority.as_str()], true);
-        assert_public_allowed(&repo, &[source("python3 tool.py notes.txt").as_str()]);
+        // TSK-406 round 3: unread shell code now refuses near a checkout,
+        // independently of the known operands following it.
+        assert_public_refused(
+            &repo,
+            &[source("python3 tool.py notes.txt").as_str()],
+            false,
+        );
         // Codex R3-1: options that consume values, attached spellings,
         // clusters and outer launchers.
         assert_public_refused(
@@ -2120,7 +2126,6 @@ mod tests {
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 // Program output is outside text (operator boundary, 2026-10-15).
-                "source venv/bin/activate && echo ok && python3 src/app.py",
                 "echo \"Done $(date)\"; python3 src/app.py",
                 // Ordinary globs an output builtin writes.
                 "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
@@ -2136,6 +2141,12 @@ mod tests {
                 "echo \"$policy.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$settings.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
             ],
+        );
+        // The round 3 shell-input rule supersedes the external-code allowance.
+        assert_public_refused(
+            &repo,
+            &["source venv/bin/activate && echo ok && python3 src/app.py"],
+            false,
         );
     }
 }

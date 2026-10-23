@@ -699,10 +699,18 @@ operands.
   Substitutions that depend on a file,
   another program or the network remain unresolved.
 - Single-quoted interpreter code and quoted heredocs remain literal.
-  Shell `eval`, including `eval --`, reparses its argument with the current
-  variable state. Each line permits at most 16 distinct code reparses per
-  shell reading; further code is refused as cannot-verify. Shell here-strings
-  and sourced builtin process-substitution output are read as scripts.
+  Shell `eval`, including leading `--` and zsh `-` markers, reparses its
+  argument with the current variable state. Each line permits at most 16 distinct code reparses per
+  shell reading; further code is refused as cannot-verify. Other leading eval
+  options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
+  including BusyBox sh/ash applets, and `source`/`.` share the script-input
+  rule. Their `-c` arguments, stdin, here-strings, heredocs, pipes and process-substitution
+  script operands are judged as shell code. Words after `-s` are positional
+  arguments. Unknown programs given code through these routes take the same
+  rule; unread code, including sourced files the guard does not read, refuses
+  near a checkout. Known data readers and interpreter families retain their
+  own input rules. Every route uses the bounded reparse
+  cache.
   Resolved builtin output piped into an interpreter is read as code; unread
   external producers retain the trailing-component checks described above.
   Literal loop word lists and earlier ordinary assignments stay resolvable
@@ -717,8 +725,9 @@ operands.
   appended to an existing destination directory. Equivalent paths containing
   `..`, existing symlinks or case variants on a case-insensitive volume
   receive the same verdict. An inline Git alias that could create or move a
-  worktree, or a writer using a symlink created earlier on the same line,
-  refuses when that prospective location cannot be verified. Add-then-status
+  worktree refuses when that prospective location cannot be verified.
+  Writers and interpreter paths follow possible same-line links made by `ln`,
+  `ln -s`, `cp -s` and `link`; ordinary targets remain allowed. Add-then-status
   is allowed
   when the source configuration proves it needs no callback that the guard
   cannot judge before the new checkout exists.

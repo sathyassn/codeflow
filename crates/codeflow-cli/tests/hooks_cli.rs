@@ -8842,7 +8842,7 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
         "cd .codeflow/git-hooks && python3 -c 'print(1)'",
-        "source go.sh && python3 tool.py notes.txt",
+        // Unread source files are refusals in the round-three matrix below.
         "nice python3 tool.py data.json",
         "timeout 5 node x.js out.json",
         "noglob cd .claude && python3 tool.py notes.txt",
@@ -10453,17 +10453,24 @@ fn shell_expansion_chains_have_bounded_guard_time() {
         ("git-guard", 300, " || ", "rm -rf $PWD/x", 5),
         ("git-guard", 80, " && ", "rm -rf $PWD/x", 2),
         ("git-guard", 80, "eval", "rm -rf $PWD/x", 2),
+        ("git-guard", 80, "here", "rm -rf $PWD/x", 2),
     ] {
         let chain = (0..count)
             .map(|i| {
-                if join == "eval" {
+                if join == "here" {
+                    format!("bash <<< \"cd d{i}\"")
+                } else if join == "eval" {
                     format!("eval \"cd d{i} || cd e{i}\"")
                 } else {
                     format!("cd d{i}")
                 }
             })
             .collect::<Vec<_>>()
-            .join(if join == "eval" { "; " } else { join });
+            .join(if matches!(join, "eval" | "here") {
+                "; "
+            } else {
+                join
+            });
         let payload = serde_json::json!({
             "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
             "cwd": tmp.path()
@@ -10670,6 +10677,298 @@ fn shell_expansions_round_two_review_matrix() {
         if output.status.code() != Some(expected)
             || (line.starts_with("f()") && stderr.contains("metadata `f()`"))
         {
+            failures.push(format!("{guard}: expected={expected}: {line}\n{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Round 3: script routes and same-line links, judged without executing them.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn shell_expansions_round_three_review_matrix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("docs/sub")).unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    std::os::unix::fs::symlink(".worktrees", root.join("lnk")).unwrap();
+    std::os::unix::fs::symlink("docs", root.join("sl")).unwrap();
+    let mut cases = [
+        ("exec-guard", "source venv/bin/activate && echo ok && python3 src/app.py", 2),
+        ("exec-guard", "source go.sh && python3 tool.py notes.txt", 2),
+        ("git-guard", "bash < <(printf %s 'printf ok')", 0),
+        ("git-guard", "ln .claude/settings.json L && printf x > L", 2),
+        ("exec-guard", "link .claude/settings.json L && python3 -c \"open('L','w').write('x')\"", 2),
+        ("git-guard", "ln -s \"$UNSET\" L && rm -rf L/w", 2),
+        ("exec-guard", "ln -s \"$UNSET\" L && python3 tool.py L/w", 2),
+        ("git-guard", "ln -s ../.worktrees sl/L && rm -rf docs/L/w", 2),
+        ("exec-guard", "ln -s ../.worktrees sl/L && python3 tool.py docs/L/w", 2),
+        ("git-guard", "env -C .worktrees bash <<< 'rm -rf w'", 2),
+        ("git-guard", "env -C .worktrees sh <(printf %s 'rm -rf w')", 2),
+        ("exec-guard", "env -C .worktrees sh <(printf %s 'python3 tool.py w')", 2),
+        ("git-guard", "printf %s 'rm -rf w' | env -C .worktrees bash", 2),
+        ("git-guard", "env -C .worktrees bash <<'EOF'\nrm -rf w\nEOF", 2),
+        ("git-guard", "printf %s 'rm -rf .worktrees/w' | bash -o pipefail", 2),
+        ("git-guard", "bash -s -- a <(printf %s 'printf ok')", 2),
+        ("git-guard", "bash -c 'printf ok' <<< 'rm -rf .worktrees/w'", 0),
+        ("git-guard", "bash -s a <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash -s a <<< 'git commit -m x'", 2),
+        ("git-guard", "bash < <(printf %s 'rm -rf .worktrees/w')", 2),
+        ("exec-guard", "bash < <(printf %s 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("git-guard", "bash /dev/fd/9", 2),
+        ("exec-guard", "bash /dev/fd/9", 2),
+        ("git-guard", "ln -s .worktrees L; ln -s L M; rm -rf M/w", 2),
+        ("exec-guard", "ln -s .worktrees L; ln -s L M; python3 tool.py M/w", 2),
+        ("git-guard", "eval - 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval - 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "eval - 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval - 'git commit -m x'", 2),
+        ("git-guard", "eval '' 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval \"\" 'rm -rf $PWD/.worktrees/w'", 2),
+        ("git-guard", "eval '--' 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval \"--\" 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "eval \"--\" 'git config core.hooksPath /x'", 2),
+        ("git-guard", "builtin eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "command eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "\\eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval -- eval -- 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "eval -- 'eval - \"rm -rf .worktrees/w\"'", 2),
+        ("exec-guard", "eval - 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("exec-guard", "eval -- 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("git-guard", "eval - 'printf x > .claude/settings.json'", 2),
+        ("git-guard", "fish <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "ksh <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "dash <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "busybox sh <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "busybox sh <<< \"rm -rf $PWD/.worktrees/w\"", 2),
+        ("git-guard", "busybox ash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "mksh <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "yash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "/bin/ksh <<< 'git commit -m x'", 2),
+        ("git-guard", "fish <<< 'git commit -m x'", 2),
+        ("git-guard", "busybox sh <<< 'git config core.hooksPath /x'", 2),
+        ("exec-guard", "busybox sh <<< 'git config core.hooksPath /x'", 2),
+        ("git-guard", "env bash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "command bash <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash - <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash /dev/stdin <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash -x <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "bash --norc <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "ksh -s <<< 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "ksh <<< 'python3 tool.py $PWD/.worktrees/w'", 2),
+        ("git-guard", "command . <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "command source <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "builtin source <(echo \"rm -rf $PWD/.worktrees/w\")", 2),
+        ("git-guard", "builtin . <(echo 'git commit -m x')", 2),
+        ("git-guard", "command . <(echo 'git config core.hooksPath /x')", 2),
+        ("exec-guard", "command . <(echo 'git config core.hooksPath /x')", 2),
+        ("git-guard", "env bash <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "command bash <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "env sh <(echo 'git commit -m x')", 2),
+        ("exec-guard", "command . <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("exec-guard", "env bash <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("git-guard", "command . /dev/stdin <<< 'rm -rf .worktrees/w'", 2),
+        ("git-guard", "git worktree add -Bf .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -Bf2 .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -fB t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add --force -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -b t --force .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add --force -bt .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -b t -f .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -B t --force --checkout .worktrees/n && rm -rf .worktrees/n/.claude", 2),
+        ("git-guard", "git worktree add --force -b t .worktrees/n && cd .worktrees/n && printf x > .claude/settings.json", 2),
+        ("git-guard", "git worktree add --quiet --force -B t .worktrees/n && printf x > $PWD/.worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git worktree add -Bf .worktrees/n", 0),
+        ("exec-guard", "git worktree add -Bf .worktrees/n", 0),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=$PWD/x.cfg wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && GIT_CONFIG_GLOBAL=x.cfg git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config -f x.cfg alias.wt worktree && git -c include.path=x.cfg wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config alias.wt worktree && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "git config --global alias.wt worktree && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' >> ~/.gitconfig && git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.wt GIT_CONFIG_VALUE_0=worktree git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "WTV=worktree git --config-env=alias.wt=WTV wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("git-guard", "printf '[alias]\\n\\twm = worktree move\\n' > x.cfg && git -c include.path=x.cfg wm .worktrees/w docs && rm -rf docs/w", 2),
+        ("git-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=x.cfg wt add -b t .worktrees/n", 2),
+        ("exec-guard", "printf '[alias]\\n\\twt = worktree\\n' > x.cfg && git -c include.path=x.cfg wt add -b t .worktrees/n", 2),
+        ("git-guard", "ln -s .worktrees L && rm -rf L/w", 2),
+        ("git-guard", "ln -s .worktrees/w L && rm -rf L/", 2),
+        ("git-guard", "ln -sf .worktrees/w L && rm -rf L/.claude", 2),
+        ("git-guard", "ln -s -- .worktrees L && printf x > L/w/.claude/settings.json", 2),
+        ("git-guard", "ln -sn $PWD/.worktrees L && rm -rf L/w", 2),
+        ("git-guard", "ln -s ../.worktrees docs/L && rm -rf docs/L/w", 2),
+        ("git-guard", "ln -s .worktrees L; cd L/w && printf x > .claude/settings.json", 2),
+        ("git-guard", "ln -s . L && rm -rf L/.worktrees/w", 2),
+        ("git-guard", "ln -s .worktrees/w/.claude L && printf x > L/settings.json", 2),
+        ("git-guard", "ln -s .claude L && printf x > L/settings.json", 2),
+        ("git-guard", "ln -s .codeflow L && rm -rf L/", 2),
+        ("git-guard", "ln -s .worktrees L && git worktree add -b t .worktrees/n && printf x > L/n/.claude/settings.json", 2),
+        ("git-guard", "mkdir -p d && ln -s ../.worktrees d/L && rm -rf d/L/w", 2),
+        ("exec-guard", "ln -s .worktrees L && python3 -c \"import shutil; shutil.rmtree('L/w')\"", 2),
+        ("git-guard", "ln -s .worktrees L && cp -r evil L/w/.claude", 2),
+        ("git-guard", "ln -s src L && rm -rf L/", 0),
+        ("exec-guard", "ln -s src L && rm -rf L/", 0),
+        ("git-guard", "rm -rf .Worktrees/w", 2),
+        ("git-guard", "rm -rf .worktrees/W", 2),
+        ("git-guard", "rm -rf $PWD/.WORKTREES/W", 2),
+        ("git-guard", "printf x > .WORKTREES/W/.claude/settings.json", 2),
+        ("git-guard", "printf x > .worktrees/w/.CLAUDE/SETTINGS.JSON", 2),
+        ("git-guard", "cd .WORKTREES/W && printf x > .claude/settings.json", 2),
+        ("git-guard", "cd .WORKTREES/W && rm -rf .", 2),
+        ("git-guard", "rm -rf ../REPO/.worktrees/w", 2),
+        ("git-guard", "rm -rf {CASE_REPO}/.worktrees/w", 2),
+        ("git-guard", "printf x > ../REPO/.claude/settings.json", 2),
+        ("git-guard", "printf x > ../REPO/.CODEFLOW/policy.json", 2),
+        ("git-guard", "cd ../REPO/.worktrees/w && rm -rf .claude", 2),
+        ("git-guard", "git worktree move .WORKTREES/W docs && rm -rf docs/w", 2),
+        ("git-guard", "git worktree add -b t .Worktrees/n && printf x > .worktrees/N/.claude/settings.json", 2),
+        ("exec-guard", "python3 tool.py .WORKTREES/W", 2),
+        ("exec-guard", "python3 -c \"import shutil; shutil.rmtree('$PWD/.Worktrees/W')\"", 2),
+        ("git-guard", "rm -rf lnk/w", 2),
+        ("git-guard", "printf x > lnk/w/.claude/settings.json", 2),
+        ("git-guard", "ln -s .worktrees/w L && printf x > L/.claude/settings.json", 2),
+        ("git-guard", "ln -s .codeflow L && printf x > L/policy.json", 2),
+        ("git-guard", "ln -s .worktrees/w/.claude/settings.json L && printf x > L", 2),
+        ("git-guard", "ln -s .worktrees L && git worktree add -b t L/n && printf x > .worktrees/n/.claude/settings.json", 2),
+        ("exec-guard", "ln -s .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln -s .worktrees L && rm -rf L/w; echo $HOME", 2),
+        ("git-guard", "ln -s .claude L && printf x > L/settings.json; true ~", 2),
+        ("git-guard", "eval - 'rm -rf .worktrees/w'; echo $HOME", 2),
+        ("exec-guard", "bash <(echo 'python3 tool.py $PWD/.worktrees/w')", 2),
+        ("exec-guard", "env bash <(echo 'python3 tool.py .worktrees/w')", 2),
+        ("git-guard", "bash <(echo 'rm -rf $PWD/.worktrees/w')", 2),
+        ("git-guard", "sh <(echo 'rm -rf .worktrees/w')", 2),
+        ("git-guard", "eval -- - 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -- - 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -- - 'git commit -m x'", 2),
+        ("git-guard", "eval - -- 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval - -- 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval - -- 'git commit -m x'", 2),
+        ("git-guard", "eval -- -- 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -- -- 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -- -- 'git commit -m x'", 2),
+        ("git-guard", "eval -bad 'rm -rf .worktrees/w'", 2),
+        ("exec-guard", "eval -bad 'git config core.hooksPath /x'", 2),
+        ("git-guard", "eval -bad 'git commit -m x'", 2),
+        ("git-guard", "ln -s .worktrees/w link && rm -rf link/.claude", 2),
+        ("git-guard", "ln -s .worktrees link2 && rm -rf link2/w", 2),
+        ("git-guard", "ln -s . here && rm -rf here/.worktrees/w", 2),
+        ("git-guard", "ln -s .worktrees/w link && printf x > link/.claude/settings.json", 2),
+        ("git-guard", "ln -s .claude c && printf x > c/settings.json", 2),
+        ("git-guard", "ln -s .codeflow cf && printf x > cf/policy.json", 2),
+        ("git-guard", "ln -s src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln -s src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln -sf .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "ln -sf .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln -sf src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln -sf src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "cp -s .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "cp -s .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "cp -s src L && printf x > L/new.txt", 0),
+        ("exec-guard", "cp -s src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "ln .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "ln src L && printf x > L/new.txt", 0),
+        ("exec-guard", "ln src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "link .claude L && printf x > L/settings.json", 2),
+        ("exec-guard", "link .claude L && python3 -c \"open('L/settings.json','w').write('x')\"", 2),
+        ("git-guard", "link src L && printf x > L/new.txt", 0),
+        ("exec-guard", "link src L && python3 tool.py L/app.py", 0),
+        ("git-guard", "ln -s src L && cat L/app.py", 0),
+    ].into_iter().map(|(guard, line, expected)| (guard, line.to_owned(), expected)).collect::<Vec<_>>();
+    // The same input routes apply to every shell, launcher and unknown reader.
+    for shell in [
+        "bash",
+        "sh",
+        "zsh",
+        "dash",
+        "ksh",
+        "mksh",
+        "yash",
+        "fish",
+        "ash",
+        "busybox sh",
+        "busybox ash",
+        "mystery-shell",
+        "env bash",
+        "command sh",
+    ] {
+        for (body, guard) in [
+            ("rm -rf .worktrees/w", "git-guard"),
+            ("git commit -m x", "git-guard"),
+            ("python3 tool.py $PWD/.worktrees/w", "exec-guard"),
+        ] {
+            for line in [
+                format!("{shell} -c '{body}'"),
+                format!("{shell} -s -- a <<< '{body}'"),
+                format!("{shell} <(printf %s '{body}')"),
+                format!("printf %s '{body}' | {shell}"),
+                format!("{shell} <<'EOF'\n{body}\nEOF"),
+            ] {
+                cases.push((guard, line, 2));
+            }
+        }
+        for line in [
+            format!("{shell} -s -- a <<< \"$UNSET\""),
+            format!("{shell} <(cat script.sh)"),
+            format!("cat script.sh | {shell}"),
+            format!("{shell} -c \"$UNSET\""),
+            format!("{shell} -s < script.sh"),
+        ] {
+            for guard in ["git-guard", "exec-guard"] {
+                cases.push((guard, line.clone(), 2));
+            }
+        }
+        for line in [
+            format!("{shell} -c 'printf ok'"),
+            format!("{shell} -s -- a <<< 'printf ok'"),
+            format!("{shell} <(printf %s 'printf ok')"),
+        ] {
+            cases.push(("git-guard", line, 0));
+        }
+    }
+    let mut failures = Vec::new();
+    for (guard, line, expected) in cases {
+        // The case-variant rows require the volume demonstrated by the review.
+        if (line.contains(".Worktrees")
+            || line.contains(".WORKTREES")
+            || line.contains(".CLAUDE")
+            || line.contains("../REPO")
+            || line.contains("{CASE_REPO}")
+            || line.contains(".worktrees/W")
+            || line.contains(".CODEFLOW")
+            || line.contains("DOCS/"))
+            && !root.join("DOCS").exists()
+        {
+            continue;
+        }
+        let line = line.replace(
+            "{CASE_REPO}",
+            &root.with_file_name("REPO").to_string_lossy(),
+        );
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        let output = run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("PWD", tmp.path())
+                .env("HOME", tmp.path())
+                .env_remove("CDPATH")
+                .env_remove("OLDPWD")
+                .env_remove("UNSET"),
+            &payload,
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!(
+            "{guard}: expected={expected} actual={:?}: {line}\n{stderr}",
+            output.status.code()
+        );
+        if output.status.code() != Some(expected) {
             failures.push(format!("{guard}: expected={expected}: {line}\n{stderr}"));
         }
     }

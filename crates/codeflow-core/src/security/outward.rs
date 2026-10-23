@@ -150,6 +150,7 @@ pub(crate) struct InterpreterCall {
     pub(crate) positional_source: PositionalSource,
     /// Shell expansions the shared resolver could not establish.
     pub(crate) unresolved: Vec<String>,
+    pub(crate) links: Vec<super::composed::paths::Link>,
     /// The words the interpreter hands its program, read by the family's
     /// own option grammar: the values of its options, a script, and every
     /// word after the code or script boundary. Inline code is left out.
@@ -350,10 +351,24 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if let Some(cwd) = cwd.filter(|_| out.resolve_shell) {
         for step in super::composed::paths::commands(command, cwd, out.shell_home.as_deref()) {
             let first_call = out.calls.len();
+            if step.text == "__unresolved_shell_code" {
+                out.calls.push(InterpreterCall {
+                    positional_source: PositionalSource::Unresolved,
+                    unresolved: step.unresolved.clone(),
+                    links: step.links.clone(),
+                    args: Vec::new(),
+                    patterns: Vec::new(),
+                    cwd: step.cwd.clone(),
+                    chdir: Vec::new(),
+                    code: Vec::new(),
+                    supplier: None,
+                });
+            }
             let first_code = out.code.len();
             visit_literal(&step.text, step.cwd.as_deref(), depth, out);
             for call in &mut out.calls[first_call..] {
                 call.unresolved.extend(step.unresolved.iter().cloned());
+                call.links.clone_from(&step.links);
                 if call.code.is_empty() {
                     if let Some(code) = &step.input_code {
                         call.code = vec![code.clone()];
@@ -1100,7 +1115,7 @@ fn argv(
                 "--replace",
             ],
         )),
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" => {
+        name if crate::hooks::git_guard::is_shell(name) => {
             if let Some(script) = shell_command_string(rest) {
                 let previous = out.positional_source;
                 // Only this exact calling convention proves that every
@@ -1334,7 +1349,7 @@ fn cd_operand(args: &[String]) -> Option<&str> {
 /// The interpreter a program name runs, by its family name: a version
 /// suffix (`python3.13`, `ruby3.3`) and a Windows `.exe` are read as the
 /// interpreter they name.
-fn interpreter_family(name: &str) -> Option<&'static str> {
+pub(crate) fn interpreter_family(name: &str) -> Option<&'static str> {
     let name = name.strip_suffix(".exe").unwrap_or(name);
     // The name without its version suffix: the digits and dots it ends with.
     let end = name
@@ -1413,6 +1428,7 @@ fn record_interpreter(
         out.calls.push(InterpreterCall {
             positional_source: out.positional_source,
             unresolved: Vec::new(),
+            links: Vec::new(),
             args,
             patterns,
             cwd: cwd.map(Path::to_path_buf),
@@ -2158,15 +2174,9 @@ pub(crate) fn reads_stdin_code(command: &str) -> bool {
         return false;
     };
     let name = program.rsplit('/').next().unwrap_or(program);
-    (matches!(name, "source" | ".") && args.first().is_some_and(|arg| arg == "/dev/stdin"))
+    crate::hooks::git_guard::reads_shell_stdin(&words)
         || interpreter_family(name)
             .is_some_and(|family| family_program(family, args) == Program::Stdin)
-        || (matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash")
-            && shell_command_string(args).is_none()
-            && args
-                .iter()
-                .find(|arg| !arg.starts_with('-'))
-                .is_none_or(|arg| descriptor_program(arg)))
 }
 
 /// Read where a shell or interpreter in one pipeline segment takes its
@@ -2182,10 +2192,7 @@ fn read_program_sources(
     producers: &str,
     out: &mut Parsed,
 ) {
-    let shell = matches!(
-        name,
-        "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "source" | "."
-    );
+    let shell = crate::hooks::git_guard::is_shell(name) || matches!(name, "source" | ".");
     let family = interpreter_family(name);
     if !shell && family.is_none() {
         return;

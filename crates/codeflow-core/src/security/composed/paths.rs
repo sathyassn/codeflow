@@ -16,6 +16,7 @@ pub(crate) struct Command {
     stdout: Option<String>,
     /// Code a preceding pipeline producer supplies to this command.
     pub(crate) input_code: Option<String>,
+    pub(crate) links: Vec<Link>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -42,6 +43,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             unresolved: vec![line.into()],
             stdout: None,
             input_code: None,
+            links: Vec::new(),
         }];
     };
     let mut result = Vec::new();
@@ -100,7 +102,7 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
                 crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
                     (program.rsplit('/').next() == Some("git")
                         && args.iter().any(|arg| arg == "worktree"))
-                        || program == "ln"
+                        || matches!(program, "ln" | "link" | "cp")
                 });
             if !declares_checkout {
                 *last_position = position;
@@ -116,7 +118,118 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
         }
     }
     unique.sort_by_key(|(position, _)| *position);
-    unique.into_iter().map(|(_, command)| command).collect()
+    let mut links = Vec::new();
+    unique
+        .into_iter()
+        .map(|(_, mut command)| {
+            command.links.clone_from(&links);
+            if let Some(dir) = &command.cwd {
+                links.extend(created_links(&command.text, dir));
+            }
+            command
+        })
+        .collect()
+}
+
+/// A possible link made earlier on the line. Sources and destinations use
+/// command-position cwd; symbolic targets are relative to the link's parent.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Link {
+    from: PathBuf,
+    to: PathBuf,
+}
+
+pub(crate) fn created_links(text: &str, cwd: &Path) -> Vec<Link> {
+    let words = crate::hooks::git_guard::command_argv(text);
+    let Some((program, args)) = crate::hooks::git_guard::strip_launchers(&words) else {
+        return Vec::new();
+    };
+    let name = program.rsplit('/').next().unwrap_or(program);
+    let symbolic = args.iter().any(|a| {
+        a == "--symbolic-link" || (a.starts_with('-') && !a.starts_with("--") && a.contains('s'))
+    });
+    if !(matches!(name, "ln" | "link") || name == "cp" && symbolic) {
+        return Vec::new();
+    }
+    let Some(effects) = crate::security::unresolved::writer_effects(
+        if name == "link" { "ln" } else { name },
+        args,
+        &[],
+    ) else {
+        return Vec::new();
+    };
+    let Some(copy) = effects.copy else {
+        return Vec::new();
+    };
+    let Some(dest) = copy.dest else {
+        return Vec::new();
+    };
+    let dest = lexical_join(cwd, Path::new(&dest));
+    let mut links = Vec::new();
+    for source in copy.sources {
+        // The destination can be an existing directory, or one made earlier
+        // on the line. Retain both spellings without consulting the hook's cwd.
+        for from in [
+            Some(dest.clone()),
+            Path::new(&source).file_name().map(|base| dest.join(base)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let to = lexical_join(
+                if symbolic {
+                    from.parent().unwrap_or(cwd)
+                } else {
+                    cwd
+                },
+                Path::new(&source),
+            );
+            links.push(Link { from, to });
+        }
+    }
+    links
+}
+
+/// All possible mapped spellings, retaining the original spelling at callers.
+/// A fixed point bound prevents cyclic or repeated link declarations growing.
+pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec<PathBuf>, String> {
+    if links.is_empty() {
+        return Ok(Vec::new());
+    }
+    let original = cwd.join(word);
+    let original = crate::hooks::git_guard::prospective_path(&original)?;
+    let mut paths = vec![original.clone()];
+    for _ in 0..16 {
+        let before = paths.len();
+        for path in paths.clone() {
+            for link in links {
+                let from = crate::hooks::git_guard::prospective_path(&link.from)?;
+                if let Ok(tail) = path.strip_prefix(&from) {
+                    if link
+                        .to
+                        .to_str()
+                        .is_none_or(crate::hooks::git_guard::unresolved_word)
+                    {
+                        return Err(
+                            "cannot verify a link target created earlier on this line".into()
+                        );
+                    }
+                    let target = lexical_join(&link.to, tail);
+                    let target = crate::hooks::git_guard::prospective_path(&target)?;
+                    if !paths.contains(&target) {
+                        paths.push(target);
+                    }
+                }
+            }
+        }
+        if paths.len() == before {
+            return Ok(paths.into_iter().filter(|p| p != &original).collect());
+        }
+        if paths.len() > 64 {
+            break;
+        }
+    }
+    Err("cannot verify paths through too many same-line links".into())
 }
 
 #[derive(Default)]
@@ -153,39 +266,53 @@ pub(crate) fn shell_managed(name: &str) -> bool {
     )
 }
 
-/// All readers agree that eval accepts one optional end-of-options marker.
+/// Both shell readings accept --; zsh also accepts a lone -. Any other
+/// leading option is unread instead of being mistaken for a command word.
 pub(crate) fn eval_body(args: &[String]) -> String {
-    args.strip_prefix(&["--".to_string()])
-        .unwrap_or(args)
-        .join(" ")
+    let args = &args[args
+        .iter()
+        .take_while(|word| matches!(word.as_str(), "--" | "-"))
+        .count()..];
+    if args.first().is_some_and(|word| word.starts_with('-')) {
+        "__unresolved_shell_code".into()
+    } else {
+        args.join(" ")
+    }
 }
 
 /// Literal stdin code for the generic segment reader, which also owns Git
 /// branch checks. The position-aware reader resolves variables separately.
 pub(crate) fn literal_input_script(line: &str) -> Option<String> {
     let words = crate::hooks::git_guard::command_argv(line);
-    if crate::hooks::git_guard::reads_shell_stdin(&words) {
-        return crate::security::outward::here_string(line);
-    }
-    if !crate::hooks::git_guard::strip_launchers(&words)
-        .is_some_and(|(program, _)| matches!(program, "source" | "."))
-    {
+    let (_, args) = crate::hooks::git_guard::script_reader(&words)?;
+    if crate::hooks::git_guard::shell_c_argument(args).is_some() {
         return None;
+    }
+    if let Some(script) = crate::security::outward::here_string(line) {
+        return Some(crate::hooks::git_guard::launched_script(&words, &script));
     }
     let (tokens, _) = lex(line).ok()?;
     let mut events = Vec::new();
     let run = new_run(Dialect::Bash, State::default(), &mut events, 0, 0);
-    tokens.iter().find_map(|token| match token {
-        Tok::Word(word) => word.parts.iter().find_map(|part| match part {
-            Part::ProcSubst(body) => {
-                run.approx.set(false);
-                let value = run.capture(body).0.ok().and_then(|v| v.exact());
-                (!run.approx.get()).then_some(value).flatten()
+    tokens
+        .iter()
+        .find_map(|token| match token {
+            Tok::Word(word)
+            | Tok::Redir {
+                target: Some(word), ..
+            } if !matches!(token, Tok::Word(_)) || !stdin_option(args) => {
+                word.parts.iter().find_map(|part| match part {
+                    Part::ProcSubst(body) => {
+                        run.approx.set(false);
+                        let value = run.capture(body).0.ok().and_then(|v| v.exact());
+                        (!run.approx.get()).then_some(value).flatten()
+                    }
+                    _ => None,
+                })
             }
             _ => None,
-        }),
-        _ => None,
-    })
+        })
+        .map(|script| crate::hooks::git_guard::launched_script(&words, &script))
 }
 
 pub(crate) fn literal_output(line: &str) -> Option<String> {
@@ -193,6 +320,23 @@ pub(crate) fn literal_output(line: &str) -> Option<String> {
     let run = new_run(Dialect::Bash, State::default(), &mut events, 0, 0);
     let value = run.capture(line).0.ok().and_then(|value| value.exact());
     (!run.approx.get()).then_some(value).flatten()
+}
+
+fn stdin_option(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg.starts_with('-') && !arg.starts_with("--") && arg.contains('s'))
+}
+
+fn unread_code(reason: &str) -> Command {
+    Command {
+        text: "__unresolved_shell_code".into(),
+        cwd: None,
+        unresolved: vec![reason.into()],
+        stdout: None,
+        input_code: None,
+        links: Vec::new(),
+    }
 }
 
 fn plain(tok: &Tok) -> Option<&str> {
@@ -453,6 +597,7 @@ fn walk(
                         output,
                         depth,
                         reparses,
+                        !producers.is_empty(),
                     )
                 })
                 .collect();
@@ -475,24 +620,16 @@ fn walk(
                     let words = crate::hooks::git_guard::command_argv(&consumer.text);
                     if crate::hooks::git_guard::reads_shell_stdin(&words) {
                         if let Some(script) = &producer.stdout {
-                            if let Ok((nested, docs)) = lex(script) {
-                                let after = walk(
-                                    &nested,
-                                    &docs,
-                                    states.clone(),
-                                    dialect,
-                                    output,
-                                    depth + 1,
-                                    reparses,
-                                );
-                                states.extend(after);
-                                bound(&mut states);
+                            for state in states.clone() {
+                                let script =
+                                    crate::hooks::git_guard::launched_script(&words, script);
+                                let after =
+                                    reparse(&script, state, dialect, output, depth, reparses);
+                                states.push(after);
                             }
-                        } else if words
-                            .first()
-                            .is_some_and(|name| matches!(name.as_str(), "source" | "."))
-                        {
-                            command.unresolved.push("sourced pipeline input".into());
+                            bound(&mut states);
+                        } else {
+                            output.push(unread_code("shell pipeline input cannot be read"));
                         }
                     }
                     output.push(command);
@@ -516,6 +653,7 @@ fn walk(
                         unresolved: vec!["pipeline input with too many reachable states".into()],
                         stdout: None,
                         input_code: None,
+                        links: Vec::new(),
                     }];
                 }
                 pipeline.get_or_insert_with(|| before.clone());
@@ -674,6 +812,7 @@ fn resolve(run: &mut Run<'_>, word: &Word, ctx: Ctx, unresolved: &mut Vec<String
 }
 
 #[allow(clippy::too_many_lines)] // One command's expansions precede its state effects.
+#[allow(clippy::too_many_arguments)] // Pipeline input is supplied after the command's words resolve.
 fn simple(
     tokens: &[Tok],
     docs: &[Heredoc],
@@ -682,6 +821,7 @@ fn simple(
     output: &mut Vec<Command>,
     depth: usize,
     reparses: &mut Reparses,
+    piped: bool,
 ) -> Position {
     position
         .state
@@ -762,6 +902,14 @@ fn simple(
     }
     let words = crate::hooks::git_guard::command_argv(&text);
     let launched = crate::hooks::git_guard::strip_launchers(&words);
+    let assignments_only = tokens
+        .iter()
+        .all(|token| matches!(token, Tok::Word(word) if super::assignment_shape(word).is_some()));
+    if !assignments_only
+        && launched.is_some_and(|(program, _)| crate::hooks::git_guard::unresolved_word(program))
+    {
+        output.push(unread_code("shell command word cannot be read"));
+    }
     let stdout = launched
         .filter(|(program, _)| matches!(*program, "echo" | "printf" | "print"))
         .and_then(|_| {
@@ -773,41 +921,86 @@ fn simple(
                 captured.ok().and_then(|value| value.exact())
             }
         });
+    let unread_script_word = unresolved
+        .iter()
+        .find(|word| word.as_str() != "process substitution")
+        .cloned();
     output.push(Command {
         text: text.clone(),
         cwd: position.state.directory.clone(),
         unresolved,
         stdout,
         input_code: None,
+        links: Vec::new(),
     });
     // The existing evaluator owns assignments, exports, invalidation and static
     // substitutions. PWD is ordinary assignable state only for this consumer.
-    let script = if let Some(("eval", args)) = launched {
+    if words
+        .first()
+        .is_some_and(|word| word == "__unresolved_shell_code")
+    {
+        output.push(unread_code("shell code or eval options cannot be read"));
+        return position;
+    }
+    let reader = crate::hooks::git_guard::script_reader(&words);
+    let script = if let Some(("eval", args)) = reader {
         Some(eval_body(args))
-    } else if launched.is_some_and(|(name, _)| matches!(name, "source" | ".")) {
-        tokens
-            .iter()
-            .find_map(|token| match token {
-                Tok::Word(word) => word.parts.iter().find_map(|part| match part {
-                    Part::ProcSubst(body) => {
-                        run.approx.set(false);
-                        let captured = run.capture(body).0.ok().and_then(|value| value.exact());
-                        (!run.approx.get()).then_some(captured).flatten()
-                    }
-                    _ => None,
-                }),
-                _ => None,
-            })
+    } else if let Some((_, args)) = reader {
+        crate::hooks::git_guard::shell_c_argument(args)
+            .cloned()
             .or_else(|| crate::security::outward::here_string(&text))
-    } else if crate::hooks::git_guard::reads_shell_stdin(&words) {
-        crate::security::outward::here_string(&text)
+            .or_else(|| {
+                tokens.iter().find_map(|token| match token {
+                    Tok::Word(word)
+                    | Tok::Redir {
+                        target: Some(word), ..
+                    } if !matches!(token, Tok::Word(_)) || !stdin_option(args) => {
+                        word.parts.iter().find_map(|part| match part {
+                            Part::ProcSubst(body) => {
+                                run.approx.set(false);
+                                let captured =
+                                    run.capture(body).0.ok().and_then(|value| value.exact());
+                                (!run.approx.get()).then_some(captured).flatten()
+                            }
+                            _ => None,
+                        })
+                    }
+                    Tok::Redir {
+                        heredoc: Some(index),
+                        ..
+                    } => docs.get(*index).and_then(|doc| {
+                        run.word(&doc.body, Ctx::Assign)
+                            .fields
+                            .ok()
+                            .and_then(|fields| fields.first().and_then(Value::exact))
+                    }),
+                    _ => None,
+                })
+            })
     } else {
         None
     };
+    let requires_code = reader.is_some_and(|(name, args)| {
+        crate::hooks::git_guard::is_shell(name)
+            || (matches!(name, "source" | ".") && !args.is_empty())
+            || args.iter().any(|a| matches!(a.as_str(), "-c" | "-s" | "--command"))
+            || args.iter().any(|a| crate::security::outward::descriptor_program(a))
+            || tokens.iter().any(|token| matches!(token, Tok::Redir { op, .. }
+                if matches!(op.as_str(), "<" | "0<" | "<<" | "0<<" | "<<-" | "0<<-" | "<<<" | "0<<<"))
+                || matches!(token, Tok::Word(w) if w.parts.iter().any(|p| matches!(p, Part::ProcSubst(_)))))
+    });
+    if requires_code && script.is_none() && !piped {
+        output.push(unread_code("shell script input cannot be read"));
+    }
+    if reader.is_some() && script.is_some() {
+        if let Some(word) = unread_script_word {
+            output.push(unread_code(&format!("cannot read script word `{word}`")));
+        }
+    }
     if let Some(script) = script {
         let current_shell =
             launched.is_some_and(|(name, _)| matches!(name, "eval" | "source" | "."));
-        if launched.is_some_and(|(name, _)| matches!(name, "source" | ".")) {
+        if reader.is_some() {
             // The synthetic filename is unread, but its supplied code is known.
             if let Some(command) = output.last_mut() {
                 command
@@ -815,62 +1008,9 @@ fn simple(
                     .retain(|word| word != "process substitution");
             }
         }
-        if let Some((_, _, after, commands)) = reparses
-            .entries
-            .iter()
-            .find(|(before, body, _, _)| before == &position && body == &script)
-        {
-            output.extend(commands.iter().cloned());
-            return if current_shell {
-                after.clone()
-            } else {
-                position
-            };
-        }
-        let before = position.clone();
-        if depth < 16 && reparses.count < 16 {
-            reparses.count += 1;
-            if let Ok((nested, nested_docs)) = lex(&script) {
-                let first = output.len();
-                let mut states = walk(
-                    &nested,
-                    &nested_docs,
-                    vec![position.clone()],
-                    dialect,
-                    output,
-                    depth + 1,
-                    reparses,
-                );
-                bound(&mut states);
-                let after = if states.len() == 1 {
-                    states.remove(0)
-                } else {
-                    let mut unknown = position.clone();
-                    unknown.state.directory = None;
-                    unknown.state.world = Some("shell code has several reachable states");
-                    unknown.stack.clear();
-                    set_pwd(&mut unknown.state);
-                    unknown
-                };
-                reparses
-                    .entries
-                    .push((before, script, after.clone(), output[first..].to_vec()));
-                // A shell child cannot change its caller's directory.
-                return if current_shell { after } else { position };
-            }
-        }
-        position.state.directory = None;
-        position.state.world = Some("shell code exceeds the bounded reading");
-        position.stack.clear();
-        set_pwd(&mut position.state);
-        output.push(Command {
-            text: "__unresolved_shell_code".into(),
-            cwd: None,
-            unresolved: vec!["shell code exceeds the bounded reading".into()],
-            stdout: None,
-            input_code: None,
-        });
-        return position;
+        let script = crate::hooks::git_guard::launched_script(&words, &script);
+        let after = reparse(&script, position.clone(), dialect, output, depth, reparses);
+        return if current_shell { after } else { position };
     }
     let directory_values =
         ["PWD", "OLDPWD"].map(|name| (name, position.state.vars.get(name).cloned()));
@@ -918,6 +1058,64 @@ fn simple(
             _ => {}
         }
     }
+    position
+}
+
+fn reparse(
+    script: &str,
+    mut position: Position,
+    dialect: Dialect,
+    output: &mut Vec<Command>,
+    depth: usize,
+    reparses: &mut Reparses,
+) -> Position {
+    if let Some((_, _, after, commands)) = reparses
+        .entries
+        .iter()
+        .find(|(before, body, _, _)| before == &position && body == script)
+    {
+        output.extend(commands.iter().cloned());
+        return after.clone();
+    }
+    let before = position.clone();
+    if depth < 16 && reparses.count < 16 {
+        reparses.count += 1;
+        if let Ok((nested, docs)) = lex(script) {
+            let first = output.len();
+            let mut states = walk(
+                &nested,
+                &docs,
+                vec![position.clone()],
+                dialect,
+                output,
+                depth + 1,
+                reparses,
+            );
+            bound(&mut states);
+            let after = if states.len() == 1 {
+                states.remove(0)
+            } else {
+                let mut unknown = position.clone();
+                unknown.state.directory = None;
+                unknown.state.world = Some("shell code has several reachable states");
+                unknown.stack.clear();
+                set_pwd(&mut unknown.state);
+                unknown
+            };
+            reparses.entries.push((
+                before,
+                script.into(),
+                after.clone(),
+                output[first..].to_vec(),
+            ));
+            return after;
+        }
+    }
+    position.state.directory = None;
+    position.state.world = Some("shell code exceeds the bounded reading");
+    position.stack.clear();
+    set_pwd(&mut position.state);
+    output.push(unread_code("shell code exceeds the bounded reading"));
     position
 }
 

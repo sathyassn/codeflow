@@ -592,6 +592,18 @@ impl Lexer {
             });
             return Ok(());
         }
+        if self.starts("<(") || self.starts(">(") {
+            self.at += 2;
+            let body = self.balanced(1)?;
+            let mut word = Word::default();
+            word.parts.push(Part::ProcSubst(body));
+            self.toks.push(Tok::Redir {
+                op,
+                target: Some(word),
+                heredoc: None,
+            });
+            return Ok(());
+        }
         match self.read_word()? {
             Tok::Word(word) if !word.raw.is_empty() => {
                 self.toks.push(Tok::Redir {

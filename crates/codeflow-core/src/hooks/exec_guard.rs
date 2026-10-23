@@ -534,14 +534,13 @@ mod tests {
     /// refuse ordinary shell work.
     #[test]
     fn test_ordinary_shell_work_is_not_blocked_by_default() {
-        for cmd in [
-            "bash -c 'printf ok'",
-            "source .venv/bin/activate",
-            "LD_LIBRARY_PATH=/opt/lib cargo test",
-        ] {
+        for cmd in ["bash -c 'printf ok'", "LD_LIBRARY_PATH=/opt/lib cargo test"] {
             let v = evaluate(cmd, &SecuritySection::default());
             assert!(!any_blocking(&v), "{cmd}: {v:?}");
         }
+        // TSK-406 round 3: unread sourced code now refuses near a checkout.
+        let unread = evaluate("source .venv/bin/activate", &SecuritySection::default());
+        assert!(any_blocking(&unread), "{unread:?}");
         for cmd in ["sudo id", "bash -c 'sudo id'", "LD_PRELOAD=/tmp/x.so ls"] {
             let v = evaluate(cmd, &SecuritySection::default());
             assert!(any_blocking(&v), "{cmd}");

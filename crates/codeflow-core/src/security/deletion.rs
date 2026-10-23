@@ -4285,7 +4285,7 @@ impl Reader<'_> {
         };
         let ambiguous = ambiguous || st.cwd.len() > 1;
         match program_name(first).as_str() {
-            "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" => {
+            name if crate::hooks::git_guard::is_shell(name) => {
                 // A new shell: its own arguments, no function calls.
                 let mut child = st.clone();
                 child.scopes.clear();
@@ -4306,7 +4306,7 @@ impl Reader<'_> {
             }
             "eval" => {
                 let mut child = st.clone();
-                self.child_script(&argv[1..].join(" "), &mut child);
+                self.child_script(&super::composed::paths::eval_body(&argv[1..]), &mut child);
             }
             "rm" => self.judge_rm(&argv, &st, forced, ambiguous),
             "rmdir" | "unlink" | "shred" | "srm" if forced => {
@@ -6826,7 +6826,7 @@ fn runs_remover(argv: &[String], depth: usize) -> bool {
     match program_name(first).as_str() {
         "rm" | "rmdir" | "unlink" | "shred" | "srm" => true,
         "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" | "eval" => {
+        name if name == "eval" || crate::hooks::git_guard::is_shell(name) => {
             let script = if program_name(first) == "eval" {
                 super::composed::paths::eval_body(&run.argv[1..])
             } else {

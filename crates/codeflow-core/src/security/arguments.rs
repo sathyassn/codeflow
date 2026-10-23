@@ -645,6 +645,16 @@ fn strongest_over_dirs(
     enforcement
 }
 
+fn strongest(first: Option<Reach>, next: Option<Reach>) -> Option<Reach> {
+    match (first, next) {
+        (Some(value @ Reach::Authority(_)), _) | (_, Some(value @ Reach::Authority(_))) => {
+            Some(value)
+        }
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        _ => None,
+    }
+}
+
 fn call_reaches(
     call: &outward::InterpreterCall,
     line_dirs: &outward::DirSet,
@@ -692,7 +702,21 @@ fn call_reaches(
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
-                value_reach(value, *pattern, dir, facts)
+                let mut reached = value_reach(value, *pattern, dir, facts);
+                let paths = match composed::paths::linked_paths(
+                    value,
+                    dir.unwrap_or(facts.payload_cwd),
+                    &call.links,
+                ) {
+                    Ok(paths) => paths,
+                    Err(why) => return strongest(reached, Some(Reach::Enforcement(why))),
+                };
+                for path in paths {
+                    if let Some(path) = path.to_str() {
+                        reached = strongest(reached, value_reach(path, *pattern, dir, facts));
+                    }
+                }
+                reached
             }));
             // A Tcl or brace-quoted word loses one `{}` pair before it runs
             // (`expect -c 'spawn ... {.git/config}'`, review round 7 F2).
@@ -711,7 +735,21 @@ fn call_reaches(
     for code in &call.code {
         for word in code_literal_words(code) {
             found.extend(strongest_over_dirs(&word, &dirs, |dir| {
-                code_reach(&word, dir, facts)
+                let mut reached = code_reach(&word, dir, facts);
+                let paths = match composed::paths::linked_paths(
+                    &word,
+                    dir.unwrap_or(facts.payload_cwd),
+                    &call.links,
+                ) {
+                    Ok(paths) => paths,
+                    Err(why) => return strongest(reached, Some(Reach::Enforcement(why))),
+                };
+                for path in paths {
+                    if let Some(path) = path.to_str() {
+                        reached = strongest(reached, code_reach(path, dir, facts));
+                    }
+                }
+                reached
             }));
         }
     }
