@@ -582,37 +582,8 @@ make a task active or create a conflict. `work next --json` keeps these in
 `informational_branches`, separate from the claim `branches`. Claim lists its
 remotes live as well as reading fetched refs, so a narrow fetch cannot hide work.
 
-`codeflow follow` keeps follow-ups in the clone's coordination ledger,
-`<git common dir>/codeflow/coord/`, shared by every worktree of the clone
-and never committed ([schema reference](coordination-ledger.md), ADR-0086).
-
-- **Who acts.** A writing verb acts as the role named by
-  `CODEFLOW_COORD_ROLE` (`coordinator`, a lane id or `operator`) with
-  `CODEFLOW_COORD_INSTANCE` and `CODEFLOW_COORD_GENERATION`, and
-  `CODEFLOW_COORD_STREAM` for a coordinator; the ledger checks the claim
-  against its own log and refuses a stale one. With no role set, a caller
-  only reads. A shell a harness marks as an agent's cannot act as the
-  operator; it records the operator's answer with `--answer-source`.
-- **Closing.** `follow check` closes an item only when every `fulfils`
-  link is done on its target: the task `complete` in the records on its
-  declared target's tip, a pull request merged, a commit in the target, a
-  branch shown deleted by its remote. A completion on a feature branch never
-  counts. `follow close` records asserted evidence.
-- **Reads.** `follow list` and `follow snapshot` never write, take a lock or
-  refresh a heartbeat. A damaged ledger only warns and shows its valid
-  prefix.
-- **Exit status.** 0 done, 1 refused, 2 no repository or unusable input,
-  3 busy (another process held the lock past the bounded wait), 4
-  read-only (a damaged log), 5 unwritten (a denied write), 6 unavailable (a
-  denied read).
-- **Not a control.** No gate, hook, CI check or landing reads the ledger.
-  Records and pull request bodies never cite FU, LN or WS ids:
-  `codeflow validate --docs` flags a task, epic or ADR record that does, and
-  `codeflow ci` blocks such a pull request body.
-
-`codeflow work status` lists, per task, each worktree with uncommitted
-changes, unpushed commits or commits on no branch, and names a worktree
-whose folder or objects are gone as not recoverable.
+`codeflow follow` is described in the
+[coordination ledger reference](coordination-ledger.md#the-command).
 
 ### Delegate notes
 

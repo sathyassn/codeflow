@@ -903,3 +903,37 @@ fn journey_two_worktrees_two_actors_and_a_landing() {
     );
     let _ = &f.origin;
 }
+
+/// AC-5: a link resolves through the record's id and UID, never its title,
+/// so a renamed task keeps its link; the id reused by another record (a new
+/// UID on the target) makes the follow-up due for relinking.
+#[test]
+fn a_renamed_task_keeps_its_link_and_a_reused_id_is_caught() {
+    let f = fixture();
+    bind(&f.root);
+    let one = lane("LN-001", "s1");
+    ok(&cli(
+        &f.root,
+        &one,
+        &add_args(
+            "watch the gate timing task",
+            &["--link", "prerequisite:TSK-002"],
+        ),
+    ));
+    write(
+        &f.root,
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "time the release gate end to end", "todo"),
+    );
+    git(&f.root, &["commit", "-qam", "docs(tasks): rename the task"]);
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let shown = ok(&cli(&f.root, &[], &["follow", "list", "FU-001"]));
+    assert!(shown.contains("prerequisite:TSK-002"), "{shown}");
+    assert!(!shown.contains("different record"), "{shown}");
+    let reused = task("TSK-002", "another record", "todo").replace("uid-TSK-002", "uid-other");
+    write(&f.root, "project-management/tasks/TSK-002.md", &reused);
+    git(&f.root, &["commit", "-qam", "docs(tasks): reuse the id"]);
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let shown = ok(&cli(&f.root, &[], &["follow", "list", "FU-001"]));
+    assert!(shown.contains("now names a different record"), "{shown}");
+}

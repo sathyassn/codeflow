@@ -269,6 +269,32 @@ above). Recorded by the adopter or the operator.
 
 No fields. Recorded by the holder or the operator.
 
+## The command
+
+- **Who acts.** A writing verb acts as the role named by
+  `CODEFLOW_COORD_ROLE` (`coordinator`, a lane id or `operator`) with
+  `CODEFLOW_COORD_INSTANCE` and `CODEFLOW_COORD_GENERATION`, and
+  `CODEFLOW_COORD_STREAM` for a coordinator; the ledger checks the claim
+  against its own log and refuses a stale one. With no role set, a caller
+  only reads. A shell a harness marks as an agent's cannot act as the
+  operator; it records the operator's answer with `--answer-source`.
+- **Closing.** `follow check` closes an item only when every `fulfils`
+  link is done on its target: the task `complete` in the records on its
+  declared target's tip, a pull request merged, a commit in the target, a
+  branch shown deleted by its remote. A completion on a feature branch never
+  counts. `follow close` records asserted evidence.
+- **Reads.** `follow list` and `follow snapshot` never write, take a lock or
+  refresh a heartbeat. A damaged ledger only warns and shows its valid
+  prefix.
+- **Exit status.** 0 done, 1 refused, 2 no repository or unusable input,
+  3 busy (another process held the lock past the bounded wait), 4
+  read-only (a damaged log), 5 unwritten (a denied write), 6 unavailable (a
+  denied read).
+- **Not a control.** No gate, hook, CI check or landing reads the ledger.
+  Records and pull request bodies never cite FU, LN or WS ids:
+  `codeflow validate --docs` flags a task, epic or ADR record that does, and
+  `codeflow ci` blocks such a pull request body.
+
 ## Transactions and damage
 
 - One append is one write of whole lines under `coord.lock`, synced before
