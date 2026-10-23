@@ -1477,3 +1477,108 @@ fn essential_refuses_an_unavailable_lock_directory_before_any_target() {
     );
     assert!(!error.contains("starting target"), "{error}");
 }
+
+#[cfg(unix)]
+#[test]
+fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work() {
+    for class in ["heavy", "light"] {
+        let home = tempfile::tempdir().unwrap();
+        let holder = held_until_released("full");
+        let linked = holder.path().join("linked");
+        git(
+            holder.path(),
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(linked.join(".codeflow")).unwrap();
+        std::fs::write(linked.join(".codeflow/test-config.json"), format!(r#"{{"schema_version":"1.0","execution":{{"quick_default_class":"{class}","heavy_wait_seconds":1}},"targets":[
+          {{"name":"undeclared","runner":"custom","modes":{{"quick":{{"command":"touch default-ran"}}}}}},
+          {{"name":"light","runner":"custom","heavy":false,"modes":{{"quick":{{"command":"touch light-ran"}}}}}}
+        ]}}"#)).unwrap();
+        let (mut child, rx, _stdout) = spawn(command(holder.path(), home.path(), &["test"]));
+        wait_for(&rx, "starting target 'holder'");
+        let start = Instant::now();
+        let output = run(&linked, home.path(), &["test", "--mode", "quick"]);
+        let error = stderr(&output);
+        assert!(linked.join("light-ran").exists());
+        if class == "heavy" {
+            assert_eq!(output.status.code(), Some(1), "{error}");
+            assert!(start.elapsed() >= Duration::from_secs(1));
+            assert!(!linked.join("default-ran").exists());
+            assert!(error.contains("waiting up to 1s"), "{error}");
+            assert!(error.contains(&format!("pid {}", child.id())), "{error}");
+            assert!(error.contains("full mode"), "{error}");
+            assert!(error.contains(holder.path().to_str().unwrap()), "{error}");
+        } else {
+            assert!(output.status.success(), "{error}");
+            assert!(linked.join("default-ran").exists());
+        }
+        std::fs::write(holder.path().join("release"), "done").unwrap();
+        assert!(child.wait().unwrap().success());
+        let after = run(&linked, home.path(), &["test", "--mode", "quick"]);
+        assert!(after.status.success(), "{}", stderr(&after));
+        assert!(linked.join("default-ran").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
+    let home = tempfile::tempdir().unwrap();
+    let root = held_until_released("essential");
+    let path = home.path().join("locks/full-gate.lock");
+    let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(empty.status.success(), "{}", stderr(&empty));
+    assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));
+    assert!(
+        !home.path().join("locks").exists(),
+        "status must not create lock directories"
+    );
+    assert!(!root.path().join(".git/codeflow").exists());
+    let (mut child, rx, _stdout) = spawn(command(
+        root.path(),
+        home.path(),
+        &["test", "--mode", "essential"],
+    ));
+    wait_for(&rx, "starting target 'holder'");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let before = loop {
+        let record = std::fs::read_to_string(&path).unwrap();
+        if record.contains("group=") {
+            break record;
+        }
+        assert!(Instant::now() < deadline, "target group was not recorded");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let started = before
+        .lines()
+        .find_map(|line| line.strip_prefix("started="))
+        .unwrap();
+    let status = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let text = String::from_utf8_lossy(&status.stdout);
+    assert_eq!(text.matches("recorded holder:").count(), 2, "{text}");
+    for value in [
+        format!("pid {}", child.id()),
+        "essential mode".into(),
+        root.path().display().to_string(),
+        format!("started_unix={started}"),
+    ] {
+        assert!(text.contains(&value), "{text}");
+    }
+    assert!(!stderr(&status).contains("starting target"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(
+        run(root.path(), home.path(), &["test"]).status.code(),
+        Some(1)
+    );
+    std::fs::write(root.path().join("release"), "done").unwrap();
+    assert!(child.wait().unwrap().success());
+    let after = run(root.path(), home.path(), &["test", "--lock-status"]);
+    assert!(after.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&after.stdout)
+            .matches("no recorded holder")
+            .count(),
+        2
+    );
+}

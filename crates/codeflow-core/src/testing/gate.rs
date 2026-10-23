@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use crate::testing::config::{load_test_config, ExecutionConfig, TargetConfig};
+use crate::testing::config::{self, load_test_config, ExecutionConfig, TargetConfig};
 use crate::testing::coverage::FileCoverage;
 use crate::testing::delivery;
 pub use crate::testing::delivery::{matches as inputs_match, GateOptions};
@@ -306,8 +306,11 @@ fn run_gate_resolved(
     )?;
     // Resolve fallback weight before scheduling; the original declarations remain evidence inputs.
     for target in &mut targets {
-        if mode == "quick" && effective_mode == "essential" && target.heavy.is_none() {
-            target.heavy = Some(true);
+        if mode == "quick" && target.heavy.is_none() {
+            target.heavy = Some(
+                effective_mode == "essential"
+                    || execution.quick_default_class == config::QuickTargetClass::Heavy,
+            );
         }
     }
     let before = delivery::tracked(project_dir)?;

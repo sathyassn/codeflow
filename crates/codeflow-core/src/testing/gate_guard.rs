@@ -214,6 +214,48 @@ pub fn unwritable_gate_dirs(
     unwritable
 }
 
+/// Read holder records without taking a lock, changing a record, or creating directories.
+/// These are snapshots: admission still checks the OS lock and live target groups.
+/// # Errors
+/// Refuses discovery failures and unreadable or oversized records.
+pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
+    let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
+        .map_err(|error| format!("cannot discover gate lock directories: {error}"))?;
+    dirs.into_iter()
+        .map(|dir| {
+            let path = dir.join(LOCK_FILE);
+            let record = match File::open(&path) {
+                Ok(mut file) => read_record(&mut file),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+                Err(error) => Err(error),
+            }
+            .map_err(|error| {
+                format!(
+                    "cannot read gate lock {}: {error}",
+                    crate::git::display_path(&path)
+                )
+            })?;
+            let description = if record.trim().is_empty() {
+                "no recorded holder".to_string()
+            } else {
+                let started = record
+                    .lines()
+                    .find_map(|line| line.strip_prefix("started="))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string());
+                format!(
+                    "recorded holder: {}; started_unix={started}",
+                    crate::git::display_line(&describe_holder(&record))
+                )
+            };
+            Ok(format!(
+                "{}: {description}",
+                crate::git::display_path(&path)
+            ))
+        })
+        .collect()
+}
+
 /// Acquire the machine and repository locks, with the operator's repair pointer.
 /// # Errors
 /// Refuses unavailable directories and held locks before starting heavy work.

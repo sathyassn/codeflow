@@ -45,6 +45,22 @@ pub struct TestConfig {
     pub targets: Vec<TargetConfig>,
 }
 
+/// Default class for undeclared targets in a configured quick mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickTargetClass {
+    #[default]
+    Light,
+    Heavy,
+}
+
+impl QuickTargetClass {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // Serde skip_serializing_if borrows the field.
+    fn is_light(&self) -> bool {
+        *self == Self::Light
+    }
+}
+
 /// Execution settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionConfig {
@@ -55,6 +71,10 @@ pub struct ExecutionConfig {
     /// Maximum number of concurrently running targets. Omitted uses CPU count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<usize>,
+
+    /// Default for undeclared targets in a configured quick mode; fallback stays heavy.
+    #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
+    pub quick_default_class: QuickTargetClass,
 
     /// Maximum wait for heavy quick targets to acquire the shared gate lock.
     #[serde(default, skip_serializing_if = "is_zero")]

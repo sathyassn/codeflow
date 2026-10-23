@@ -108,11 +108,21 @@ starting a target and names the holder's process, mode and directory.
 Quick gates can run light targets while another gate holds the lock. Declare
 `"heavy": true` on targets that compile or run substantial parallel work, or
 `"heavy": false` for light checks. Undeclared targets in a configured quick
-mode are light. When there are no quick targets and quick falls back to
+mode use `execution.quick_default_class`, which accepts `"light"` (the
+default) or `"heavy"`. A project with substantial undeclared quick suites
+can set it to `"heavy"` and set `execution.heavy_wait_seconds` to a bounded
+wait for both interactive and pre-push runs. An explicit target declaration
+takes precedence. When there are no quick targets and quick falls back to
 essential, undeclared targets are heavy. Heavy quick targets wait up to
 `execution.heavy_wait_seconds` (default zero), then refuse if the lock is
 still held. The result names the light targets that ran. Pre-push uses the
 same admission for its configured quick targets.
+
+Read the holder's process, worktree, mode and start time with
+`codeflow test --lock-status`. This reads both records without taking a
+lock, changing a record or starting a target. A killed gate can leave a
+stale record; the displayed snapshot does not replace admission's OS-lock
+and live-process-group checks.
 
 Run a direct heavy command with `codeflow reserve -- cargo build` to take
 the same locks. `--wait-seconds` sets a bounded wait, and

@@ -6,7 +6,7 @@ use codeflow_core::testing::gate::{
     gate_uses_cargo, run_gate_with_options, CoverageReport, FailureReport, GateOptions, GateOutcome,
 };
 use codeflow_core::testing::gate_guard::{
-    acquire_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
+    acquire_gate_lock, check_cargo_target_dir, gate_lock_status, lock_dirs, GateLock,
 };
 use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
 use codeflow_core::testing::setup::{self, SetupError, SetupResult};
@@ -18,7 +18,8 @@ pub struct TestArgs {
     pub command: Option<TestCommand>,
 
     /// Full (default) and essential hold the shared heavy-work lock for the run.
-    /// Quick runs light targets beside gates; declared heavy targets wait up to
+    /// Undeclared quick targets use `execution.quick_default_class` (light by default).
+    /// Quick runs light targets beside gates; heavy targets wait up to
     /// `execution.heavy_wait_seconds` (default zero), then refuse if still held.
     /// With no quick targets, quick uses essential targets, heavy unless declared light.
     /// Both the `CodeFlow` home and git common directory use `full-gate.lock`, also
@@ -26,6 +27,11 @@ pub struct TestArgs {
     /// These locks do not make the rest of the machine quiet.
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
+
+    /// Read recorded lock holders and their start times without running targets.
+    /// Records are snapshots; admission still checks the OS lock and live target groups.
+    #[arg(long, conflicts_with_all = ["mode", "strict", "since", "all", "only"])]
+    pub lock_status: bool,
 
     /// Exit non-zero when no targets executed or candidate evidence skipped a target.
     /// Explicit --only and mode exclusions are not skips.
@@ -91,6 +97,10 @@ pub struct SetupArgs {
 
 pub fn run(args: &TestArgs) -> i32 {
     if let Some(TestCommand::Setup(setup_args)) = &args.command {
+        if args.lock_status {
+            eprintln!("codeflow test: --lock-status cannot be combined with setup");
+            return 2;
+        }
         return run_setup(setup_args);
     }
 
@@ -101,6 +111,9 @@ pub fn run(args: &TestArgs) -> i32 {
             return 2;
         }
     };
+    if args.lock_status {
+        return print_lock_status(&root);
+    }
     let _lock = match guard_gate(&root, &args.mode) {
         Ok(lock) => lock,
         Err(message) => {
@@ -187,6 +200,24 @@ pub fn run(args: &TestArgs) -> i32 {
         }
         Err(e) => {
             eprintln!("codeflow test: {e}", e = crate::cmd::shown(&e));
+            1
+        }
+    }
+}
+
+fn print_lock_status(root: &std::path::Path) -> i32 {
+    match gate_lock_status(root) {
+        Ok(lines) => {
+            if lines.is_empty() {
+                println!("no gate lock locations");
+            }
+            for line in lines {
+                println!("{line}");
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("codeflow test: {error}");
             1
         }
     }

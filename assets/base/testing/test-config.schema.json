@@ -56,6 +56,15 @@
           "type": "integer",
           "minimum": 1,
           "description": "Total workers allocated across concurrent heavy targets. Omitted leaves tool defaults unchanged."
+        },
+        "quick_default_class": {
+          "type": "string",
+          "enum": [
+            "light",
+            "heavy"
+          ],
+          "default": "light",
+          "description": "Default class of undeclared targets in a configured quick mode. The quick-to-essential fallback remains heavy unless a target declares heavy=false."
         }
       },
       "additionalProperties": false

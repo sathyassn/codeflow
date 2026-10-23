@@ -441,10 +441,17 @@ pub fn run_dependency_targets_with_admission(
                         wait_started = None;
                     }
                     Err(message) => {
+                        let first_wait = wait_started.is_none();
                         let since = wait_started.get_or_insert_with(Instant::now);
                         if !message.contains("gate lock unavailable")
                             && since.elapsed() < Duration::from_secs(execution.heavy_wait_seconds)
                         {
+                            if first_wait {
+                                progress!(
+                                    "[codeflow test] waiting up to {}s for heavy work: {message}",
+                                    execution.heavy_wait_seconds
+                                );
+                            }
                             waiting = true;
                             continue;
                         }
