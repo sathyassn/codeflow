@@ -203,6 +203,31 @@ canary claim rather than an inference from Unix tests.
 
 The locked `check`, `build`, `dev`, and `preview` scripts hold one top-level
 workflow lease, so another process cannot bind `dist` to the wrong snapshot.
+The lease records its owner: the coordinator's process id and host, the
+process id of each writer (adapter, Astro, evidence, test runner), a count of
+writers being started, and whether writers lead process groups. On POSIX each
+writer leads its own group, so workers it leaves behind count as live. A
+contender on the same host reclaims the lease at once, with one line naming
+the dead owner, only when the coordinator and every recorded writer group have
+exited, which covers a run killed with `SIGKILL`. Proven liveness of any of
+them blocks whatever the lease age, and the refusal names the live process ids
+(`group N` is a group with members still running). The contender judges the
+owner's last record, heartbeat included, and refuses while that record keeps
+changing; it never expires through that branch. Anything the lease cannot prove
+safe keeps the lease and falls back to the four-hour age rule: a coordinator
+that died while a writer was being started, another host, a lease without
+owner fields, a permission error, and on Windows every lease that names a
+writer, because Windows cannot see the workers a writer left behind. On
+Windows a workflow that started a writer therefore leaves its lease in place
+when it ends, and the next run waits for the age rule; to start sooner, stop
+the named processes and remove `.portal/workflow.lock` once no portal process
+runs. Native Windows behavior is not verified. A displaced holder found during
+recovery is judged on its settled record and is kept while its owner lives. If
+its record cannot be read, recovery stops with the holder's claim still
+recoverable, and the next run judges it again; a candidate whose owner lives is
+never cleaned up as incomplete. A workflow that cannot prove a writer's
+group stopped, or cannot stop a writer it failed to record, fails and keeps the
+lease. A reused process id reads as live and blocks.
 Before Astro starts, the workflow rejects symlinks and non-regular entries in
 tool-controlled `dist`, `.astro`, and Node cache roots; it never follows an
 output link while cleaning. Run only one task-owned dev server per portal, stop
