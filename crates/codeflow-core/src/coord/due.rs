@@ -132,8 +132,9 @@ impl Observer for RepoObserver {
         let tip = crate::workgraph::work_start::target_reference(&repo, &resolved.target)
             .ok()??
             .id();
-        let commit = git2::Oid::from_str(sha).ok()?;
-        let contained = tip == commit || repo.graph_descendant_of(tip, commit).ok()?;
+        // The guarded ancestry reader: no replace refs, grafts or commit graph.
+        let contained =
+            crate::git::commit_reachable_from(&self.root, sha, &[tip.to_string()]).ok()?;
         Some((contained, target, tip.to_string()))
     }
 
