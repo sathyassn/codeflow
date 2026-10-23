@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "What can the binary do, and which commands are never typed by hand?",
-    "idea": "Twenty-seven subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
+    "idea": "Twenty-eight subcommands sit in six jobs, and three of them are run for you by the settings presets, the git hooks and CI.",
     "title": "The command surface, by job",
     "kicker": "Command reference",
-    "caption": "You type twenty-four of the commands; hook, git-hook and ci are called by the wiring that init installs.",
+    "caption": "You type twenty-five of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
         "name": "typed",
@@ -412,6 +412,23 @@
           "style": "mono",
           "for": [
             "g2c4"
+          ]
+        },
+        {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 630,
+          "cy": 139,
+          "r": 7,
+          "id": "g2c5"
+        },
+        {
+          "text": "reserve",
+          "x": 646,
+          "y": 144,
+          "style": "mono",
+          "for": [
+            "g2c5"
           ]
         },
         {
@@ -960,6 +977,23 @@
           ]
         },
         {
+          "state": "typed",
+          "shape": "circle",
+          "cx": 184,
+          "cy": 263,
+          "r": 7,
+          "id": "g2c5"
+        },
+        {
+          "text": "reserve",
+          "x": 198,
+          "y": 268,
+          "style": "mono",
+          "for": [
+            "g2c5"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
@@ -1158,7 +1192,7 @@
         ],
         [
           "Verify",
-          "`test`, `validate`, `integrate`, `doctor`, `work`",
+          "`test`, `validate`, `integrate`, `doctor`, `work`, `reserve`",
           "none"
         ],
         [

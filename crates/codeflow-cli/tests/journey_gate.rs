@@ -353,7 +353,7 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
     .contains("--results target/nextest/partitions"));
 }
 
-/// The quick gate, which the pre-push hook runs on every push, is the light
+/// The quick gate, which the pre-push hook runs on every push, is the smaller
 /// set: fmt, clippy, the Python contracts and the repository update replay,
 /// the one cargo test that fails before review when a shipped asset changes
 /// without a resync of this repository's install. The producers (the web
@@ -397,7 +397,7 @@ fn the_quick_gate_runs_only_the_light_targets() {
         .collect();
     assert_eq!(
         heavy,
-        ["rust-clippy", "repository-update-noop"]
+        ["rust-clippy", "repository-update-noop", "contract-scans"]
             .into_iter()
             .collect()
     );
