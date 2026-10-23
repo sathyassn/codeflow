@@ -343,6 +343,37 @@ mod authority {
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
+/// The source and completion endpoints established by the binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionProof {
+    /// The commit named by the acceptance review.
+    pub reviewed: Oid,
+    /// The clean merge that carried the reviewed task, absent for direct work.
+    pub landing_merge: Option<Oid>,
+    /// The reviewed span's end: the landing's second parent, or the direct head.
+    pub span_head: Oid,
+    /// The completing commit, or HEAD when checking an uncommitted completion.
+    pub completion_tail: Oid,
+}
+
+/// Findings and, only when every binding check passes, its source proof.
+#[derive(Debug, Default)]
+pub struct BindingResult {
+    /// Refusals from the binding, waivers and leaf journey checks.
+    pub findings: Vec<Finding>,
+    /// Absent for a refused binding or a record with no active acceptance block.
+    pub proof: Option<CompletionProof>,
+}
+
+impl From<Vec<Finding>> for BindingResult {
+    fn from(findings: Vec<Finding>) -> Self {
+        Self {
+            findings,
+            proof: None,
+        }
+    }
+}
+
 /// Bind a completion to its reviewed source. Only this record's status and
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range always reviews its
@@ -358,7 +389,7 @@ pub fn bind_completion(
     default_target: Option<Oid>,
     transport: Transport,
     base: Option<Oid>,
-) -> Vec<Finding> {
+) -> BindingResult {
     let run = RunBases::new(default_target);
     bind_completion_with_amendment(
         repo,
@@ -429,13 +460,13 @@ pub(crate) fn bind_completion_with_amendment(
     own_range_base: Option<Oid>,
     stacking: &StackingTips,
     criteria: &CriteriaBases,
-) -> Vec<Finding> {
+) -> BindingResult {
     let Some(block) = active_block(task) else {
-        return Vec::new();
+        return BindingResult::default();
     };
     let target = match task_target(repo, task, default_target) {
         Ok(target) => target,
-        Err(error) => return vec![finding(BINDING_RULE, error)],
+        Err(error) => return vec![finding(BINDING_RULE, error)].into(),
     };
     // On the target itself there is no PR range to anchor. The status verb
     // still checks the transition and reviewed span, including uncommitted
@@ -444,7 +475,7 @@ pub(crate) fn bind_completion_with_amendment(
         (Some(base), _) => Some(base),
         (None, Some(tip)) => match common_base(repo, tip, landing.commit()) {
             Ok(anchor) => anchor,
-            Err(error) => return vec![finding(BINDING_RULE, error)],
+            Err(error) => return vec![finding(BINDING_RULE, error)].into(),
         },
         (None, None) => None,
     };
@@ -459,7 +490,7 @@ pub(crate) fn bind_completion_with_amendment(
     // reopened the task itself.
     let reopened_history = match task_reopen_history(repo, task, landing, anchor) {
         Ok(history) => history,
-        Err(error) => return vec![finding(BINDING_RULE, error)],
+        Err(error) => return vec![finding(BINDING_RULE, error)].into(),
     };
     let mut recovered = false;
     let mut unreadable = None;
@@ -489,13 +520,13 @@ pub(crate) fn bind_completion_with_amendment(
                 Some((found.at, found.old))
             }
             Ok(None) => None,
-            Err(error) => return vec![finding(BINDING_RULE, error)],
+            Err(error) => return vec![finding(BINDING_RULE, error)].into(),
         },
     };
     let reopen_before_range = match reopen.as_ref().zip(anchor) {
         Some(((at, _), base)) => match is_ancestor_or_same(repo, *at, base) {
             Ok(before) => before,
-            Err(error) => return vec![finding(BINDING_RULE, error)],
+            Err(error) => return vec![finding(BINDING_RULE, error)].into(),
         },
         None => false,
     };
@@ -505,6 +536,7 @@ pub(crate) fn bind_completion_with_amendment(
     let reopens_range = reopen
         .as_ref()
         .is_some_and(|_| !recovered || !reopen_before_range);
+    let mut proof = None;
     let mut findings = Vec::new();
     findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
     if let Some((_, old)) = &reopen {
@@ -533,7 +565,7 @@ pub(crate) fn bind_completion_with_amendment(
                     Ok(contains) => (reviewed == *at && !completed_in_range) || !contains,
                     Err(error) => {
                         bind(format!("{}: {error}", task.id));
-                        return findings;
+                        return findings.into();
                     }
                 },
                 None => false,
@@ -546,7 +578,22 @@ pub(crate) fn bind_completion_with_amendment(
                 } else {
                     transport
                 };
-                binding_problem(repo, task, landing, reviewed, carried, stacking)
+                match binding_source(
+                    repo,
+                    task,
+                    landing,
+                    reviewed,
+                    carried,
+                    stacking,
+                    default_target,
+                    anchor,
+                ) {
+                    Ok(bound) => {
+                        proof = Some(bound);
+                        None
+                    }
+                    Err(problem) => Some(problem),
+                }
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -569,7 +616,10 @@ pub(crate) fn bind_completion_with_amendment(
         }
     }
     findings.extend(leaf_journey(task, graph, &block));
-    findings
+    BindingResult {
+        proof: proof.filter(|_| findings.is_empty()),
+        findings,
+    }
 }
 
 /// Bind an epic's own acceptance block (SPC-013 R-33, R-60), which proves
@@ -791,31 +841,49 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<crate::git::GitName>, g
 /// when the source and completion do not share a directly reviewed span.
 /// `stacking` holds the target tips a clean merge after the review must
 /// come from.
-fn binding_problem(
+#[allow(clippy::too_many_arguments)] // Reviewed-span inputs and the landed adoption anchor.
+fn binding_source(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
     transport: Transport,
     stacking: &StackingTips,
-) -> Option<String> {
-    // A task landing's own span may stack (TSK-184): the task branch may
-    // re-merge its integration target cleanly after the review. Direct
-    // work, a reopening range and a completion bound at a head never stack.
+    default_target: Option<Oid>,
+    anchor: Option<Oid>,
+) -> Result<CompletionProof, String> {
+    let proof = CompletionProof {
+        reviewed,
+        landing_merge: None,
+        span_head: landing.commit(),
+        completion_tail: landing.commit(),
+    };
     let stacking = if transport == Transport::TaskLanding {
         Stacking::OnTarget(stacking)
     } else {
         Stacking::Never
     };
-    let direct = reviewed_span_problem(repo, task, landing, reviewed, stacking)?;
+    let Some(direct) = reviewed_span_problem(repo, task, landing, reviewed, stacking) else {
+        return Ok(proof);
+    };
     if transport == Transport::Direct {
-        return Some(direct);
+        return Err(direct);
     }
-    match task_landing(repo, task, landing, reviewed) {
-        Landed::NoMerge => Some(direct),
-        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
-            .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
-        Landed::Refused(problem) => Some(problem),
+    match task_landing(repo, task, landing, reviewed, default_target, anchor) {
+        Landed::NoMerge => Err(direct),
+        Landed::Span { merge, head } => {
+            if let Some(problem) =
+                reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
+            {
+                return Err(format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed"));
+            }
+            Ok(CompletionProof {
+                landing_merge: Some(merge),
+                span_head: head,
+                ..proof
+            })
+        }
+        Landed::Refused(problem) => Err(problem),
     }
 }
 
@@ -1060,6 +1128,8 @@ fn task_landing(
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
+    default_target: Option<Oid>,
+    anchor: Option<Oid>,
 ) -> Landed {
     let _judgment = history::judgment();
     if let Err(error) = history::check(repo) {
@@ -1080,12 +1150,9 @@ fn task_landing(
                 .map(|path| path.display().to_string()),
         ),
         Landing::Commit(at) => {
-            let Ok(commit) = repo.find_commit(at) else {
-                return unreadable("the completing commit");
-            };
-            let parent = match history::parents(repo, &commit) {
-                Ok(parents) => parents.first().copied(),
-                Err(error) => return Landed::Refused(error.to_string()),
+            let parent = match first_parent(repo, at) {
+                Ok(parent) => parent,
+                Err(error) => return Landed::Refused(error),
             };
             match non_planning_change(repo, parent, at) {
                 Ok(outside) => (parent, outside),
@@ -1093,7 +1160,7 @@ fn task_landing(
             }
         }
     };
-    let mut after_merge = None;
+    let mut after_merge = Vec::new();
     let mut at = start;
     // The landing merge is the commit of C's first-parent chain that brought
     // `reviewed` onto it: its first parent does not hold `reviewed`.
@@ -1127,10 +1194,10 @@ fn task_landing(
             }
             return Landed::NoMerge;
         }
-        if parents.len() < 2 && after_merge.is_none() {
+        if parents.len() < 2 {
             match non_planning_change(repo, first, oid) {
                 Ok(None) => {}
-                Ok(Some(path)) => after_merge = Some((oid, path)),
+                Ok(Some(path)) => after_merge.push((oid, path)),
                 Err(_) => return unreadable("the first-parent chain"),
             }
         }
@@ -1147,11 +1214,16 @@ fn task_landing(
             merge.id()
         ));
     }
-    if let Some((commit, path)) = after_merge {
-        return Landed::Refused(format!(
-            "{commit} changes {path} after the landing merge {} of the reviewed commit {reviewed}; only merges and planning records may follow it",
-            merge.id()
-        ));
+    if let Err(error) = check_after_landing(
+        repo,
+        task,
+        merge.id(),
+        anchor.or(start).unwrap_or(merge.id()),
+        default_target,
+        reviewed,
+        &after_merge,
+    ) {
+        return Landed::Refused(error);
     }
     match is_clean_remerge(repo, &merge) {
         Ok(true) => Landed::Span { merge: merge.id(), head: second },
@@ -1161,6 +1233,84 @@ fn task_landing(
         )),
         Err(_) => unreadable("the landing merge"),
     }
+}
+
+/// A direct non-planning change after landing needs both a landed adoption
+/// and unchanged acceptance blocks. Check each commit even if later reverted.
+fn check_after_landing(
+    repo: &Repository,
+    task: &RecordView,
+    merge: Oid,
+    head: Oid,
+    default_target: Option<Oid>,
+    reviewed: Oid,
+    commits: &[(Oid, String)],
+) -> Result<(), String> {
+    if commits.is_empty() {
+        return Ok(());
+    }
+    let adopted = landed_adoptions(repo, task, merge, head, default_target)?;
+    for (commit, path) in commits {
+        if !adopted
+            .iter()
+            .any(|entry| entry.commit == commit.to_string())
+        {
+            return Err(format!(
+                "{commit} changes {path} after the landing merge {merge} of the reviewed commit {reviewed}; only merges, planning records and landed line adoptions may follow it"
+            ));
+        }
+        let parent = first_parent(repo, *commit)?.ok_or("adopted commit has no parent")?;
+        let blocks = |at| -> Result<_, String> {
+            Ok(record_at(repo, at, task)?.map(|record| {
+                acceptance_blocks(&record.body)
+                    .into_iter()
+                    .map(|block| block.inner)
+                    .collect::<Vec<_>>()
+            }))
+        };
+        if blocks(parent)? != blocks(*commit)? {
+            return Err(format!(
+                "adopted commit {commit} changes {}'s acceptance block after the landing merge",
+                task.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Use the line classifier's landed-entry proof, including its read errors.
+fn landed_adoptions(
+    repo: &Repository,
+    task: &RecordView,
+    merge: Oid,
+    head: Oid,
+    default_target: Option<Oid>,
+) -> Result<Vec<super::line_adoption::LineAdoption>, String> {
+    let Some(line) = task
+        .integration_target
+        .as_deref()
+        .filter(|line| line.starts_with("integration/"))
+    else {
+        return Ok(Vec::new());
+    };
+    // `head` is the landed range anchor, or the pre-completion head when
+    // no anchor exists. The default target bounds the line's history; without it,
+    // start that history at the task landing's first parent.
+    let target = match default_target {
+        Some(target) => target,
+        None => first_parent(repo, merge)?.ok_or("the landing merge has no first parent")?,
+    };
+    let report = super::line_adoption::check_range(
+        repo.workdir().unwrap_or_else(|| repo.path()),
+        line,
+        &target.to_string(),
+        &merge.to_string(),
+        &head.to_string(),
+    )?;
+    if let Some(error) = report.record_error {
+        return Err(format!("{line}'s line_adoptions cannot be read: {error}"));
+    }
+    Ok(report.adopted)
 }
 
 /// Whether `merge`'s tree is what merging its two parents gives with no
@@ -3071,7 +3221,7 @@ pub fn completions_in_range(
                     note: true,
                 });
             }
-            findings.extend(bind_completion_with_amendment(
+            let bound = bind_completion_with_amendment(
                 repo,
                 task,
                 &after,
@@ -3082,7 +3232,8 @@ pub fn completions_in_range(
                 (own_task == Some(task.id.as_str())).then_some(anchor),
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
                 &run.criteria(),
-            ));
+            );
+            findings.extend(bound.findings);
         }
     }
     findings.extend(epic_completions_in_range(
@@ -3443,18 +3594,21 @@ fn bind_stacked(
         ),
         note: true,
     }];
-    findings.extend(bind_completion_with_amendment(
-        repo,
-        &stack.record,
-        &stack.graph,
-        Landing::Commit(stack.pin),
-        default_target,
-        Transport::TaskLanding,
-        Some(own_anchor),
-        Some(own_anchor),
-        stacking,
-        criteria,
-    ));
+    findings.extend(
+        bind_completion_with_amendment(
+            repo,
+            &stack.record,
+            &stack.graph,
+            Landing::Commit(stack.pin),
+            default_target,
+            Transport::TaskLanding,
+            Some(own_anchor),
+            Some(own_anchor),
+            stacking,
+            criteria,
+        )
+        .findings,
+    );
     Ok(findings)
 }
 
@@ -4353,5 +4507,263 @@ mod tests {
             vec!["AC-1 changed its tags with the same text: no tag -> (after release)".to_string()]
         );
         assert!(criteria_delta(&split, &split).is_empty());
+    }
+    const ADOPTION_TASK: &str = "project-management/tasks/TSK-001.md";
+    const ADOPTION_EPIC: &str = "project-management/epics/EPC-001.md";
+    const ADOPTION_LINE: &str = "integration/EPC-001-line";
+
+    struct AdoptionFixture {
+        dir: tempfile::TempDir,
+        base: Oid,
+        reviewed: Oid,
+        span: Oid,
+        merge: Oid,
+    }
+
+    impl AdoptionFixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            git(root, &["init", "-q", "-b", "main"]);
+            git(root, &["config", "user.email", "t@example.com"]);
+            git(root, &["config", "user.name", "t"]);
+            let mut f = Self {
+                dir,
+                base: Oid::ZERO_SHA1,
+                reviewed: Oid::ZERO_SHA1,
+                span: Oid::ZERO_SHA1,
+                merge: Oid::ZERO_SHA1,
+            };
+            f.write(ADOPTION_TASK, &format!("---\nid: TSK-001\nstatus: todo\nintegration_target: {ADOPTION_LINE}\n---\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n"));
+            f.write(ADOPTION_EPIC, "---\nid: EPC-001\nstatus: planning\n---\n");
+            f.base = f.commit();
+            git(f.dir.path(), &["branch", ADOPTION_LINE]);
+            git(f.dir.path(), &["switch", "-qc", "task/TSK-001-work"]);
+            f.write("src/work.rs", "// reviewed work\n");
+            f.reviewed = f.commit();
+            // A status-only tail on the task branch distinguishes span head
+            // from the reviewed source in the public proof.
+            let record = f
+                .read(ADOPTION_TASK)
+                .replace("status: todo", "status: in_progress");
+            f.write(ADOPTION_TASK, &record);
+            f.span = f.commit();
+            git(f.dir.path(), &["switch", "-q", ADOPTION_LINE]);
+            git(
+                f.dir.path(),
+                &[
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    "land task",
+                    "task/TSK-001-work",
+                ],
+            );
+            f.merge = f.head();
+            f
+        }
+
+        fn read(&self, path: &str) -> String {
+            std::fs::read_to_string(self.dir.path().join(path)).unwrap()
+        }
+
+        fn write(&self, path: &str, text: &str) {
+            let path = self.dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+
+        fn head(&self) -> Oid {
+            Repository::open(self.dir.path())
+                .unwrap()
+                .head()
+                .unwrap()
+                .target()
+                .unwrap()
+        }
+
+        fn commit(&self) -> Oid {
+            git(self.dir.path(), &["add", "-A"]);
+            git(self.dir.path(), &["commit", "-qm", "fixture change"]);
+            self.head()
+        }
+
+        fn adopt(&self, invalid: bool) -> Oid {
+            self.write(".gitleaksignore", "# owner's exemption\n");
+            let direct = self.commit();
+            git(self.dir.path(), &["switch", "-qc", "plan/adopt"]);
+            let entry = if invalid {
+                "not-a-commit".to_string()
+            } else {
+                direct.to_string()
+            };
+            self.write(ADOPTION_EPIC, &format!("---\nid: EPC-001\nstatus: planning\nline_adoptions:\n  - commit: {entry}\n    reason: Owner exemption\n    review: https://example.test/review\n---\n"));
+            self.commit();
+            git(self.dir.path(), &["switch", "-q", ADOPTION_LINE]);
+            git(
+                self.dir.path(),
+                &[
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "-m",
+                    "land adoption",
+                    "plan/adopt",
+                ],
+            );
+            direct
+        }
+
+        fn complete(&self) -> Oid {
+            let record = self.read(ADOPTION_TASK).replace("status: in_progress", "status: complete").replace("Pending.", &format!("```yaml\nacceptance:\n  reviewed: {}\n  review: https://example.test/review\n  criteria:\n    AC-1: verified | test passed\n  journey: verified | fixture ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n```", self.reviewed));
+            self.write(ADOPTION_TASK, &record);
+            self.commit()
+        }
+
+        fn bind(&self) -> BindingResult {
+            let repo = Repository::open(self.dir.path()).unwrap();
+            let task =
+                RecordView::parse(RecordKind::Task, ADOPTION_TASK, &self.read(ADOPTION_TASK))
+                    .unwrap();
+            bind_completion(
+                &repo,
+                &task,
+                &Graph::default(),
+                Landing::Commit(self.head()),
+                Some(self.base),
+                Transport::TaskLanding,
+                None, // This fixture completes on its checked-out branch, without a PR range.
+            )
+        }
+    }
+
+    #[test]
+    fn binding_proof_names_the_review_landing_span_and_completion_tail() {
+        let f = AdoptionFixture::new();
+        f.adopt(false);
+        let tail = f.complete();
+        let bound = f.bind();
+        assert!(bound.findings.is_empty(), "{:?}", bound.findings);
+        assert_eq!(
+            bound.proof,
+            Some(CompletionProof {
+                reviewed: f.reviewed,
+                landing_merge: Some(f.merge),
+                span_head: f.span,
+                completion_tail: tail
+            })
+        );
+    }
+
+    #[test]
+    fn direct_binding_proof_has_no_landing_merge() {
+        let f = AdoptionFixture::new();
+        git(f.dir.path(), &["switch", "-q", "task/TSK-001-work"]);
+        let tail = f.complete();
+        let bound = f.bind();
+        assert!(bound.findings.is_empty(), "{:?}", bound.findings);
+        assert_eq!(
+            bound.proof,
+            Some(CompletionProof {
+                reviewed: f.reviewed,
+                landing_merge: None,
+                span_head: tail,
+                completion_tail: tail
+            })
+        );
+    }
+
+    #[test]
+    fn binding_propagates_an_unreadable_adoption_entry() {
+        let f = AdoptionFixture::new();
+        f.adopt(true);
+        f.complete();
+        let bound = f.bind();
+        assert!(bound.proof.is_none());
+        assert!(
+            bound.findings.iter().any(|finding| finding
+                .message
+                .contains("line_adoptions[0].commit must be a full 40-hex commit id")),
+            "{:?}",
+            bound.findings
+        );
+    }
+
+    #[test]
+    fn binding_refuses_an_unreadable_entry_in_adoption_history() {
+        let f = AdoptionFixture::new();
+        let direct = f.adopt(true);
+        git(f.dir.path(), &["switch", "-qc", "plan/repair"]);
+        f.write(
+            ADOPTION_EPIC,
+            &f.read(ADOPTION_EPIC)
+                .replace("not-a-commit", &direct.to_string()),
+        );
+        f.commit();
+        git(f.dir.path(), &["switch", "-q", ADOPTION_LINE]);
+        git(
+            f.dir.path(),
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "repair adoption",
+                "plan/repair",
+            ],
+        );
+        f.complete();
+        let bound = f.bind();
+        assert!(bound.proof.is_none());
+        assert!(
+            bound.findings.iter().any(|finding| finding
+                .message
+                .contains("line_adoptions[0].commit must be a full 40-hex commit id")),
+            "{:?}",
+            bound.findings
+        );
+    }
+
+    #[test]
+    fn binding_refuses_an_adoption_over_overlaid_history() {
+        for replace in [false, true] {
+            let f = AdoptionFixture::new();
+            f.adopt(false);
+            let tail = f.complete();
+            let repo = Repository::open(f.dir.path()).unwrap();
+            if replace {
+                repo.reference(
+                    &format!("refs/replace/{tail}"),
+                    f.base,
+                    false,
+                    "fixture overlay",
+                )
+                .unwrap();
+            } else {
+                std::fs::create_dir_all(repo.path().join("info")).unwrap();
+                std::fs::write(
+                    repo.path().join("info/grafts"),
+                    format!("{tail} {}\n", f.base),
+                )
+                .unwrap();
+            }
+            let bound = f.bind();
+            assert!(bound.proof.is_none());
+            assert!(
+                bound
+                    .findings
+                    .iter()
+                    .any(|finding| finding.message.contains("cannot verify")),
+                "{:?}",
+                bound.findings
+            );
+            // Exercise the exact guarded reader the adoption consumer uses.
+            let task =
+                RecordView::parse(RecordKind::Task, ADOPTION_TASK, &f.read(ADOPTION_TASK)).unwrap();
+            assert!(landed_adoptions(&repo, &task, f.merge, tail, Some(f.base))
+                .unwrap_err()
+                .contains("cannot verify"));
+        }
     }
 }
