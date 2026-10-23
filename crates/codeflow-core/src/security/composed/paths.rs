@@ -27,6 +27,14 @@ struct Position {
 /// Resolve both supported shell readings. Pipeline tails may run in the caller
 /// (zsh and Bash lastpipe), so the walk retains both the child and caller state.
 pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Command> {
+    read_commands(line, cwd, home, false)
+}
+
+pub(crate) fn writer_commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Command> {
+    read_commands(line, cwd, home, true)
+}
+
+fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool) -> Vec<Command> {
     let Ok((tokens, docs)) = lex(line) else {
         return vec![Command {
             text: line.into(),
@@ -42,6 +50,18 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
             directory: Some(cwd.to_path_buf()),
             ..State::default()
         };
+        if environment {
+            for (name, value) in std::env::vars_os() {
+                if let (Ok(name), Ok(value)) = (name.into_string(), value.into_string()) {
+                    if !shell_managed(&name)
+                        && !name.starts_with("__directory_stack_")
+                        && line.contains(&name)
+                    {
+                        state.vars.insert(name, Var::Scalar(Value::text(&value)));
+                    }
+                }
+            }
+        }
         state.vars.insert("PWD".into(), path_value(cwd));
         if let Some(home) = home {
             state.vars.insert("HOME".into(), path_value(home));
@@ -61,6 +81,7 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
             dialect,
             &mut result,
             0,
+            &mut Reparses::default(),
         );
     }
     // A command can be reached by several branches and by both dialects.
@@ -77,8 +98,9 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
             let words = crate::hooks::git_guard::command_argv(&prior.text);
             let declares_checkout =
                 crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
-                    program.rsplit('/').next() == Some("git")
-                        && args.iter().any(|arg| arg == "worktree")
+                    (program.rsplit('/').next() == Some("git")
+                        && args.iter().any(|arg| arg == "worktree"))
+                        || program == "ln"
                 });
             if !declares_checkout {
                 *last_position = position;
@@ -95,6 +117,82 @@ pub(crate) fn commands(line: &str, cwd: &Path, home: Option<&Path>) -> Vec<Comma
     }
     unique.sort_by_key(|(position, _)| *position);
     unique.into_iter().map(|(_, command)| command).collect()
+}
+
+#[derive(Default)]
+struct Reparses {
+    entries: Vec<(Position, String, Position, Vec<Command>)>,
+    count: usize,
+}
+
+/// These values are maintained by the executing shell, not its hook child.
+pub(crate) fn shell_managed(name: &str) -> bool {
+    matches!(
+        name,
+        "PWD"
+            | "OLDPWD"
+            | "DIRSTACK"
+            | "dirstack"
+            | "_"
+            | "PPID"
+            | "BASHPID"
+            | "BASH_SOURCE"
+            | "BASH_LINENO"
+            | "BASH_COMMAND"
+            | "BASH_SUBSHELL"
+            | "BASH_ARGC"
+            | "BASH_ARGV"
+            | "FUNCNAME"
+            | "LINENO"
+            | "SHLVL"
+            | "RANDOM"
+            | "SRANDOM"
+            | "SECONDS"
+            | "EPOCHSECONDS"
+            | "EPOCHREALTIME"
+    )
+}
+
+/// All readers agree that eval accepts one optional end-of-options marker.
+pub(crate) fn eval_body(args: &[String]) -> String {
+    args.strip_prefix(&["--".to_string()])
+        .unwrap_or(args)
+        .join(" ")
+}
+
+/// Literal stdin code for the generic segment reader, which also owns Git
+/// branch checks. The position-aware reader resolves variables separately.
+pub(crate) fn literal_input_script(line: &str) -> Option<String> {
+    let words = crate::hooks::git_guard::command_argv(line);
+    if crate::hooks::git_guard::reads_shell_stdin(&words) {
+        return crate::security::outward::here_string(line);
+    }
+    if !crate::hooks::git_guard::strip_launchers(&words)
+        .is_some_and(|(program, _)| matches!(program, "source" | "."))
+    {
+        return None;
+    }
+    let (tokens, _) = lex(line).ok()?;
+    let mut events = Vec::new();
+    let run = new_run(Dialect::Bash, State::default(), &mut events, 0, 0);
+    tokens.iter().find_map(|token| match token {
+        Tok::Word(word) => word.parts.iter().find_map(|part| match part {
+            Part::ProcSubst(body) => {
+                run.approx.set(false);
+                let value = run.capture(body).0.ok().and_then(|v| v.exact());
+                (!run.approx.get()).then_some(value).flatten()
+            }
+            _ => None,
+        }),
+        _ => None,
+    })
+}
+
+pub(crate) fn literal_output(line: &str) -> Option<String> {
+    let mut events = Vec::new();
+    let run = new_run(Dialect::Bash, State::default(), &mut events, 0, 0);
+    let value = run.capture(line).0.ok().and_then(|value| value.exact());
+    (!run.approx.get()).then_some(value).flatten()
 }
 
 fn plain(tok: &Tok) -> Option<&str> {
@@ -148,6 +246,7 @@ fn walk(
     dialect: Dialect,
     output: &mut Vec<Command>,
     depth: usize,
+    reparses: &mut Reparses,
 ) -> Vec<Position> {
     if depth > 16 {
         for state in &mut states {
@@ -253,6 +352,7 @@ fn walk(
                     dialect,
                     output,
                     depth + 1,
+                    reparses,
                 );
                 at = end + usize::from(end < tokens.len());
                 continue;
@@ -321,6 +421,7 @@ fn walk(
                 dialect,
                 output,
                 depth + 1,
+                reparses,
             );
             if open == "{" {
                 states = nested;
@@ -343,7 +444,17 @@ fn walk(
             }
             states = states
                 .into_iter()
-                .map(|state| simple(&tokens[start..at], docs, state, dialect, output, depth))
+                .map(|state| {
+                    simple(
+                        &tokens[start..at],
+                        docs,
+                        state,
+                        dialect,
+                        output,
+                        depth,
+                        reparses,
+                    )
+                })
                 .collect();
         }
         if !producers.is_empty() {
@@ -360,8 +471,28 @@ fn walk(
                             .unresolved
                             .extend(producer.unresolved.iter().cloned());
                         command.input_code.clone_from(&producer.stdout);
-                        if command.input_code.is_none() {
-                            command.unresolved.push("pipeline input".into());
+                    }
+                    let words = crate::hooks::git_guard::command_argv(&consumer.text);
+                    if crate::hooks::git_guard::reads_shell_stdin(&words) {
+                        if let Some(script) = &producer.stdout {
+                            if let Ok((nested, docs)) = lex(script) {
+                                let after = walk(
+                                    &nested,
+                                    &docs,
+                                    states.clone(),
+                                    dialect,
+                                    output,
+                                    depth + 1,
+                                    reparses,
+                                );
+                                states.extend(after);
+                                bound(&mut states);
+                            }
+                        } else if words
+                            .first()
+                            .is_some_and(|name| matches!(name.as_str(), "source" | "."))
+                        {
+                            command.unresolved.push("sourced pipeline input".into());
                         }
                     }
                     output.push(command);
@@ -550,6 +681,7 @@ fn simple(
     dialect: Dialect,
     output: &mut Vec<Command>,
     depth: usize,
+    reparses: &mut Reparses,
 ) -> Position {
     position
         .state
@@ -650,9 +782,56 @@ fn simple(
     });
     // The existing evaluator owns assignments, exports, invalidation and static
     // substitutions. PWD is ordinary assignable state only for this consumer.
-    if let Some(("eval", args)) = launched {
-        if depth < 16 {
-            if let Ok((nested, nested_docs)) = lex(&args.join(" ")) {
+    let script = if let Some(("eval", args)) = launched {
+        Some(eval_body(args))
+    } else if launched.is_some_and(|(name, _)| matches!(name, "source" | ".")) {
+        tokens
+            .iter()
+            .find_map(|token| match token {
+                Tok::Word(word) => word.parts.iter().find_map(|part| match part {
+                    Part::ProcSubst(body) => {
+                        run.approx.set(false);
+                        let captured = run.capture(body).0.ok().and_then(|value| value.exact());
+                        (!run.approx.get()).then_some(captured).flatten()
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .or_else(|| crate::security::outward::here_string(&text))
+    } else if crate::hooks::git_guard::reads_shell_stdin(&words) {
+        crate::security::outward::here_string(&text)
+    } else {
+        None
+    };
+    if let Some(script) = script {
+        let current_shell =
+            launched.is_some_and(|(name, _)| matches!(name, "eval" | "source" | "."));
+        if launched.is_some_and(|(name, _)| matches!(name, "source" | ".")) {
+            // The synthetic filename is unread, but its supplied code is known.
+            if let Some(command) = output.last_mut() {
+                command
+                    .unresolved
+                    .retain(|word| word != "process substitution");
+            }
+        }
+        if let Some((_, _, after, commands)) = reparses
+            .entries
+            .iter()
+            .find(|(before, body, _, _)| before == &position && body == &script)
+        {
+            output.extend(commands.iter().cloned());
+            return if current_shell {
+                after.clone()
+            } else {
+                position
+            };
+        }
+        let before = position.clone();
+        if depth < 16 && reparses.count < 16 {
+            reparses.count += 1;
+            if let Ok((nested, nested_docs)) = lex(&script) {
+                let first = output.len();
                 let mut states = walk(
                     &nested,
                     &nested_docs,
@@ -660,13 +839,38 @@ fn simple(
                     dialect,
                     output,
                     depth + 1,
+                    reparses,
                 );
                 bound(&mut states);
-                if states.len() == 1 {
-                    return states.remove(0);
-                }
+                let after = if states.len() == 1 {
+                    states.remove(0)
+                } else {
+                    let mut unknown = position.clone();
+                    unknown.state.directory = None;
+                    unknown.state.world = Some("shell code has several reachable states");
+                    unknown.stack.clear();
+                    set_pwd(&mut unknown.state);
+                    unknown
+                };
+                reparses
+                    .entries
+                    .push((before, script, after.clone(), output[first..].to_vec()));
+                // A shell child cannot change its caller's directory.
+                return if current_shell { after } else { position };
             }
         }
+        position.state.directory = None;
+        position.state.world = Some("shell code exceeds the bounded reading");
+        position.stack.clear();
+        set_pwd(&mut position.state);
+        output.push(Command {
+            text: "__unresolved_shell_code".into(),
+            cwd: None,
+            unresolved: vec!["shell code exceeds the bounded reading".into()],
+            stdout: None,
+            input_code: None,
+        });
+        return position;
     }
     let directory_values =
         ["PWD", "OLDPWD"].map(|name| (name, position.state.vars.get(name).cloned()));
@@ -846,6 +1050,33 @@ mod tests {
             .iter()
             .map(|step| crate::hooks::git_guard::command_argv(&step.text)[1..].to_vec())
             .collect()
+    }
+
+    #[test]
+    fn reparsed_code_preserves_scope_and_has_a_per_line_budget() {
+        assert!(values("eval -- 'D=src'; probe $D")
+            .iter()
+            .all(|v| v == &["src"]));
+        assert!(values("bash <<< 'PWD=/elsewhere'; probe $PWD")
+            .iter()
+            .all(|v| v == &["/project"]));
+        assert!(values("source /dev/stdin <<< 'D=src'; probe $D")
+            .iter()
+            .all(|v| v == &["src"]));
+        let repeated = std::iter::repeat_n("eval 'probe src'", 80)
+            .collect::<Vec<_>>()
+            .join("; ");
+        let steps = commands(&repeated, Path::new("/project"), None);
+        assert!(!steps
+            .iter()
+            .any(|step| step.text == "__unresolved_shell_code"));
+        let distinct = (0..80)
+            .map(|i| format!("eval 'probe file{i}'"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(commands(&distinct, Path::new("/project"), None)
+            .iter()
+            .any(|step| step.text == "__unresolved_shell_code"));
     }
 
     #[test]

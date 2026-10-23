@@ -496,6 +496,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
 
 thread_local! {
     /// Prospective checkouts exist only while judging this command line.
+    static RAW_EXPANSIONS_CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PLANNED_CHECKOUTS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -508,6 +509,62 @@ impl PlannedCheckouts {
 impl Drop for PlannedCheckouts {
     fn drop(&mut self) {
         PLANNED_CHECKOUTS.with(|paths| *paths.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+/// Existing ancestors resolve physically; missing suffixes use the volume's
+/// comparison rule. The same normalization is used for roots and operands.
+fn prospective_path(path: &Path) -> Result<PathBuf, String> {
+    let path = super::edit_guard::normalized(path, true).map_err(|e| e.to_string())?;
+    let ancestor = path
+        .ancestors()
+        .find(|p| crate::absence::is_kind(p, true) != Some(false))
+        .unwrap_or(&path);
+    // Read-only probe on an existing component. No file is created by a guard.
+    let insensitive = ancestor
+        .ancestors()
+        .find_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            let alternate = if name.to_uppercase() == name {
+                name.to_lowercase()
+            } else {
+                name.to_uppercase()
+            };
+            if alternate == name {
+                return None;
+            }
+            let other = p.with_file_name(alternate);
+            match crate::absence::metadata_optional(&other) {
+                Ok(Some(metadata)) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt as _;
+                        Some(
+                            crate::absence::metadata_optional(p).map_or(true, |original| {
+                                original.is_none_or(|original| {
+                                    original.dev() == metadata.dev()
+                                        && original.ino() == metadata.ino()
+                                })
+                            }),
+                        )
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = metadata;
+                        Some(true)
+                    }
+                }
+                Ok(None) => Some(false),
+                Err(_) => Some(true),
+            }
+        })
+        .unwrap_or(true);
+    if insensitive {
+        path.to_str()
+            .map(|text| PathBuf::from(super::repo::folded_ref_name(text)))
+            .ok_or_else(|| "cannot compare a non-UTF-8 prospective checkout path".into())
+    } else {
+        Ok(path)
     }
 }
 
@@ -547,7 +604,13 @@ fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
     let mut operands = Vec::new();
     let mut args = rest[1..].iter();
     while let Some(arg) = args.next() {
-        if matches!(arg.as_str(), "-b" | "-B" | "--reason") {
+        if arg == "--reason"
+            || (arg.starts_with('-')
+                && !arg.starts_with("--")
+                && arg[1..]
+                    .find(['b', 'B'])
+                    .is_some_and(|at| at + 2 == arg.len()))
+        {
             args.next();
         } else if arg == "--" {
             operands.extend(args);
@@ -560,7 +623,7 @@ fn planned_worktrees(words: &[String], cwd: &Path) -> Vec<PathBuf> {
         .into_iter()
         .take(if action == "move" { 2 } else { 1 })
         .filter(|word| !unresolved_word(word) && !has_glob(word))
-        .map(|word| crate::security::outward::lexical_join(&dir, Path::new(word)))
+        .map(|word| dir.join(word))
         .collect();
     if action == "move" && paths.len() == 2 {
         if let Some(name) = paths[0].file_name() {
@@ -615,6 +678,7 @@ fn unresolved_writer_word<'a>(
     })
 }
 
+#[allow(clippy::too_many_lines)] // The position-scoped prospective paths and writer checks advance together.
 fn expanded_integrity(
     command: &str,
     cwd: &Path,
@@ -623,9 +687,12 @@ fn expanded_integrity(
 ) -> Vec<Violation> {
     let _planned = PlannedCheckouts::enter();
     let mut violations = Vec::new();
-    for step in
-        crate::security::composed::paths::commands(command, cwd, line_home::home().as_deref())
-    {
+    let mut links: Vec<PathBuf> = Vec::new();
+    for step in crate::security::composed::paths::writer_commands(
+        command,
+        cwd,
+        line_home::home().as_deref(),
+    ) {
         let dirs = step.cwd.as_ref().map_or_else(
             || Cwd::Unknown("unresolved shell directory".into()),
             |dir| {
@@ -640,12 +707,62 @@ fn expanded_integrity(
             let mut tokens = shell_tokens(&segment);
             strip_reserved_words(&mut tokens);
             let redirects = redirect_writes(&segment);
+            let here = step.cwd.as_deref().unwrap_or(cwd);
+            if let Some((program, args)) = strip_launchers(&tokens) {
+                if program == "__unresolved_shell_code"
+                    || ((matches!(program, "source" | ".")
+                        || (reads_shell_stdin(&command_argv(&segment)) && segment.contains("<<<")))
+                        && !step.unresolved.is_empty())
+                {
+                    violations.push(hook_integrity_violation(
+                        level,
+                        format!(
+                            "cannot verify shell input code: {}",
+                            step.unresolved.join(", ")
+                        ),
+                    ));
+                    if program == "__unresolved_shell_code" {
+                        continue;
+                    }
+                }
+                if prospective_alias_unknown(&tokens) {
+                    violations.push(hook_integrity_violation(
+                        level,
+                        "cannot verify prospective worktrees through a Git alias".into(),
+                    ));
+                }
+                if program == "ln" && args.iter().any(|a| a.starts_with('-') && a.contains('s')) {
+                    if let Some(link) = args.last() {
+                        links.push(here.join(link));
+                    }
+                } else if !links.is_empty()
+                    && (!read_only_program(&tokens)
+                        || !redirects.targets.is_empty()
+                        || !redirects.unread.is_empty())
+                {
+                    let paths = tokens.iter().chain(redirects.targets.iter());
+                    if paths
+                        .map(|word| prospective_path(&here.join(word)))
+                        .any(|path| {
+                            path.map_or(true, |path| {
+                                links.iter().any(|link| {
+                                    prospective_path(link)
+                                        .map_or(true, |link| path.starts_with(link))
+                                })
+                            })
+                        })
+                    {
+                        violations.push(hook_integrity_violation(level,
+                            "cannot verify a path through a symbolic link created earlier on this line".into()));
+                    }
+                }
+            }
             if redirects.targets.is_empty()
                 && redirects.unread.is_empty()
                 && strip_launchers(&tokens).is_some_and(|(program, _)| {
                     matches!(
                         program,
-                        "cd" | "chdir" | "pushd" | "popd" | "true" | "false"
+                        "cd" | "chdir" | "pushd" | "popd" | "true" | "false" | "eval"
                     )
                 })
             {
@@ -689,6 +806,28 @@ fn expanded_integrity(
     violations
 }
 
+fn prospective_alias_unknown(tokens: &[String]) -> bool {
+    let Some((program, args)) = strip_launchers(tokens) else {
+        return false;
+    };
+    let Some((sub, _)) = git_subcommand(args) else {
+        return false;
+    };
+    if basename(program) != "git" || GIT_BUILTINS.contains(&sub) {
+        return false;
+    }
+    let setting = format!("alias.{sub}=");
+    args.iter()
+        .filter_map(|arg| arg.strip_prefix("-c").unwrap_or(arg).strip_prefix(&setting))
+        .next_back()
+        .is_some_and(|value| {
+            split_alias(value)
+                .and_then(|words| words.first().cloned())
+                .is_none_or(|first| first == "worktree" || !GIT_BUILTINS.contains(&first.as_str()))
+        })
+        || configuration_environment_trigger(tokens).is_some()
+}
+
 #[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 fn evaluate_report_with_runners(
     command: &str,
@@ -724,15 +863,17 @@ fn evaluate_report_with_runners(
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(segments, roles.as_deref(), command);
     let run = run_dirs(segments, cwd);
-    if command.contains(['$', '`', '~'])
+    let expanded_operands = command.contains(['$', '`', '~'])
+        || command.contains("<(")
+        || command.contains("<<<")
         || segments.iter().any(|segment| {
             let words = command_argv(segment);
-            strip_launchers(&words).is_some_and(|(program, args)| {
+            strip_launchers(&words).is_some_and(|(program, _)| {
                 matches!(program, "cd" | "chdir" | "pushd" | "popd" | "eval")
-                    || (basename(program) == "git" && args.iter().any(|a| a == "worktree"))
+                    || basename(program) == "git"
             })
-        })
-    {
+        });
+    if expanded_operands {
         violations.extend(expanded_integrity(
             command,
             cwd,
@@ -781,7 +922,8 @@ fn evaluate_report_with_runners(
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
         let moved = line.moves_for(&shell, top_level, &tokens);
-        if let Some(mut v) = integrity_write_in_dirs(
+        RAW_EXPANSIONS_CHECKED.with(|flag| flag.set(expanded_operands));
+        let integrity = integrity_write_in_dirs(
             &tokens,
             &redirect_writes(segment),
             ctx.policy.hook_integrity,
@@ -789,7 +931,9 @@ fn evaluate_report_with_runners(
             &moved.cwd,
             command,
             &run,
-        ) {
+        );
+        RAW_EXPANSIONS_CHECKED.with(|flag| flag.set(false));
+        if let Some(mut v) = integrity {
             let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH)
                 || v.message.contains(super::edit_guard::GIT_CONFIG_AUTHORITY);
             if authority {
@@ -1764,7 +1908,7 @@ fn integrity_write_in_dirs(
         && tokens.first().is_some_and(|word| {
             matches!(
                 word.as_str(),
-                "cd" | "chdir" | "pushd" | "popd" | "true" | "false"
+                "cd" | "chdir" | "pushd" | "popd" | "true" | "false" | "eval"
             )
         })
     {
@@ -2228,11 +2372,14 @@ fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> 
     if token.is_empty() {
         return None;
     }
-    let path = crate::security::outward::lexical_join(cwd, &integrity_shell_path(token, cwd));
+    let path = integrity_shell_path(token, cwd);
     // Populated only in expanded_integrity's command-position scope; the
     // original literal pass deliberately cannot see future worktrees.
     if let Some(protected) = PLANNED_CHECKOUTS.with(|roots| {
         roots.borrow().iter().find_map(|root| {
+            let (Ok(path), Ok(root)) = (prospective_path(&path), prospective_path(root)) else {
+                return Some("cannot compare prospective checkout paths".into());
+            };
             let relative = path.strip_prefix(root).ok()?;
             let name = crate::git::GitName::from_os_str(relative.as_os_str());
             let relative = match name.rule_text() {
@@ -4347,7 +4494,7 @@ fn environment_value(name: &str, line: &str, _cwd: &Path) -> Option<std::ffi::Os
     }
     // Shell-managed values belong to the consuming command's state, never
     // to the hook process. HOME is resolved by line_home and the shared reader.
-    if matches!(name, "PWD" | "OLDPWD" | "DIRSTACK" | "dirstack") {
+    if crate::security::composed::paths::shell_managed(name) {
         None
     } else {
         std::env::var_os(name)
@@ -4468,13 +4615,19 @@ fn checkout_under(
     payload_cwd: &Path,
     except: Option<&Path>,
 ) -> Option<CheckoutReach> {
-    let absolute = crate::security::outward::lexical_join(cwd, path);
+    let absolute = cwd.join(path);
     // Prospective roots are available only in expanded_integrity's scoped pass.
     if let Some(root) = PLANNED_CHECKOUTS.with(|roots| {
         roots
             .borrow()
             .iter()
-            .find(|root| root.starts_with(&absolute) && except != Some(root.as_path()))
+            .find(|root| {
+                except != Some(root.as_path())
+                    && match (prospective_path(root), prospective_path(&absolute)) {
+                        (Ok(root), Ok(path)) => root.starts_with(path),
+                        _ => true,
+                    }
+            })
             .cloned()
     }) {
         return Some(CheckoutReach::Path(root));
@@ -4519,6 +4672,9 @@ fn worktree_delete_check(
         }
     };
     for target in targets.iter().filter(|t| !t.is_empty()) {
+        if RAW_EXPANSIONS_CHECKED.with(std::cell::Cell::get) && unresolved_word(target) {
+            continue;
+        }
         match resolve_targets(target, cwd, line) {
             Err(error) => return Some(hook_integrity_violation(level, error)),
             Ok(Some(paths)) => {
@@ -5000,6 +5156,26 @@ fn find_action_violation(
         rest[..end].iter().map(String::as_str).collect()
     };
     if find_mutates(rest) {
+        for start in &starts {
+            let candidate = prospective_path(&integrity_shell_path(start, cwd));
+            let planned = PLANNED_CHECKOUTS.with(|roots| {
+                roots
+                    .borrow()
+                    .iter()
+                    .find(|root| match (prospective_path(root), &candidate) {
+                        (Ok(root), Ok(start)) => root.starts_with(start),
+                        _ => true,
+                    })
+                    .cloned()
+            });
+            if let Some(root) = planned {
+                return Some(checkout_delete_violation(
+                    level,
+                    "`find` may delete a prospective checkout",
+                    &CheckoutReach::Path(root),
+                ));
+            }
+        }
         // A search pattern in a command it runs names nothing (TSK-380).
         let (searched, patterns) = line_without_patterns("find", args, line);
         let words: Vec<&String> = rest
@@ -6442,6 +6618,7 @@ fn expand_segments(
             carried_commands(&toks)
         };
         let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
+        bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
         let mut words = toks;
         strip_reserved_words(&mut words);
         if let Some((program, _)) = strip_launchers(&words) {
@@ -6588,12 +6765,22 @@ impl Literals {
     }
 }
 
-/// The command texts a simple command runs from what it carries: the
-/// command `env -S` splits ([`env_split_command`]), the body of a shell's
-/// `-c`, the joined words of `eval`, and the command a launcher runs from a
-/// string or from its words: `flock`, `script`, `watch`, `parallel`,
-/// `setsid` and `unbuffer` ([`launcher_commands`]), and git or a command
-/// string run by `xargs` or `find -exec` (TSK-242 review round 14).
+/// Whether a shell or source builtin reads its script from standard input.
+pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
+    strip_launchers(words).is_some_and(|(program, args)| {
+        (is_shell(basename(program))
+            && shell_c_argument(args).is_none()
+            && args
+                .iter()
+                .find(|a| !a.starts_with('-'))
+                .is_none_or(|a| a == "/dev/stdin"))
+            || (matches!(program, "source" | ".")
+                && args.first().is_some_and(|a| a == "/dev/stdin"))
+    })
+}
+
+/// The command texts a simple command carries: env -S, shell -c, eval,
+/// launcher strings, runner bodies, and commands supplied to xargs or find.
 fn carried_commands(toks: &[String]) -> Vec<String> {
     let mut words = toks.to_vec();
     strip_reserved_words(&mut words);
@@ -6624,7 +6811,7 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
         vec![format!("{moves}{inner}")]
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
-        vec![args.join(" ")]
+        vec![crate::security::composed::paths::eval_body(args)]
     } else if let Some(args) = runners::arguments(prog, args) {
         // Active integrity checks use the fallible reader; other security
         // readers still inspect every command the option table can read.
@@ -7252,6 +7439,14 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
+        if c == '<' && chars.get(i + 1) == Some(&'(') {
+            let (inner, _) = capture_balanced(&chars, i + 2);
+            if let Some(script) =
+                crate::security::composed::paths::literal_input_script(&format!("{cur}<({inner})"))
+            {
+                split_into_segments(&script, out, depth + 1, true);
+            }
+        }
         match c {
             '\'' => {
                 in_single = true;
@@ -7489,6 +7684,13 @@ impl Line {
     /// pipeline turned out to feed a program that is not a data reader
     /// (`echo "$(cat <<EOF …)" | bash`), then start the next line.
     fn finish(&mut self, continues: bool, out: &mut Vec<String>, depth: usize) {
+        for pair in self.segments.windows(2) {
+            if pair[0].0 == pair[1].0 && reads_shell_stdin(&command_argv(&pair[1].1)) {
+                if let Some(script) = crate::security::composed::paths::literal_output(&pair[0].1) {
+                    split_into_segments(&script, out, depth + 1, true);
+                }
+            }
+        }
         for (pipeline, inner) in std::mem::take(&mut self.data_substitutions) {
             if !self.pipeline_reads_data(pipeline, continues) {
                 split_into_segments(&inner, out, depth + 1, true);

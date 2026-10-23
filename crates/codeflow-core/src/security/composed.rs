@@ -3821,7 +3821,7 @@ impl Run<'_> {
             }
         };
         match fields.iter().map(Value::exact).collect::<Option<Vec<_>>>() {
-            Some(words) => self.eval_text(&words.join(" ")),
+            Some(words) => self.eval_text(&paths::eval_body(&words)),
             // Code from outside the line, as `source` runs.
             None => self.changed_all(),
         }

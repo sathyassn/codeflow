@@ -278,8 +278,10 @@ pub const SCHEMA: [KeySpec; 70] = [
                 (after a `--` too), and a script string an unknown program \
                 is given, a `-c` or `-e` value or any quoted word (`expect \
                 -c`, `osascript -e`, `ssh host '...'`), which is read as a \
-                command line; `echo` and `printf` operands stay data. When \
-                a shell or interpreter takes its code from anything other \
+                command line; `echo` and `printf` operands stay data. Resolved \
+                builtin output, shell here-strings and sourced process substitutions \
+                are also read as code. When an interpreter takes code from an external \
+                producer the guard cannot read, or a shell or interpreter takes its code from anything other \
                 than a literal argument or a heredoc body the guard reads (a \
                 pipe, a here-string, a descriptor such as `/dev/stdin` or \
                 `/dev/fd/N`, a process substitution, or a `-c`/`-e` value \

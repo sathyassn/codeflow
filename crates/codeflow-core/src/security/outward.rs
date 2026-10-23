@@ -2124,7 +2124,7 @@ fn process_substitutions(segment: &str) -> Vec<String> {
 
 /// The text after a here-string operator (`<<<`) in one segment, read
 /// outside quotes, as written.
-fn here_string(segment: &str) -> Option<String> {
+pub(crate) fn here_string(segment: &str) -> Option<String> {
     let mut quote = None;
     for (at, ch) in segment.char_indices() {
         if let Some(q) = quote {
@@ -2158,7 +2158,9 @@ pub(crate) fn reads_stdin_code(command: &str) -> bool {
         return false;
     };
     let name = program.rsplit('/').next().unwrap_or(program);
-    interpreter_family(name).is_some_and(|family| family_program(family, args) == Program::Stdin)
+    (matches!(name, "source" | ".") && args.first().is_some_and(|arg| arg == "/dev/stdin"))
+        || interpreter_family(name)
+            .is_some_and(|family| family_program(family, args) == Program::Stdin)
         || (matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash")
             && shell_command_string(args).is_none()
             && args

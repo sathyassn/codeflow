@@ -6828,7 +6828,7 @@ fn runs_remover(argv: &[String], depth: usize) -> bool {
         "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
         "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" | "eval" => {
             let script = if program_name(first) == "eval" {
-                run.argv[1..].join(" ")
+                super::composed::paths::eval_body(&run.argv[1..])
             } else {
                 shell_script(&run.argv[1..])
                     .map(|(script, _)| script.to_string())

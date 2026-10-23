@@ -244,6 +244,10 @@ impl Facts<'_> {
         let found = git_guard::line_path_readings(self.line)
             .into_iter()
             .find(|(word, pattern)| {
+                // A function declaration is shell syntax, not a path glob.
+                if word.ends_with("()") && self.line.contains(&format!("{word} {{")) {
+                    return false;
+                }
                 // A glob the guard cannot list is left to the enforcement
                 // reading of the line, which refuses it near protected paths.
                 literal_paths(word, *pattern, from, self.payload_cwd, self.home)
