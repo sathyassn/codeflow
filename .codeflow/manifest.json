@@ -347,7 +347,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "2612a12e43224fe4c79e48f3d74dce397835858abd569a8799e03be13db7ea18",
+      "sha256": "c12dfd229a18d45fad9cada9bc29de795a34d19bdf1844427f4784ee1fefc8c3",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "96afcce42de3fe5725344bd22738aaf474051ddf8bec7b618723b746edb66d6d",
+      "sha256": "1809267297576ef5f438ac087db5750f4d9bac1275523d6a9264f92676784efb",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -1187,7 +1187,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "2612a12e43224fe4c79e48f3d74dce397835858abd569a8799e03be13db7ea18",
+      "sha256": "c12dfd229a18d45fad9cada9bc29de795a34d19bdf1844427f4784ee1fefc8c3",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -1253,7 +1253,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "96afcce42de3fe5725344bd22738aaf474051ddf8bec7b618723b746edb66d6d",
+      "sha256": "1809267297576ef5f438ac087db5750f4d9bac1275523d6a9264f92676784efb",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {

@@ -1364,6 +1364,46 @@ fn recorded_authority_requires_landed_approval_and_the_right_person() {
     }
 }
 
+/// Hosts need remote and forge evidence before a recorded grant can be used.
+#[test]
+fn recorded_authority_and_host_recovery_name_verifiable_evidence() {
+    let text = normalized(&read(
+        &repo_root().join("assets/base/claude/skills/cf-method/references/autonomy.md"),
+    ));
+    let records = text
+        .split_once("A delegation, host-run recovery or standing-rule record counts only when")
+        .unwrap()
+        .1
+        .split_once("## Seat prompts and refusals")
+        .unwrap()
+        .0;
+    let recovery = text
+        .split_once("A host-run recovery is available")
+        .unwrap()
+        .1
+        .split_once("## Multi-session coordination")
+        .unwrap()
+        .0;
+    for (section, content) in [("records", records), ("host recovery", recovery)] {
+        for clause in [
+            "protected target branch as fetched from the remote",
+            "not only on a local or task branch",
+            "merged into that branch by a person",
+            "forge's merge record",
+            "project's recorded merge authority",
+            "review, comment or approval record that the forge attributes to the operator",
+            "If the host cannot read that evidence",
+            "ask the operator",
+            "Never infer approval or a human merge from commit authorship or local history.",
+        ] {
+            assert!(content.contains(clause), "{section} lost {clause}");
+        }
+    }
+    assert!(records.contains("`gh pr view <n> --json mergedBy,baseRefName`"));
+    assert!(records.contains("treat the record as absent"));
+    assert!(recovery.contains("treat the route as absent"));
+}
+
 /// The Herdr entry point must not widen the autonomy reference's trust scope.
 #[test]
 fn herdr_first_run_trust_is_limited_to_the_task_worktree() {
