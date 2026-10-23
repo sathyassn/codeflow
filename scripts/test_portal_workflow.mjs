@@ -38,7 +38,7 @@ test('verify runs adapter once and check build evidence under one lease', async 
   });
 });
 
-test('verify stops on build failure and releases its lease', async () => {
+test('verify stops on build failure and releases its lease, except where Windows keeps it', async () => {
   await fixture(async root => {
     await writeFile(join(root, 'fail-build'), 'fail');
     const result = spawnSync(process.execPath, ['scripts/workflow.mjs', 'verify'], { cwd: root, encoding: 'utf8' });
