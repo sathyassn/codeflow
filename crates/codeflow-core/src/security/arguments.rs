@@ -1023,11 +1023,15 @@ fn literal_reach(
             )));
         }
     }
+    // A separate Git directory can live outside every checkout-based name
+    // prefix. Include its enforcement paths without treating an ordinary
+    // file under a not-yet-created cwd as a recursive checkout operation.
     for path in paths.iter().filter(|path| {
         facts.names.may_reach(path)
             || run_names
                 .as_ref()
                 .is_some_and(|names| names.may_reach(path))
+            || edit_guard::repository_enforcement_target(path, facts.root, true).unwrap_or(true)
     }) {
         // A string fragment such as "/." is not an argv operand reaching
         // other checkouts. Exact enforcement paths still take file checks.
@@ -1110,7 +1114,7 @@ fn unreadable_reach(
             git_guard::token_integrity_path(value, dir, facts.payload_cwd)
         }
         Some(_) => None,
-        None => git_guard::word_could_name(value),
+        None => git_guard::word_could_name(value).map(str::to_string),
     };
     if let Some(reached) = reached {
         let why = if unresolved {
@@ -1119,7 +1123,7 @@ fn unreadable_reach(
             "it is used from a directory the guard cannot follow"
         };
         let message = format!("an interpreter argument `{shown}` could name `{reached}`: {why}");
-        return Some(if names_authority(reached) {
+        return Some(if names_authority(&reached) {
             Reach::Authority(message)
         } else {
             Reach::Enforcement(message)

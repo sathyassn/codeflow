@@ -503,6 +503,168 @@ level:
 The backstop reads text, not a parse of copier behavior. For reviewers, a
 new copier option is a residual, not a new member of the startup class.
 
+### Repository discovery and enforcement targets
+
+Enforcement-path checks judge every repository enclosing the target, as
+well as the session repository and its registered worktrees. Nested
+repositories and submodules do not hide an enclosing checkout. An absolute
+target in another repository receives the same checks, including when the
+command starts outside any repository. Both lexical and resolved paths are
+checked, so a symlink does not remove the target owner's protection.
+
+- Shell redirects, native file edits and interpreter arguments protect the
+  owning checkout's enforcement files and its common Git directory.
+- A checkout whose `.git` pointer survives a move and prune remains subject
+  to discovery checks when it returns. An unreadable or inconsistent pointer
+  refuses the operation; missing registration is not proof of an ordinary
+  directory. Each invocation reads current disk state.
+  A hidden-checkout search stops at a verified checkout of the same
+  repository. Foreign, empty or malformed `.git` markers do not hide a
+  checkout below them. The search visits at most 4096 directories under
+  the configured locations reached by a removal target; ordinary files do
+  not count toward that bound. An unreadable walk or an exceeded bound
+  refuses and names the inspection problem; narrow a cleanup target when
+  the search exceeds the bound.
+- Shell moves of a worktree, and `rsync --remove-source-files` targeting its
+  source, refuse. So does `rsync --delete` into a checkout. An empty `mv` or
+  `rsync` operand is read as the current directory, as rsync reads it; an
+  empty `rm`, `rmdir` or `find` operand names nothing. Copying a worktree
+  does not authorize deleting its source. Use `git worktree move` or
+  `git worktree remove` for lifecycle changes.
+- Persistent writes of `core.worktree`, `core.bare` and
+  `extensions.worktreeConfig` refuse under `git.hook_integrity` in both shell
+  hooks, regardless of the config file or scope. Reads and command-local
+  `git -c` settings keep their existing checks.
+  Expanded config keys that cannot be proven literal refuse; explicit
+  config reads can still use regular expressions. Git commands fed by
+  xargs refuse when the subcommand is absent or guarded, because their
+  complete operands are unknown. Ordinary `xargs git add` and `xargs git
+  status` remain available. `xargs git grep pattern` is also available:
+  Git stops reading options at that first operand. With only `-e pattern`,
+  add `--` before stdin supplies filenames, or stdin could supply a pager
+  option. Replacement placeholders remain unread. Quoted search patterns
+  stay data. The arch launcher and Git command runners
+  receive the same checks as their command payloads. A shared catalog
+  covers command-valued options, effective configuration and environment,
+  including rebase exec, bisect run, submodule foreach, filter-branch,
+  diff tools, pagers and transport programs. Saved rebase exec instructions
+  and clone-local callback settings use the same reader. Filter consumers
+  include plumbing commands such as `cat-file` and `hash-object`. Callback
+  checks also cover pull, commit replay and interactive patch editors.
+  Filesystem monitor, filter and merge-driver command settings are checked
+  for every Git verb. Multi-argument foreach bodies retain argument
+  boundaries. Option bodies are checked from the starting directory after
+  `-C` changes and from the work tree; a bare runner has no proven work tree.
+  Saved instructions are read before continuation, bounded to a regular
+  UTF-8 file of 1 MiB.
+  For-each-repo bodies use the configured repositories. The reader follows
+  Git option arity, short bundles and unambiguous long-option prefixes.
+  Aliases, dashed Git programs and the submodule helper use the same reader.
+  Ordinary flags and literal Git revision expressions remain available.
+  Command-valued options still require a readable body; a missing value or
+  ambiguous spelling names the option and its readable route. External Git
+  commands resolve as `git-<name>` on PATH or Git's exec path and receive the
+  same checks as other programs. When discovery proves the starting directory
+  is outside any repository, configured callbacks are checked there. Ordinary
+  status, config writes and cleanup do not require a checkout merely because
+  global filters are configured. A name found nowhere, an unread command
+  value or an unresolved checkout refuses under active hook integrity.
+  This includes an explicitly unresolved target for `git status`, which can
+  run a configured filesystem monitor. Each body is judged from the checkout
+  or submodule where Git runs it, including Git commands nested in the body.
+  A body that only names a script path remains unread; these checks do not inspect that
+  script's contents. Nested Git commands inherit command-local config
+  options and environment, including alias overrides. The `ext::` transport
+  syntax refuses because its percent expansion is not a classified shell
+  body; this includes configured URLs, URL rewrites and direct helper calls.
+  A preceding config write that could change command settings or a saved-instruction rewrite
+  makes the next Git command's runner state unknown; run those commands
+  separately so the guard can read the resulting state. The same holds for
+  any earlier write on the line that can create, replace or move repository
+  state the next Git command reads: a path with a `.git` component at or
+  above its starting directory or work tree; a copy, move, sync, link,
+  archive extraction or clone whose destination is that directory or above
+  it; a write in or around its explicit Git directory; or the configuration
+  file its environment or home names. A copy or move of named regular files
+  into the directory still passes, as do ordinary writes that create no
+  repository state.
+  Push operands can use preceding literal assignments on the same line,
+  for example `BRANCH=task/topic; git push origin "$BRANCH"`. Git-guard's
+  fetch-source check requires a literal configured remote name or its URL.
+  An inherited shell variable whose value the reader cannot prove remains
+  unresolved. PATH assignments can extend the inherited PATH using `$HOME`,
+  and ordinary path operands, including `git -C` and discard pathspecs, can
+  start with `~/` or be `~`. Named-user homes, a quoted `~` and remaining
+  brace or filename patterns still require a literal path.
+  `~` and `$HOME` resolve against the HOME the line assigns before them, in
+  every check of both shell hooks: `HOME=<repo>; rm -rf ~/.claude` is judged
+  as `rm -rf <repo>/.claude`. Only one literal absolute value assigned in
+  statement or export form is read, including behind the `command` and
+  `builtin` wrappers. Any other HOME change before a word that uses the home
+  refuses: an unresolved or relative value, an append (`HOME+=`), `HOME=` in
+  front of a command, `read`, `unset`, a loop variable, a nameref, an `eval`
+  of unread text, a sourced file, a wrapper the reader does not unwrap, or a
+  line that uses the home both before and after assigning it. The guard does
+  not read sourced files: a line that sources one and then uses the home
+  refuses because the file could set HOME, and what a sourced file does
+  otherwise remains unread. Exec-guard refuses such a line when a command
+  that uses the reassigned home writes an enforcement path, as git-guard
+  judges the write; a read-only use such as a Git pathspec passes.
+- An honestly deleted checkout remains prunable. When registration and a
+  live checkout disagree, the operator runs `git worktree repair` in their
+  own terminal outside the harness.
+
+A target outside every repository and outside the session's protected paths
+does not acquire repository enforcement protection. Home startup and Git
+configuration protections retain their separate rules.
+
+Git directories outside a checkout, including submodule metadata and
+separate Git directories, protect their configuration, hooks, HEAD and
+remote-tracking metadata. This also applies to plain Git repositories that
+have not adopted CodeFlow. Unreadable enclosing markers refuse targets
+that could be their enforcement paths; they do not lock ordinary files in
+a nested project. Agent writes cannot create or rewrite a `.git` marker in
+an ancestor of the session project. Removing a directory that contains
+submodule or separate Git metadata also refuses. Inspection for contained
+Git directories counts at most 4096 directories, excluding ordinary files;
+an unreadable or larger walk refuses with the inspection reason.
+
+Non-interactive editor scripts refuse when the guard cannot prove which
+files they write, even with an initial file argument: a script can switch
+files. Interactive edits of ordinary files remain available. Git-native
+clone or worktree creation cannot target an enforcement directory, including
+through a same-line variable assignment. An unresolved creation target
+refuses. `git init`, including `--separate-git-dir`, cannot create inside
+an enforcement directory or a configured worktree location. Scratch
+initialization outside these locations remains available.
+Git's own output paths receive the same check in both shell hooks:
+`archive -o`, the `--output` option of any verb, `format-patch -o`,
+`bundle create`, `bugreport` and `diagnose -o`, `index-pack -o`,
+`mailsplit -o`, `checkout-index --prefix`, `merge-file` without `-p`,
+fast-export and fast-import marks, and the file a `git config --file` write
+changes when that file is not Git configuration. They are read with the same
+option tables as the command runners, so another option's value is never
+taken for the output and Git's accepted abbreviations (`--pref`, `--fil`)
+count; an option the tables do not know, where its value could be the
+output, refuses. An alias that expands to one of these is judged the same
+way. `git worktree add` reads the conditional includes (`includeIf`),
+which can apply to the new worktree though not where the guard reads, and
+refuses when one sets a setting Git can run during the add or a hooks path,
+even an empty one. Which conditions hold
+depends on the Git directory Git creates (its sanitized and numbered name,
+its spelling through any alias) and the new branch, so the guard does not
+decide it: every conditional include, of any kind, is read for every add.
+A repository with a callback-setting conditional include anywhere therefore
+refuses `git worktree add` through the guards, and the refusal names the
+include file; benign includes pass. Each include is read by the path Git
+reads it by, so a relative include inside a linked file resolves from the
+link's directory; the new checkout then
+counts as an earlier write for later commands on the line. Ordinary outputs such as
+`git archive -o build/x.tar HEAD`, `git format-patch -o patches/ HEAD~1`
+and `git diff --output=out.diff` remain available.
+Source-removing rsync spellings protect the checkout's gitfile as well
+as its directory.
+
 ### Git settings that can run a program
 
 git-guard refuses a user- or system-scope git setting that is not known to
@@ -533,7 +695,8 @@ number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
 Any other value is a program git runs, so `core.fsmonitor 08` refuses
 (`08` is no octal number) while `true` and `0x10` pass (review round 13);
 keys match by exact name. Repository-scope settings, unsets and
-reads pass. git has many keys that run a program and adds more, so a list
+reads pass this program-setting check; the discovery settings and hook-path
+settings have the separate integrity checks described above. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
 refusal the operator can clear by setting it by hand.
 
