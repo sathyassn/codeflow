@@ -38,6 +38,7 @@ fn push_with_path(root: &Path, first: &Path, args: &[&str]) -> String {
     .unwrap();
     text(
         &cmd.env("PATH", path)
+            .env_remove("CODEFLOW_HOOK_BINARY")
             .arg("push")
             .arg("-q")
             .args(args)

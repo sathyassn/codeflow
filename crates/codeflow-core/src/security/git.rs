@@ -24,6 +24,14 @@ pub const GLOBAL_VALUE_OPTIONS: &[&str] = &[
     "--shallow-file",
 ];
 
+/// Persistent changes to these keys can relocate or hide a checkout from
+/// subsequent hook discovery. Command-local `-c` settings are judged separately.
+pub(crate) fn relocates_checkout(key: &str) -> bool {
+    ["core.worktree", "core.bare", "extensions.worktreeconfig"]
+        .iter()
+        .any(|name| key.eq_ignore_ascii_case(name))
+}
+
 /// What a git configuration setting can do when git reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfigKind {
