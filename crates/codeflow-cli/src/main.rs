@@ -181,7 +181,7 @@ enum Command {
     Adr(cmd::new::AdrArgs),
     /// Operator feedback items: record (FB-NNN), move by the transition table, list.
     Feedback(cmd::feedback::FeedbackArgs),
-    /// Follow-ups in the clone's coordination ledger (FU-NNN): add, check, close, list.
+    /// Follow-ups in the clone's coordination ledger (FU-NNN): add, check, close, list. The `CODEFLOW_COORD_*` role binding is cooperative ownership, not authentication.
     Follow(cmd::follow::FollowArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),

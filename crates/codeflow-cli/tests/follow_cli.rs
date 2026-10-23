@@ -212,11 +212,21 @@ fn add_args<'a>(title: &'a str, link: &'a [&'a str]) -> Vec<&'a str> {
 }
 
 /// Land TSK-001 on `main`: mark it complete there and push.
+/// A task record complete with an acceptance block that passes the
+/// acceptance rules, as a landed task's record is.
+fn accepted(id: &str, title: &str) -> String {
+    format!(
+        "{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {}\n  review: \"reviewed by the fixture\"\n  criteria:\n    AC-1: verified | the fixture ran the command\n  journey: verified | the fixture journey\n  not_verified: \"nothing\"\n  follow_ups: \"none: nothing left\"\n  verdict: approved\n```\n",
+        task(id, title, "complete"),
+        "0".repeat(40)
+    )
+}
+
 fn land(root: &Path, id: &str) {
     write(
         root,
         &format!("project-management/tasks/{id}.md"),
-        &task(id, "landed", "complete"),
+        &accepted(id, "landed"),
     );
     git(root, &["commit", "-qam", "docs(tasks): complete the task"]);
     git(root, &["push", "-q", "origin", "main"]);
@@ -361,12 +371,17 @@ fn every_verb_records_its_event_and_each_refusal_holds() {
         ),
         "cannot record as the operator",
     );
+    // Security F1: unsetting the harness marker is not enough. Without an
+    // interactive terminal the operator role fails closed.
     agent.truncate(1);
-    ok(&cli(
-        &f.root,
-        &agent,
-        &add_args("asked by hand", &["--no-link-reason", "a hallway question"]),
-    ));
+    refused(
+        &cli(
+            &f.root,
+            &agent,
+            &add_args("asked by hand", &["--no-link-reason", "a hallway question"]),
+        ),
+        "only from an interactive terminal",
+    );
     refused(
         &cli(&f.root, &[], &add_args("x", &["--no-link-reason", "none"])),
         "no role is bound",
@@ -385,10 +400,10 @@ fn every_verb_records_its_event_and_each_refusal_holds() {
         item.last_check.as_ref().unwrap().1.answer_source.as_deref(),
         Some("operator")
     );
-    assert_eq!(ledger.items["FU-002"].added_by.role, "operator");
+    assert!(!ledger.items.contains_key("FU-002"));
     let table = ok(&cli(&f.root, &[], &["follow", "list", "--all"]));
     assert!(
-        table.contains("1 open") && table.contains("1 dropped"),
+        table.contains("0 open") && table.contains("1 dropped"),
         "{table}"
     );
     let md = ok(&cli(&f.root, &[], &["follow", "list", "--md"]));
@@ -845,7 +860,7 @@ fn journey_two_worktrees_two_actors_and_a_landing() {
     write(
         &second,
         "project-management/tasks/TSK-001.md",
-        &task("TSK-001", "ship the cache warmer", "complete"),
+        &accepted("TSK-001", "ship the cache warmer"),
     );
     git(
         &second,
@@ -936,4 +951,196 @@ fn a_renamed_task_keeps_its_link_and_a_reused_id_is_caught() {
     git(&f.root, &["push", "-q", "origin", "main"]);
     let shown = ok(&cli(&f.root, &[], &["follow", "list", "FU-001"]));
     assert!(shown.contains("now names a different record"), "{shown}");
+}
+
+// ---------------------------------------------------------------------------
+// Review round 1 reproductions through the binary; each failed at
+// 998dadb1e.
+// ---------------------------------------------------------------------------
+
+/// Codex F2: a task complete on its target without a passing acceptance
+/// block does not close a fulfils item.
+#[test]
+fn completion_without_acceptance_does_not_close() {
+    let f = fixture();
+    bind(&f.root);
+    let one = lane("LN-001", "s1");
+    ok(&cli(
+        &f.root,
+        &one,
+        &add_args("watch the cache warmer", &["--link", "fulfils:TSK-001"]),
+    ));
+    write(
+        &f.root,
+        "project-management/tasks/TSK-001.md",
+        &task("TSK-001", "landed", "complete"),
+    );
+    git(
+        &f.root,
+        &["commit", "-qam", "docs(tasks): complete without acceptance"],
+    );
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let out = ok(&cli(&f.root, &one, &["follow", "check", "--offline"]));
+    assert!(!out.contains("closed"), "{out}");
+}
+
+/// Codex F3: a closure on a branch deletion reopens when the branch is
+/// recreated on the remote.
+#[test]
+fn a_recreated_branch_reopens_its_closure() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let one = lane("LN-001", "s1");
+    git(
+        &f.root,
+        &["push", "-q", "origin", "main:refs/heads/task/old"],
+    );
+    ok(&cli(
+        &f.root,
+        &one,
+        &add_args(
+            "delete the old branch",
+            &["--link", "fulfils:branch:task/old"],
+        ),
+    ));
+    let out = ok(&cli(&f.root, &one, &["follow", "check"]));
+    assert!(!out.contains("closed"), "{out}");
+    git(&f.root, &["push", "-q", "origin", "--delete", "task/old"]);
+    let out = ok(&cli(&f.root, &one, &["follow", "check"]));
+    assert!(
+        out.contains("FU-001 closed on machine-verified evidence"),
+        "{out}"
+    );
+    git(
+        &f.root,
+        &["push", "-q", "origin", "main:refs/heads/task/old"],
+    );
+    let out = ok(&cli(&f.root, &one, &["follow", "check"]));
+    assert!(out.contains("FU-001 reopened"), "{out}");
+    let item = &folded(&paths).items["FU-001"];
+    assert_eq!(item.state, ItemState::Open);
+    assert_eq!(item.proofs.len(), 1, "the old proof is kept");
+}
+
+/// Codex F6: an update that adds a dependency records its baseline, so a
+/// later change makes the item due, and a far schedule is capped daily.
+#[test]
+fn an_updated_dependency_is_watched_and_its_wait_is_capped() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let one = lane("LN-001", "s1");
+    ok(&cli(
+        &f.root,
+        &one,
+        &add_args("watch the gate task", &["--no-link-reason", "not yet"]),
+    ));
+    ok(&cli(
+        &f.root,
+        &one,
+        &[
+            "follow",
+            "check",
+            "FU-001",
+            "--observed",
+            "nothing yet",
+            "--offline",
+        ],
+    ));
+    ok(&cli(
+        &f.root,
+        &one,
+        &[
+            "follow",
+            "update",
+            "FU-001",
+            "--link",
+            "prerequisite:TSK-002",
+            "--next-check",
+            "30d",
+        ],
+    ));
+    let next = folded(&paths).items["FU-001"].record.next_check.clone();
+    let next = codeflow_core::coord::parse_time(&next).unwrap();
+    assert!(next <= codeflow_core::coord::now_secs() + codeflow_core::coord::MAX_RECHECK_SECS + 5);
+    write(
+        &f.root,
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "gate", "blocked"),
+    );
+    git(&f.root, &["commit", "-qam", "docs(tasks): block the task"]);
+    git(&f.root, &["push", "-q", "origin", "main"]);
+    let shown = ok(&cli(&f.root, &[], &["follow", "list", "FU-001"]));
+    assert!(
+        shown.contains("prerequisite:TSK-002 changed: todo -> blocked"),
+        "{shown}"
+    );
+}
+
+/// Codex F7, security F6: a rejected argument is never echoed when it is
+/// secret-shaped.
+#[test]
+fn a_rejected_secret_argument_is_never_echoed() {
+    let f = fixture();
+    bind(&f.root);
+    let one = lane("LN-001", "s1");
+    let token = format!("ghp_{}", "w".repeat(36));
+    for args in [
+        vec!["--link".to_string(), format!("context:{token}")],
+        vec!["--waits-on".to_string(), token.clone()],
+        vec![
+            "--next-check".to_string(),
+            token.clone(),
+            "--no-link-reason".into(),
+            "x".into(),
+        ],
+    ] {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = cli(&f.root, &one, &add_args("x", &refs));
+        assert!(!out.status.success());
+        assert!(!text(&out).contains(&token), "echoed the token");
+    }
+}
+
+/// Codex F9: `work status` never writes Git's index, even with stale stat
+/// data that `git status` would refresh.
+#[test]
+fn work_status_never_writes_the_index() {
+    let f = fixture();
+    let file = f.root.join("project-management/tasks/TSK-001.md");
+    let content = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &content).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let index = f.root.join(".git/index");
+    let before = std::fs::read(&index).unwrap();
+    ok(&cli(&f.root, &[], &["work", "status"]));
+    assert_eq!(
+        before,
+        std::fs::read(&index).unwrap(),
+        "work status wrote the index"
+    );
+}
+
+/// A bound `follow check` that records no event still refreshes the
+/// actor's liveness; a read never does.
+#[test]
+fn a_check_with_nothing_to_record_refreshes_liveness() {
+    let f = fixture();
+    let paths = bind(&f.root);
+    let status = paths.status.join("s2.json");
+    assert!(!status.exists());
+    ok(&cli(&f.root, &[], &["follow", "list"]));
+    assert!(!status.exists());
+    let out = ok(&cli(
+        &f.root,
+        &lane("LN-002", "s2"),
+        &["follow", "check", "--offline"],
+    ));
+    assert!(out.contains("nothing due"), "{out}");
+    assert!(status.is_file(), "the check refreshed no liveness");
 }

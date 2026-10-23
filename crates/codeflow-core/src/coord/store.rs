@@ -224,7 +224,34 @@ fn unwritten(path: &Path, error: &std::io::Error) -> CoordError {
     CoordError::Unwritten(format!("{}: {error}", path.display()))
 }
 
-/// Create a private directory, refusing a symbolic link in its place.
+/// On a write, an existing directory or file of the ledger must belong to
+/// this user; group and other access is removed. Unix only: Windows keeps
+/// the ACL the directory inherits from the git directory.
+fn make_private(path: &Path, meta: &fs::Metadata, mode: u32) -> Result<(), CoordError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        if meta.uid() != me {
+            return Err(CoordError::Refused(format!(
+                "{} belongs to another user; the ledger writes only its own files",
+                path.display()
+            )));
+        }
+        if meta.permissions().mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))
+                .map_err(|error| unwritten(path, &error))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, meta, mode);
+    Ok(())
+}
+
+/// Create a private directory, refusing a symbolic link in its place and
+/// making an existing one private. A new directory's parent is synced so
+/// the entry survives a crash.
 fn private_dir(path: &Path) -> Result<(), CoordError> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -233,7 +260,7 @@ fn private_dir(path: &Path) -> Result<(), CoordError> {
                 path.display()
             )))
         }
-        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(meta) if meta.is_dir() => return make_private(path, &meta, 0o700),
         Ok(_) => {
             return Err(CoordError::Refused(format!(
                 "{} is not a directory",
@@ -247,7 +274,7 @@ fn private_dir(path: &Path) -> Result<(), CoordError> {
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     match builder.create(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_dir(path.parent().unwrap_or(Path::new("."))),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => private_dir(path),
         Err(error) => Err(unwritten(path, &error)),
     }
@@ -274,7 +301,12 @@ fn private_file(path: &Path, append: bool) -> Result<fs::File, CoordError> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    options.open(path).map_err(|error| unwritten(path, &error))
+    let file = options
+        .open(path)
+        .map_err(|error| unwritten(path, &error))?;
+    let meta = file.metadata().map_err(|error| unwritten(path, &error))?;
+    make_private(path, &meta, 0o600)?;
+    Ok(file)
 }
 
 /// Write a whole file atomically and durably: a private temporary file in
@@ -301,19 +333,22 @@ fn durable_write(path: &Path, bytes: &[u8]) -> Result<(), CoordError> {
     temporary
         .persist(path)
         .map_err(|error| unwritten(path, &error.error))?;
-    sync_dir(dir);
-    Ok(())
+    sync_dir(dir)
 }
 
-/// Sync a directory so a new or renamed entry survives a crash. Windows
-/// cannot open a directory for this; NTFS journals the rename.
-fn sync_dir(dir: &Path) {
+/// Sync a directory so a new or renamed entry survives a crash; a failure is
+/// reported, never ignored. Windows cannot open a directory for this; NTFS
+/// journals the rename, so there it is a no-op.
+fn sync_dir(dir: &Path) -> Result<(), CoordError> {
     #[cfg(unix)]
-    if let Ok(handle) = fs::File::open(dir) {
-        let _ = handle.sync_all();
+    {
+        fs::File::open(dir)
+            .and_then(|handle| handle.sync_all())
+            .map_err(|error| unwritten(dir, &error))?;
     }
     #[cfg(not(unix))]
     let _ = dir;
+    Ok(())
 }
 
 fn lock(paths: &Paths, wait: Duration) -> Result<Locked, CoordError> {
@@ -336,7 +371,7 @@ fn lock(paths: &Paths, wait: Duration) -> Result<Locked, CoordError> {
     let created = !paths.events.exists();
     let mut events = private_file(&paths.events, true)?;
     if created {
-        sync_dir(&paths.dir);
+        sync_dir(&paths.dir)?;
     }
     ensure_instance(paths)?;
     let repaired_tail = repair_tail(paths, &mut events)?;
@@ -438,6 +473,7 @@ fn fold_clean(paths: &Paths, events: &mut fs::File) -> Result<Ledger, CoordError
 /// [`CoordError::Busy`] past the wait, [`CoordError::ReadOnly`] for a
 /// damaged log, [`CoordError::Unwritten`] for a denied write, and
 /// [`CoordError::Refused`] for an event that breaks a rule.
+#[allow(clippy::too_many_lines)]
 pub fn commit<F>(
     paths: &Paths,
     actor: &RecordedBy,
@@ -449,19 +485,48 @@ where
 {
     let mut locked = lock(paths, wait)?;
     let ledger = fold_clean(paths, &mut locked.events)?;
-    let drafts = build(&ledger)?;
-    if let Some(key) = drafts
-        .first()
-        .and_then(|draft| draft.idempotency_key.as_ref())
-    {
-        if let Some(sequence) = ledger.keys.get(key) {
-            return Ok(Committed {
-                envelopes: Vec::new(),
-                duplicate_of: Some(*sequence),
-                heartbeat_error: None,
-                repaired_tail: locked.repaired_tail,
-            });
+    let mut drafts = keyed(build(&ledger)?);
+    // Each keyed event of the operation is judged alone: one already
+    // recorded with the same payload is skipped, so a retry after an
+    // interrupted operation writes exactly the events that are missing; the
+    // same key with another payload or actor is refused.
+    let mut duplicate_of = None;
+    let mut kept = Vec::with_capacity(drafts.len());
+    for draft in drafts.drain(..) {
+        let Some(key) = &draft.idempotency_key else {
+            kept.push(draft);
+            continue;
+        };
+        match ledger.keys.get(key) {
+            None => kept.push(draft),
+            Some((sequence, digest)) => {
+                let subject = match &draft.subject {
+                    SubjectId::Given(id) => Some(id.as_str()),
+                    _ => None,
+                };
+                let wanted = super::transition::operation_digest(
+                    draft.data.kind(),
+                    subject,
+                    &actor.actor_instance,
+                    &draft.data.to_value(),
+                );
+                if *digest != wanted {
+                    return Err(CoordError::KeyConflict(
+                        "the idempotency key was already used for a different operation or actor; nothing was written".into(),
+                    ));
+                }
+                duplicate_of.get_or_insert(*sequence);
+            }
         }
+    }
+    let drafts = kept;
+    if drafts.is_empty() && duplicate_of.is_some() {
+        return Ok(Committed {
+            envelopes: Vec::new(),
+            duplicate_of,
+            heartbeat_error: None,
+            repaired_tail: locked.repaired_tail,
+        });
     }
     if drafts.is_empty() {
         return Ok(Committed {
@@ -532,6 +597,26 @@ where
     })
 }
 
+/// Give every event of a keyed operation its own key: the operation's key
+/// with the event's place (`key#0`, `key#1`, ...) when it has several
+/// events, so each can be found again after an interruption.
+fn keyed(mut drafts: Vec<Draft>) -> Vec<Draft> {
+    let Some(key) = drafts
+        .first()
+        .and_then(|draft| draft.idempotency_key.clone())
+    else {
+        return drafts;
+    };
+    if drafts.len() > 1 {
+        for (index, draft) in drafts.iter_mut().enumerate() {
+            if index == 0 || draft.idempotency_key.is_none() {
+                draft.idempotency_key = Some(format!("{key}#{index}"));
+            }
+        }
+    }
+    drafts
+}
+
 fn read_counters(paths: &Paths) -> Result<Counters, CoordError> {
     match fs::read_to_string(&paths.counters) {
         Ok(text) => serde_json::from_str(&text).map_err(|error| {
@@ -580,6 +665,22 @@ fn heartbeat(paths: &Paths, actor: &RecordedBy, sequence: u64) -> Result<(), Coo
     )
 }
 
+/// Refresh the liveness file of a bound actor whose operation recorded no
+/// event (a check that found nothing to record). Reads never call this.
+///
+/// # Errors
+///
+/// The reason the file could not be written.
+pub fn refresh_liveness(
+    paths: &Paths,
+    actor: &RecordedBy,
+    sequence: u64,
+) -> Result<(), CoordError> {
+    private_dir(&paths.common_dir.join("codeflow"))?;
+    private_dir(&paths.dir)?;
+    heartbeat(paths, actor, sequence)
+}
+
 /// Read every liveness file; unreadable ones are skipped.
 #[must_use]
 pub fn liveness(paths: &Paths) -> Vec<Liveness> {
@@ -603,40 +704,126 @@ pub fn liveness(paths: &Paths) -> Vec<Liveness> {
 /// What [`purge`] did.
 #[derive(Debug)]
 pub struct Purged {
+    /// Events whose free text was replaced.
     pub lines: usize,
+    /// Quarantine files that held the item and were removed.
+    pub quarantine_removed: usize,
+    /// The purge event's sequence.
+    pub sequence: u64,
 }
 
-/// Replace the free text of every event about `subject` with `[purged]`,
-/// keeping ids, links, sequences and order. The rewritten log must fold as
-/// cleanly as before. Runs under the lock.
+/// Fields that hold structure, not free text: ids, kinds, times, holders,
+/// streams and link identities. Every other string of an item's events is
+/// free text and is purged.
+const STRUCTURAL: [&str; 21] = [
+    "stream",
+    "holder",
+    "to_holder",
+    "to_stream",
+    "waits_on",
+    "next_check",
+    "observed_at",
+    "kind",
+    "type",
+    "id",
+    "uid",
+    "repository",
+    "number",
+    "sha",
+    "name",
+    "remote",
+    "at",
+    "generation",
+    "expected_generation",
+    "outcome",
+    "successor",
+];
+
+/// Replace every free-text string of `value` with `[purged]`, keeping the
+/// structural fields. `source` is structure (an enum) only in `item_added`.
+fn purge_value(value: &mut serde_json::Value, keep_source: bool) {
+    match value {
+        serde_json::Value::String(text) if !text.is_empty() => *text = "[purged]".into(),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                purge_value(item, keep_source);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, field) in object.iter_mut() {
+                // A link holds only its kind and target identity.
+                let structural = STRUCTURAL.contains(&key.as_str())
+                    || key == "links"
+                    || (key == "source" && keep_source);
+                if !structural {
+                    purge_value(field, keep_source);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remove an item's free text from the live log and from quarantine, as
+/// `actor`, and record who purged it and when (no content) as an
+/// `item_purged` event. Under the lock the actor is bound and must hold the
+/// item, as for any mutation. Ids, links, sequences and order are kept; an
+/// exact-duplicate identity becomes `[purged FU-NNN]`, so purged items stay
+/// distinct, and an idempotency key is replaced by an opaque one.
 ///
 /// # Errors
 ///
-/// As [`commit`], and a refusal when the subject is unknown.
-pub fn purge(paths: &Paths, subject: &str, wait: Duration) -> Result<Purged, CoordError> {
+/// As [`commit`], and a refusal when the subject is unknown or the actor
+/// does not hold it.
+pub fn purge(
+    paths: &Paths,
+    actor: &RecordedBy,
+    subject: &str,
+    wait: Duration,
+) -> Result<Purged, CoordError> {
     let mut locked = lock(paths, wait)?;
     let bytes = read_log(paths, &mut locked.events)?;
     let before = fold(&bytes);
     if let Some(damage) = before.damage {
         return Err(CoordError::ReadOnly(damage));
     }
-    if !before.ledger.items.contains_key(subject) {
-        return Err(CoordError::Refused(format!(
-            "{subject} is not in this ledger"
-        )));
+    let ledger = &before.ledger;
+    let item = ledger
+        .items
+        .get(subject)
+        .ok_or_else(|| CoordError::Refused(format!("{subject} is not in this ledger")))?;
+    let bound = ledger.bind(actor).map_err(CoordError::Refused)?;
+    if !super::transition::holds(&bound, item) {
+        return Err(CoordError::Refused(
+            "only the holder or the operator purges a follow-up".into(),
+        ));
     }
     let mut out = String::with_capacity(bytes.len());
-    let mut lines = 0;
-    for raw in String::from_utf8_lossy(&bytes).lines() {
+    let mut lines = 0_u64;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| CoordError::ReadOnly("the log is not UTF-8".into()))?;
+    for raw in text.lines() {
         let mut value: serde_json::Value =
             serde_json::from_str(raw).map_err(|error| CoordError::ReadOnly(error.to_string()))?;
         if value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject) {
+            let added =
+                value.get("event").and_then(serde_json::Value::as_str) == Some("item_added");
+            let sequence = value.get("sequence").cloned().unwrap_or_default();
             if let Some(object) = value.as_object_mut() {
                 if object.contains_key("comment") {
                     object.insert("comment".into(), "[purged]".into());
                 }
+                if object.contains_key("idempotency_key") {
+                    object.insert(
+                        "idempotency_key".into(),
+                        format!("purged:{subject}:{sequence}").into(),
+                    );
+                }
                 if let Some(data) = object.get_mut("data") {
-                    purge_text(data);
+                    purge_value(data, added);
+                    if let Some(reference) = data.get_mut("source_reference") {
+                        *reference = format!("[purged {subject}]").into();
+                    }
                 }
             }
             lines += 1;
@@ -644,48 +831,70 @@ pub fn purge(paths: &Paths, subject: &str, wait: Duration) -> Result<Purged, Coo
         out.push_str(&serde_json::to_string(&value).unwrap_or_default());
         out.push('\n');
     }
-    let after = fold(out.as_bytes());
-    if after.damage.is_some() || after.ledger.last_sequence != before.ledger.last_sequence {
+    // The purge event, judged by the same rules as any other.
+    let mut state = fold(out.as_bytes());
+    if state.damage.is_some() || state.ledger.last_sequence != ledger.last_sequence {
         return Err(CoordError::Refused(
             "the purged log would not fold cleanly; nothing was changed".into(),
         ));
     }
+    let envelope = Envelope {
+        schema_version: SCHEMA_VERSION,
+        event: super::schema::EventKind::ItemPurged,
+        subject_id: subject.to_string(),
+        sequence: ledger.last_sequence + 1,
+        recorded_at: super::format_time(super::now_secs()),
+        recorded_by: actor.clone(),
+        comment: None,
+        idempotency_key: None,
+        expected_revision: None,
+        data: Data::ItemPurged(super::schema::Purge { events: lines }).to_value(),
+    };
+    let data = super::schema::validate(&envelope).map_err(CoordError::Refused)?;
+    state
+        .ledger
+        .apply(&envelope, &data)
+        .map_err(CoordError::Refused)?;
+    out.push_str(&serde_json::to_string(&envelope).unwrap_or_default());
+    out.push('\n');
     durable_write(&paths.events, out.as_bytes())?;
-    Ok(Purged { lines })
+    let quarantine_removed = purge_quarantine(paths, subject)?;
+    let _ = heartbeat(paths, actor, envelope.sequence);
+    Ok(Purged {
+        lines: usize::try_from(lines).unwrap_or(usize::MAX),
+        quarantine_removed,
+        sequence: envelope.sequence,
+    })
 }
 
-/// The free-text fields of follow-up data.
-const PURGED_FIELDS: [&str; 10] = [
-    "title",
-    "description",
-    "done_when",
-    "source_reference",
-    "no_link_reason",
-    "awaiting_operator",
-    "observed",
-    "reason",
-    "disposition",
-    "summary",
-];
-
-fn purge_text(data: &mut serde_json::Value) {
-    let Some(object) = data.as_object_mut() else {
-        return;
-    };
-    for field in PURGED_FIELDS {
-        if let Some(value) = object.get_mut(field) {
-            if value.is_string() && value.as_str() != Some("") {
-                *value = "[purged]".into();
-            }
+/// Remove every quarantined fragment that names the subject.
+fn purge_quarantine(paths: &Paths, subject: &str) -> Result<usize, CoordError> {
+    if crate::absence::proven_absent(&paths.quarantine)
+        .map_err(|error| unwritten(&paths.quarantine, &error))?
+    {
+        return Ok(0);
+    }
+    let entries =
+        fs::read_dir(&paths.quarantine).map_err(|error| unwritten(&paths.quarantine, &error))?;
+    let needle = format!("\"subject_id\":\"{subject}\"");
+    let mut removed = 0;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| unwritten(&paths.quarantine, &error))?
+            .path();
+        let bytes = fs::read(&path).map_err(|error| unwritten(&path, &error))?;
+        if bytes
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+        {
+            fs::remove_file(&path).map_err(|error| unwritten(&path, &error))?;
+            removed += 1;
         }
     }
-    if let Some(serde_json::Value::Array(rejected)) = object.get_mut("rejected_suggestions") {
-        for entry in rejected {
-            if let Some(reason) = entry.get_mut("reason") {
-                *reason = "[purged]".into();
-            }
-        }
+    if removed > 0 {
+        sync_dir(&paths.quarantine)?;
     }
+    Ok(removed)
 }
 
 /// What [`repair`] did.

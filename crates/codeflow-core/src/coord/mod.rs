@@ -51,19 +51,38 @@ pub enum CoordError {
     Unavailable(String),
     /// The repository could not be found or read.
     Repository(String),
+    /// An idempotency key was reused for a different operation or actor.
+    KeyConflict(String),
 }
 
 impl fmt::Display for CoordError {
+    /// Every diagnostic passes through [`text::scrub`]: none echoes a
+    /// secret-shaped value, whatever parser or log line it came from.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Refused(reason) => write!(f, "refused: {reason}"),
-            Self::Busy => f.write_str(
+        f.write_str(&text::scrub(&self.unscrubbed()))
+    }
+}
+
+impl CoordError {
+    fn unscrubbed(&self) -> String {
+        Raw(self).to_string()
+    }
+}
+
+struct Raw<'a>(&'a CoordError);
+
+impl fmt::Display for Raw<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            CoordError::Refused(reason) => write!(f, "refused: {reason}"),
+            CoordError::Busy => f.write_str(
                 "busy: another codeflow process holds the coordination ledger lock; try again",
             ),
-            Self::ReadOnly(reason) => write!(f, "read-only: {reason}"),
-            Self::Unwritten(reason) => write!(f, "unwritten: {reason}"),
-            Self::Unavailable(reason) => write!(f, "unavailable: {reason}"),
-            Self::Repository(reason) => write!(f, "repository: {reason}"),
+            CoordError::ReadOnly(reason) => write!(f, "read-only: {reason}"),
+            CoordError::Unwritten(reason) => write!(f, "unwritten: {reason}"),
+            CoordError::Unavailable(reason) => write!(f, "unavailable: {reason}"),
+            CoordError::Repository(reason) => write!(f, "repository: {reason}"),
+            CoordError::KeyConflict(reason) => write!(f, "key conflict: {reason}"),
         }
     }
 }
@@ -99,7 +118,12 @@ pub fn format_time(secs: u64) -> String {
 ///
 /// The reason the text is not such a time.
 pub fn parse_time(text: &str) -> Result<u64, String> {
-    let bad = || format!("`{text}` is not a UTC time of the form YYYY-MM-DDTHH:MM:SSZ");
+    let bad = || {
+        format!(
+            "`{}` is not a UTC time of the form YYYY-MM-DDTHH:MM:SSZ",
+            text::shown(text)
+        )
+    };
     let bytes = text.as_bytes();
     if bytes.len() != 20
         || bytes[4] != b'-'
@@ -163,7 +187,12 @@ fn days_from_civil(year: u64, month: u64, day: u64) -> u64 {
 ///
 /// The reason the text is not such a duration.
 pub fn parse_duration(text: &str) -> Result<u64, String> {
-    let bad = || format!("`{text}` is not a duration such as 30m, 2h or 1d");
+    let bad = || {
+        format!(
+            "`{}` is not a duration such as 30m, 2h or 1d",
+            text::shown(text)
+        )
+    };
     let unit = text.chars().last().ok_or_else(bad)?;
     let scale = match unit {
         's' => 1,

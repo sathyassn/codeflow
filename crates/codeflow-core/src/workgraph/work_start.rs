@@ -216,6 +216,9 @@ pub(crate) struct Record {
     pub(crate) id: String,
     /// The hidden record identity, when the record carries one.
     pub(crate) uid: Option<String>,
+    /// A complete task whose active acceptance block passes the structural
+    /// acceptance rules against its own criteria.
+    pub(crate) accepted: bool,
     pub(crate) kind: RecordKind,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -2999,11 +3002,14 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
     if !valid {
         return Err(format!("unsupported id {id}"));
     }
+    let status = string(&data, "status").unwrap_or_default();
+    let accepted = kind == RecordKind::Task && status == "complete" && accepted_block(content);
     Ok(Record {
         id,
         uid: string(&data, "uid"),
+        accepted,
         kind,
-        status: string(&data, "status").unwrap_or_default(),
+        status,
         epic_id: string(&data, "epic_id"),
         standalone_reason: string(&data, "standalone_reason"),
         title: string(&data, "title").unwrap_or_default(),
@@ -3019,6 +3025,20 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
             Vec::new()
         },
     })
+}
+
+/// Whether the record's last active acceptance block parses and passes the
+/// structural acceptance rules for its criteria.
+fn accepted_block(content: &str) -> bool {
+    use super::record_text::{acceptance_blocks, check_acceptance, parse_criteria};
+    let blocks = acceptance_blocks(content);
+    let Some(active) = blocks.iter().rev().find(|block| !block.is_superseded()) else {
+        return false;
+    };
+    match &active.parsed {
+        Ok(block) => check_acceptance(block, &parse_criteria(content).items).is_empty(),
+        Err(_) => false,
+    }
 }
 
 pub(crate) fn target_reference<'repo>(

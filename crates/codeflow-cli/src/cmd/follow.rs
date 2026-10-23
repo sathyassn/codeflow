@@ -4,7 +4,8 @@
 //!
 //! Exit status: 0 done, 1 refused, 2 no repository or unusable input,
 //! 3 busy, 4 read-only (a damaged log), 5 unwritten (a denied write),
-//! 6 unavailable (a denied read).
+//! 6 unavailable (a denied read), 7 key conflict (an idempotency key
+//! reused for another operation).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -273,6 +274,7 @@ fn fail(error: &CoordError) -> i32 {
         CoordError::ReadOnly(_) => 4,
         CoordError::Unwritten(_) => 5,
         CoordError::Unavailable(_) => 6,
+        CoordError::KeyConflict(_) => 7,
     }
 }
 
@@ -281,11 +283,15 @@ fn refused(message: impl Into<String>) -> CoordError {
 }
 
 fn bound_actor() -> Result<Actor, CoordError> {
-    Actor::from_env(&codeflow_core::root_checkout::process_env).map_err(|unbound| match unbound {
-        Unbound::Observer => {
-            refused("no role is bound: an unbound watcher may only read (`codeflow follow list`)")
+    use std::io::IsTerminal as _;
+    let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    Actor::from_env(&codeflow_core::root_checkout::process_env, terminal).map_err(|unbound| {
+        match unbound {
+            Unbound::Observer => refused(
+                "no role is bound: an unbound watcher may only read (`codeflow follow list`)",
+            ),
+            Unbound::Refused(reason) => refused(reason),
         }
-        Unbound::Refused(reason) => refused(reason),
     })
 }
 
@@ -445,6 +451,7 @@ fn asserted_evidence(root: &Path, written: &str) -> Result<Evidence, CoordError>
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn add_cmd(paths: &Paths, root: &Path, actor: &Actor, add: &AddArgs) -> Result<(), CoordError> {
     use codeflow_core::coord::actor::Role;
     let now = coord::now_secs();
@@ -504,6 +511,8 @@ fn add_cmd(paths: &Paths, root: &Path, actor: &Actor, add: &AddArgs) -> Result<(
         last_check: None,
         proofs: Vec::new(),
         reopened: Vec::new(),
+        purged: Vec::new(),
+        baseline: Vec::new(),
         last_sequence: 0,
     };
     let observed = due::observe_item(&probe, ledger_now, &liveness, &mut watcher);
@@ -647,12 +656,51 @@ fn update_cmd(
     } else {
         Some(links(&resolver, &update.links)?)
     };
-    let next_check = update
-        .next_check
-        .as_deref()
-        .map(|text| coord::parse_schedule(text, now).map(coord::format_time))
-        .transpose()
-        .map_err(refused)?;
+    let waits = (!update.waits_on.is_empty()).then(|| update.waits_on.clone());
+    let snapshot = match store::read(paths) {
+        ReadOutcome::Ledger(snapshot) => snapshot,
+        ReadOutcome::Empty => return Err(refused("the ledger is empty")),
+        ReadOutcome::Unavailable(reason) => return Err(CoordError::Unavailable(reason)),
+    };
+    let ledger = &snapshot.folded.ledger;
+    let item = ledger
+        .items
+        .get(&update.id)
+        .ok_or_else(|| refused(format!("{} is not in this ledger", update.id)))?;
+    // The item as it will stand, so new dependencies are observed (outside
+    // the lock) and the schedule rule applies to them.
+    let mut probe = item.clone();
+    if let Some(links) = &new_links {
+        probe.record.links.clone_from(links);
+        probe.record.no_link_reason = None;
+    }
+    if update.no_link_reason.is_some() && new_links.is_none() {
+        probe.record.links.clear();
+    }
+    if let Some(waits) = &waits {
+        probe.record.waits_on.clone_from(waits);
+    }
+    let dependencies_changed =
+        new_links.is_some() || update.no_link_reason.is_some() || waits.is_some();
+    let observed = if dependencies_changed {
+        let mut watcher = RepoObserver::new(root, false);
+        Some(due::observe_item(
+            &probe,
+            ledger,
+            &store::liveness(paths),
+            &mut watcher,
+        ))
+    } else {
+        None
+    };
+    let requested = match update.next_check.as_deref() {
+        Some(text) => coord::parse_schedule(text, now).map_err(refused)?,
+        None => coord::parse_time(&item.record.next_check).unwrap_or(now),
+    };
+    let effective = due::capped_next_check(&probe, requested, now);
+    let next_check = (update.next_check.is_some()
+        || coord::format_time(effective) != item.record.next_check)
+        .then(|| coord::format_time(effective));
     let change = ItemUpdate {
         title: update.title.clone(),
         description: update.description.clone(),
@@ -660,15 +708,15 @@ fn update_cmd(
         links: new_links,
         no_link_reason: update.no_link_reason.clone(),
         next_check,
-        waits_on: (!update.waits_on.is_empty()).then(|| update.waits_on.clone()),
+        waits_on: waits,
         awaiting_operator: update.awaiting_operator.clone(),
-        observed: None,
+        observed,
     };
     one(
         paths,
         actor,
         &update.id,
-        update.expect_revision,
+        Some(update.expect_revision.unwrap_or(item.revision)),
         None,
         Data::ItemUpdated(change),
         "updated",
@@ -731,7 +779,7 @@ fn check_cmd(
             }
             continue;
         }
-        if let Some(evidence) = due::fulfilment(item, &mut watcher) {
+        if let Some(evidence) = due::fulfilment(item, ledger, &mut watcher) {
             drafts.push(Draft {
                 subject: SubjectId::Given(item.id.clone()),
                 data: Data::ItemClosed(evidence),
@@ -781,6 +829,12 @@ fn check_cmd(
         if check.id.is_none() && due_lines.is_empty() {
             println!("nothing due among the items you hold");
         }
+        // A bound check is a mutating operation even when it records no
+        // event: it refreshes the actor's liveness (never a read's job).
+        if let Err(error) = store::refresh_liveness(paths, &actor.recorded_by, ledger.last_sequence)
+        {
+            eprintln!("follow: warning: the liveness file was not refreshed: {error}");
+        }
         return Ok(());
     }
     let committed = store::commit(paths, &actor.recorded_by, COMMAND_WAIT, |_| Ok(drafts))?;
@@ -802,23 +856,11 @@ fn check_cmd(
 }
 
 fn purge_cmd(paths: &Paths, actor: &Actor, id: &str) -> Result<(), CoordError> {
-    if let ReadOutcome::Ledger(snapshot) = store::read(paths) {
-        let ledger = &snapshot.folded.ledger;
-        let bound = ledger.bind(&actor.recorded_by).map_err(refused)?;
-        let item = ledger
-            .items
-            .get(id)
-            .ok_or_else(|| refused(format!("{id} is not in this ledger")))?;
-        if !codeflow_core::coord::transition::holds(&bound, item) {
-            return Err(refused(
-                "only the holder or the operator purges a follow-up",
-            ));
-        }
-    }
-    let purged = store::purge(paths, id, COMMAND_WAIT)?;
+    // Authorization is judged under the lock, inside the store.
+    let purged = store::purge(paths, &actor.recorded_by, id, COMMAND_WAIT)?;
     println!(
-        "{id}: free text purged from {} events; ids, links and order kept",
-        purged.lines
+        "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} quarantined fragments removed; recorded as sequence {}",
+        purged.lines, purged.quarantine_removed, purged.sequence
     );
     Ok(())
 }
@@ -859,7 +901,10 @@ fn list_cmd(paths: &Paths, root: &Path, list: &ListArgs) -> i32 {
         ReadOutcome::Ledger(snapshot) => snapshot,
     };
     if let Some(damage) = &snapshot.folded.damage {
-        eprintln!("follow: warning: the ledger is read-only ({damage}); showing the valid prefix");
+        eprintln!(
+            "follow: warning: the ledger is read-only ({}); showing the valid prefix",
+            text::scrub(damage)
+        );
     }
     if snapshot.folded.tail > 0 {
         eprintln!("follow: note: a write is in progress or torn at the end of the log; showing the committed prefix");
@@ -1118,6 +1163,9 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
             ),
         );
     }
+    for (at, role) in &item.purged {
+        field(&mut out, "purged", &format!("{at} by {role}"));
+    }
     for reason in &item.reopened {
         field(&mut out, "reopened", &t(reason));
     }
@@ -1153,7 +1201,8 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
     };
     if let Some(damage) = &read.folded.damage {
         eprintln!(
-            "follow: warning: the ledger is read-only ({damage}); exporting the valid prefix"
+            "follow: warning: the ledger is read-only ({}); exporting the valid prefix",
+            text::scrub(damage)
         );
     }
     let mut out = TextBlock::new();
@@ -1179,14 +1228,14 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
             0
         }
         Some(path) => {
-            let written = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .and_then(|mut file| {
-                    use std::io::Write as _;
-                    file.write_all(out.as_str().as_bytes())
-                });
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let written = options.open(path).and_then(|mut file| {
+                use std::io::Write as _;
+                file.write_all(out.as_str().as_bytes())
+            });
             match written {
                 Ok(()) => {
                     println!(

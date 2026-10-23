@@ -32,6 +32,7 @@ pub enum EventKind {
     ItemClosed,
     ItemDropped,
     ItemReopened,
+    ItemPurged,
     StreamOpened,
     StreamScopeChanged,
     StreamClosed,
@@ -50,7 +51,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Every kind, in documentation order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::ItemAdded,
         Self::ItemUpdated,
         Self::ItemChecked,
@@ -58,6 +59,7 @@ impl EventKind {
         Self::ItemClosed,
         Self::ItemDropped,
         Self::ItemReopened,
+        Self::ItemPurged,
         Self::StreamOpened,
         Self::StreamScopeChanged,
         Self::StreamClosed,
@@ -85,6 +87,7 @@ impl EventKind {
             Self::ItemClosed => "item_closed",
             Self::ItemDropped => "item_dropped",
             Self::ItemReopened => "item_reopened",
+            Self::ItemPurged => "item_purged",
             Self::StreamOpened => "stream_opened",
             Self::StreamScopeChanged => "stream_scope_changed",
             Self::StreamClosed => "stream_closed",
@@ -112,7 +115,8 @@ impl EventKind {
             | Self::ItemHandedOver
             | Self::ItemClosed
             | Self::ItemDropped
-            | Self::ItemReopened => Subject::FollowUp,
+            | Self::ItemReopened
+            | Self::ItemPurged => Subject::FollowUp,
             Self::StreamOpened
             | Self::StreamScopeChanged
             | Self::StreamClosed
@@ -230,7 +234,7 @@ pub fn validate(envelope: &Envelope) -> Result<Data, String> {
     if !subject_ok {
         return Err(format!(
             "subject `{}` does not fit {}",
-            crate::git::display_message(&envelope.subject_id),
+            super::text::shown(&envelope.subject_id),
             envelope.event.as_str()
         ));
     }
@@ -261,7 +265,7 @@ impl Source {
         serde_json::from_value(Value::String(text.into())).map_err(|_| {
             format!(
                 "`{}` is not a source: use operator, coordinator, lane, review, issue or outside",
-                crate::git::display_message(text)
+                super::text::shown(text)
             )
         })
     }
@@ -532,6 +536,14 @@ pub struct Claim {
     pub generation: u64,
 }
 
+/// `item_purged`: who purged an item's text and when come from the
+/// envelope; the data holds only how many events were rewritten.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Purge {
+    pub events: u64,
+}
+
 /// `coordinator_released` and other events with no data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -547,6 +559,7 @@ pub enum Data {
     ItemClosed(Evidence),
     ItemDropped(Drop),
     ItemReopened(Reason),
+    ItemPurged(Purge),
     StreamOpened(Scope),
     StreamScopeChanged(Scope),
     StreamClosed(Reason),
@@ -585,6 +598,7 @@ impl Data {
             EventKind::ItemClosed => Self::ItemClosed(typed(kind, value)?),
             EventKind::ItemDropped => Self::ItemDropped(typed(kind, value)?),
             EventKind::ItemReopened => Self::ItemReopened(typed(kind, value)?),
+            EventKind::ItemPurged => Self::ItemPurged(typed(kind, value)?),
             EventKind::StreamOpened => Self::StreamOpened(typed(kind, value)?),
             EventKind::StreamScopeChanged => Self::StreamScopeChanged(typed(kind, value)?),
             EventKind::StreamClosed => Self::StreamClosed(typed(kind, value)?),
@@ -612,6 +626,7 @@ impl Data {
             Self::ItemHandedOver(data) => serde_json::to_value(data),
             Self::ItemClosed(data) => serde_json::to_value(data),
             Self::ItemDropped(data) => serde_json::to_value(data),
+            Self::ItemPurged(data) => serde_json::to_value(data),
             Self::ItemReopened(data) | Self::StreamClosed(data) => serde_json::to_value(data),
             Self::StreamOpened(data)
             | Self::StreamScopeChanged(data)
@@ -640,6 +655,7 @@ impl Data {
             Self::ItemClosed(_) => EventKind::ItemClosed,
             Self::ItemDropped(_) => EventKind::ItemDropped,
             Self::ItemReopened(_) => EventKind::ItemReopened,
+            Self::ItemPurged(_) => EventKind::ItemPurged,
             Self::StreamOpened(_) => EventKind::StreamOpened,
             Self::StreamScopeChanged(_) => EventKind::StreamScopeChanged,
             Self::StreamClosed(_) => EventKind::StreamClosed,
@@ -739,6 +755,12 @@ impl Data {
             Self::ItemDropped(drop) => {
                 check_required("reason", &drop.reason, MEDIUM, true)?;
                 check_required("disposition", &drop.disposition, MEDIUM, true)
+            }
+            Self::ItemPurged(purge) => {
+                if purge.events == 0 {
+                    return Err("item_purged rewrites at least one event".into());
+                }
+                Ok(())
             }
             Self::ItemReopened(reason) | Self::StreamClosed(reason) => {
                 check_required("reason", &reason.reason, MEDIUM, true)
@@ -867,7 +889,7 @@ fn validate_waits(waits: &[String]) -> Result<(), String> {
         if !is_follow_up_id(wait) && !is_lane_id(wait) {
             return Err(format!(
                 "`{}` in waits_on is neither a follow-up nor a lane id",
-                crate::git::display_message(wait)
+                super::text::shown(wait)
             ));
         }
     }
@@ -894,7 +916,7 @@ fn validate_stream(stream: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "`{}` is not a stream: use WS-NNN or {INTAKE}",
-            crate::git::display_message(stream)
+            super::text::shown(stream)
         ))
     }
 }
@@ -905,7 +927,7 @@ fn validate_holder(holder: &str) -> Result<(), String> {
     } else {
         Err(format!(
             "`{}` is not a holder: use coordinator or a lane id LN-NNN",
-            crate::git::display_message(holder)
+            super::text::shown(holder)
         ))
     }
 }

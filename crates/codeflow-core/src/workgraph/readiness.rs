@@ -894,11 +894,32 @@ pub struct TargetTask {
     pub tip: String,
     /// A visible, unlanded branch carries the task (claimed, advisory).
     pub claimed: bool,
+    /// Complete with an acceptance block that passes the structural
+    /// acceptance rules against the record's criteria, on this tip.
+    pub accepted: bool,
+}
+
+/// Whether a declared target names a landing line (`main`, `master` or an
+/// `integration/` line), with or without a remote prefix. A task's
+/// completion counts only there, never on a work branch.
+#[must_use]
+pub fn is_landing_target(declared: &str) -> bool {
+    let name = declared
+        .strip_prefix("refs/remotes/")
+        .or_else(|| declared.strip_prefix("refs/heads/"))
+        .unwrap_or(declared);
+    crate::ids::inventory::is_landing_branch(name)
+        || name
+            .split_once('/')
+            .is_some_and(|(_, rest)| crate::ids::inventory::is_landing_branch(rest))
 }
 
 /// Every task's state on its own target tip, from the refs as last fetched,
-/// with the same target resolution `work next` and `work start` use. Makes
-/// no network call and writes nothing.
+/// with the same target resolution `work next` and `work start` use. Only a
+/// landing line counts as a target: a record that declares a work branch is
+/// left out, and a task that two landing tips each hold as their own is left
+/// out as ambiguous rather than judged by the first name. Makes no network
+/// call and writes nothing.
 ///
 /// # Errors
 ///
@@ -912,7 +933,10 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
     let tips = read_tips(
         &repo,
         &mut resolved,
-        declared_targets(repo_root)?,
+        declared_targets(repo_root)?
+            .into_iter()
+            .filter(|declared| is_landing_target(declared))
+            .collect(),
         &mut snapshots,
     )?;
     let active: BTreeSet<String> = backlog(repo_root)
@@ -923,7 +947,8 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                 .collect()
         })
         .unwrap_or_default();
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, TargetTask> = BTreeMap::new();
+    let mut ambiguous = BTreeSet::new();
     for (_, reference, tip, records) in &tips {
         for record in records
             .values()
@@ -936,8 +961,17 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
             else {
                 continue;
             };
+            if !is_landing_target(&declared) {
+                continue;
+            }
             let here = matches!(resolved.resolve(&declared), Ok(Some((seen, oid))) if seen == *reference && oid == *tip);
-            if !here || out.contains_key(&record.id) {
+            if !here {
+                continue;
+            }
+            if let Some(seen) = out.get(&record.id) {
+                if seen.reference != shown(reference) || seen.tip != tip.to_string() {
+                    ambiguous.insert(record.id.clone());
+                }
                 continue;
             }
             out.insert(
@@ -949,9 +983,13 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                     reference: shown(reference),
                     tip: tip.to_string(),
                     claimed: active.contains(&record.id),
+                    accepted: record.accepted,
                 },
             );
         }
+    }
+    for id in ambiguous {
+        out.remove(&id);
     }
     Ok(out)
 }

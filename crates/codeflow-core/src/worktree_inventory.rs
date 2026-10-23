@@ -40,7 +40,10 @@ impl WorktreeWork {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+    // `--no-optional-locks`: a status read never refreshes the index or
+    // takes a lock; the inventory writes nothing, Git metadata included.
     let output = crate::git::command()
+        .arg("--no-optional-locks")
         .arg("-C")
         .arg(dir)
         .args(args)

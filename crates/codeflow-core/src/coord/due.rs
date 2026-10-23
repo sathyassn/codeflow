@@ -9,7 +9,7 @@
 //!
 //! Only a `fulfils` link closes a follow-up, and only when its target is
 //! done on the target branch: a task `complete` in the records on its
-//! declared target's tip (read by [`crate::workgraph::readiness::target_tasks`],
+//! declared landing line's tip (read by [`crate::workgraph::readiness::target_tasks`],
 //! the same resolution `work start` uses), a pull request merged, a commit
 //! contained in the target, a branch shown deleted by its remote. A
 //! completion on a feature branch never counts, and nothing unknown counts.
@@ -50,6 +50,11 @@ pub trait Observer {
     fn commit_on_target(&mut self, sha: &str) -> Option<(bool, String, String)>;
     /// The current time, seconds since the epoch.
     fn now(&self) -> u64;
+    /// This clone's repository identity, when known; a link to another
+    /// repository is then never judged against this one.
+    fn repository(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The observer over a checkout: records on target tips, git, and, when
@@ -57,6 +62,7 @@ pub trait Observer {
 /// invocation and cached.
 pub struct RepoObserver {
     root: PathBuf,
+    repository: String,
     online: bool,
     now: u64,
     tasks: Option<BTreeMap<String, TaskView>>,
@@ -71,6 +77,7 @@ impl RepoObserver {
     pub fn new(root: &Path, online: bool) -> Self {
         Self {
             root: root.to_path_buf(),
+            repository: super::reference::repository_identity(root),
             online,
             now: super::now_secs(),
             tasks: None,
@@ -111,12 +118,28 @@ impl Observer for RepoObserver {
             .branches
             .entry((remote.to_string(), name.to_string()))
             .or_insert_with(|| {
-                let output = crate::git::command()
+                // Only a remote this clone configures is contacted: a name
+                // replayed from the log is checked again here, and Git
+                // resolves its URL from the clone's own configuration.
+                let configured = git2::Repository::discover(&root)
+                    .is_ok_and(|repo| repo.find_remote(remote).is_ok());
+                if !configured {
+                    return None;
+                }
+                let mut command = crate::git::command();
+                command
                     .current_dir(&root)
-                    .args(["ls-remote", "--heads", "--", remote])
-                    .arg(format!("refs/heads/{name}"))
-                    .output()
-                    .ok()?;
+                    .env("GIT_TERMINAL_PROMPT", "0")
+                    .args([
+                        "-c",
+                        "protocol.ext.allow=never",
+                        "ls-remote",
+                        "--heads",
+                        "--",
+                        remote,
+                    ])
+                    .arg(format!("refs/heads/{name}"));
+                let output = bounded(command, OBSERVATION_TIMEOUT)?;
                 output
                     .status
                     .success()
@@ -141,10 +164,66 @@ impl Observer for RepoObserver {
     fn now(&self) -> u64 {
         self.now
     }
+
+    fn repository(&self) -> Option<String> {
+        Some(self.repository.clone())
+    }
+}
+
+/// How long one network observation may take before it counts as unknown.
+pub const OBSERVATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Run `command` with its output captured, killing it at `limit`; `None`
+/// when it cannot start or does not finish in time.
+fn bounded(
+    mut command: std::process::Command,
+    limit: std::time::Duration,
+) -> Option<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    let readers = (
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut stdout, &mut bytes).map(|_| bytes)
+        }),
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut stderr, &mut bytes).map(|_| bytes)
+        }),
+    );
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    Some(std::process::Output {
+        status,
+        // A failed read makes the whole observation unknown, never an empty
+        // answer (which `ls-remote` would mean as "deleted").
+        stdout: readers.0.join().ok()?.ok()?,
+        stderr: readers.1.join().ok()?.ok()?,
+    })
 }
 
 fn gh_pull(root: &Path, repository: &str, number: u64) -> Option<PullView> {
-    let output = crate::git::process("gh")
+    let mut command = crate::git::process("gh");
+    command
         .current_dir(root)
         .env("GH_PROMPT_DISABLED", "1")
         .args([
@@ -155,9 +234,8 @@ fn gh_pull(root: &Path, repository: &str, number: u64) -> Option<PullView> {
             repository,
             "--json",
             "state,baseRefName,mergeCommit,statusCheckRollup",
-        ])
-        .output()
-        .ok()?;
+        ]);
+    let output = bounded(command, OBSERVATION_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
@@ -214,7 +292,7 @@ pub fn observe(
         Target::Record { id, uid, .. } => {
             if super::reference::is_task_id(id) {
                 match observer.task(id) {
-                    Some(view) if uid.is_some() && view.uid.is_some() && view.uid != *uid => {
+                    Some(view) if uid.is_some() && view.uid != *uid => {
                         ("uid-changed".to_string(), Some(view.tip))
                     }
                     Some(view) => {
@@ -383,22 +461,27 @@ pub fn due_reasons(item: &Item, now: u64, observed: &[Observation]) -> Vec<Strin
     reasons
 }
 
-/// The machine-verified proof that closes an item, when every `fulfils`
-/// link is done on its target. `None` when the item has no `fulfils` link
-/// or any of them is not done or not known.
-pub fn fulfilment(item: &Item, observer: &mut dyn Observer) -> Option<Evidence> {
+/// The machine-verified proof that closes an item: every `fulfils` link is
+/// done on its target, and every prerequisite and `waits_on` id the item
+/// declares beside it is met too, so a condition that asks for more than
+/// the fulfilled work keeps the item open. `None` when the item has no
+/// `fulfils` link, or anything is unmet or unknown.
+pub fn fulfilment(item: &Item, ledger: &Ledger, observer: &mut dyn Observer) -> Option<Evidence> {
     let fulfils: Vec<&Link> = item
         .record
         .links
         .iter()
         .filter(|link| link.kind == LinkKind::Fulfils)
         .collect();
-    if fulfils.is_empty() {
+    if fulfils.is_empty() || !prerequisites_met(item, ledger, observer) {
         return None;
     }
     let mut proofs = Vec::new();
     for link in fulfils {
-        proofs.push(proof(link, observer)?);
+        match judge(link, observer) {
+            Judged::Met(evidence) => proofs.push(*evidence),
+            Judged::Unmet(_) | Judged::Unknown => return None,
+        }
     }
     let first = proofs.first()?.clone();
     if proofs.len() == 1 {
@@ -414,7 +497,58 @@ pub fn fulfilment(item: &Item, observer: &mut dyn Observer) -> Option<Evidence> 
     })
 }
 
-fn proof(link: &Link, observer: &mut dyn Observer) -> Option<Evidence> {
+/// Whether every prerequisite link and `waits_on` id is met: a task
+/// accepted complete on its target, a pull request merged into a landing
+/// line, a commit in the target, a branch deleted, a follow-up closed or
+/// dropped, a lane closed, a time passed. Context links do not count.
+fn prerequisites_met(item: &Item, ledger: &Ledger, observer: &mut dyn Observer) -> bool {
+    let local = |id: &str| -> bool {
+        if super::actor::is_lane_id(id) {
+            ledger
+                .lanes
+                .get(id)
+                .is_some_and(|lane| lane.closed.is_some())
+        } else {
+            ledger
+                .items
+                .get(id)
+                .is_some_and(|item| item.state != ItemState::Open)
+        }
+    };
+    for link in &item.record.links {
+        if link.kind != LinkKind::Prerequisite {
+            continue;
+        }
+        let met = match &link.target {
+            Target::FollowUp { id } | Target::Lane { id } => local(id),
+            Target::Time { at } => super::parse_time(at).is_ok_and(|at| at <= observer.now()),
+            _ => matches!(judge(link, observer), Judged::Met(_)),
+        };
+        if !met {
+            return false;
+        }
+    }
+    item.record.waits_on.iter().all(|id| local(id))
+}
+
+/// What one fulfils condition shows now.
+enum Judged {
+    /// Done on its target, with the proof.
+    Met(Box<Evidence>),
+    /// Definitely not done, and why.
+    Unmet(String),
+    /// Not observable now (offline, unreadable, not found).
+    Unknown,
+}
+
+fn repository_matches(repository: &str, observer: &dyn Observer) -> bool {
+    observer
+        .repository()
+        .is_none_or(|current| current == repository)
+}
+
+#[allow(clippy::too_many_lines)]
+fn judge(link: &Link, observer: &mut dyn Observer) -> Judged {
     let now = super::format_time(observer.now());
     match &link.target {
         Target::Record {
@@ -422,32 +556,64 @@ fn proof(link: &Link, observer: &mut dyn Observer) -> Option<Evidence> {
             uid,
             repository,
         } => {
-            let view = observer.task(id)?;
-            if view.status != "complete"
-                || (uid.is_some() && view.uid.is_some() && view.uid != *uid)
-            {
-                return None;
+            if !super::reference::is_task_id(id) || !repository_matches(repository, observer) {
+                return Judged::Unknown;
             }
-            Some(Evidence {
+            let Some(view) = observer.task(id) else {
+                return Judged::Unknown;
+            };
+            // A pinned identity must be established on the target: a
+            // missing or different UID there is another record.
+            if uid.is_some() && view.uid != *uid {
+                return Judged::Unmet(format!(
+                    "{id} on {} is not the record the link names (its UID differs)",
+                    view.reference
+                ));
+            }
+            if view.status != "complete" {
+                return Judged::Unmet(format!(
+                    "{id} is {} on {} at {}",
+                    view.status,
+                    view.reference,
+                    short(&view.tip)
+                ));
+            }
+            if !view.accepted {
+                return Judged::Unmet(format!(
+                    "{id} is complete on {} without a passing acceptance block",
+                    view.reference
+                ));
+            }
+            Judged::Met(Box::new(Evidence {
                 kind: EvidenceKind::MachineVerified,
                 reference: format!(
-                    "{id} complete on {} at {}",
+                    "{id} complete and accepted on {} at {}",
                     view.reference,
                     short(&view.tip)
                 ),
-                source: format!("task records on {}", view.reference),
+                source: format!("task record and acceptance block on {}", view.reference),
                 repository: Some(repository.clone()),
                 target: Some(view.target),
                 revision: Some(view.tip),
                 observed_at: now,
-            })
+            }))
         }
         Target::PullRequest { repository, number } => {
-            let view = observer.pull_request(repository, *number)?;
-            if view.state != "merged" {
-                return None;
+            if !repository_matches(repository, observer) {
+                return Judged::Unknown;
             }
-            Some(Evidence {
+            let Some(view) = observer.pull_request(repository, *number) else {
+                return Judged::Unknown;
+            };
+            if view.state != "merged" {
+                return Judged::Unmet(format!("PR#{number} is {}", view.state));
+            }
+            if !crate::workgraph::readiness::is_landing_target(&view.base) {
+                return Judged::Unmet(format!(
+                    "PR#{number} merged into a work branch, not a landing line"
+                ));
+            }
+            Judged::Met(Box::new(Evidence {
                 kind: EvidenceKind::MachineVerified,
                 reference: format!("https://{repository}/pull/{number}"),
                 source: "gh pr view".into(),
@@ -455,37 +621,51 @@ fn proof(link: &Link, observer: &mut dyn Observer) -> Option<Evidence> {
                 target: Some(view.base),
                 revision: Some(view.merge_commit.unwrap_or_else(|| "unknown".into())),
                 observed_at: now,
-            })
+            }))
         }
         Target::Commit { sha, repository } => {
-            let (contained, target, tip) = observer.commit_on_target(sha)?;
-            contained.then(|| Evidence {
-                kind: EvidenceKind::MachineVerified,
-                reference: format!("commit {sha} contained in {target}"),
-                source: "git history".into(),
-                repository: Some(repository.clone()),
-                target: Some(target),
-                revision: Some(tip),
-                observed_at: now,
-            })
+            if !repository_matches(repository, observer) {
+                return Judged::Unknown;
+            }
+            match observer.commit_on_target(sha) {
+                Some((true, target, tip)) => Judged::Met(Box::new(Evidence {
+                    kind: EvidenceKind::MachineVerified,
+                    reference: format!("commit {sha} contained in {target}"),
+                    source: "git history".into(),
+                    repository: Some(repository.clone()),
+                    target: Some(target),
+                    revision: Some(tip),
+                    observed_at: now,
+                })),
+                Some((false, target, _)) => {
+                    Judged::Unmet(format!("commit {} is not in {target}", short(sha)))
+                }
+                None => Judged::Unknown,
+            }
         }
         Target::Branch {
             name,
             remote,
             repository,
         } => {
-            let deleted = observer.branch_deleted(remote, name)?;
-            deleted.then(|| Evidence {
-                kind: EvidenceKind::MachineVerified,
-                reference: format!("branch {name} absent from {remote}"),
-                source: "git ls-remote".into(),
-                repository: Some(repository.clone()),
-                target: Some(remote.clone()),
-                revision: Some("absent".into()),
-                observed_at: now,
-            })
+            if !repository_matches(repository, observer) {
+                return Judged::Unknown;
+            }
+            match observer.branch_deleted(remote, name) {
+                Some(true) => Judged::Met(Box::new(Evidence {
+                    kind: EvidenceKind::MachineVerified,
+                    reference: format!("branch {name} absent from {remote}"),
+                    source: "git ls-remote".into(),
+                    repository: Some(repository.clone()),
+                    target: Some(remote.clone()),
+                    revision: Some("absent".into()),
+                    observed_at: now,
+                })),
+                Some(false) => Judged::Unmet(format!("branch {name} is present on {remote}")),
+                None => Judged::Unknown,
+            }
         }
-        Target::FollowUp { .. } | Target::Lane { .. } | Target::Time { .. } => None,
+        Target::FollowUp { .. } | Target::Lane { .. } | Target::Time { .. } => Judged::Unknown,
     }
 }
 
@@ -493,8 +673,10 @@ fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
 
-/// Why a machine-verified closure no longer holds, when a `fulfils` task
-/// it rested on is now definitely not complete on its target (a revert).
+/// Why a machine-verified closure no longer holds: one of its `fulfils`
+/// conditions is now definitely unmet (a task reverted or replaced, a pull
+/// request reopened, a commit gone from the target, a branch recreated). An
+/// observation that cannot be made is not invalidation.
 pub fn reverted(item: &Item, observer: &mut dyn Observer) -> Option<String> {
     let ItemState::Closed(evidence) = &item.state else {
         return None;
@@ -506,17 +688,8 @@ pub fn reverted(item: &Item, observer: &mut dyn Observer) -> Option<String> {
         if link.kind != LinkKind::Fulfils {
             continue;
         }
-        if let Target::Record { id, .. } = &link.target {
-            if let Some(view) = observer.task(id) {
-                if view.status != "complete" {
-                    return Some(format!(
-                        "the proof no longer holds: {id} is {} on {} at {}",
-                        view.status,
-                        view.reference,
-                        short(&view.tip)
-                    ));
-                }
-            }
+        if let Judged::Unmet(reason) = judge(link, observer) {
+            return Some(format!("the proof no longer holds: {reason}"));
         }
     }
     None

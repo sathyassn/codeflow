@@ -59,9 +59,8 @@ impl Role {
             "coordinator" => Ok(Self::Coordinator),
             "operator" => Ok(Self::Operator),
             lane if is_lane_id(lane) => Ok(Self::Lane(lane.to_string())),
-            other => Err(format!(
-                "`{}` is not a role: use coordinator, operator or a lane id LN-NNN",
-                crate::git::display_message(other)
+            _ => Err(format!(
+                "{ROLE_ENV} is not a role: use coordinator, operator or a lane id LN-NNN"
             )),
         }
     }
@@ -222,15 +221,20 @@ impl Actor {
 
     /// Form the actor from the environment.
     ///
-    /// An agent's shell (any harness marker set) can never act as the
-    /// operator: an operator's answer is recorded by the agent, with its
-    /// source, never as the operator.
+    /// The binding is cooperative ownership among actors that tell the truth
+    /// about themselves, never authentication: any process that can run
+    /// `codeflow` can set these variables.
+    ///
+    /// The operator role fails closed: it is accepted only from an
+    /// interactive terminal (`terminal`, standard input and error both a
+    /// terminal) in a shell no harness marks as an agent's. An agent's shell
+    /// records an operator's answer under its own role with its source.
     ///
     /// # Errors
     ///
     /// [`Unbound::Observer`] with no role set, or the reason the role is
     /// refused.
-    pub fn from_env(lookup: EnvLookup<'_>) -> Result<Self, Unbound> {
+    pub fn from_env(lookup: EnvLookup<'_>, terminal: bool) -> Result<Self, Unbound> {
         let read = |name: &str| {
             lookup(name)
                 .and_then(|value| value.into_string().ok())
@@ -248,6 +252,11 @@ impl Actor {
                 return Err(Unbound::Refused(format!(
                     "an agent cannot record as the operator ({marker} is set); record the operator's answer under your own role with --answer-source operator"
                 )));
+            }
+            if !terminal {
+                return Err(Unbound::Refused(
+                    "the operator role is accepted only from an interactive terminal; an agent records the operator's answer under its own role with --answer-source operator".into(),
+                ));
             }
         }
         let instance = match (&role, read(INSTANCE_ENV)) {
@@ -307,7 +316,7 @@ mod tests {
     fn no_role_is_an_observer() {
         let env = env_of(&[]);
         assert_eq!(
-            Actor::from_env(&|name| env.get(name).cloned()),
+            Actor::from_env(&|name| env.get(name).cloned(), true),
             Err(Unbound::Observer)
         );
     }
@@ -315,19 +324,27 @@ mod tests {
     #[test]
     fn an_agent_cannot_act_as_the_operator() {
         let env = env_of(&[(ROLE_ENV, "operator"), ("CLAUDECODE", "1")]);
-        let Err(Unbound::Refused(reason)) = Actor::from_env(&|name| env.get(name).cloned()) else {
+        let Err(Unbound::Refused(reason)) = Actor::from_env(&|name| env.get(name).cloned(), true)
+        else {
             panic!("an agent acted as the operator");
         };
         assert!(reason.contains("cannot record as the operator"), "{reason}");
         let env = env_of(&[(ROLE_ENV, "operator")]);
-        assert!(Actor::from_env(&|name| env.get(name).cloned()).is_ok());
+        assert!(Actor::from_env(&|name| env.get(name).cloned(), true).is_ok());
+        // Unsetting the marker is not enough: without a terminal the
+        // operator role fails closed.
+        let Err(Unbound::Refused(reason)) = Actor::from_env(&|name| env.get(name).cloned(), false)
+        else {
+            panic!("a non-interactive shell acted as the operator");
+        };
+        assert!(reason.contains("interactive terminal"), "{reason}");
     }
 
     #[test]
     fn a_lane_needs_instance_and_generation() {
         let env = env_of(&[(ROLE_ENV, "LN-001"), (INSTANCE_ENV, "seat-a")]);
         assert!(matches!(
-            Actor::from_env(&|name| env.get(name).cloned()),
+            Actor::from_env(&|name| env.get(name).cloned(), true),
             Err(Unbound::Refused(_))
         ));
         let env = env_of(&[
@@ -335,7 +352,7 @@ mod tests {
             (INSTANCE_ENV, "seat-a"),
             (GENERATION_ENV, "1"),
         ]);
-        let actor = Actor::from_env(&|name| env.get(name).cloned()).unwrap();
+        let actor = Actor::from_env(&|name| env.get(name).cloned(), true).unwrap();
         assert_eq!(actor.role, Role::Lane("LN-001".into()));
         assert_eq!(actor.recorded_by.harness, UNKNOWN);
     }

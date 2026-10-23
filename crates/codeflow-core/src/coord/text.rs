@@ -97,6 +97,51 @@ fn percent_decoded(value: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// A rejected or quoted value as a diagnostic may show it: the value itself
+/// when it is short, plain and not secret-shaped, otherwise a placeholder.
+/// A refusal never echoes a value that looks like a secret.
+#[must_use]
+pub fn shown(value: &str) -> String {
+    if check("value", value, 80, false).is_ok() {
+        crate::git::display_message(value)
+    } else {
+        "<value withheld>".to_string()
+    }
+}
+
+/// Replace every secret-shaped word of a message (split on spaces, quotes,
+/// backticks, brackets and commas) with `[redacted]`, so a diagnostic built
+/// from a parser's or the log's own text never carries one.
+#[must_use]
+pub fn scrub(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if !word.is_empty() {
+            let secret = check("word", word, usize::MAX, true)
+                .err()
+                .is_some_and(|reason| reason.contains("secret"));
+            out.push_str(if secret { "[redacted]" } else { word });
+            word.clear();
+        }
+    };
+    for c in message.chars() {
+        if c.is_whitespace()
+            || matches!(
+                c,
+                '`' | '"' | '\'' | ',' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+        {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 /// Replace a secret-shaped line with a marker, for the redacted snapshot.
 #[must_use]
 pub fn redact(value: &str) -> String {
@@ -176,6 +221,22 @@ mod tests {
         let error = check("title", &"x".repeat(SHORT + 1), SHORT, false).unwrap_err();
         assert!(error.contains("limit is 200"), "{error}");
         assert!(check_required("title", "  ", SHORT, false).is_err());
+    }
+
+    #[test]
+    fn diagnostics_never_echo_a_secret() {
+        let token = format!("ghp_{}", "d".repeat(36));
+        assert_eq!(shown(&token), "<value withheld>");
+        assert_eq!(shown("TSK-001"), "TSK-001");
+        let message = format!("unknown variant `{token}`, expected one of `a`");
+        let clean = scrub(&message);
+        assert!(!clean.contains(&token), "{clean}");
+        assert!(
+            clean.contains("[redacted]") && clean.contains("`a`"),
+            "{clean}"
+        );
+        let url = format!("https://x:{token}@github.com/o/r");
+        assert!(!scrub(&url).contains(&token));
     }
 
     #[test]

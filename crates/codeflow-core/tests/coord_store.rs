@@ -641,7 +641,7 @@ fn purge_removes_an_items_text_from_the_live_log() {
     record.description = "a private detail to purge".into();
     let id = add(&paths, &lead, record).unwrap();
     add(&paths, &lead, item("kept", "WS-001", "coordinator")).unwrap();
-    let purged = store::purge(&paths, &id, WAIT).unwrap();
+    let purged = store::purge(&paths, &lead, &id, WAIT).unwrap();
     assert_eq!(purged.lines, 1);
     let text = std::fs::read_to_string(&paths.events).unwrap();
     assert!(!text.contains("private detail"));
@@ -679,6 +679,7 @@ struct Fake {
     tasks: std::collections::BTreeMap<String, TaskView>,
     pull: Option<PullView>,
     branch: Option<bool>,
+    repository: Option<String>,
     now: u64,
 }
 
@@ -698,6 +699,9 @@ impl Observer for Fake {
     fn now(&self) -> u64 {
         self.now
     }
+    fn repository(&self) -> Option<String> {
+        self.repository.clone()
+    }
 }
 
 fn task_view(status: &str, claimed: bool, tip: &str) -> TaskView {
@@ -708,6 +712,7 @@ fn task_view(status: &str, claimed: bool, tip: &str) -> TaskView {
         reference: "origin/main".into(),
         tip: tip.into(),
         claimed,
+        accepted: status == "complete",
     }
 }
 
@@ -745,6 +750,8 @@ fn observed_item(
         last_check: None,
         proofs: Vec::new(),
         reopened: Vec::new(),
+        purged: Vec::new(),
+        baseline: Vec::new(),
         last_sequence: 0,
     };
     record.observed = due::observe_item(&probe, &folded, &[], fake);
@@ -791,7 +798,7 @@ fn a_prerequisite_task_changing_state_makes_the_item_due_and_never_closes_it() {
             "{status}: {found:?}"
         );
         // A prerequisite never closes the item.
-        assert!(due::fulfilment(&item, &mut fake).is_none());
+        assert!(due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).is_none());
     }
 }
 
@@ -946,7 +953,7 @@ fn only_a_fulfils_link_done_on_the_target_closes_and_a_revert_reopens() {
     );
     // Completion on a feature branch leaves the target's record as it was:
     // the observer reads the target tip only, so nothing closes.
-    assert!(due::fulfilment(&item, &mut fake).is_none());
+    assert!(due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).is_none());
     // A context link never closes either.
     let context = observed_item(
         &paths,
@@ -963,12 +970,12 @@ fn only_a_fulfils_link_done_on_the_target_closes_and_a_revert_reopens() {
     );
     fake.tasks
         .insert("TSK-002".into(), task_view("complete", false, "a"));
-    assert!(due::fulfilment(&context, &mut fake).is_none());
+    assert!(due::fulfilment(&context, &ledger(&paths).ledger, &mut fake).is_none());
     // Complete on the target closes, recording source, repository, target,
     // revision and time.
     fake.tasks
         .insert("TSK-001".into(), task_view("complete", false, "c0ffee"));
-    let proof = due::fulfilment(&item, &mut fake).unwrap();
+    let proof = due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).unwrap();
     assert_eq!(proof.kind, EvidenceKind::MachineVerified);
     assert_eq!(proof.target.as_deref(), Some("main"));
     assert_eq!(proof.revision.as_deref(), Some("c0ffee"));
@@ -1018,10 +1025,10 @@ fn a_branch_deletion_stays_open_until_deletion_evidence_exists() {
     // Unknown (offline, never asked) and present both keep it open.
     for observed in [None, Some(false)] {
         fake.branch = observed;
-        assert!(due::fulfilment(&item, &mut fake).is_none());
+        assert!(due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).is_none());
     }
     fake.branch = Some(true);
-    let proof = due::fulfilment(&item, &mut fake).unwrap();
+    let proof = due::fulfilment(&item, &ledger(&paths).ledger, &mut fake).unwrap();
     assert_eq!(proof.revision.as_deref(), Some("absent"));
 }
 
@@ -1145,4 +1152,419 @@ fn every_event_kind_is_documented_in_the_schema_reference() {
             "no {record} record section"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review round 1 (Codex F1 to F10, security F1 to F7): each reproduction
+// failed at 998dadb1e and passes here.
+// ---------------------------------------------------------------------------
+
+fn scope_change(lane: &str, text: &str) -> Draft {
+    Draft::new(
+        SubjectId::Given(lane.into()),
+        Data::LaneScopeChanged(codeflow_core::coord::schema::Scope {
+            slug: None,
+            scope: vec![text.into()],
+        }),
+    )
+}
+
+/// Codex F1: an operation of two events interrupted after the first
+/// complete line is finished by its retry, exactly once.
+#[test]
+fn an_interrupted_operation_is_finished_by_its_retry() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let operation = || {
+        let mut first = scope_change("LN-001", "first");
+        first.idempotency_key = Some("op-7".into());
+        vec![first, scope_change("LN-001", "second")]
+    };
+    let before = std::fs::read_to_string(&paths.events).unwrap();
+    store::commit(&paths, &lead, WAIT, |_| Ok(operation())).unwrap();
+    let after = std::fs::read_to_string(&paths.events).unwrap();
+    let mut lines = after[before.len()..].lines();
+    let (one, two) = (lines.next().unwrap(), lines.next().unwrap());
+    // The crash image: the first event whole, 15 bytes of the second.
+    std::fs::write(&paths.events, format!("{before}{one}\n{}", &two[..15])).unwrap();
+    let retried = store::commit(&paths, &lead, WAIT, |_| Ok(operation())).unwrap();
+    assert_eq!(
+        retried.envelopes.len(),
+        1,
+        "only the missing event is written"
+    );
+    let folded = ledger(&paths).ledger;
+    assert_eq!(folded.lanes["LN-001"].scope, vec!["second".to_string()]);
+    assert!(folded.keys.contains_key("op-7#0") && folded.keys.contains_key("op-7#1"));
+    // A second retry writes nothing.
+    let again = store::commit(&paths, &lead, WAIT, |_| Ok(operation())).unwrap();
+    assert!(again.envelopes.is_empty() && again.duplicate_of.is_some());
+}
+
+/// Security F5: a reused idempotency key with another payload or actor is
+/// refused, never silently dropped.
+#[test]
+fn a_reused_key_with_another_payload_or_actor_is_refused() {
+    let dir = repo();
+    let (paths, lead, lane) = bound(dir.path());
+    let keyed = |title: &str| Draft {
+        idempotency_key: Some("review-R1-F3".into()),
+        ..Draft::new(
+            SubjectId::NextFollowUp,
+            Data::ItemAdded(item(title, "WS-001", "coordinator")),
+        )
+    };
+    store::commit(&paths, &lead, WAIT, |_| Ok(vec![keyed("decoy")])).unwrap();
+    let error = store::commit(&paths, &lead, WAIT, |_| {
+        Ok(vec![keyed("rotate the deploy key")])
+    })
+    .unwrap_err();
+    assert!(matches!(error, CoordError::KeyConflict(_)), "{error:?}");
+    let error = store::commit(&paths, &lane, WAIT, |_| Ok(vec![keyed("decoy")])).unwrap_err();
+    assert!(matches!(error, CoordError::KeyConflict(_)), "{error:?}");
+    let same = store::commit(&paths, &lead, WAIT, |_| Ok(vec![keyed("decoy")])).unwrap();
+    assert!(same.duplicate_of.is_some());
+}
+
+/// Codex F2: completion without a passing acceptance block, a pinned UID
+/// missing or changed on the target, another repository, or a prerequisite
+/// still open never closes as machine-verified.
+#[test]
+fn only_accepted_identified_work_with_its_prerequisites_met_closes() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let mut fake = Fake {
+        now: coord::now_secs(),
+        ..Fake::default()
+    };
+    fake.tasks
+        .insert("TSK-001".into(), task_view("todo", false, "a"));
+    let fulfils = observed_item(
+        &paths,
+        &lead,
+        linked(LinkKind::Fulfils, task_target()),
+        &mut fake,
+    );
+    let mut unaccepted = task_view("complete", false, "b");
+    unaccepted.accepted = false;
+    fake.tasks.insert("TSK-001".into(), unaccepted);
+    assert!(due::fulfilment(&fulfils, &ledger(&paths).ledger, &mut fake).is_none());
+    let mut no_uid = task_view("complete", false, "b");
+    no_uid.uid = None;
+    fake.tasks.insert("TSK-001".into(), no_uid);
+    assert!(due::fulfilment(&fulfils, &ledger(&paths).ledger, &mut fake).is_none());
+    fake.tasks
+        .insert("TSK-001".into(), task_view("complete", false, "b"));
+    fake.repository = Some("github.com/other/repo".into());
+    assert!(due::fulfilment(&fulfils, &ledger(&paths).ledger, &mut fake).is_none());
+    fake.repository = None;
+    assert!(due::fulfilment(&fulfils, &ledger(&paths).ledger, &mut fake).is_some());
+    // A condition that asks for more than the fulfilled task: an open
+    // prerequisite follow-up keeps the item open.
+    let other = add(
+        &paths,
+        &lead,
+        item("release notes reviewed", "WS-001", "coordinator"),
+    )
+    .unwrap();
+    let mut record = linked(LinkKind::Fulfils, task_target());
+    record.links.push(Link {
+        kind: LinkKind::Prerequisite,
+        target: Target::FollowUp { id: other.clone() },
+    });
+    let both = observed_item(&paths, &lead, record, &mut fake);
+    assert!(due::fulfilment(&both, &ledger(&paths).ledger, &mut fake).is_none());
+    act(&paths, &lead, &other, Data::ItemClosed(asserted())).unwrap();
+    let both = ledger(&paths).ledger.items[&both.id].clone();
+    assert!(due::fulfilment(&both, &ledger(&paths).ledger, &mut fake).is_some());
+}
+
+/// Codex F3: a closure on a branch deletion, a commit or a pull request is
+/// reopened when that proof is definitely invalidated, and not when the
+/// observation is unknown.
+#[test]
+fn every_invalidated_machine_proof_reopens_and_unknown_does_not() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let mut fake = Fake {
+        now: coord::now_secs(),
+        branch: Some(true),
+        ..Fake::default()
+    };
+    let branch = observed_item(
+        &paths,
+        &lead,
+        linked(
+            LinkKind::Fulfils,
+            Target::Branch {
+                name: "task/x".into(),
+                remote: "origin".into(),
+                repository: "local".into(),
+            },
+        ),
+        &mut fake,
+    );
+    let proof = due::fulfilment(&branch, &ledger(&paths).ledger, &mut fake).unwrap();
+    act(&paths, &lead, &branch.id, Data::ItemClosed(proof)).unwrap();
+    let closed = ledger(&paths).ledger.items[&branch.id].clone();
+    fake.branch = None;
+    assert!(
+        due::reverted(&closed, &mut fake).is_none(),
+        "unknown is not invalidation"
+    );
+    fake.branch = Some(false);
+    let reason = due::reverted(&closed, &mut fake).unwrap();
+    assert!(reason.contains("present"), "{reason}");
+    // A pull request reopened after its merge, and one merged into a work
+    // branch, are unmet.
+    fake.pull = Some(PullView {
+        state: "merged".into(),
+        checks: "passed".into(),
+        base: "main".into(),
+        merge_commit: Some("m".into()),
+    });
+    let pr = observed_item(
+        &paths,
+        &lead,
+        linked(
+            LinkKind::Fulfils,
+            Target::PullRequest {
+                number: 9,
+                repository: "local".into(),
+            },
+        ),
+        &mut fake,
+    );
+    let proof = due::fulfilment(&pr, &ledger(&paths).ledger, &mut fake).unwrap();
+    act(&paths, &lead, &pr.id, Data::ItemClosed(proof)).unwrap();
+    let closed = ledger(&paths).ledger.items[&pr.id].clone();
+    fake.pull = Some(PullView {
+        state: "open".into(),
+        checks: "pending".into(),
+        base: "main".into(),
+        merge_commit: None,
+    });
+    assert!(due::reverted(&closed, &mut fake).is_some());
+    fake.pull = Some(PullView {
+        state: "merged".into(),
+        checks: "passed".into(),
+        base: "feature/x".into(),
+        merge_commit: Some("m".into()),
+    });
+    let reopened = ledger(&paths).ledger.items[&pr.id].clone();
+    assert!(
+        due::reverted(&reopened, &mut fake).is_some(),
+        "a work-branch merge is no proof"
+    );
+}
+
+/// Codex F4, security F4: purge removes every free-text field of the item
+/// from the live log, its keys and quarantine, records who purged it, and a
+/// second item with its own source reference can be purged too.
+#[test]
+fn purge_removes_every_free_text_field_and_keeps_items_distinct() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let mut record = item("PRIVATE-TITLE", "WS-001", "coordinator");
+    record.description = "PRIVATE-DESCRIPTION".into();
+    record.source = Source::Review;
+    record.source_reference = Some("PRIVATE-REF-1".into());
+    record.rejected_suggestions = vec![codeflow_core::coord::schema::Rejected {
+        reference: "PRIVATE-REJREF".into(),
+        reason: "PRIVATE-REJREASON".into(),
+    }];
+    let first = store::commit(&paths, &lead, WAIT, |_| {
+        Ok(vec![Draft {
+            idempotency_key: Some("PRIVATE-KEY".into()),
+            comment: Some("PRIVATE-COMMENT".into()),
+            ..Draft::new(SubjectId::NextFollowUp, Data::ItemAdded(record))
+        }])
+    })
+    .unwrap()
+    .envelopes[0]
+        .subject_id
+        .clone();
+    act(
+        &paths,
+        &lead,
+        &first,
+        Data::ItemChecked(codeflow_core::coord::schema::ItemCheck {
+            observed: "PRIVATE-OBSERVED".into(),
+            next_check: coord::format_time(coord::now_secs() + 60),
+            observations: vec![codeflow_core::coord::schema::Observation {
+                link: "PRIVATE-OBSLINK".into(),
+                state: "PRIVATE-STATE".into(),
+                version: None,
+            }],
+            answer_source: Some("PRIVATE-ANSWERSRC".into()),
+        }),
+    )
+    .unwrap();
+    let mut evidence = asserted();
+    evidence.reference = "https://example.invalid/PRIVATE-EVIDENCE-URL".into();
+    act(&paths, &lead, &first, Data::ItemClosed(evidence)).unwrap();
+    // A torn fragment of the item in quarantine.
+    std::fs::create_dir_all(&paths.quarantine).unwrap();
+    std::fs::write(
+        paths.quarantine.join("torn-1-x.bin"),
+        format!("{{\"subject_id\":\"{first}\",\"data\":\"PRIVATE-TORN\""),
+    )
+    .unwrap();
+    let mut second = item("second", "WS-001", "coordinator");
+    second.source = Source::Review;
+    second.source_reference = Some("PRIVATE-REF-2".into());
+    let second = add(&paths, &lead, second).unwrap();
+    let purged = store::purge(&paths, &lead, &first, WAIT).unwrap();
+    assert_eq!(purged.quarantine_removed, 1);
+    store::purge(&paths, &lead, &second, WAIT).unwrap();
+    let mut everything = String::new();
+    for entry in walk(&paths.dir) {
+        everything.push_str(&String::from_utf8_lossy(&std::fs::read(entry).unwrap()));
+    }
+    assert!(!everything.contains("PRIVATE"), "text left behind");
+    let folded = ledger(&paths);
+    assert!(folded.damage.is_none(), "{:?}", folded.damage);
+    assert_eq!(folded.ledger.items[&first].purged.len(), 1);
+    assert_eq!(folded.ledger.items[&first].purged[0].1, "coordinator");
+}
+
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Codex F5: purge is judged under the lock; a holder that handed the item
+/// over can no longer purge it, and its text is unchanged.
+#[test]
+fn purge_by_a_former_holder_is_refused_under_the_lock() {
+    let dir = repo();
+    let (paths, lead, lane) = bound(dir.path());
+    let id = add(&paths, &lane, item("lane item", "WS-001", "LN-001")).unwrap();
+    act(
+        &paths,
+        &lane,
+        &id,
+        Data::ItemHandedOver(codeflow_core::coord::schema::HandOver {
+            to_holder: "coordinator".into(),
+            to_stream: None,
+        }),
+    )
+    .unwrap();
+    let before = std::fs::read(&paths.events).unwrap();
+    let error = store::purge(&paths, &lane, &id, WAIT).unwrap_err();
+    assert!(format!("{error}").contains("only the holder"), "{error}");
+    assert_eq!(before, std::fs::read(&paths.events).unwrap());
+    store::purge(&paths, &lead, &id, WAIT).unwrap();
+}
+
+/// Codex F8: an existing public ledger becomes private on the next write.
+#[cfg(unix)]
+#[test]
+fn an_existing_public_ledger_is_made_private_on_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let set = |path: &Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set(&paths.dir, 0o755);
+    set(&paths.events, 0o644);
+    set(&paths.counters, 0o644);
+    add(&paths, &lead, item("after", "WS-001", "coordinator")).unwrap();
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&paths.dir), 0o700);
+    assert_eq!(mode(&paths.events), 0o600);
+    assert_eq!(mode(&paths.counters), 0o600);
+}
+
+/// Codex F7, security F6: a refusal or a damage diagnostic never echoes a
+/// secret-shaped value.
+#[test]
+fn refusals_and_damage_never_echo_a_secret() {
+    let dir = repo();
+    let (paths, lead, _) = bound(dir.path());
+    let token = format!("ghp_{}", "q".repeat(36));
+    let resolver = codeflow_core::coord::reference::Resolver::new(dir.path());
+    for written in [
+        format!("context:{token}"),
+        format!("context:https://x:{token}@github.com/o/r"),
+        format!("{token}:TSK-001"),
+        format!("prerequisite:time:{token}"),
+    ] {
+        let error = resolver.link(&written).unwrap_err();
+        assert!(!error.contains(&token), "echoed: {error}");
+    }
+    add(&paths, &lead, item("a", "WS-001", "coordinator")).unwrap();
+    plant(&paths, |mut lines| {
+        let mut last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+        last["sequence"] = (last["sequence"].as_u64().unwrap() + 1).into();
+        last["subject_id"] = "FU-002".into();
+        last["data"]["waits_on"] = serde_json::json!([token.clone()]);
+        lines.push(last.to_string());
+        let mut bad: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+        bad["event"] = token.clone().into();
+        lines.push(bad.to_string());
+        lines
+    });
+    let error = add(&paths, &lead, item("b", "WS-001", "coordinator")).unwrap_err();
+    assert!(!format!("{error}").contains(&token), "echoed: {error}");
+}
+
+/// Security F7: a branch link replayed with a remote the clone does not
+/// configure is never contacted.
+#[test]
+fn an_unconfigured_remote_is_never_contacted() {
+    let dir = repo();
+    let mut observer = due::RepoObserver::new(dir.path(), true);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        observer.branch_deleted("https://attacker.example/x", "main"),
+        None
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// Security F3: a task completed on a work branch that the record itself
+/// names as its target is never read as complete; only a landing line is.
+#[test]
+fn a_work_branch_named_as_target_is_never_a_target() {
+    let dir = repo();
+    let root = dir.path();
+    let record = |status: &str, target: &str| {
+        format!("---\nid: TSK-001\nuid: u-1\nepic_id: null\nstandalone_reason: x\nintegration_target: \"{target}\"\ntitle: t\nstatus: {status}\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-10-01\n---\n\n## Description\nx\n")
+    };
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        record("todo", "main"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan"]);
+    git(root, &["checkout", "-qb", "fix/TSK-001-fixture"]);
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        record("complete", "fix/TSK-001-fixture"),
+    )
+    .unwrap();
+    git(root, &["commit", "-qam", "docs: complete on the branch"]);
+    let tasks = codeflow_core::workgraph::readiness::target_tasks(root).unwrap();
+    assert_eq!(
+        tasks.get("TSK-001").map(|task| task.status.as_str()),
+        Some("todo")
+    );
+    assert!(!codeflow_core::workgraph::readiness::is_landing_target(
+        "fix/TSK-001-fixture"
+    ));
+    assert!(codeflow_core::workgraph::readiness::is_landing_target(
+        "origin/integration/EPC-025-x"
+    ));
 }

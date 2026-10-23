@@ -700,14 +700,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
-    // TSK-422: The log is JSON Lines, which is UTF-8; purge runs only after the whole log folded cleanly, so no byte is replaced.
-    (
-        "codeflow-core/src/coord/store.rs",
-        "purge",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
     // TSK-422: Free text percent-decoded only to scan it for secrets; the decoded form is never stored or shown.
     (
         "codeflow-core/src/coord/text.rs",
@@ -5771,6 +5763,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/worktree_inventory.rs",
         "inventory",
         "trim",
+        1,
+        "display",
+    ),
+    // TSK-422: Splits a diagnostic into words only to withhold secret-shaped ones; the message is shown, never judged.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "scrub",
+        "is_whitespace",
         1,
         "display",
     ),

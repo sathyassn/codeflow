@@ -14,6 +14,7 @@
 //! close       the holder, the operator
 //! drop        the holder, the stream's coordinator (a reason always), the operator
 //! reopen      the holder, the stream's coordinator, the operator
+//! purge       the holder, the operator
 //! ```
 //!
 //! The holder is `coordinator` (the bound coordinator of the item's stream;
@@ -64,19 +65,21 @@ pub struct Item {
     pub proofs: Vec<Evidence>,
     /// Every reopen reason, in order.
     pub reopened: Vec<String>,
+    /// Each purge of the item's text: when and by which role.
+    pub purged: Vec<(String, String)>,
+    /// The links' states last recorded (at add, update or check): a change
+    /// from these makes the item due.
+    pub baseline: Vec<super::schema::Observation>,
     /// The sequence of the last event on this item.
     pub last_sequence: u64,
 }
 
 impl Item {
-    /// The links' states the item last recorded: at its last check, or when
-    /// it was added or updated.
+    /// The links' states the item last recorded: at the latest of its add,
+    /// a dependency update and its last check.
     #[must_use]
     pub fn baseline(&self) -> &[super::schema::Observation] {
-        match &self.last_check {
-            Some((_, check)) if !check.observations.is_empty() => &check.observations,
-            _ => &self.record.observed,
-        }
+        &self.baseline
     }
 }
 
@@ -121,8 +124,9 @@ pub struct Ledger {
     pub items: BTreeMap<String, Item>,
     pub streams: BTreeMap<String, Stream>,
     pub lanes: BTreeMap<String, Lane>,
-    /// Idempotency key to the sequence that recorded it.
-    pub keys: BTreeMap<String, u64>,
+    /// Idempotency key to the sequence that recorded it and the digest of
+    /// the operation it recorded.
+    pub keys: BTreeMap<String, (u64, String)>,
     /// The highest follow-up and lane numbers seen in the log.
     pub max_follow_up: u64,
     pub max_lane: u64,
@@ -270,7 +274,7 @@ impl Ledger {
             return Err("the data does not fit the event".into());
         }
         if let Some(key) = &envelope.idempotency_key {
-            if let Some(sequence) = self.keys.get(key) {
+            if let Some((sequence, _)) = self.keys.get(key) {
                 return Err(format!(
                     "the idempotency key was already recorded at sequence {sequence}"
                 ));
@@ -329,11 +333,21 @@ impl Ledger {
                     record.awaiting_operator =
                         Some(condition.clone()).filter(|condition| !condition.is_empty());
                 }
+                let dependencies_changed = update.links.is_some()
+                    || update.no_link_reason.is_some()
+                    || update.waits_on.is_some();
                 if let Some(observed) = &update.observed {
                     record.observed.clone_from(observed);
+                } else if dependencies_changed {
+                    // New dependencies with no recorded states: nothing old
+                    // may stand in as their baseline.
+                    record.observed.clear();
                 }
                 self.check_references(subject, &record)?;
                 let item = self.items.get_mut(subject).ok_or("vanished")?;
+                if update.observed.is_some() || dependencies_changed {
+                    item.baseline.clone_from(&record.observed);
+                }
                 item.record = record;
             }
             Data::ItemChecked(check) => {
@@ -345,6 +359,9 @@ impl Ledger {
                 )?;
                 let item = self.items.get_mut(subject).ok_or("vanished")?;
                 item.record.next_check.clone_from(&check.next_check);
+                if !check.observations.is_empty() {
+                    item.baseline.clone_from(&check.observations);
+                }
                 item.last_check = Some((envelope.recorded_at.clone(), check.clone()));
             }
             Data::ItemHandedOver(hand) => {
@@ -389,6 +406,20 @@ impl Ledger {
                     disposition: drop.disposition.clone(),
                 };
             }
+            Data::ItemPurged(_) => {
+                let bound = self.bind(by)?;
+                let item = self
+                    .items
+                    .get(subject)
+                    .ok_or_else(|| format!("{subject} is not in this ledger"))?;
+                require(
+                    holds(&bound, item),
+                    "only the holder or the operator purges a follow-up",
+                )?;
+                let item = self.items.get_mut(subject).ok_or("vanished")?;
+                item.purged
+                    .push((envelope.recorded_at.clone(), by.role.clone()));
+            }
             Data::ItemReopened(reason) => {
                 let bound = self.bind(by)?;
                 let item = self
@@ -417,7 +448,14 @@ impl Ledger {
             lane.last_sequence = envelope.sequence;
         }
         if let Some(key) = &envelope.idempotency_key {
-            self.keys.insert(key.clone(), envelope.sequence);
+            let subject = Some(envelope.subject_id.as_str());
+            let digest = operation_digest(
+                envelope.event,
+                subject,
+                &envelope.recorded_by.actor_instance,
+                &envelope.data,
+            );
+            self.keys.insert(key.clone(), (envelope.sequence, digest));
         }
         self.last_sequence = envelope.sequence;
         Ok(())
@@ -473,6 +511,8 @@ impl Ledger {
                 last_check: None,
                 proofs: Vec::new(),
                 reopened: Vec::new(),
+                purged: Vec::new(),
+                baseline: record.observed.clone(),
                 last_sequence: envelope.sequence,
             },
         );
@@ -833,6 +873,38 @@ impl Ledger {
             )),
         }
     }
+}
+
+/// The digest an idempotency key is bound to: the event kind, the subject
+/// (except for an event that reserves its subject), the actor instance and
+/// the data, without the fields a retry recomputes (schedules and
+/// observations).
+#[must_use]
+pub fn operation_digest(
+    kind: super::schema::EventKind,
+    subject: Option<&str>,
+    actor_instance: &str,
+    data: &serde_json::Value,
+) -> String {
+    use super::schema::EventKind;
+    const VOLATILE: [&str; 4] = ["next_check", "observed", "observations", "observed_at"];
+    let mut data = data.clone();
+    if let Some(object) = data.as_object_mut() {
+        for key in VOLATILE {
+            object.remove(key);
+        }
+    }
+    let subject = match kind {
+        EventKind::ItemAdded | EventKind::LaneOpened => None,
+        _ => subject,
+    };
+    let canonical = serde_json::json!({
+        "event": kind.as_str(),
+        "subject": subject,
+        "actor": actor_instance,
+        "data": data,
+    });
+    crate::scaffold::sha256_hex(canonical.to_string().as_bytes())
 }
 
 fn require(condition: bool, message: &str) -> Result<(), String> {

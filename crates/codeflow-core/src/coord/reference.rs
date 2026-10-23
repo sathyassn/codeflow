@@ -185,7 +185,7 @@ impl Target {
 }
 
 fn shown(text: &str) -> String {
-    crate::git::display_message(text)
+    super::text::shown(text)
 }
 
 impl Link {
