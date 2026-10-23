@@ -78,6 +78,7 @@ fields are refused.
 | `event` | string | One of the event kinds below. |
 | `subject_id` | string | `FU-NNN` for follow-up events, `LN-NNN` for lane events, `WS-NNN` for stream and coordinator events. |
 | `sequence` | integer | Assigned under the lock; exactly one above the previous line. Order comes from this alone. |
+| `purged` | boolean, optional | `true` on an event `follow purge` rewrote: its key and source reference are digests. |
 | `recorded_at` | string | UTC, `YYYY-MM-DDTHH:MM:SSZ`, for people; never for order. |
 | `recorded_by` | object | Who recorded it; see below. |
 | `comment` | string, optional | Free text, at most 1,000 characters. |
@@ -88,9 +89,10 @@ fields are refused.
 `recorded_by` has `role` (`coordinator`, a lane id or `operator`),
 `actor_instance` (always), `generation` (a coordinator's or lane's claim
 generation), `stream` (a coordinator's stream), and `harness`, `model` and
-`session`, each written as `unknown` when it is not known. An agent's shell
-can never record as the operator; it records an operator's answer under its
-own role with `answer_source`.
+`session`, each written as `unknown` when it is not known. A shell that
+carries a harness's agent marker cannot record as the operator; it records
+an operator's answer under its own role with `answer_source`. That check is
+not authentication: see "The operator" under [The command](#the-command).
 
 ## Records
 
@@ -110,6 +112,7 @@ cold reader.
 | `holder` | yes | `coordinator` (the stream's coordinator, no lane) or a lane id. |
 | `links` | one of these two | Typed links: `context`, `prerequisite` or `fulfils`, each to a target below. |
 | `no_link_reason` | one of these two | Why it links to nothing. |
+| `schedule` | no | The schedule the adder asked for (`30m`, a UTC time); part of the operation's identity. |
 | `next_check` | yes | The effective next check, UTC; the default is 10 minutes after the add. An item that waits on a prerequisite is rechecked at least daily. |
 | `waits_on` | no | Follow-up or lane ids, possibly another stream's; read-only. |
 | `awaiting_operator` | no | A condition the operator must settle; never a holder. |
@@ -303,14 +306,26 @@ No fields. Recorded by the holder or the operator.
   link is done on its target and every prerequisite and `waits_on` id it
   declares is met: the task `complete`, with an acceptance block that passes
   the acceptance rules and is bound to its reviewed commit as CI binds a
-  completion, on the tip of the landing line its record declares, with the
-  UID the link pinned. A landing line is the remote-tracking ref of a remote
-  this clone configures, for `main`, `master` or an `integration/EPC-NNN-...`
-  line whose epic the default target holds; a local branch never counts,
-  whatever its name. A pull request counts when merged into such a line; a commit in the
-  target; a branch shown deleted by a remote this clone configures. A link
-  to another repository, a completion on a work branch and an observation
-  that cannot be made never count. The `done_when` text is for people; the
+  completion at the head that carried it, on the tip of the landing line its
+  record declares, with the UID the link pinned. A landing line is the one
+  remote-tracking ref the declared target names, by the same remote rules
+  `work start` uses (`origin/main` is origin's, never another remote's; a
+  bare name is its local branch's upstream remote, or `origin` when there
+  is no local branch; an absent tracking ref, or a local branch with no
+  upstream, is unknown), for `main`, `master` or an `integration/`
+  line that a task record on the default target names as its target. A
+  local branch never counts, nor a pushed line no record on the default
+  target names. A pull request counts when the host reports it merged into
+  such a line; a commit when it is in the default work target; a branch when
+  a remote this clone configures shows it deleted. A link to another
+  repository, a completion on a work branch and an observation that cannot
+  be made never count.
+- **Clones without a remote.** Task-completion proof needs a configured
+  remote's tracking ref, so in a clone with no remote a task link never
+  closes on its own. Commit proof is the stated exception, in line with the
+  ledger's clone-local scope: it is judged against the default work target,
+  which in such a clone is its local default branch. Pull request proof
+  comes from the host. Asserted closure by the holder is always available. The `done_when` text is for people; the
   machine condition is the links. `follow close` records asserted evidence.
 - **Reopening.** A later `follow check` reopens a machine-verified closure
   whose condition is now definitely unmet: the task reverted, replaced or no
@@ -322,10 +337,11 @@ No fields. Recorded by the holder or the operator.
   output open (killed with its process group); output is capped at 1 MiB.
   One that does not answer counts as unknown. A branch link contacts only a
   remote this clone configures, over https or ssh, with the stock upload
-  pack.
+  pack and the stock ssh client.
 - **Idempotency.** A key is bound to the operation's kind, subject, actor
-  and content (only fields a retry recomputes, such as an add's default
-  schedule, are left out). The same key and content again records nothing;
+  and content. Only fields a retry recomputes are left out: an add's
+  absolute next check is, but the schedule it was asked for (`--next-check
+  30m`) is content. The same key and content again records nothing;
   the same key with other content or another actor is refused (exit 7). A
   key whose item was purged is acknowledged without writing anything. An operation of
   several events gives each its own key, so a retry after an interruption
@@ -363,10 +379,16 @@ No fields. Recorded by the holder or the operator.
   the lock) replaces every free-text string of the item's events with
   `[purged]`, and its source reference and idempotency keys with digests
   that keep their identity without their text, so a stale retry is still
-  recognised and the same source is still a duplicate. It keeps ids, link
+  recognised and the same source is still a duplicate. Each rewritten event
+  carries `"purged": true`; that flag, never a text prefix, marks its
+  identity as purge-made, so user text that looks like a digest is still
+  purged and a repeated purge changes nothing more. It keeps ids, link
   identities, times and order, removes only the item's own lines from
-  quarantined fragments (other items' lines stay), and records an
-  `item_purged` event with who and when, never the text.
+  quarantined fragments (judged by each line's `subject_id`, in any
+  spacing, even beside a damaged byte; other items' lines stay byte for
+  byte), names any fragment it cannot judge instead of claiming it purged,
+  and records an `item_purged` event with who and when, never the text. The
+  operator may also purge an item that survives only in quarantine.
 - On a write, an existing ledger directory or file must belong to the user;
   group and other access is removed. A failed directory sync is reported,
   never ignored.
