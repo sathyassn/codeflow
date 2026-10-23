@@ -1486,6 +1486,40 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // A reader error blocks active integrity unless authority or integrity
+    // already denies it. Inactive integrity retains independent branch checks.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "evaluate_report_with_runners",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // Discovery has already failed. These optional reads only choose whether
+    // its refusal names worktree repair; failure retains the marker refusal.
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "discovery_error",
+        "obtain-absent:Repository::open",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "discovery_error",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
+    // A failed probe does not skip a directory: contains_git_directory keeps
+    // walking it, propagating metadata and read_dir errors rather than allowing.
+    (
+        "crates/codeflow-core/src/hooks/repo.rs",
+        "same_checkout_root",
+        "obtain-absent:Repository::open",
+        1,
+        "unproven",
+    ),
     // Missing or non-Unicode HOME leaves the path unresolved and refused;
     // no empty value or alternate path is substituted after a decode error.
     (
@@ -6102,6 +6136,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "ErrorKind::NotFound", 1, "Only native NotFound marks an include missing; Git silently skips that file and doctor retains and names its missing inventory entry. Other metadata errors remain cannot verify."),
@@ -6185,6 +6220,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "contains_git_directory", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated before their types select traversal; missing targets require cannot_exist proof."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_dir", 2, "Target metadata and directory entry file_type are obtained with errors propagated; only their already obtained types select traversal."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "hidden_checkout_under", "is_file", 1, "Marker absence is proven first and metadata errors propagate; its obtained type selects gitfile parsing."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open_checkout", "is_dir", 1, "Marker metadata was obtained with errors propagated; this tests its type, not its existence."),
     ("crates/codeflow-core/src/hooks/repo.rs", "registered_marker", "is_file", 1, "Registration symlink metadata is read with errors propagated; only a regular file is accepted, so a symlink or another type fails closed before absence is judged."),
     ("crates/codeflow-core/src/hooks/repo.rs", "read_registration", "is_file", 1, "Marker metadata was obtained with errors propagated; the type selects the physical gitfile parent cross-check."),

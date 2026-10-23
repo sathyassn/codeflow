@@ -26,6 +26,9 @@ use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
+pub(crate) mod line_home;
+mod runners;
+
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
 /// empty means the current branch's PR) to its base branch name, when it can
 /// be determined. Returns `None` on any doubt — an unreachable API, an
@@ -487,15 +490,37 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 
 /// Evaluate a command using the tool payload's working directory for paths.
 #[must_use]
-#[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
+    evaluate_report_with_runners(command, ctx, cwd, true)
+}
+
+#[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
+fn evaluate_report_with_runners(
+    command: &str,
+    ctx: &GuardContext<'_>,
+    cwd: &Path,
+    read_runners: bool,
+) -> Evaluation {
     let _facts = super::edit_guard::RepoFactsScope::enter();
+    // `~` and `$HOME` name the home the line assigns before them (TSK-379).
+    let home = line_home::read(command);
+    let _home = line_home::Scope::enter(command, &home);
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
+    violations.extend(line_home::unread_violation(
+        &home,
+        ctx.policy.hook_integrity,
+    ));
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
     branches.line = command.to_string();
-    let expanded = expand_commands_read(command);
+    // Disabling hook integrity must not drop the independent branch checks
+    // that already read inline Git payloads through the generic expander.
+    let expanded = if ctx.policy.hook_integrity.is_active() {
+        expand_shell_commands(command)
+    } else {
+        expand_commands_read(command)
+    };
     let segments = &expanded.segments;
     // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
     // top-level command and `None` for one nested in a substitution or a
@@ -668,6 +693,45 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             }
         }
     }
+    if read_runners {
+        match runners::read(command, cwd) {
+            Ok(bodies) => {
+                for body in bodies {
+                    let Some(directory) = body.directory.to_str() else {
+                        violations.push(Violation::always_blocking(
+                            "git.policy_authority",
+                            "cannot represent the Git runner directory without losing path bytes"
+                                .to_string(),
+                            "use a checkout path the command reader can represent exactly",
+                        ));
+                        continue;
+                    };
+                    let nested = format!(
+                        "cd {} && {}",
+                        quote_words(&[directory.to_string()]),
+                        body.command
+                    );
+                    let judged = evaluate_report_with_runners(&nested, ctx, cwd, false);
+                    violations.extend(judged.violations);
+                    notes.extend(judged.notes);
+                }
+            }
+            Err(why)
+                if ctx.policy.hook_integrity.is_active()
+                    && !violations.iter().any(|finding| {
+                        finding.level == PolicyLevel::Block
+                            && matches!(
+                                finding.rule.as_str(),
+                                "git.policy_authority" | "git.hook_integrity"
+                            )
+                    }) =>
+            {
+                violations.push(runners::unread(&why));
+            }
+            Err(_) => {}
+        }
+    }
+
     report.notes = notes;
     report
 }
@@ -1782,17 +1846,13 @@ fn unknown_dir_name_violation(
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
-pub(crate) fn token_integrity_path(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+pub(crate) fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
     // Each word brace expansion can make is judged (TSK-216 round 16).
     let Some(words) = word_readings(token) else {
-        return Some(BRACE_UNREAD);
+        return Some(BRACE_UNREAD.to_string());
     };
     words
         .iter()
@@ -1800,11 +1860,7 @@ pub(crate) fn token_integrity_path(
 }
 
 /// [`token_integrity_path`] for one word after brace expansion.
-fn token_integrity_path_spelled(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+fn token_integrity_path_spelled(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
@@ -1813,11 +1869,13 @@ fn token_integrity_path_spelled(
     // filled in at run time counts inside an enforcement directory it
     // follows (`alias/$x` with `alias` linked to `.codeflow`).
     if let Some(rest) = unknown_tilde_rest(token) {
-        return word_could_name(rest).or_else(|| rest.is_empty().then_some(BRACE_UNREAD_DIR));
+        return word_could_name(rest)
+            .or_else(|| rest.is_empty().then_some(BRACE_UNREAD_DIR))
+            .map(str::to_string);
     }
     if let Some(tail) = unresolved_tail(token) {
         if let Some(p) = word_could_name(tail) {
-            return Some(p);
+            return Some(p.to_string());
         }
         if tail.is_empty() {
             let cut = token
@@ -1829,7 +1887,7 @@ fn token_integrity_path_spelled(
                     && unresolved_tail(dir).is_none()
                     && in_enforcement_dir(&integrity_shell_path(dir, cwd)).unwrap_or(true)
                 {
-                    return Some("repository enforcement files");
+                    return Some("repository enforcement files".to_string());
                 }
             }
         }
@@ -1841,8 +1899,8 @@ fn token_integrity_path_spelled(
             return None;
         }
         match glob_integrity(token, cwd, payload_cwd) {
-            Ok(found) => found.map(|_| "repository enforcement files"),
-            Err(stop) => Some(stop.reason()),
+            Ok(found) => found.map(|_| "repository enforcement files".to_string()),
+            Err(stop) => Some(stop.reason().to_string()),
         }
     })
 }
@@ -1884,7 +1942,7 @@ const BRACE_UNREAD_DIR: &str =
 /// valid UTF-8 has no honest token (its storage key holds a NUL and resolves
 /// to nothing), so the file-system checks run on the exact path, links
 /// followed (OS text rule, issue 79).
-fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     // Slash conversion must not turn a verbatim drive marker into a UNC
     // server named `?`. Read the plain drive spelling before converting.
     let shown =
@@ -1898,12 +1956,12 @@ fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'stati
         cwd.join(path)
     };
     if super::edit_guard::repository_authority_target(&exact, payload_cwd, true) {
-        return Some(super::edit_guard::AUTHORITY_PATH);
+        return Some(super::edit_guard::AUTHORITY_PATH.to_string());
     }
     match super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true) {
-        Ok(true) => Some("repository enforcement files"),
+        Ok(true) => Some("repository enforcement files".to_string()),
         Ok(false) => None,
-        Err(_) => Some("repository enforcement paths (cannot read repository state)"),
+        Err(error) => Some(error),
     }
 }
 
@@ -1914,12 +1972,10 @@ pub(crate) fn resolved_path_integrity(
     cwd: &Path,
     payload_cwd: &Path,
 ) -> Option<String> {
-    path_integrity(path, cwd, payload_cwd)
-        .map(str::to_string)
-        .or_else(|| {
-            checkout_under(path, cwd, payload_cwd, None)
-                .map(|checkout| format!("the registered worktree {}", checkout.description()))
-        })
+    path_integrity(path, cwd, payload_cwd).or_else(|| {
+        checkout_under(path, cwd, payload_cwd, None)
+            .map(|checkout| format!("the registered worktree {}", checkout.description()))
+    })
 }
 
 /// Interpreter operands share the writer's file checks. A project location
@@ -1932,58 +1988,55 @@ pub(crate) fn interpreter_path_integrity(
     payload_cwd: &Path,
     code_literal: Option<&str>,
 ) -> Option<String> {
-    path_integrity(path, cwd, payload_cwd)
-        .map(str::to_string)
-        .or_else(
-            || match super::edit_guard::is_own_checkout_location(path, cwd, code_literal) {
-                Ok(true) => None,
-                Ok(false) => checkout_under(path, cwd, payload_cwd, None)
-                    .map(|checkout| format!("the registered worktree {}", checkout.description())),
-                Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
-            },
-        )
+    path_integrity(path, cwd, payload_cwd).or_else(|| {
+        match super::edit_guard::is_own_checkout_location(path, cwd, code_literal) {
+            Ok(true) => None,
+            Ok(false) => checkout_under(path, cwd, payload_cwd, None)
+                .map(|checkout| format!("the registered worktree {}", checkout.description())),
+            Err(why) => Some(format!("cannot read the interpreter's checkout: {why}")),
+        }
+    })
 }
 
 /// [`token_integrity_path`] for the token as written, without expanding a
 /// glob in it.
-fn token_integrity_path_literal(
-    token: &str,
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
+fn token_integrity_path_literal(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if token.is_empty() {
         return None;
     }
     let path = integrity_shell_path(token, cwd);
     if super::edit_guard::global_git_config_target(&path, payload_cwd) {
-        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY);
+        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY.to_string());
     }
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
-        return Some(super::edit_guard::AUTHORITY_PATH);
+        return Some(super::edit_guard::AUTHORITY_PATH.to_string());
     }
     match super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
-        Ok(true) => return Some("repository enforcement files"),
+        Ok(true) => return Some("repository enforcement files".to_string()),
         Ok(false) => {}
-        Err(_) => return Some("repository enforcement paths (cannot read repository state)"),
+        Err(error) => return Some(error),
     }
-    integrity_target(&normalize_path(token)).or_else(|| {
-        let (Ok(base), Ok(path)) = (
-            integrity_disk_case(payload_cwd),
-            integrity_disk_case(&cwd.join(token)),
-        ) else {
-            return Some("repository enforcement paths (cannot read path case)");
-        };
-        if let Some(protected) = root_dot_pattern_target(&path) {
-            return Some(protected);
-        }
-        // A derived absolute path is not a typed scratch-copy exemption.
-        // Keep relative spellings (including `..`) relative to the tool cwd.
-        let target = path
-            .strip_prefix(&base)
-            .ok()
-            .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
-        integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
-    })
+    integrity_target(&normalize_path(token))
+        .map(str::to_string)
+        .or_else(|| {
+            let (Ok(base), Ok(path)) = (
+                integrity_disk_case(payload_cwd),
+                integrity_disk_case(&cwd.join(token)),
+            ) else {
+                return Some("repository enforcement paths (cannot read path case)".to_string());
+            };
+            if let Some(protected) = root_dot_pattern_target(&path) {
+                return Some(protected.to_string());
+            }
+            // A derived absolute path is not a typed scratch-copy exemption.
+            // Keep relative spellings (including `..`) relative to the tool cwd.
+            let target = path
+                .strip_prefix(&base)
+                .ok()
+                .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
+            integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
+                .map(str::to_string)
+        })
 }
 
 /// Whether a word holds pattern syntax some shell reads at run time: Bash's
@@ -2991,7 +3044,7 @@ pub(crate) struct RunDirs {
 /// unknown (TSK-216 round 10). It over-approximates: a command is judged
 /// from each listed directory.
 pub(crate) fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
-    run_dirs_from_home(segments, start, crate::portable_path::user_home())
+    run_dirs_from_home(segments, start, line_home::home())
 }
 
 /// [`run_dirs`] with `~` read as `home`: the startup guard passes the home
@@ -3220,7 +3273,7 @@ fn integrity_write_in_run(
 }
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
-    shell_path_with_home(token, cwd, crate::portable_path::user_home().as_deref())
+    shell_path_with_home(token, cwd, line_home::home().as_deref())
 }
 
 /// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
@@ -3389,7 +3442,7 @@ fn integrity_target(path: &str) -> Option<&'static str> {
 }
 
 /// The integrity path named by any argument in `args`.
-fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<String> {
     args.iter()
         .find_map(|a| token_integrity_path(a, cwd, payload_cwd))
 }
@@ -4105,7 +4158,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
                 GlobStop::TooManyEntries => format!("target glob `{text}` has too many entries"),
             });
     }
-    if (text == "~" || text.starts_with("~/")) && crate::portable_path::user_home().is_none() {
+    if (text == "~" || text.starts_with("~/")) && line_home::home().is_none() {
         return Err("cannot resolve the home directory".to_string());
     }
     Ok(Some(vec![integrity_shell_path(&text, cwd)]))
@@ -4116,6 +4169,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<Pat
 /// files (TSK-216 review finding 1).
 enum CheckoutReach {
     Path(PathBuf),
+    Hidden(PathBuf),
     Unreadable(String),
 }
 
@@ -4123,6 +4177,7 @@ impl CheckoutReach {
     fn description(&self) -> String {
         match self {
             Self::Path(path) => path.display().to_string(),
+            Self::Hidden(path) => format!("hidden checkout {}", path.display()),
             Self::Unreadable(why) => format!("cannot read registered worktrees: {why}"),
         }
     }
@@ -4138,6 +4193,11 @@ fn checkout_delete_violation(
             "{what} would delete the registered worktree `{}` with its work and enforcement files",
             path.display()
         ),
+        CheckoutReach::Hidden(path) => format!(
+            "{what} would remove hidden checkout `{}`; {}",
+            path.display(),
+            super::repo::registration_error("its registration is absent")
+        ),
         CheckoutReach::Unreadable(why) => {
             format!("{what}: cannot read registered worktrees: {why}")
         }
@@ -4146,7 +4206,12 @@ fn checkout_delete_violation(
         "git.hook_integrity",
         level,
         message,
-        crate::remedy::WORKTREE_DELETE.remedy(),
+        match checkout {
+            CheckoutReach::Path(_) => crate::remedy::WORKTREE_DELETE.remedy(),
+            CheckoutReach::Hidden(_) | CheckoutReach::Unreadable(_) => {
+                crate::remedy::HOOK_INTEGRITY.remedy()
+            }
+        },
     )
 }
 
@@ -4158,7 +4223,12 @@ fn checkout_under(
 ) -> Option<CheckoutReach> {
     for root in [cwd, payload_cwd] {
         match super::edit_guard::registered_checkout_under(path, root, except) {
-            Ok(Some(path)) => return Some(CheckoutReach::Path(path)),
+            Ok(Some(super::edit_guard::Checkout::Registered(path))) => {
+                return Some(CheckoutReach::Path(path))
+            }
+            Ok(Some(super::edit_guard::Checkout::Hidden(path))) => {
+                return Some(CheckoutReach::Hidden(path))
+            }
             Ok(None) => {}
             Err(error) => return Some(CheckoutReach::Unreadable(error)),
         }
@@ -5262,6 +5332,8 @@ fn integrity_write_violation(
     // stays blocked when hook integrity is relaxed. The new hardening only
     // adds refusals after them (TSK-216).
     direct_write_violation(cmd, args, level, cwd, payload_cwd, line)
+        .or_else(|| unread_editor_script(cmd, args, level))
+        .or_else(|| directory_removal_violation(cmd, args, cwd, level))
         .or_else(|| {
             let why = uncertain.filter(|_| !read_only_program(tokens))?;
             Some(hook_integrity_violation(
@@ -5270,6 +5342,282 @@ fn integrity_write_violation(
             ))
         })
         .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
+}
+
+pub(crate) fn git_command_write_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    if let Some(finding) = xargs_git_write(cmd, args, level) {
+        return Some(finding);
+    }
+    if !level.is_active() {
+        return None;
+    }
+    if cmd == "git" {
+        let mut literals = Literals::default();
+        for segment in expand_commands_read(line).segments {
+            let words = command_argv(&segment);
+            if strip_launchers(&words)
+                .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
+            {
+                break;
+            }
+            literals.note(&words);
+        }
+        let filled: Vec<_> = args.iter().map(|word| literals.fill(word)).collect();
+        if let Some((verb, rest)) = git_subcommand(&filled) {
+            if verb == "config" {
+                if let Some(finding) = checkout_config_write(rest, level) {
+                    return Some(finding);
+                }
+                if config_writes_hooks_path(rest) {
+                    return Some(hook_integrity_violation(level,
+                        "`git config` would write core.hooksPath, which changes where git looks for hooks".into()));
+                }
+            }
+            if let Some(finding) =
+                git_output_violation(verb, &filled, rest, level, cwd, payload_cwd)
+            {
+                return Some(finding);
+            }
+            let creates = matches!(verb, "clone" | "init")
+                || (verb == "worktree" && rest.first().is_some_and(|word| word == "add"));
+            if creates {
+                let mut directory = cwd.to_path_buf();
+                let globals = &filled[..filled.len() - rest.len() - 1];
+                for pair in globals.windows(2) {
+                    if pair[0] == "-C" {
+                        directory = directory.join(&pair[1]);
+                    }
+                }
+                let cwd = directory.as_path();
+                if filled.iter().any(|word| expands(word)) {
+                    return Some(hook_integrity_violation(level,
+                        format!("cannot prove the `git {verb}` creation target; pass a literal path outside enforcement directories")));
+                }
+                // All explicit path operands are judged. Option values may
+                // also be paths that Git uses while creating the checkout.
+                if let Some(path) = arg_integrity_path(rest, cwd, payload_cwd) {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!("`git {verb}` would create inside `{path}`"),
+                    ));
+                }
+                let operands: Vec<String> = if verb == "init" {
+                    git_init_paths(rest)
+                } else {
+                    rest.to_vec()
+                };
+                for word in operands.iter().filter(|word| !word.starts_with('-')) {
+                    let path = integrity_shell_path(word, cwd);
+                    if let Some(finding) = creation_path_violation(verb, &path, level, payload_cwd)
+                    {
+                        return Some(finding);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A Git output path that lands on or inside an enforcement path, judged
+/// as the creation targets of clone, init and worktree add are.
+fn git_output_violation(
+    verb: &str,
+    filled: &[String],
+    rest: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    let outputs = match runners::output_paths(verb, rest) {
+        Ok(outputs) if outputs.is_empty() => return None,
+        Ok(outputs) => outputs,
+        Err(why) => return Some(hook_integrity_violation(level, why)),
+    };
+    let mut directory = cwd.to_path_buf();
+    let globals = &filled[..filled.len() - rest.len() - 1];
+    for pair in globals.windows(2) {
+        if pair[0] == "-C" {
+            directory = integrity_shell_path(&pair[1], &directory);
+        }
+    }
+    let cwd = directory.as_path();
+    for output in &outputs {
+        if expands(output) || output.is_empty() {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot prove the `git {verb}` output path; pass a literal path outside enforcement directories"),
+            ));
+        }
+        // A repository's own configuration file, and a user or system one,
+        // is judged by the key checks of `git config`; any other file is an
+        // output.
+        if verb == "config" {
+            let path = integrity_shell_path(output, cwd);
+            if git_configuration_file(&path)
+                || super::edit_guard::global_git_config_target(&path, payload_cwd)
+            {
+                continue;
+            }
+        }
+        if let Some(path) = token_integrity_path(output, cwd, payload_cwd) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`git {verb}` would write the integrity path `{path}`"),
+            ));
+        }
+        if verb != "config" {
+            let path = integrity_shell_path(output, cwd);
+            if let Some(finding) = creation_path_violation(verb, &path, level, payload_cwd) {
+                return Some(finding);
+            }
+        }
+    }
+    None
+}
+
+/// `config` or `config.worktree` in a Git directory: under a `.git`
+/// component, or in a bare or separate directory holding HEAD.
+fn git_configuration_file(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == "config" || name == "config.worktree")
+        && path.parent().is_some_and(|dir| {
+            // A checkout's `.git`, or a bare or separate Git directory,
+            // which holds HEAD.
+            dir.components()
+                .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+                || crate::absence::cannot_exist(&dir.join("HEAD")).is_ok_and(|absent| !absent)
+        })
+}
+
+fn creation_path_violation(
+    verb: &str,
+    path: &Path,
+    level: PolicyLevel,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    for resolve in [false, true] {
+        let path = match super::edit_guard::normalized(path, resolve) {
+            Ok(path) => path,
+            Err(error) => return Some(hook_integrity_violation(level, error.to_string())),
+        };
+        if let Some(finding) = owned_creation_path_violation(verb, &path, level, payload_cwd) {
+            return Some(finding);
+        }
+    }
+    None
+}
+
+fn owned_creation_path_violation(
+    verb: &str,
+    path: &Path,
+    level: PolicyLevel,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    let owners = match super::repo::target_roots(path, payload_cwd) {
+        Ok(owners) => owners,
+        Err(error) => return Some(hook_integrity_violation(level, error)),
+    };
+    for owner in owners {
+        if verb == "init" {
+            match super::repo::configured_worktree_target(path, &owner) {
+                Ok(true) => {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!(
+                            "`git init` would create inside configured worktree location `{}`",
+                            path.display()
+                        ),
+                    ))
+                }
+                Err(error) => return Some(hook_integrity_violation(level, error)),
+                Ok(false) => {}
+            }
+        }
+        let Ok(Some(repo)) = super::repo::open(&owner) else {
+            continue;
+        };
+        let roots = match super::edit_guard::checkout_roots(&repo) {
+            Ok(roots) => roots,
+            Err(error) => return Some(hook_integrity_violation(level, error)),
+        };
+        for root in roots {
+            let Ok(relative) = path.strip_prefix(&root) else {
+                continue;
+            };
+            if relative.components().next().is_some_and(|first| {
+                [
+                    ".git",
+                    ".claude",
+                    ".codeflow",
+                    ".codex",
+                    ".grok",
+                    ".agents",
+                    ".github",
+                ]
+                .iter()
+                .any(|name| first.as_os_str().eq_ignore_ascii_case(name))
+            }) {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!(
+                        "`git {verb}` would create inside enforcement directory `{}`",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Both init's checkout and separate Git directory are creation targets.
+fn git_init_paths(args: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut checkout = false;
+    let mut words = args.iter();
+    let mut options = true;
+    while let Some(word) = words.next() {
+        if options && word == "--" {
+            options = false;
+            continue;
+        }
+        if options {
+            if word == "--separate-git-dir" {
+                if let Some(path) = words.next() {
+                    paths.push(path.clone());
+                }
+                continue;
+            }
+            if let Some(path) = word.strip_prefix("--separate-git-dir=") {
+                paths.push(path.to_string());
+                continue;
+            }
+            if matches!(
+                word.as_str(),
+                "--template" | "--initial-branch" | "-b" | "--object-format" | "--ref-format"
+            ) {
+                words.next();
+                continue;
+            }
+            if word.starts_with('-') {
+                continue;
+            }
+        }
+        paths.push(word.clone());
+        checkout = true;
+    }
+    if !checkout {
+        paths.push(".".to_string());
+    }
+    paths
 }
 
 /// The writes 3.0.0 judged directly: a mutating command's own path
@@ -5283,10 +5631,26 @@ fn direct_write_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
+    // Config is judged after shell-state tracking with its actual argv. Raw
+    // integrity tokens still contain redirects and must not become values.
+    if !(cmd == "git" && git_subcommand(args).is_some_and(|(verb, _)| verb == "config")) {
+        if let Some(finding) = git_command_write_violation(cmd, args, level, cwd, payload_cwd, line)
+        {
+            return Some(finding);
+        }
+    } else if level.is_active() {
+        // The file a config write changes is an output like any other; its
+        // keys are judged after shell-state tracking (TSK-379 round 9).
+        if let Some(finding) = git_subcommand(args).and_then(|(verb, rest)| {
+            git_output_violation(verb, args, rest, level, cwd, payload_cwd)
+        }) {
+            return Some(finding);
+        }
+    }
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
         "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "mkdir"
-        | "touch" => Some(args),
+        | "touch" | "ed" | "ex" | "vi" | "vim" | "nvim" | "view" | "rview" | "rvim" => Some(args),
         _ => None,
     };
     // Every writer the table lists goes through the one judge exec-guard
@@ -5307,10 +5671,9 @@ fn direct_write_violation(
     }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
-            token_integrity_path(".", cwd, payload_cwd).map(str::to_string)
+            token_integrity_path(".", cwd, payload_cwd)
         } else {
             arg_integrity_path(paths, cwd, payload_cwd)
-                .map(str::to_string)
                 .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
         }
     }) {
@@ -5331,51 +5694,8 @@ fn direct_write_violation(
             ));
         }
     }
-    if cmd == "sed" && requests_in_place(args) {
-        if let Some(p) = sed_file_operands(args)
-            .into_iter()
-            .find_map(|file| token_integrity_path(file, cwd, payload_cwd))
-        {
-            return Some(hook_integrity_violation(
-                level,
-                format!("`sed -i` edits the integrity path `{p}`"),
-            ));
-        }
-    }
     if cmd == "sed" {
-        match sed_script_writes(args, cwd) {
-            SedRead::Read(paths) => {
-                if let Some((path, p)) = paths.iter().find_map(|path| {
-                    token_integrity_path(path, cwd, payload_cwd).map(|p| (path, p))
-                }) {
-                    // Name what runs: a word of a command that `e` or the
-                    // `e` flag of `s` runs, or a file a `w` command, the
-                    // `w` flag or an in-place backup writes.
-                    let runs = match sed_script_split(args, Some(cwd)) {
-                        SedRead::Read((writes, run, _)) => {
-                            run.contains(path) && !writes.contains(path)
-                        }
-                        SedRead::Unreadable { .. } => false,
-                    };
-                    let what = if runs {
-                        "a command a `sed` script runs (`e` or the `e` flag of `s`) can write"
-                    } else {
-                        "a `sed` script `w` command or backup writes"
-                    };
-                    return Some(hook_integrity_violation(
-                        level,
-                        format!("{what} the integrity path `{p}`"),
-                    ));
-                }
-            }
-            SedRead::Unreadable { file, why } => {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!("cannot read `sed` script `{file}`: {why}"),
-                ))
-            }
-        }
-        if let Some(v) = sed_file_command_violation(args, level, cwd, payload_cwd) {
+        if let Some(v) = sed_integrity_violation(args, level, cwd, payload_cwd) {
             return Some(v);
         }
     }
@@ -5386,6 +5706,60 @@ fn direct_write_violation(
                 format!("`git {}` removes the integrity path `{p}`", args[0]),
             ));
         }
+    }
+    None
+}
+
+fn sed_integrity_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    if requests_in_place(args) {
+        if let Some(p) = sed_file_operands(args)
+            .into_iter()
+            .find_map(|file| token_integrity_path(file, cwd, payload_cwd))
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`sed -i` edits the integrity path `{p}`"),
+            ));
+        }
+    }
+    match sed_script_writes(args, cwd) {
+        SedRead::Read(paths) => {
+            if let Some((path, p)) = paths
+                .iter()
+                .find_map(|path| token_integrity_path(path, cwd, payload_cwd).map(|p| (path, p)))
+            {
+                // Name what runs: a word of a command that `e` or the
+                // `e` flag of `s` runs, or a file a `w` command, the
+                // `w` flag or an in-place backup writes.
+                let runs = match sed_script_split(args, Some(cwd)) {
+                    SedRead::Read((writes, run, _)) => run.contains(path) && !writes.contains(path),
+                    SedRead::Unreadable { .. } => false,
+                };
+                let what = if runs {
+                    "a command a `sed` script runs (`e` or the `e` flag of `s`) can write"
+                } else {
+                    "a `sed` script `w` command or backup writes"
+                };
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("{what} the integrity path `{p}`"),
+                ));
+            }
+        }
+        SedRead::Unreadable { file, why } => {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot read `sed` script `{file}`: {why}"),
+            ))
+        }
+    }
+    if let Some(v) = sed_file_command_violation(args, level, cwd, payload_cwd) {
+        return Some(v);
     }
     None
 }
@@ -5406,7 +5780,6 @@ impl GitWriter<'_> {
     /// on a line that names an enforcement path.
     fn integrity(&self, paths: &[String]) -> Option<String> {
         arg_integrity_path(paths, self.cwd, self.payload_cwd)
-            .map(str::to_string)
             .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
     }
 
@@ -5425,12 +5798,80 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
 
     fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
         let cmd = self.cmd;
+        // rsync reads an empty operand as the current directory, so a
+        // source or destination spelled `''` is judged as `.`; mv follows
+        // the same reading (TSK-379 security round 8).
+        let current = |path: &String| {
+            if path.is_empty() {
+                ".".to_string()
+            } else {
+                path.clone()
+            }
+        };
+        let copy = &crate::security::unresolved::CopyRead {
+            dest: copy.dest.as_ref().map(current),
+            target: copy.target,
+            sources: copy.sources.iter().map(current).collect(),
+            directories: copy.directories,
+            written: copy.written.clone(),
+            flags: copy.flags.clone(),
+            unknown: copy.unknown.clone(),
+        };
         // A dry run writes nothing at its destination.
         if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
             return None;
         }
+        if cmd == "mv"
+            || (cmd == "rsync" && copy.flags.iter().any(|flag| rsync_removes_source(flag)))
+        {
+            if let Some(finding) = copy
+                .sources
+                .iter()
+                .find_map(|source| contained_git_directory_violation(source, self.cwd, self.level))
+            {
+                return Some(finding);
+            }
+            if let Some(path) = self.integrity(&copy.sources) {
+                return Some(self.refuse(format!("`{cmd}` removes the integrity source `{path}`")));
+            }
+            let sources: Vec<_> = copy.sources.iter().map(String::as_str).collect();
+            if let Some(finding) = worktree_delete_check(
+                &format!("`{cmd}` removes its source"),
+                &sources,
+                self.level,
+                self.cwd,
+                self.payload_cwd,
+                self.line,
+                None,
+            ) {
+                return Some(finding);
+            }
+        }
         if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
             return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        }
+        if cmd == "rsync" && copy.flags.iter().any(|flag| flag.starts_with("--delete")) {
+            if let Some(finding) = copy
+                .dest
+                .iter()
+                .find_map(|dest| contained_git_directory_violation(dest, self.cwd, self.level))
+            {
+                return Some(finding);
+            }
+            // Deleting what the source lacks empties a checkout destination
+            // as a recursive removal does (TSK-379 security round 8).
+            let dests: Vec<_> = copy.dest.iter().map(String::as_str).collect();
+            if let Some(finding) = worktree_delete_check(
+                &format!("`{cmd} --delete` removes from its destination"),
+                &dests,
+                self.level,
+                self.cwd,
+                self.payload_cwd,
+                self.line,
+                None,
+            ) {
+                return Some(finding);
+            }
         }
         let p = git_config_destination(cmd, copy, self.cwd)?;
         Some(self.refuse(format!(
@@ -5503,6 +5944,44 @@ impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
             "`{}` places files it does not name in the integrity path `{p}`",
             self.cmd
         )))
+    }
+}
+
+fn directory_removal_violation(
+    cmd: &str,
+    args: &[String],
+    cwd: &Path,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    let removed = match cmd {
+        "rm" | "rmdir" => Some(args),
+        "find" => find_mutating_roots(args),
+        _ => None,
+    }?;
+    // An empty filename names nothing for these programs: rm, rmdir and
+    // find each report it missing and remove nothing.
+    removed
+        .iter()
+        .filter(|path| !path.is_empty() && !path.starts_with('-'))
+        .find_map(|path| contained_git_directory_violation(path, cwd, level))
+}
+
+fn contained_git_directory_violation(
+    path: &str,
+    cwd: &Path,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    let target = integrity_shell_path(path, cwd);
+    match super::repo::contains_git_directory(&target) {
+        Ok(false) => None,
+        Ok(true) => Some(hook_integrity_violation(
+            level,
+            format!(
+                "removal target `{}` contains a Git directory and its enforcement files",
+                target.display()
+            ),
+        )),
+        Err(error) => Some(hook_integrity_violation(level, error)),
     }
 }
 
@@ -5665,10 +6144,18 @@ pub(crate) struct Expanded {
 /// the line assigned a literal before it is read with that literal
 /// (`CMD='git config ...'; sh -c "$CMD"`, TSK-242 review round 15).
 pub(crate) fn expand_commands_read(command: &str) -> Expanded {
+    expand_command_bodies(command, true)
+}
+
+fn expand_shell_commands(command: &str) -> Expanded {
+    expand_command_bodies(command, false)
+}
+
+fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
     let mut out = Expanded::default();
-    expand_segments(raw, &mut out, 1, &mut Literals::default());
+    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
     out
 }
 
@@ -5684,13 +6171,19 @@ fn expand_segments(
     out: &mut Expanded,
     depth: usize,
     literals: &mut Literals,
+    git_bodies: bool,
 ) {
     for seg in segments {
-        let toks = command_argv(&seg);
-        let mut bodies: Vec<String> = carried_commands(&toks)
-            .iter()
-            .map(|body| literals.fill(body))
-            .collect();
+        let mut toks = command_argv(&seg);
+        strip_reserved_words(&mut toks);
+        let carries_git = strip_launchers(&toks)
+            .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
+        let carried = if !git_bodies && carries_git {
+            Vec::new()
+        } else {
+            carried_commands(&toks)
+        };
+        let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         let mut words = toks;
         strip_reserved_words(&mut words);
         if let Some((program, _)) = strip_launchers(&words) {
@@ -5720,7 +6213,7 @@ fn expand_segments(
         for body in bodies {
             let mut inner = Vec::new();
             split_into_segments(&body, &mut inner, depth, false);
-            expand_segments(inner, out, depth + 1, literals);
+            expand_segments(inner, out, depth + 1, literals, git_bodies);
         }
     }
 }
@@ -5739,6 +6232,34 @@ pub(crate) fn expands(word: &str) -> bool {
 #[derive(Debug, Default)]
 struct Literals(BTreeMap<String, Option<String>>);
 
+/// A simple command's words with the builtin wrappers `command` and
+/// `builtin` removed (TSK-379 review round 9): `command export X=y` and
+/// `builtin declare -x X=y` assign in the current shell as the plain forms
+/// do. `command -v` and `-V` only look a name up, so their words come back
+/// empty; a `command` option the reader does not know is kept as written.
+pub(crate) fn builtin_words(mut words: &[String]) -> &[String] {
+    loop {
+        match words.first().map(String::as_str) {
+            Some("builtin") => words = &words[1..],
+            Some("command") => {
+                let options = words[1..]
+                    .iter()
+                    .take_while(|word| word.starts_with('-') && word.len() > 1)
+                    .count();
+                let flags = &words[1..=options];
+                if flags.iter().any(|flag| flag.contains(['v', 'V'])) {
+                    return &[];
+                }
+                if flags.iter().any(|flag| flag != "-p" && flag != "--") {
+                    return words;
+                }
+                words = &words[1 + options..];
+            }
+            _ => return words,
+        }
+    }
+}
+
 impl Literals {
     /// Record the assignments of one segment's words.
     fn note(&mut self, words: &[String]) {
@@ -5746,6 +6267,7 @@ impl Literals {
             w.split_once('=')
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
         }
+        let words = builtin_words(words);
         let declaring = matches!(
             words.first().map(String::as_str),
             Some("export" | "declare" | "typeset" | "local" | "readonly")
@@ -5815,6 +6337,9 @@ impl Literals {
 /// `setsid` and `unbuffer` ([`launcher_commands`]), and git or a command
 /// string run by `xargs` or `find -exec` (TSK-242 review round 14).
 fn carried_commands(toks: &[String]) -> Vec<String> {
+    let mut words = toks.to_vec();
+    strip_reserved_words(&mut words);
+    let toks = words.as_slice();
     if let Some(command) = env_split_command(toks) {
         return vec![command];
     }
@@ -5842,11 +6367,60 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
         vec![args.join(" ")]
+    } else if let Some(args) = runners::arguments(prog, args) {
+        // Active integrity checks use the fallible reader; other security
+        // readers still inspect every command the option table can read.
+        runners::carried(&args)
     } else if name == "sed" {
         sed_run_commands(args)
     } else {
         launcher_commands(name, args)
     }
+}
+
+/// Exec-guard judges the same runner bodies and directories as git-guard.
+pub(crate) fn git_runner_write_violation(
+    command: &str,
+    cwd: &Path,
+    level: PolicyLevel,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let bodies = match runners::read(command, cwd) {
+        Ok(bodies) => bodies,
+        Err(why) => return Some(runners::unread(&why)),
+    };
+    for body in bodies {
+        let expanded = expand_shell_commands(&body.command);
+        let run = run_dirs(&expanded.segments, &body.directory);
+        for segment in &expanded.segments {
+            let mut words = shell_tokens(segment);
+            strip_reserved_words(&mut words);
+            if let Some(finding) = integrity_write_in_run(
+                &words,
+                &redirect_writes(segment),
+                level,
+                &run,
+                cwd,
+                &body.command,
+            ) {
+                return Some(finding);
+            }
+        }
+        if let Some(finding) = crate::security::startup::evaluate_with(
+            &body.command,
+            &body.directory,
+            &crate::security::startup::StartupEnv::from_process_at(&body.directory),
+            level,
+        )
+        .into_iter()
+        .next()
+        {
+            return Some(finding);
+        }
+    }
+    None
 }
 
 /// The shell commands a `sed` runs through GNU `e` and the `e` flag of `s`,
@@ -8707,7 +9281,9 @@ fn judge_git_sub(
             // Hook-path manipulation via config (`git config core.hooksPath …`
             // / `--unset core.hooksPath`) disarms the client hooks. Every read
             // (`git config core.hooksPath`, `--get`, `--list`) stays allowed.
-            if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
+            if let Some(finding) = checkout_config_write(rest, policy.hook_integrity) {
+                out.push(finding);
+            } else if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
                 out.push(hook_integrity_violation(
                     policy.hook_integrity,
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
@@ -8837,6 +9413,143 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
+}
+
+fn rsync_removes_source(flag: &str) -> bool {
+    flag.starts_with("--")
+        && flag.len() > 2
+        && ["--remove-source-files", "--remove-sent-files"]
+            .iter()
+            .any(|full| full.starts_with(flag))
+}
+
+pub(crate) fn xargs_git_write(cmd: &str, args: &[String], level: PolicyLevel) -> Option<Violation> {
+    if launcher_name(cmd) != "xargs" || !level.is_active() {
+        return None;
+    }
+    let tail = xargs_command(args)?;
+    let replaced = args[..args.len() - tail.len()].iter().any(|word| {
+        if word.starts_with("--") {
+            let name = word.split('=').next().unwrap_or(word);
+            name.len() > 2 && "--replace".starts_with(name)
+        } else {
+            word.starts_with('-') && word.contains(['I', 'J', 'i'])
+        }
+    });
+    let (program, args) = strip_launchers(tail)?;
+    let args = runners::arguments(program, args)?;
+    // Appended stdin words can also be options, such as branch -D or reset
+    // --hard. These verbs remain guarded even with an existing path operand.
+    let guarded = git_subcommand(&args).is_none_or(|(verb, rest)| match verb {
+        "grep" => replaced || !runners::closed_grep_options(rest),
+        "branch" | "reset" | "config" | "worktree" | "update-ref" | "symbolic-ref" | "push"
+        | "clean" | "checkout" | "switch" | "restore" | "rm" | "mv" | "commit" | "merge"
+        | "cherry-pick" | "rebase" | "bisect" | "submodule" | "fast-import" | "clone" | "init"
+        | "fetch" | "pull" | "stash" => true,
+        _ => expands(verb) || runners::command_options(verb) || !GIT_BUILTINS.contains(&verb),
+    });
+    guarded.then(|| hook_integrity_violation(level,
+        "xargs supplies operands to a guarded Git command from input that the guard cannot prove; run the complete Git command directly".into()))
+}
+
+/// Editor scripts can switch files regardless of the initial file operand.
+/// Their language is not interpreted by either shell hook.
+pub(crate) fn unread_editor_script(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let unread = match cmd {
+        "ed" | "ex" => true,
+        "vim" | "vi" | "nvim" | "view" | "rview" | "rvim" => args.iter().any(|arg| {
+            arg == "--headless"
+                || arg == "--cmd"
+                || arg.starts_with("--cmd=")
+                || (arg.starts_with('-')
+                    && !arg.starts_with("--")
+                    && arg[1..].contains(['e', 'E', 's', 'S', 'c']))
+        }),
+        "emacs" => args
+            .iter()
+            .any(|arg| arg == "--batch" || arg == "--eval" || arg.starts_with("--eval=")),
+        _ => false,
+    };
+    unread.then(|| hook_integrity_violation(level,
+        format!("cannot prove the files an unread `{cmd}` editor script writes; use an explicit file-edit tool")))
+}
+
+/// Shared by both shell hooks. Scope and file options cannot make a
+/// persistent discovery change safe; a read or a transient `-c` is unchanged.
+pub(crate) fn checkout_config_write(rest: &[String], level: PolicyLevel) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let mode = parsed.operands.first().copied().unwrap_or_default();
+    if config_only_reads(rest)
+        && (parsed.has_short(&['l'])
+            || [
+                "--get",
+                "--get-all",
+                "--get-regexp",
+                "--get-urlmatch",
+                "--get-color",
+                "--get-colorbool",
+                "--list",
+            ]
+            .iter()
+            .any(|flag| parsed.has_long(flag))
+            || matches!(mode, "get" | "list"))
+    {
+        return None;
+    }
+    let key = parsed
+        .operands
+        .get(usize::from(matches!(mode, "set" | "unset" | "get")));
+    if key.is_some_and(|key| key.contains(['{', '}', '*', '?', '[', ']'])) {
+        return Some(hook_integrity_violation(
+            level,
+            "cannot inspect an expanded Git config key; pass a literal key".into(),
+        ));
+    }
+    if config_only_reads(rest) {
+        return None;
+    }
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let mode = parsed.operands.first().copied().unwrap_or_default();
+    let edit = parsed.has_short(&['e']) || parsed.has_long("--edit") || mode == "edit";
+    let section = parsed.has_long("--rename-section")
+        || parsed.has_long("--remove-section")
+        || matches!(mode, "rename-section" | "remove-section");
+    if edit
+        || (section
+            && parsed.operands.iter().any(|word| {
+                word.eq_ignore_ascii_case("core")
+                    || word.eq_ignore_ascii_case("extensions")
+                    || expands(word)
+            }))
+    {
+        return Some(hook_integrity_violation(level,
+            "`git config` can rewrite repository discovery settings through an editor or section change".into()));
+    }
+    let key = parsed
+        .operands
+        .get(usize::from(matches!(mode, "set" | "unset")))?;
+    if expands(key) {
+        return Some(hook_integrity_violation(level, format!(
+            "cannot inspect persistent config key `{key}`; it may change repository or worktree discovery"
+        )));
+    }
+    if !git::relocates_checkout(key) {
+        return None;
+    }
+    Some(hook_integrity_violation(
+        level,
+        format!("`git config` would write `{key}`, which changes repository or worktree discovery"),
+    ))
 }
 
 /// Where a `git config --file` path sits, as [`config_file_scope`] judges it.
@@ -10359,6 +11072,13 @@ const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
 /// them is read as the `<upstream>` or `<branch>` operand.
 const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
     short: &[
+        ('i', Arity::Flag),
+        ('q', Arity::Flag),
+        ('v', Arity::Flag),
+        ('n', Arity::Flag),
+        ('f', Arity::Flag),
+        ('m', Arity::Flag),
+        ('h', Arity::Flag),
         ('s', Arity::Value),
         ('X', Arity::Value),
         ('x', Arity::Value),
@@ -10367,6 +11087,58 @@ const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
         ('r', Arity::Flag),
     ],
     long: &[
+        ("--keep-base", Arity::Flag),
+        ("--no-keep-base", Arity::Flag),
+        ("--verify", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--no-quiet", Arity::Flag),
+        ("--verbose", Arity::Flag),
+        ("--no-verbose", Arity::Flag),
+        ("--stat", Arity::Flag),
+        ("--no-stat", Arity::Flag),
+        ("--signoff", Arity::Flag),
+        ("--no-signoff", Arity::Flag),
+        ("--committer-date-is-author-date", Arity::Flag),
+        ("--no-committer-date-is-author-date", Arity::Flag),
+        ("--reset-author-date", Arity::Flag),
+        ("--no-reset-author-date", Arity::Flag),
+        ("--ignore-date", Arity::Flag),
+        ("--ignore-whitespace", Arity::Flag),
+        ("--no-ignore-whitespace", Arity::Flag),
+        ("--force-rebase", Arity::Flag),
+        ("--no-force-rebase", Arity::Flag),
+        ("--ff", Arity::Flag),
+        ("--no-ff", Arity::Flag),
+        ("--continue", Arity::Flag),
+        ("--skip", Arity::Flag),
+        ("--abort", Arity::Flag),
+        ("--quit", Arity::Flag),
+        ("--edit-todo", Arity::Flag),
+        ("--show-current-patch", Arity::Flag),
+        ("--apply", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--no-interactive", Arity::Flag),
+        ("--rerere-autoupdate", Arity::Flag),
+        ("--no-rerere-autoupdate", Arity::Flag),
+        ("--autosquash", Arity::Flag),
+        ("--no-autosquash", Arity::Flag),
+        ("--update-refs", Arity::Flag),
+        ("--no-update-refs", Arity::Flag),
+        ("--autostash", Arity::Flag),
+        ("--no-autostash", Arity::Flag),
+        ("--fork-point", Arity::Flag),
+        ("--no-fork-point", Arity::Flag),
+        ("--reschedule-failed-exec", Arity::Flag),
+        ("--no-reschedule-failed-exec", Arity::Flag),
+        ("--reapply-cherry-picks", Arity::Flag),
+        ("--no-reapply-cherry-picks", Arity::Flag),
+        ("--no-exec", Arity::Flag),
+        ("--no-rebase-merges", Arity::Flag),
+        ("--no-gpg-sign", Arity::Flag),
+        ("--no-root", Arity::Flag),
+        ("--help", Arity::Flag),
         ("--onto", Arity::Value),
         ("--strategy", Arity::Value),
         ("--strategy-option", Arity::Value),
@@ -10393,7 +11165,17 @@ fn rebase_branch(rest: &[String]) -> Option<&str> {
 /// `git push` (git-push(1)). The destructive options are what the guard reads,
 /// so they resolve through the same abbreviation rule as every other command.
 const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
-    short: &[('o', Arity::Value)],
+    short: &[
+        ('o', Arity::Value),
+        ('f', Arity::Flag),
+        ('d', Arity::Flag),
+        ('u', Arity::Flag),
+        ('q', Arity::Flag),
+        ('v', Arity::Flag),
+        ('n', Arity::Flag),
+        ('4', Arity::Flag),
+        ('6', Arity::Flag),
+    ],
     long: &[
         ("--force", Arity::Flag),
         ("--force-with-lease", Arity::AttachedValue),
@@ -10405,6 +11187,7 @@ const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
         ("--branches", Arity::Flag),
         ("--tags", Arity::Flag),
         ("--follow-tags", Arity::Flag),
+        ("--no-follow-tags", Arity::Flag),
         ("--prune", Arity::Flag),
         ("--atomic", Arity::Flag),
         ("--dry-run", Arity::Flag),
@@ -10856,6 +11639,11 @@ enum Seen<'a> {
 /// `--delete-branch`; `sequence` keeps every option in the order it was
 /// written, for flags whose last assignment wins.
 struct ParsedOptions<'a> {
+    /// Unclassified options and missing required values, for strict readers.
+    unread: Vec<&'a str>,
+    /// Known options whose required value is absent.
+    missing: Vec<&'a str>,
+    ended: bool,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -10895,7 +11683,18 @@ impl<'a> ParsedOptions<'a> {
 /// option ends the options; every token after it is an operand, including one
 /// that begins with `-`.
 fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedOptions<'a> {
+    parse_options_mode(args, spec, false)
+}
+
+fn parse_options_mode<'a, S: AsRef<str>>(
+    args: &'a [S],
+    spec: &OptionSpec,
+    stop_at_operand: bool,
+) -> ParsedOptions<'a> {
     let mut parsed = ParsedOptions {
+        unread: Vec::new(),
+        missing: Vec::new(),
+        ended: false,
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -10908,6 +11707,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         index += 1;
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
+                parsed.ended = true;
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
@@ -10920,10 +11720,14 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             let written = &token[..name.len() + 2];
             let canonical = spec.resolve_long(written);
             if canonical == Some(END_OF_OPTIONS) {
+                parsed.ended = true;
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
                 return parsed;
+            }
+            if canonical.is_none() {
+                parsed.unread.push(token);
             }
             let name = canonical.unwrap_or(written);
             parsed.long.push((name, attached));
@@ -10933,6 +11737,9 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             } else if canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value)) {
                 if let Some(value) = args.get(index) {
                     parsed.values.push((Seen::Long(name, None), value.as_ref()));
+                } else {
+                    parsed.unread.push(token);
+                    parsed.missing.push(token);
                 }
                 index += 1;
             }
@@ -10940,9 +11747,18 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         }
         let Some(cluster) = token.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
             parsed.operands.push(token);
+            if stop_at_operand {
+                parsed
+                    .operands
+                    .extend(args[index..].iter().map(AsRef::as_ref));
+                return parsed;
+            }
             continue;
         };
         for (offset, letter) in cluster.char_indices() {
+            if !spec.short.iter().any(|(known, _)| *known == letter) {
+                parsed.unread.push(token);
+            }
             parsed.short.push(letter);
             parsed.sequence.push(Seen::Short(letter));
             let rest = &cluster[offset + letter.len_utf8()..];
@@ -10958,6 +11774,9 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
                     if rest.is_empty() {
                         if let Some(value) = args.get(index) {
                             parsed.values.push((Seen::Short(letter), value.as_ref()));
+                        } else {
+                            parsed.unread.push(token);
+                            parsed.missing.push(token);
                         }
                         index += 1;
                     } else {
@@ -11625,6 +12444,7 @@ fn is_prefix_launcher(t: &str) -> bool {
             | "ionice"
             | "caffeinate"
             | "xcrun"
+            | "arch"
     )
 }
 
@@ -11676,6 +12496,7 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
         "stdbuf" => &["--input", "--output", "--error"],
         "ionice" => &["--class", "--classdata", "--pid", "--pgid", "--uid"],
         "xcrun" => &["--sdk", "--toolchain"],
+        "arch" => &["-arch", "-e", "-d"],
         _ => &[],
     };
     if long_valued.contains(&a) {
@@ -12273,6 +13094,7 @@ mod tests {
             .is_empty());
         let readable = |_: &Retarget<'_>| same_repo("feat/x");
         let context = ctx_with_dir_branch(&policy, "feat/x", &readable);
+        git2::Repository::init(dir.path()).unwrap();
         assert!(
             evaluate_report_at("git -C . commit -m x", &context, dir.path())
                 .violations
@@ -12835,6 +13657,26 @@ mod tests {
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
+    }
+
+    #[test]
+    fn disabled_integrity_keeps_literal_runner_branch_checks() {
+        let policy = GitPolicy {
+            hook_integrity: PolicyLevel::Allow,
+            ..GitPolicy::default()
+        };
+        let mut context = ctx(&policy, "task/example");
+        context.discard_lookup = None;
+        let findings = evaluate(
+            "git rebase --unclassified -x 'git push origin HEAD:main' HEAD~1",
+            &context,
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "git.push_to_protected"),
+            "{findings:?}"
+        );
     }
 
     /// A guard context with an injected `gh pr merge` base-branch resolver.
@@ -14128,6 +14970,7 @@ mod tests {
             "unbuffer -p git config --global alias.x '!id'",
             "xargs sh -c 'git config --global alias.x !id'",
             "xargs -I{} git config --global alias.x '!id'",
+            "xargs -I{} git config --global user.name Test",
             "find . -exec sh -c 'git config --global alias.x !id' \\;",
             "find . -execdir git config --global alias.x '!id' \\;",
             "find . -name x -ok git config --global alias.x '!id' {} +",
@@ -14143,7 +14986,6 @@ mod tests {
             "watch git status",
             "parallel echo ::: a b",
             "setsid git config --global user.name Test",
-            "xargs -I{} git config --global user.name Test",
             "find . -name '*.rs' -exec ls {} \\;",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -14666,6 +15508,43 @@ mod tests {
                 && !unknown.contains("runs that value"),
             "{unknown}"
         );
+    }
+
+    #[test]
+    fn persistent_checkout_settings_refuse_in_every_scope() {
+        let p = default_policy();
+        for key in [
+            "core.worktree",
+            "CORE.WorkTree",
+            "core.bare",
+            "extensions.worktreeConfig",
+        ] {
+            for form in [
+                "",
+                "--local ",
+                "--worktree ",
+                "--file .git/config ",
+                "set ",
+                "--add ",
+                "--unset ",
+            ] {
+                let value = if form == "--unset " { "" } else { " decoy" };
+                let command = format!("git config {form}{key}{value}");
+                let found = evaluate(&command, &ctx(&p, "feat/x"));
+                assert!(
+                    has_rule(&found, "git.hook_integrity"),
+                    "{command}: {found:?}"
+                );
+            }
+            for form in ["", "--get ", "get --local "] {
+                let command = format!("git config {form}{key}");
+                let found = evaluate(&command, &ctx(&p, "feat/x"));
+                assert!(
+                    !has_rule(&found, "git.hook_integrity"),
+                    "{command}: {found:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -15951,7 +16830,7 @@ mod tests {
         let mut check = |word: &str, refuse: bool| {
             for finding in [
                 glob_reach(word, dir.path(), dir.path()),
-                token_integrity_path(word, dir.path(), dir.path()).map(str::to_string),
+                token_integrity_path(word, dir.path(), dir.path()),
             ] {
                 if finding.is_some() != refuse {
                     wrong.push(format!("{word}: refuse={refuse}: {finding:?}"));
@@ -16472,10 +17351,11 @@ mod tests {
         // Resolver reports the target repo is on a feature branch — allowed.
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| same_repo("feat/y");
-        assert!(evaluate(
+        assert!(fixture_report(
             "git -C /other commit -m x",
             &ctx_with_dir_branch(&p, "main", &resolver)
         )
+        .violations
         .is_empty());
     }
 
@@ -17229,7 +18109,7 @@ mod tests {
             "git -C /repo switch -c feat/x && git -C /repo commit -m x",
             "git -C /repo switch -c feat/x && git -C /repo/ commit -m x",
         ] {
-            let v = evaluate(cmd, &ctx_with_dir_branch(&p, "main", &resolver));
+            let v = fixture_report(cmd, &ctx_with_dir_branch(&p, "main", &resolver)).violations;
             assert!(v.is_empty(), "{cmd}: {v:?}");
         }
     }
@@ -17460,7 +18340,85 @@ mod tests {
 
     fn report(cmd: &str, session: &str) -> Evaluation {
         let p = default_policy();
-        evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+        fixture_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+    }
+
+    // Branch answers remain controlled by these branch-tracker tests. The
+    // command-source reader also needs actual repository configuration, so
+    // materialize the named repositories instead of relying on host paths.
+    fn fixture_report(command: &str, context: &GuardContext<'_>) -> Evaluation {
+        let temp = tempfile::tempdir().unwrap();
+        let prefix = temp.path().to_str().unwrap().replace('\\', "/");
+        for name in [
+            "session",
+            "session/scratch",
+            "session/work/scratch",
+            "repo",
+            "other",
+            "scratch",
+            "scratch-main",
+            "work",
+            "work/scratch",
+            "release-repo",
+            "aliased",
+        ] {
+            let repo = git2::Repository::init(temp.path().join(name)).unwrap();
+            let mut config = repo.config().unwrap();
+            config.set_str("alias.st", "status --short").unwrap();
+            config.set_str("alias.ci", "commit").unwrap();
+            if name == "aliased" {
+                for (key, value) in [
+                    ("x", "commit"),
+                    ("sh", "!git commit"),
+                    ("opt", "-C /elsewhere commit"),
+                    ("loop", "loop"),
+                    ("quoted", "commit -m 'a b'"),
+                ] {
+                    config.set_str(&format!("alias.{key}"), value).unwrap();
+                }
+            }
+        }
+        std::fs::write(temp.path().join("aliases.ini"), "[alias]\nx = commit\n").unwrap();
+        let command = command.replace("cd / &&", &format!("cd {prefix} &&"));
+        let paths = regex::Regex::new(r#"(^|[ ="'])/(?:work/scratch|scratch-main|release-repo|aliases\.ini|session|scratch|aliased|other|repo|work)\b"#).unwrap();
+        let command = paths.replace_all(&command, |captures: &regex::Captures<'_>| {
+            let separator = &captures[1];
+            format!("{separator}{prefix}{}", &captures[0][separator.len()..])
+        });
+        let target = |spec: &Retarget<'_>| {
+            context.dir_target_lookup.unwrap()(&Retarget {
+                path: spec.path.strip_prefix(&prefix).unwrap_or(spec.path),
+                git_dir: spec.git_dir,
+            })
+        };
+        let alias = |query: &AliasQuery<'_>| {
+            let mapped = query.target.map(|spec| Retarget {
+                path: spec.path.strip_prefix(&prefix).unwrap_or(spec.path),
+                git_dir: spec.git_dir,
+            });
+            let config: Vec<String> = query
+                .config
+                .iter()
+                .map(|value| value.replace(&prefix, ""))
+                .collect();
+            context.alias_lookup.unwrap()(&AliasQuery {
+                target: mapped,
+                config: &config,
+                name: query.name,
+            })
+        };
+        let context = GuardContext {
+            policy: context.policy,
+            current_branch: context.current_branch,
+            integrate_token: context.integrate_token,
+            pr_base_lookup: context.pr_base_lookup,
+            dir_target_lookup: Some(&target),
+            alias_lookup: Some(&alias),
+            branch_lookup: context.branch_lookup,
+            discard_lookup: context.discard_lookup,
+            root_checkout: context.root_checkout,
+        };
+        evaluate_report_at(&command, &context, &temp.path().join("session"))
     }
 
     // Aliases (TSK-112, primary ruling after round 4): a subcommand that is
@@ -17524,12 +18482,11 @@ mod tests {
         let p = default_policy();
         assert!(blocks(&evaluate("git frobnicate", &ctx(&p, "feat/x"))));
         // Controls: a builtin wins over an alias of its name, as in git; an
-        // alias to a read-only command, a name that is no alias, and a commit
+        // alias to a read-only command and a commit
         // alias on a feature branch pass.
         for (cmd, session) in [
             ("git -c alias.log=commit log", "main"),
             ("git st", "main"),
-            ("git frobnicate", "main"),
             ("git ci -m x", "feat/s"),
             ("git -c alias.x=commit x -m y", "feat/s"),
             ("echo \"$HOME\" && git -c alias.x=status x", "main"),
@@ -17538,6 +18495,8 @@ mod tests {
             let r = report(cmd, session);
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
         }
+        // Unknown programs can carry commands outside the catalog.
+        assert!(has(&report("git frobnicate", "main"), "git.hook_integrity"));
     }
 
     #[test]
@@ -17992,9 +18951,14 @@ mod tests {
                 .starts_with("`git commit`: target unresolved: `$DEST`"));
             assert!(r.notes[0].remedy.contains("literal path"), "{}", r.notes[0]);
         }
-        // A read of an unresolved target is not a mutation: allowed, noted.
+        // Status can run a configured filesystem monitor, so its unresolved
+        // command settings refuse even though it does not mutate refs.
         let r = report("git -C \"$DEST\" status", "feat/s");
-        assert!(r.violations.is_empty(), "{:?}", r.violations);
+        assert!(
+            has_rule(&r.violations, "git.hook_integrity"),
+            "{:?}",
+            r.violations
+        );
         assert_eq!(r.notes.len(), 1);
     }
 
