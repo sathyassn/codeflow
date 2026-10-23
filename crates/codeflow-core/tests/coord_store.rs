@@ -64,6 +64,7 @@ fn item(title: &str, stream: &str, holder: &str) -> FollowUp {
         links: Vec::new(),
         no_link_reason: Some("nothing to link yet".into()),
         next_check: coord::format_time(coord::now_secs() + 600),
+        schedule: None,
         waits_on: Vec::new(),
         awaiting_operator: None,
         rejected_suggestions: Vec::new(),
@@ -752,6 +753,7 @@ fn observed_item(
         reopened: Vec::new(),
         purged: Vec::new(),
         baseline: Vec::new(),
+        identity_purged: false,
         last_sequence: 0,
     };
     record.observed = due::observe_item(&probe, &folded, &[], fake);
@@ -1555,7 +1557,7 @@ fn a_work_branch_named_as_target_is_never_a_target() {
         root,
         &["remote", "add", "origin", origin.path().to_str().unwrap()],
     );
-    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["push", "-q", "-u", "origin", "main"]);
     git(root, &["checkout", "-qb", "fix/TSK-001-fixture"]);
     std::fs::write(
         root.join("project-management/tasks/TSK-001.md"),

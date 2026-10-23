@@ -505,8 +505,7 @@ where
             kept.push(draft);
             continue;
         };
-        let purged = super::transition::purged_key(key);
-        if let Some((sequence, _)) = ledger.keys.get(&purged) {
+        if let Some(sequence) = ledger.purged_keys.get(&super::transition::purged_key(key)) {
             duplicate_of.get_or_insert(*sequence);
             continue;
         }
@@ -577,6 +576,7 @@ where
             comment: draft.comment,
             idempotency_key: draft.idempotency_key,
             expected_revision: draft.expected_revision,
+            purged: false,
             data: draft.data.to_value(),
         };
         let data = super::schema::validate(&envelope).map_err(CoordError::Refused)?;
@@ -722,7 +722,11 @@ pub struct Purged {
     /// Quarantined lines of the item that were removed; other items' lines
     /// stay.
     pub quarantine_removed: usize,
-    /// The purge event's sequence.
+    /// Quarantine files that still hold the item's id in a line whose
+    /// subject could not be established; reported, never claimed purged.
+    pub retained: Vec<PathBuf>,
+    /// The purge event's sequence (the last sequence when only quarantine
+    /// was purged).
     pub sequence: u64,
 }
 
@@ -789,6 +793,7 @@ fn purge_value(value: &mut serde_json::Value, keep_source: bool) {
 ///
 /// As [`commit`], and a refusal when the subject is unknown or the actor
 /// does not hold it.
+#[allow(clippy::too_many_lines)]
 pub fn purge(
     paths: &Paths,
     actor: &RecordedBy,
@@ -802,11 +807,28 @@ pub fn purge(
         return Err(CoordError::ReadOnly(damage));
     }
     let ledger = &before.ledger;
-    let item = ledger
-        .items
-        .get(subject)
-        .ok_or_else(|| CoordError::Refused(format!("{subject} is not in this ledger")))?;
     let bound = ledger.bind(actor).map_err(CoordError::Refused)?;
+    let Some(item) = ledger.items.get(subject) else {
+        // An item that survives only in quarantine (its events fell into a
+        // damaged suffix): the operator may purge its quarantined lines.
+        if bound != super::transition::Bound::Operator {
+            return Err(CoordError::Refused(format!(
+                "{subject} is not in this ledger; only the operator purges an item that survives only in quarantine"
+            )));
+        }
+        let (quarantine_removed, retained) = purge_quarantine(paths, subject)?;
+        if quarantine_removed == 0 && retained.is_empty() {
+            return Err(CoordError::Refused(format!(
+                "{subject} is neither in this ledger nor in quarantine"
+            )));
+        }
+        return Ok(Purged {
+            lines: 0,
+            quarantine_removed,
+            retained,
+            sequence: ledger.last_sequence,
+        });
+    };
     if !super::transition::holds(&bound, item) {
         return Err(CoordError::Refused(
             "only the holder or the operator purges a follow-up".into(),
@@ -822,24 +844,27 @@ pub fn purge(
         if value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject) {
             let added =
                 value.get("event").and_then(serde_json::Value::as_str) == Some("item_added");
+            // The envelope's own flag, never a text prefix, says an earlier
+            // purge already made this event's identity digests.
+            let already = value.get("purged") == Some(&serde_json::Value::Bool(true));
             if let Some(object) = value.as_object_mut() {
                 if object.contains_key("comment") {
                     object.insert("comment".into(), "[purged]".into());
                 }
-                // Identity stays, as a digest: a retry of the purged
-                // operation is still recognised, and two purged items stay
-                // distinct, without any of their text.
-                if let Some(key) = object
-                    .get("idempotency_key")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-                {
-                    let opaque = if key.starts_with(super::transition::PURGED_KEY) {
-                        key
-                    } else {
-                        super::transition::purged_key(&key)
-                    };
-                    object.insert("idempotency_key".into(), opaque.into());
+                if !already {
+                    // Identity stays, as a digest: a retry of the purged
+                    // operation is still recognised, and two purged items
+                    // stay distinct, without any of their text.
+                    if let Some(key) = object
+                        .get("idempotency_key")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                    {
+                        object.insert(
+                            "idempotency_key".into(),
+                            super::transition::purged_key(&key).into(),
+                        );
+                    }
                 }
                 if let Some(data) = object.get_mut("data") {
                     let reference = data
@@ -848,14 +873,15 @@ pub fn purge(
                         .map(str::to_string);
                     purge_value(data, added);
                     if let Some(reference) = reference {
-                        let opaque = if reference.starts_with(super::transition::PURGED_REFERENCE) {
+                        data["source_reference"] = if already {
                             reference
                         } else {
                             super::transition::purged_reference(&reference)
-                        };
-                        data["source_reference"] = opaque.into();
+                        }
+                        .into();
                     }
                 }
+                object.insert("purged".into(), true.into());
             }
             lines += 1;
         }
@@ -879,6 +905,7 @@ pub fn purge(
         comment: None,
         idempotency_key: None,
         expected_revision: None,
+        purged: false,
         data: Data::ItemPurged(super::schema::Purge { events: lines }).to_value(),
     };
     let data = super::schema::validate(&envelope).map_err(CoordError::Refused)?;
@@ -889,63 +916,98 @@ pub fn purge(
     out.push_str(&serde_json::to_string(&envelope).unwrap_or_default());
     out.push('\n');
     durable_write(&paths.events, out.as_bytes())?;
-    let quarantine_removed = purge_quarantine(paths, subject)?;
+    let (quarantine_removed, retained) = purge_quarantine(paths, subject)?;
     let _ = heartbeat(paths, actor, envelope.sequence);
     Ok(Purged {
         lines: usize::try_from(lines).unwrap_or(usize::MAX),
         quarantine_removed,
+        retained,
         sequence: envelope.sequence,
     })
 }
 
-/// Whether one quarantined line belongs to `subject`: by its parsed
-/// `subject_id` where it parses, otherwise by a `subject_id` field naming it
-/// in any spacing (a torn or damaged line holds one event).
-fn names_subject(line: &str, subject: &str) -> bool {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-        return value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject);
+/// Whether one quarantined line belongs to `subject`. A line that parses
+/// is judged by its `subject_id`; any other line by a `subject_id` field in
+/// its bytes, in any JSON spacing, without decoding the rest (a damaged
+/// byte elsewhere does not hide it). `None` when the line names the
+/// subject's id but no `subject_id` field can be read: ambiguous.
+fn names_subject(line: &[u8], subject: &str) -> Option<bool> {
+    if let Some(value) = std::str::from_utf8(line)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    {
+        return Some(value.get("subject_id").and_then(serde_json::Value::as_str) == Some(subject));
     }
-    let Some(position) = line.find("\"subject_id\"") else {
-        return false;
-    };
-    let rest = line[position + "\"subject_id\"".len()..].trim_start();
-    rest.strip_prefix(':')
-        .map(str::trim_start)
-        .and_then(|rest| rest.strip_prefix('"'))
-        .is_some_and(|rest| {
-            rest.strip_prefix(subject)
-                .is_some_and(|after| after.starts_with('"'))
-        })
+    let field = b"\"subject_id\"";
+    let mut start = 0;
+    while let Some(found) = line[start..]
+        .windows(field.len())
+        .position(|window| window == field)
+    {
+        let mut rest = &line[start + found + field.len()..];
+        let skip = |bytes: &[u8]| -> usize {
+            bytes
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+                .count()
+        };
+        rest = &rest[skip(rest)..];
+        if let Some(after) = rest.strip_prefix(b":") {
+            let after = &after[skip(after)..];
+            if let Some(value) = after.strip_prefix(b"\"") {
+                let end = value.iter().position(|byte| *byte == b'"');
+                if let Some(end) = end {
+                    return Some(&value[..end] == subject.as_bytes());
+                }
+            }
+        }
+        start += found + field.len();
+    }
+    let mentions = line
+        .windows(subject.len())
+        .any(|window| window == subject.as_bytes());
+    if mentions {
+        None
+    } else {
+        Some(false)
+    }
 }
 
 /// Remove the subject's lines from every quarantined fragment, keeping every
-/// other item's lines; a fragment left empty is removed. Returns how many
-/// lines were removed.
-fn purge_quarantine(paths: &Paths, subject: &str) -> Result<usize, CoordError> {
+/// other item's lines byte for byte; a fragment left empty is removed.
+/// Returns how many lines were removed and the fragments that still name
+/// the subject in a line whose subject could not be read.
+fn purge_quarantine(paths: &Paths, subject: &str) -> Result<(usize, Vec<PathBuf>), CoordError> {
     if crate::absence::proven_absent(&paths.quarantine)
         .map_err(|error| unwritten(&paths.quarantine, &error))?
     {
-        return Ok(0);
+        return Ok((0, Vec::new()));
     }
     let entries =
         fs::read_dir(&paths.quarantine).map_err(|error| unwritten(&paths.quarantine, &error))?;
     let mut removed = 0;
+    let mut retained = Vec::new();
     for entry in entries {
         let path = entry
             .map_err(|error| unwritten(&paths.quarantine, &error))?
             .path();
         let bytes = fs::read(&path).map_err(|error| unwritten(&path, &error))?;
-        // Bytes, line by line: other items' lines are kept exactly as they
-        // were, whatever they hold.
         let mut kept: Vec<u8> = Vec::with_capacity(bytes.len());
         let mut dropped = 0;
+        let mut ambiguous = false;
         for line in bytes.split_inclusive(|byte| *byte == b'\n') {
             let body = line.strip_suffix(b"\n").unwrap_or(line);
-            if std::str::from_utf8(body).is_ok_and(|text| names_subject(text, subject)) {
-                dropped += 1;
-            } else {
-                kept.extend_from_slice(line);
+            match names_subject(body, subject) {
+                Some(true) => dropped += 1,
+                Some(false) => kept.extend_from_slice(line),
+                None => {
+                    ambiguous = true;
+                    kept.extend_from_slice(line);
+                }
             }
+        }
+        if ambiguous {
+            retained.push(path.clone());
         }
         if dropped == 0 {
             continue;
@@ -960,7 +1022,7 @@ fn purge_quarantine(paths: &Paths, subject: &str) -> Result<usize, CoordError> {
     if removed > 0 {
         sync_dir(&paths.quarantine)?;
     }
-    Ok(removed)
+    Ok((removed, retained))
 }
 
 /// What [`repair`] did.

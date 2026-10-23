@@ -907,16 +907,26 @@ pub fn is_landing_target(name: &str) -> bool {
     crate::ids::inventory::is_landing_branch(name)
 }
 
-/// The epic ids whose records the default work target's tip holds; an
-/// `integration/EPC-NNN-...` line counts as a landing line only for one of
-/// these. Empty when the default target cannot be read.
-fn default_tip_epics(repo_root: &Path, repo: &Repository) -> BTreeSet<String> {
+/// The integration lines the default work target's records name: every
+/// task's declared `integration/` target there, as a bare branch name. An
+/// `integration/` line counts as a landing line only when it is one of
+/// these, so a line someone made up and pushed, even under a real epic
+/// number, is not one. Empty when the default target cannot be read.
+fn default_tip_lines(repo_root: &Path, repo: &Repository) -> BTreeSet<String> {
     let Ok(Some(default)) = super::default_work_target(repo_root) else {
         return BTreeSet::new();
     };
     let Ok(Some((_, tip))) = resolve_target(repo_root, repo, &default) else {
         return BTreeSet::new();
     };
+    let remotes: Vec<String> = repo
+        .remotes()
+        .map(|names| {
+            (0..names.len())
+                .filter_map(|index| names.get(index).ok().flatten().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     repo.find_commit(tip)
         .and_then(|commit| commit.tree())
         .ok()
@@ -924,41 +934,46 @@ fn default_tip_epics(repo_root: &Path, repo: &Repository) -> BTreeSet<String> {
         .map(|records| {
             records
                 .values()
-                .filter(|record| record.kind == RecordKind::Epic)
-                .map(|record| record.id.clone())
+                .filter(|record| record.kind == RecordKind::Task)
+                .filter_map(|record| record.integration_target.as_deref())
+                .map(|declared| {
+                    let name = declared
+                        .strip_prefix("refs/remotes/")
+                        .or_else(|| declared.strip_prefix("refs/heads/"))
+                        .unwrap_or(declared);
+                    // Only a configured remote's name is a prefix to drop.
+                    remotes
+                        .iter()
+                        .find_map(|remote| {
+                            name.strip_prefix(remote.as_str())
+                                .and_then(|rest| rest.strip_prefix('/'))
+                        })
+                        .unwrap_or(name)
+                        .to_string()
+                })
+                .filter(|name| name.starts_with(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX))
                 .collect()
         })
         .unwrap_or_default()
 }
 
 /// Whether a bare branch name is a landing line this project recognises:
-/// `main`, `master`, or an `integration/EPC-NNN-...` line whose epic the
-/// default target holds. A line an agent made up names no such epic.
+/// `main`, `master`, or an `integration/` line the default target's records
+/// name as a task's target.
 #[must_use]
-pub fn is_recognised_landing(name: &str, epics: &BTreeSet<String>) -> bool {
-    if matches!(name, "main" | "master") {
-        return true;
-    }
-    name.strip_prefix(crate::hooks::policy::INTEGRATION_BRANCH_PREFIX)
-        .and_then(|rest| {
-            let digits: String = rest
-                .strip_prefix("EPC-")?
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect();
-            (digits.len() >= 3).then(|| format!("EPC-{digits}"))
-        })
-        .is_some_and(|epic| epics.contains(&epic))
+pub fn is_recognised_landing(name: &str, lines: &BTreeSet<String>) -> bool {
+    matches!(name, "main" | "master") || lines.contains(name)
 }
 
-/// The landing lines a pull request base may name, for the observer.
+/// The integration lines a pull request base or a task target may name,
+/// for the observer.
 ///
 /// # Errors
 ///
 /// Returns the reason when the repository cannot be opened.
-pub fn landing_epics(repo_root: &Path) -> Result<BTreeSet<String>, String> {
+pub fn landing_lines(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    Ok(default_tip_epics(repo_root, &repo))
+    Ok(default_tip_lines(repo_root, &repo))
 }
 
 /// Whether a completion is bound to its review as CI binds it: the
@@ -1023,13 +1038,29 @@ fn completion_bound(
     // A completion that landed by a merge binds as its pull request bound
     // it: at the head the merge brought in, which holds the reviewed commit,
     // for a merge on the tip's first-parent line.
+    // The head must carry this completion: the task complete there with the
+    // same active block. A head that still holds the task todo, or an empty
+    // completion range, is no proof.
+    let carries = |head: &str| -> bool {
+        git2::Oid::from_str(head)
+            .and_then(|oid| repo.find_commit(oid))
+            .and_then(|commit| commit.tree())
+            .ok()
+            .and_then(|tree| records_from_tree(repo, &tree).ok())
+            .and_then(|records| {
+                records.get(task_id).map(|record| {
+                    record.status == "complete" && record.reviewed.as_deref() == Some(reviewed)
+                })
+            })
+            .unwrap_or(false)
+    };
     landing_heads(repo_root, tip)
         .into_iter()
         .find(|head| {
             crate::git::commit_reachable_from(repo_root, reviewed, std::slice::from_ref(head))
                 .unwrap_or(false)
         })
-        .is_some_and(|head| !unbound(&head))
+        .is_some_and(|head| carries(&head) && !unbound(&head))
 }
 
 /// The second parents of the merges on `tip`'s first-parent line, newest
@@ -1084,35 +1115,31 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
     let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
-    let epics = default_tip_epics(repo_root, &repo);
-    let remotes: Vec<String> = repo
-        .remotes()
-        .map(|names| {
-            (0..names.len())
-                .filter_map(|index| names.get(index).ok().flatten().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    // A declared target as a bare branch name: a configured remote's prefix
-    // is removed (`origin/main` is `main`); any other prefix is part of the
-    // name (`fix/main` stays a work branch).
-    let branch_of = |declared: &str| -> String {
-        let name = declared.strip_prefix("refs/heads/").unwrap_or(declared);
-        let name = name.strip_prefix("refs/remotes/").unwrap_or(name);
-        remotes
-            .iter()
-            .find_map(|remote| {
-                name.strip_prefix(remote.as_str())
-                    .and_then(|rest| rest.strip_prefix('/'))
-            })
+    let lines = default_tip_lines(repo_root, &repo);
+    // A declared target as the one remote-tracking ref it names, by the
+    // resolver's own remote rules (`target_fetch_remote`): `origin/main` is
+    // origin's `main`, a bare name is its local branch's upstream remote or
+    // `origin`. Another remote never stands in, and a target whose tracking
+    // ref is absent stays unknown.
+    let tracking = |declared: &str| -> Option<(String, String)> {
+        let remote = target_fetch_remote(&repo, declared).ok()??;
+        let name = declared
+            .strip_prefix("refs/remotes/")
+            .or_else(|| declared.strip_prefix("refs/heads/"))
+            .unwrap_or(declared);
+        let branch = name
+            .strip_prefix(remote.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
             .unwrap_or(name)
-            .to_string()
+            .to_string();
+        repo.find_remote(&remote).ok()?;
+        is_recognised_landing(&branch, &lines)
+            .then(|| (format!("refs/remotes/{remote}/{branch}"), branch))
     };
-    let landing: BTreeSet<String> = declared_targets(repo_root)?
+    let landing: BTreeSet<(String, String)> = declared_targets(repo_root)?
         .iter()
         .chain(default.iter())
-        .map(|declared| branch_of(declared))
-        .filter(|branch| is_recognised_landing(branch, &epics))
+        .filter_map(|declared| tracking(declared))
         .collect();
     let active: BTreeSet<String> = backlog(repo_root)
         .map(|backlog| {
@@ -1127,11 +1154,10 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
     let mut ambiguous = BTreeSet::new();
     // Only the remote-tracking refs of configured remotes are read: a
     // completion counts on a line the remote holds, never on a local branch.
-    for branch in &landing {
-        for remote in &remotes {
-            let reference = format!("refs/remotes/{remote}/{branch}");
+    for (reference, branch) in &landing {
+        {
             let Ok(commit) = repo
-                .find_reference(&reference)
+                .find_reference(reference)
                 .and_then(|found| found.peel_to_commit())
             else {
                 continue;
@@ -1157,7 +1183,7 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                 else {
                     continue;
                 };
-                if branch_of(&declared) != *branch {
+                if tracking(&declared).as_ref().map(|(seen, _)| seen) != Some(reference) {
                     continue;
                 }
                 if let Some(seen) = out.get(&record.id) {
@@ -1172,7 +1198,7 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
                         status: record.status.clone(),
                         uid: record.uid.clone(),
                         target: branch.clone(),
-                        reference: shown(&reference),
+                        reference: shown(reference),
                         tip: tip.to_string(),
                         claimed: active.contains(&record.id),
                         accepted: record.reviewed.as_deref().is_some_and(|reviewed| {

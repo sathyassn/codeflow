@@ -500,6 +500,7 @@ fn add_cmd(paths: &Paths, root: &Path, actor: &Actor, add: &AddArgs) -> Result<(
             links: links.clone(),
             no_link_reason: add.no_link_reason.clone(),
             next_check: String::new(),
+            schedule: add.next_check.clone(),
             waits_on: add.waits_on.clone(),
             awaiting_operator: None,
             rejected_suggestions: Vec::new(),
@@ -514,6 +515,7 @@ fn add_cmd(paths: &Paths, root: &Path, actor: &Actor, add: &AddArgs) -> Result<(
         reopened: Vec::new(),
         purged: Vec::new(),
         baseline: Vec::new(),
+        identity_purged: false,
         last_sequence: 0,
     };
     let observed = due::observe_item(&probe, ledger_now, &liveness, &mut watcher);
@@ -863,6 +865,12 @@ fn purge_cmd(paths: &Paths, actor: &Actor, id: &str) -> Result<(), CoordError> {
         "{id}: every free-text field of {} events replaced with [purged]; ids, links, times and order kept; {} of its quarantined lines removed, other items' kept; recorded as sequence {}",
         purged.lines, purged.quarantine_removed, purged.sequence
     );
+    for path in &purged.retained {
+        eprintln!(
+            "follow: warning: {} still names {id} in a line whose subject cannot be read; it was kept, not purged: inspect it and remove it by hand if it is {id}'s",
+            path.display()
+        );
+    }
     Ok(())
 }
 

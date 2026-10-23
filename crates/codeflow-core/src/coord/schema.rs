@@ -162,6 +162,10 @@ pub struct Envelope {
     /// The subject's revision the writer read; a stale one is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<u64>,
+    /// Set by `follow purge` on each event it rewrote: this event's key and
+    /// source reference are digests that purge made, never user text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub purged: bool,
     pub data: Value,
 }
 
@@ -326,6 +330,10 @@ pub struct FollowUp {
     pub no_link_reason: Option<String>,
     /// The effective next check, UTC.
     pub next_check: String,
+    /// The schedule the adder asked for (`30m`, a UTC time), when one was
+    /// given; with none, `next_check` is the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
     /// Other follow-ups or lanes, possibly in other streams, this waits on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waits_on: Vec<String>,
@@ -844,6 +852,9 @@ fn validate_follow_up(item: &FollowUp) -> Result<(), String> {
         (false, None) => {}
     }
     super::parse_time(&item.next_check)?;
+    if let Some(schedule) = &item.schedule {
+        check_required("schedule", schedule, SHORT, false)?;
+    }
     validate_waits(&item.waits_on)?;
     if let Some(condition) = &item.awaiting_operator {
         check_required("awaiting_operator", condition, MEDIUM, true)?;

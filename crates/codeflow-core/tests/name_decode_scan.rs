@@ -5790,13 +5790,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // TSK-422: JSON whitespace around a subject_id field of a quarantined line; the subject itself is compared exactly.
+    // TSK-422: A quarantined line that is not UTF-8 is judged by its subject_id bytes instead; it is never skipped as absent.
     (
         "crates/codeflow-core/src/coord/store.rs",
         "names_subject",
-        "trim_start",
-        2,
-        "format-contract",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // TSK-422: The CI binding judges at a head named by a commit id; an unreadable id counts as unbound, never as bound.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "completion_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
     ),
     // TSK-422: Free text scanned line by line for secrets; it decides only what is withheld.
     (
@@ -5806,10 +5814,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // TSK-422: The default target's epics name recognised landing lines; an unreadable tip recognises none, so nothing counts as landed.
+    // TSK-422: The default target's records name recognised integration lines; an unreadable tip recognises none, so nothing counts as landed.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
-        "default_tip_epics",
+        "default_tip_lines",
         "obtain-absent:find_commit",
         1,
         "unproven",

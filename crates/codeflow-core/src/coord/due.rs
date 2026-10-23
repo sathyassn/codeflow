@@ -73,7 +73,7 @@ pub struct RepoObserver {
     tasks: Option<BTreeMap<String, TaskView>>,
     pulls: BTreeMap<(String, u64), Option<PullView>>,
     branches: BTreeMap<(String, String), Option<bool>>,
-    epics: Option<std::collections::BTreeSet<String>>,
+    lines: Option<std::collections::BTreeSet<String>>,
 }
 
 impl RepoObserver {
@@ -89,7 +89,7 @@ impl RepoObserver {
             tasks: None,
             pulls: BTreeMap::new(),
             branches: BTreeMap::new(),
-            epics: None,
+            lines: None,
         }
     }
 }
@@ -137,6 +137,10 @@ impl Observer for RepoObserver {
                 command
                     .current_dir(&root)
                     .env("GIT_TERMINAL_PROMPT", "0")
+                    // The stock ssh client: no configured or inherited
+                    // command runs in its place.
+                    .env_remove("GIT_SSH")
+                    .env_remove("GIT_SSH_COMMAND")
                     // Only https and ssh transports, and the stock upload
                     // pack: a remote's configured command is never run.
                     .args([
@@ -146,6 +150,8 @@ impl Observer for RepoObserver {
                         "protocol.https.allow=always",
                         "-c",
                         "protocol.ssh.allow=always",
+                        "-c",
+                        "core.sshCommand=ssh",
                         "ls-remote",
                         "--upload-pack=git-upload-pack",
                         "--heads",
@@ -185,10 +191,10 @@ impl Observer for RepoObserver {
 
     fn landing_base(&mut self, base: &str) -> bool {
         let root = self.root.clone();
-        let epics = self.epics.get_or_insert_with(|| {
-            crate::workgraph::readiness::landing_epics(&root).unwrap_or_default()
+        let lines = self.lines.get_or_insert_with(|| {
+            crate::workgraph::readiness::landing_lines(&root).unwrap_or_default()
         });
-        crate::workgraph::readiness::is_recognised_landing(base, epics)
+        crate::workgraph::readiness::is_recognised_landing(base, lines)
     }
 }
 

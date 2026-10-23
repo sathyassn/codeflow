@@ -67,6 +67,9 @@ pub struct Item {
     pub reopened: Vec<String>,
     /// Each purge of the item's text: when and by which role.
     pub purged: Vec<(String, String)>,
+    /// The add event was rewritten by a purge: its source reference is a
+    /// digest.
+    pub identity_purged: bool,
     /// The links' states last recorded (at add, update or check): a change
     /// from these makes the item due.
     pub baseline: Vec<super::schema::Observation>,
@@ -127,6 +130,9 @@ pub struct Ledger {
     /// Idempotency key to the sequence that recorded it and the digest of
     /// the operation it recorded.
     pub keys: BTreeMap<String, (u64, String)>,
+    /// The digest form of each key a purge replaced, to its sequence: a
+    /// retry of a purged operation is acknowledged, never rewritten.
+    pub purged_keys: BTreeMap<String, u64>,
     /// The highest follow-up and lane numbers seen in the log.
     pub max_follow_up: u64,
     pub max_lane: u64,
@@ -447,7 +453,9 @@ impl Ledger {
         if let Some(lane) = self.lanes.get_mut(subject) {
             lane.last_sequence = envelope.sequence;
         }
-        if let Some(key) = &envelope.idempotency_key {
+        if let (Some(key), true) = (&envelope.idempotency_key, envelope.purged) {
+            self.purged_keys.insert(key.clone(), envelope.sequence);
+        } else if let Some(key) = &envelope.idempotency_key {
             let subject = Some(envelope.subject_id.as_str());
             let digest = operation_digest(
                 envelope.event,
@@ -512,6 +520,7 @@ impl Ledger {
                 proofs: Vec::new(),
                 reopened: Vec::new(),
                 purged: Vec::new(),
+                identity_purged: envelope.purged,
                 baseline: record.observed.clone(),
                 last_sequence: envelope.sequence,
             },
@@ -524,19 +533,20 @@ impl Ledger {
     #[must_use]
     pub fn exact_duplicate(&self, record: &FollowUp) -> Option<String> {
         let reference = record.source_reference.as_ref()?;
-        // A purged item keeps its identity as a digest: the same source is
-        // still a duplicate of it.
+        // A purged item keeps its identity as a digest (its add event says
+        // so with its own flag): the same source is still a duplicate.
         let purged = purged_reference(reference);
         self.items
             .values()
             .find(|item| {
+                let wanted = if item.identity_purged {
+                    &purged
+                } else {
+                    reference
+                };
                 item.state == ItemState::Open
                     && item.record.source == record.source
-                    && item
-                        .record
-                        .source_reference
-                        .as_ref()
-                        .is_some_and(|existing| existing == reference || *existing == purged)
+                    && item.record.source_reference.as_ref() == Some(wanted)
             })
             .map(|item| item.id.clone())
     }
@@ -882,12 +892,11 @@ impl Ledger {
     }
 }
 
-/// The prefix of an idempotency key kept, as a digest, after its item was
-/// purged.
-pub const PURGED_KEY: &str = "purged:";
-/// The prefix of a source reference kept, as a digest, after its item was
-/// purged.
-pub const PURGED_REFERENCE: &str = "[purged ";
+/// The form of an idempotency key a purge replaced. Only the event's
+/// `purged` flag says a purge made it; the prefix alone proves nothing.
+const PURGED_KEY: &str = "purged:";
+/// The form of a source reference a purge replaced; see [`PURGED_KEY`].
+const PURGED_REFERENCE: &str = "[purged ";
 
 fn digest_of(text: &str) -> String {
     crate::scaffold::sha256_hex(text.as_bytes())[..32].to_string()
@@ -922,6 +931,8 @@ pub fn operation_digest(
 ) -> String {
     use super::schema::EventKind;
     let volatile: &[&str] = match kind {
+        // The add's `schedule` (what the adder asked for) stays; the
+        // absolute `next_check` computed from it is left out.
         EventKind::ItemAdded => &["next_check", "observed"],
         EventKind::ItemChecked => &["observations"],
         EventKind::ItemUpdated => &["observed"],
