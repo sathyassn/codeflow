@@ -240,16 +240,16 @@ fn land(root: &Path, id: &str) {
     // Only the status and the Closeout change after the review.
     let path = root.join(format!("project-management/tasks/{id}.md"));
     let record = std::fs::read_to_string(&path).unwrap();
-    let title = record
-        .lines()
-        .find_map(|line| line.strip_prefix("title: "))
-        .unwrap()
-        .to_string();
-    write(
-        root,
-        &format!("project-management/tasks/{id}.md"),
-        &accepted(id, &title, &reviewed),
-    );
+    let block = accepted(id, "unused", &reviewed);
+    let closeout = block.split("\n## Closeout").nth(1).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n## Closeout{closeout}",
+            record.replacen("status: todo", "status: complete", 1)
+        ),
+    )
+    .unwrap();
     git(root, &["commit", "-qam", "docs(tasks): complete the task"]);
     git(root, &["checkout", "-q", "main"]);
     git(
@@ -2353,4 +2353,129 @@ fn a_changed_acceptance_block_under_the_old_review_reopens() {
     let out = ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
     assert!(out.contains("FU-001 reopened"), "{out}");
     assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+}
+
+// ---------------------------------------------------------------------------
+// Review round 6; each case failed at 41a543364.
+// ---------------------------------------------------------------------------
+
+/// V1: a landing merge that changes the work while keeping the completion
+/// is not the clean re-merge of its parents, so it inherits no proof; a
+/// clean landing merge still closes.
+#[test]
+fn an_edited_landing_merge_inherits_no_proof() {
+    for edit in [false, true] {
+        let f = fixture();
+        let paths = bind(&f.root);
+        let by = coordinator("WS-001", "c1");
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args(
+                "reviewed implementation landed",
+                &["--link", "fulfils:TSK-001"],
+            ),
+        ));
+        git(&f.root, &["checkout", "-qb", "task/TSK-001-reviewed"]);
+        let reviewed = reviewed_work(&f.root, "TSK-001");
+        write(
+            &f.root,
+            "project-management/tasks/TSK-001.md",
+            &accepted("TSK-001", "ship the cache warmer", &reviewed),
+        );
+        git(&f.root, &["commit", "-qam", "docs: complete reviewed task"]);
+        git(&f.root, &["checkout", "-q", "main"]);
+        git(
+            &f.root,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "--no-commit",
+                "task/TSK-001-reviewed",
+            ],
+        );
+        if edit {
+            write(
+                &f.root,
+                "src/TSK-001.txt",
+                "UNREVIEWED replacement at merge\n",
+            );
+        }
+        git(&f.root, &["add", "."]);
+        git(&f.root, &["commit", "-qm", "feat: merge the task"]);
+        git(&f.root, &["push", "-q", "origin", "main"]);
+        ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+        let closed = matches!(folded(&paths).items["FU-001"].state, ItemState::Closed(_));
+        assert_eq!(closed, !edit, "edit={edit}");
+    }
+}
+
+/// V2: after a completion, the record's criteria stay as the landing gate
+/// keeps them. For an epic task, changing a completed criterion's text
+/// without a new review (the acceptance block untouched) is a frozen-
+/// criteria finding and voids the proof. For a standalone task the gate's
+/// correction route (ADR-0080: a completed standalone task's criteria text
+/// may be corrected by a planning-only change) accepts the same edit, so
+/// the proof stands.
+#[test]
+fn a_changed_criterion_after_the_completion_voids_the_proof() {
+    for epic in [true, false] {
+        let f = fixture();
+        if epic {
+            write(
+                &f.root,
+                "project-management/epics/EPC-001.md",
+                "---\nid: EPC-001\nuid: uid-EPC-001\ntitle: the epic\nstatus: in_progress\nwork_type: feat\ncapabilities: []\nadrs: []\nspecs: []\ncreated: 2026-10-01\n---\n\n# EPC-001: the epic\n",
+            );
+            let rel = f.root.join("project-management/tasks/TSK-001.md");
+            let record = std::fs::read_to_string(&rel).unwrap().replace(
+                "epic_id: null\nstandalone_reason: bounded outcome\n",
+                "epic_id: EPC-001\nstandalone_reason: null\n",
+            );
+            std::fs::write(&rel, record).unwrap();
+            git(&f.root, &["add", "."]);
+            git(
+                &f.root,
+                &["commit", "-qm", "docs(plan): put the task under an epic"],
+            );
+            git(&f.root, &["push", "-q", "origin", "main"]);
+        }
+        let paths = bind(&f.root);
+        let by = coordinator("WS-001", "c1");
+        ok(&cli(
+            &f.root,
+            &by,
+            &add_args(
+                "current acceptance criteria",
+                &["--link", "fulfils:TSK-001"],
+            ),
+        ));
+        land(&f.root, "TSK-001");
+        ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+        assert!(
+            matches!(folded(&paths).items["FU-001"].state, ItemState::Closed(_)),
+            "epic={epic}"
+        );
+        let rel = "project-management/tasks/TSK-001.md";
+        let old = std::fs::read_to_string(f.root.join(rel)).unwrap();
+        let changed = old.replace(
+            "When run, the command shall succeed.",
+            "When run, the command shall succeed and also implement the new unreviewed feature.",
+        );
+        assert_ne!(old, changed);
+        write(&f.root, rel, &changed);
+        git(
+            &f.root,
+            &[
+                "commit",
+                "-qam",
+                "docs: change completed criterion without a new review",
+            ],
+        );
+        git(&f.root, &["push", "-q", "origin", "main"]);
+        ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+        let closed = matches!(folded(&paths).items["FU-001"].state, ItemState::Closed(_));
+        assert_eq!(closed, !epic, "epic={epic}");
+    }
 }

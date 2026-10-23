@@ -5859,6 +5859,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "unproven",
     ),
+    // TSK-422: A merge that cannot be read is not the clean re-merge of its parents, so it inherits no proof.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "completion_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
 ];
 
 const FRAMING_OWNERS: &[(&str, &str, &str)] = &[

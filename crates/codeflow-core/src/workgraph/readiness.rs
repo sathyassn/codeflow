@@ -1092,11 +1092,15 @@ fn completion_of(record: Option<&Record>) -> Completion {
 ///    judged head's first-parent line and must not hold the task complete,
 ///    and
 ///    `completions_in_range(reviewed, head)` must report no finding for the
-///    task. For a merge, no reopen of the task may lie on the first-parent
-///    line between the reviewed commit and M.
+///    task. For a merge, M must be the clean re-merge of its parents, and
+///    no reopen of the task may lie on the first-parent line between the
+///    reviewed commit and M. After the completion, the criteria check a
+///    pull request gets, over the range to `tip`, must report nothing for
+///    the task.
 /// 4. A reopen after the transition voids it; since `tip` holds the task
 ///    complete, any later reopen is followed by a newer transition, which
 ///    is the one judged.
+#[allow(clippy::too_many_lines)]
 fn completion_bound(
     repo_root: &Path,
     repo: &Repository,
@@ -1134,6 +1138,17 @@ fn completion_bound(
     // Rule 3: the head its landing gate judged.
     let head = match parents.get(1) {
         Some(second) if state(second) == state(&transition) => {
+            // A merge passes on its second parent's proof only when it is
+            // the clean re-merge of its parents, as the landing gate
+            // requires: an edited, conflicted or unreadable merge landed a
+            // result nobody reviewed.
+            let clean = git2::Oid::from_str(&transition)
+                .and_then(|oid| repo.find_commit(oid))
+                .ok()
+                .map(|merge| super::acceptance::is_clean_remerge(repo, &merge));
+            if !matches!(clean, Some(Ok(true))) {
+                return false;
+            }
             // Rule 3 for a merge: no reopen of the task on the first-parent
             // line between the reviewed commit and the merge.
             for (commit, parents) in &changes[index + 1..] {
@@ -1179,7 +1194,7 @@ fn completion_bound(
     let Ok(head_oid) = git2::Oid::from_str(&head) else {
         return false;
     };
-    match completions_in_range(
+    let bound = match completions_in_range(
         repo,
         &reviewed,
         &head,
@@ -1193,7 +1208,35 @@ fn completion_bound(
             .iter()
             .any(|finding| !finding.note && finding.message.starts_with(task_id)),
         Err(_) => false,
+    };
+    if !bound {
+        return false;
     }
+    // After the completion, the record's criteria stay as the landing gate
+    // keeps them: the same criteria check a pull request gets, with its
+    // correction route for a completed task, over the range from the
+    // completion to the tip. Any finding for this task voids the proof.
+    if transition != tip.to_string() {
+        let criteria = super::acceptance::task_criteria(repo_root, &transition, task_id, false)
+            .unwrap_or(Criteria::Frozen);
+        match super::acceptance::pull_request_findings(
+            repo_root,
+            &transition,
+            &tip.to_string(),
+            &criteria,
+        ) {
+            Ok(findings) => {
+                if findings
+                    .iter()
+                    .any(|finding| !finding.note && finding.message.starts_with(task_id))
+                {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 /// Every task's state on its own target tip, from the refs as last fetched,
