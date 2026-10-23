@@ -128,6 +128,10 @@ record's `line_adoptions` list: its full 40-hex `commit`, a `reason` and
 the `review` where it was reviewed. The entry lands on the line by a
 reviewed planning pull request that names the epic, or is already on the
 target, and CI prints each adoption on the line's class line.
+A landed adoption also preserves the acceptance binding of tasks landed
+before it, provided the adopted commit leaves their acceptance blocks
+unchanged. An unlanded entry or unreadable adoption history does not
+authorize the binding.
 
 ## PR bodies
 

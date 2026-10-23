@@ -896,8 +896,8 @@ fn a_waiver_amendment_changes_planning_records_only() {
 
 // The binding of a completion made after its task landed (the merge rule):
 // R is the second parent of a clean landing merge M on the completion's
-// first-parent chain, only merges and planning records follow M, and the
-// completion changes planning records only. `task status complete` and
+// first-parent chain, only merges, planning records and landed adoptions
+// follow M, and the completion changes planning records only. `task status complete` and
 // `codeflow ci` apply the same judge.
 
 const LINE: &str = "integration/EPC-001-line";
@@ -1058,6 +1058,112 @@ fn a_late_completion_binds_to_the_landing_merge() {
         assert_passes(&result, what);
         assert!(binding_lines(&result).is_empty(), "{what}: {}", result.1);
     }
+}
+
+fn write_adoption(root: &Path, commit: &str) {
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replacen(
+            "specs: []",
+            &format!("specs: []\nline_adoptions:\n  - commit: {commit}\n    reason: Owner exemption\n    review: https://example.test/pr/2#review"),
+            1,
+        ),
+    );
+}
+
+fn refused_adoption(what: &str) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner exemption\n");
+    if what == "changed acceptance" {
+        write_done(root, "TSK-001", "todo", &reviewed);
+    }
+    let direct = commit(root, "chore: direct exemption");
+    if what != "absent" {
+        git(root, &["switch", "-c", "plan/adopt", LINE]);
+        write_adoption(
+            root,
+            if what == "wrong commit" {
+                &reviewed
+            } else {
+                &direct
+            },
+        );
+        commit(root, "docs: adopt exemption");
+        if what != "branch only" {
+            land(root, "plan/adopt");
+        }
+    }
+    // Keep an unlanded entry in the completion branch for the forgery case.
+    git(root, &["switch", "-c", "plan/complete-tsk001"]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task");
+    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+    let reason = if what == "changed acceptance" {
+        "changes TSK-001's acceptance block"
+    } else {
+        "changes .gitleaksignore after the landing merge"
+    };
+    assert_blocks(&result, what, &["work.acceptance_binding", reason]);
+}
+
+#[test]
+fn a_direct_commit_without_an_adoption_refuses_binding() {
+    refused_adoption("absent");
+}
+
+#[test]
+fn an_adoption_only_on_the_completion_branch_refuses_binding() {
+    refused_adoption("branch only");
+}
+
+#[test]
+fn an_adoption_of_another_commit_refuses_binding() {
+    refused_adoption("wrong commit");
+}
+
+#[test]
+fn an_adopted_commit_that_changes_acceptance_refuses_binding() {
+    refused_adoption("changed acceptance");
+}
+
+/// An owner's direct exemption is reviewed and adopted by a landed planning
+/// PR before a separate planning PR completes the already-landed task.
+#[test]
+fn a_late_completion_binds_after_a_landed_line_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    git(root, &["switch", "-c", "plan/complete-tsk001", LINE]);
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status after adoption");
+    commit(root, "docs: complete the task");
+    assert_passes(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "completion after landed adoption",
+    );
+    land(root, "plan/complete-tsk001");
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "adopted line into main");
+    assert!(
+        result
+            .1
+            .lines()
+            .any(|line| line.contains("pull request class:")
+                && line.contains(&format!("adopts {}", &adopted[..9]))),
+        "{}",
+        result.1
+    );
 }
 
 /// A late completion fails when the landing merge is not the clean

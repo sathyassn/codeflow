@@ -118,6 +118,16 @@ control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_
 fault = ["codeflow-cli --test acceptance_cli a_completion_binds_to_the_reviewed_commit"]
 
 [[journey]]
+text = "a landed line adoption preserves an earlier task's acceptance binding"
+control = ["codeflow-cli --test acceptance_cli a_late_completion_binds_after_a_landed_line_adoption"]
+fault = [
+  "codeflow-cli --test acceptance_cli a_direct_commit_without_an_adoption_refuses_binding",
+  "codeflow-cli --test acceptance_cli an_adoption_only_on_the_completion_branch_refuses_binding",
+  "codeflow-cli --test acceptance_cli an_adoption_of_another_commit_refuses_binding",
+  "codeflow-cli --test acceptance_cli an_adopted_commit_that_changes_acceptance_refuses_binding",
+]
+
+[[journey]]
 text = "a waiver without an amendment"
 control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project"]
 fault = ["codeflow-cli --test acceptance_cli a_waiver_names_its_amendment_on_the_target"]
