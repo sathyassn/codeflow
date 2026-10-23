@@ -165,7 +165,7 @@ Each section lists the event's `data` fields. Every free-text field is
 size-bounded and scanned for secrets after decoding; control and format
 characters are refused. Who may record each follow-up event is the
 permission matrix: any bound actor adds; the holder (or the operator)
-updates, checks, hands over and closes; the holder, the stream's
+updates, checks, hands over, closes and purges; the holder, the stream's
 coordinator or the operator drops (always with a reason) and reopens; any
 coordinator takes an intake item.
 
@@ -205,6 +205,12 @@ session can open, `source` of the observation, `repository`, `target`,
 ### `item_reopened`
 
 `reason`. The old proof stays in history.
+
+### `item_purged`
+
+`events`, the number of the item's events whose free text was replaced.
+Who purged it and when are the envelope's; no content is recorded. The
+holder or the operator.
 
 ### `stream_opened`
 
@@ -276,20 +282,47 @@ No fields. Recorded by the holder or the operator.
   `CODEFLOW_COORD_INSTANCE` and `CODEFLOW_COORD_GENERATION`, and
   `CODEFLOW_COORD_STREAM` for a coordinator; the ledger checks the claim
   against its own log and refuses a stale one. With no role set, a caller
-  only reads. A shell a harness marks as an agent's cannot act as the
-  operator; it records the operator's answer with `--answer-source`.
+  only reads.
+- **Binding is not authentication.** The `CODEFLOW_COORD_*` binding is
+  cooperative ownership among sessions that state their own role truthfully.
+  The instance id and generation are readable in the log, so any process
+  that can run `codeflow` can claim to be any actor. The checks catch stale
+  and mistaken writers, not a hostile one; nothing in the ledger is a
+  security boundary.
+- **The operator.** The operator role fails closed: it is accepted only from
+  an interactive terminal (standard input and error both a terminal) in a
+  shell no harness marks as an agent's. An agent records an operator's
+  answer under its own role with `--answer-source operator`.
 - **Closing.** `follow check` closes an item only when every `fulfils`
-  link is done on its target: the task `complete` in the records on its
-  declared target's tip, a pull request merged, a commit in the target, a
-  branch shown deleted by its remote. A completion on a feature branch never
-  counts. `follow close` records asserted evidence.
+  link is done on its target and every prerequisite and `waits_on` id it
+  declares is met: the task `complete`, with an acceptance block that passes
+  the acceptance rules, on the tip of the landing line its record declares
+  (`main`, `master` or an `integration/` line), with the UID the link
+  pinned; a pull request merged into a landing line; a commit in the
+  target; a branch shown deleted by a remote this clone configures. A link
+  to another repository, a completion on a work branch and an observation
+  that cannot be made never count. The `done_when` text is for people; the
+  machine condition is the links. `follow close` records asserted evidence.
+- **Reopening.** A later `follow check` reopens a machine-verified closure
+  whose condition is now definitely unmet: the task reverted, replaced or no
+  longer accepted, the pull request reopened, the commit gone from the
+  target, the branch recreated. The old proof stays in history.
+- **Observations.** `gh` and `git ls-remote` each run with a 20 second
+  limit; one that does not answer counts as unknown.
+- **Idempotency.** A key is bound to the operation's kind, subject, actor
+  and content. The same key and content again records nothing; the same key
+  with other content or another actor is refused (exit 7). An operation of
+  several events gives each its own key, so a retry after an interruption
+  writes exactly the missing events.
 - **Reads.** `follow list` and `follow snapshot` never write, take a lock or
   refresh a heartbeat. A damaged ledger only warns and shows its valid
   prefix.
 - **Exit status.** 0 done, 1 refused, 2 no repository or unusable input,
   3 busy (another process held the lock past the bounded wait), 4
   read-only (a damaged log), 5 unwritten (a denied write), 6 unavailable (a
-  denied read).
+  denied read), 7 key conflict.
+- **Diagnostics.** A refusal names the field, never a secret-shaped value:
+  such a value is withheld or shown as `[redacted]`.
 - **Not a control.** No gate, hook, CI check or landing reads the ledger.
   Records and pull request bodies never cite FU, LN or WS ids:
   `codeflow validate --docs` flags a task, epic or ADR record that does, and
@@ -310,7 +343,14 @@ No fields. Recorded by the holder or the operator.
   or an unknown newer schema version makes the ledger read-only; reads
   still show the valid prefix with a warning. `codeflow follow repair`
   (the operator) moves the damaged suffix to `quarantine/`.
-- `codeflow follow purge FU-NNN` replaces an item's free text with
-  `[purged]` in the live log, keeping ids, links and order.
+- `codeflow follow purge FU-NNN` (the holder or the operator, judged under
+  the lock) replaces every free-text string of the item's events with
+  `[purged]`, its source reference with `[purged FU-NNN]` and its
+  idempotency keys with opaque ones, keeping ids, link identities, times and
+  order; it removes quarantined fragments that name the item, and records
+  an `item_purged` event with who and when, never the text.
+- On a write, an existing ledger directory or file must belong to the user;
+  group and other access is removed. A failed directory sync is reported,
+  never ignored.
 - There is no compaction. The read path folds 10,000 events once per
   invocation; the measured figure is recorded with the release evidence.
