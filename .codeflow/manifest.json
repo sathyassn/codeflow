@@ -1829,13 +1829,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "9af8a6bf19177ff4c3cecfedbf18c93b479cdacb0a633524312946fab7aea93d",
+      "sha256": "cd846d8099a88f7ed35039bb3190687f5ca54fdbfc0fde32eb9a83f80cd8399b",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "74b0a3d447b0bfd0abf61d579d17050274b881a26600c075588486f48b718042",
+      "sha256": "9356bd8252eca6e0e7e4f47ebe77c742158382ba95a4a396ed90e736b3298205",
       "exec": false
     },
     "docs/architecture.md": {

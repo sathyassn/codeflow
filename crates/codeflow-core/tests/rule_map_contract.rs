@@ -1417,6 +1417,54 @@ fn recorded_authority_and_host_recovery_name_verifiable_evidence() {
     assert!(recovery.contains("treat the route as absent"));
 }
 
+/// The c11 failure must be stopped by always-loaded instructions in both hosts.
+#[test]
+fn forge_account_comparison_is_always_loaded_before_recorded_routes() {
+    let kernel = Kernel::shipped();
+    for tier in [Tier::Standard, Tier::Full] {
+        let rule = kernel
+            .rules_for(tier)
+            .into_iter()
+            .find(|rule| rule.id == "forge-identity")
+            .expect("missing always-loaded forge identity trigger");
+        for clause in [
+            "Before relying on a merge or approval as another person's",
+            "compare each approving or merging account with your own forge login",
+            "`gh auth status`",
+            "If an account matches, it is not independent approval: stop and ask the operator.",
+            "Read \"Recorded rules and delegations\" before using the record or running its route.",
+        ] {
+            assert!(rule.text.contains(clause), "{tier}: trigger lost {clause}");
+        }
+        assert_eq!(rule.see, ["cf-method/references/autonomy.md"]);
+        let agents = kernel.render(agents_output(tier));
+        let always = agents
+            .split_once("## Always rules")
+            .unwrap()
+            .1
+            .split_once("## When you are about to")
+            .unwrap()
+            .0;
+        assert!(always.contains(&rule.text));
+        assert!(always.contains(".agents/skills/cf-method/references/autonomy.md"));
+
+        let claude = kernel.render(&rule_map::Output {
+            asset: "CLAUDE.md.tmpl",
+            tier,
+            file: File::Claude,
+        });
+        let notes = claude
+            .split_once("## Claude-specific notes")
+            .unwrap()
+            .1
+            .split_once("## How the map's rows run in Claude Code")
+            .unwrap()
+            .0;
+        assert!(normalized(notes).contains(&normalized(&rule.text)));
+        assert!(notes.contains(".claude/skills/cf-method/references/autonomy.md"));
+    }
+}
+
 /// The Herdr entry point must not widen the autonomy reference's trust scope.
 #[test]
 fn herdr_first_run_trust_is_limited_to_the_task_worktree() {
