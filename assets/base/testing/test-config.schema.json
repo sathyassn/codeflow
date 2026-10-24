@@ -45,6 +45,26 @@
             "type": "string"
           },
           "description": "Shared input globs that select all targets."
+        },
+        "heavy_wait_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Bounded wait for heavy quick work to acquire the shared gate lock."
+        },
+        "worker_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total workers allocated across concurrent heavy targets. Omitted leaves tool defaults unchanged."
+        },
+        "quick_default_class": {
+          "type": "string",
+          "enum": [
+            "light",
+            "heavy"
+          ],
+          "default": "light",
+          "description": "Default class of undeclared targets in a configured quick mode. The quick-to-essential fallback remains heavy unless a target declares heavy=false."
         }
       },
       "additionalProperties": false
@@ -279,6 +299,15 @@
               "description": "The full execution covers these modes only when the exact command and all dependency evidence match."
             }
           }
+        },
+        "heavy": {
+          "type": "boolean",
+          "description": "Heavy work takes the quick gate lock; false declares light work. Omitted targets are heavy only in the quick-to-essential fallback."
+        },
+        "workers": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Workers needed before this heavy target starts; requires execution.worker_budget and cannot exceed it. Omitted targets share the available budget."
         }
       },
       "additionalProperties": false

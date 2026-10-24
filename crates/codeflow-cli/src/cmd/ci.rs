@@ -544,6 +544,36 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
+    match codeflow_core::hooks::path_policy::PathPolicy::from_git(configured).and_then(|paths| {
+        codeflow_core::hooks::path_policy::range(&root, range.base_sha.as_deref(), &head, &paths)
+    }) {
+        Ok(paths) => {
+            for note in paths.notes {
+                eprintln!("codeflow ci: {}", super::shown(&note));
+            }
+            tagged.extend(
+                paths
+                    .violations
+                    .into_iter()
+                    .map(|violation| TaggedViolation {
+                        sha: None,
+                        violation,
+                    }),
+            );
+            if configured.path_policy.is_active() {
+                ran.push("path-policy");
+            }
+        }
+        Err(error) => tagged.push(TaggedViolation {
+            sha: None,
+            violation: Violation::always_blocking(
+                "git.path_policy",
+                format!("cannot verify introduced paths: {error}"),
+                "repair the named policy source or Git object, then retry",
+            ),
+        }),
+    }
+
     let destination = match args.destination.clone() {
         Some(destination) => Some(destination),
         None => match origin_url(&root) {
