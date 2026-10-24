@@ -119,6 +119,7 @@ fn cli(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
             "CODEFLOW_COORD_GENERATION" => cmd.env("CODEFLOW_COORD_GENERATION", value),
             "CODEFLOW_COORD_STREAM" => cmd.env("CODEFLOW_COORD_STREAM", value),
             "CLAUDECODE" => cmd.env("CLAUDECODE", value),
+            "PATH" => cmd.env("PATH", value),
             other => panic!("the test sets no {other}"),
         };
     }
@@ -2478,4 +2479,70 @@ fn a_changed_criterion_after_the_completion_voids_the_proof() {
         let closed = matches!(folded(&paths).items["FU-001"].state, ItemState::Closed(_));
         assert_eq!(closed, !epic, "epic={epic}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review round 7 reproduction; it failed at 4b6df7628.
+// ---------------------------------------------------------------------------
+
+/// Codex W1 (AC-13): a record read whose Git history read stalls makes the
+/// task unknown within the records bound; the check returns and closes
+/// nothing. Without the stall the same landing closes the item.
+#[cfg(unix)]
+#[test]
+fn a_stalled_record_read_is_unknown_within_its_bound() {
+    use codeflow_core::coord::observe::RECORDS_TIMEOUT;
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("watch the cache warmer", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    // A Git on PATH that stalls the guarded history read the record reader
+    // makes, and runs every other command as the real Git.
+    let bin = f.root.parent().unwrap().join("stalled-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let marker = f.root.parent().unwrap().join("entered-history-read");
+    let real = Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = PathBuf::from(String::from_utf8(real.stdout).unwrap().trim());
+    assert!(real.is_absolute(), "no git on PATH: {}", real.display());
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" log --first-parent \"*) touch '{}'; /bin/sleep 40;; esac\nexec '{}' \"$@\"\n",
+            marker.display(),
+            real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut stalled: Vec<(&str, &str)> = by.clone();
+    stalled.push(("PATH", path.as_str()));
+    let started = std::time::Instant::now();
+    ok(&cli(&f.root, &stalled, &["follow", "check", "--offline"]));
+    let elapsed = started.elapsed();
+    assert!(marker.exists(), "the history read was not exercised");
+    assert!(
+        elapsed < RECORDS_TIMEOUT + std::time::Duration::from_secs(8),
+        "the check waited {elapsed:?}"
+    );
+    assert_eq!(folded(&paths).items["FU-001"].state, ItemState::Open);
+    // The control: the same landing, read without the stall, closes it.
+    ok(&cli(&f.root, &by, &["follow", "check", "--offline"]));
+    assert!(matches!(
+        folded(&paths).items["FU-001"].state,
+        ItemState::Closed(_)
+    ));
 }

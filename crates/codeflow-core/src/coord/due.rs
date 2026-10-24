@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use super::observe::Cache;
 use super::reference::{Link, LinkKind, Target};
 use super::schema::{Evidence, EvidenceKind, Observation};
 use super::store::Liveness;
@@ -63,33 +64,50 @@ pub trait Observer {
 }
 
 /// The observer over a checkout: records on target tips, git, and, when
-/// `online`, `gh` and `git ls-remote`. Each observation is made once per
-/// invocation and cached.
+/// `online`, `gh` and `git ls-remote`. Every observation goes through the
+/// bounded interface in [`super::observe`], each kind within its own limit,
+/// and is kept for the freshness window; a timeout or a failed read is
+/// unknown.
 pub struct RepoObserver {
     root: PathBuf,
-    repository: String,
     online: bool,
     now: u64,
-    tasks: Option<BTreeMap<String, TaskView>>,
-    pulls: BTreeMap<(String, u64), Option<PullView>>,
-    branches: BTreeMap<(String, String), Option<bool>>,
-    lines: Option<std::collections::BTreeSet<String>>,
+    limits: super::observe::Limits,
+    repository: Option<String>,
+    tasks: Cache<(), Option<BTreeMap<String, TaskView>>>,
+    pulls: Cache<(String, u64), Option<PullView>>,
+    branches: Cache<(String, String), Option<bool>>,
+    commits: Cache<String, Option<(bool, String, String)>>,
+    lines: Cache<(), Option<std::collections::BTreeSet<String>>>,
 }
 
 impl RepoObserver {
-    /// An observer over the checkout at `root`; network observations only
-    /// when `online`.
+    /// An observer over the checkout at `root` with the default limits;
+    /// network observations only when `online`.
     #[must_use]
     pub fn new(root: &Path, online: bool) -> Self {
+        Self::with_limits(root, online, super::observe::Limits::default())
+    }
+
+    /// An observer with its own limits and freshness window. The clone's
+    /// repository identity is read here, within the Git limit; unknown when
+    /// it does not finish.
+    #[must_use]
+    pub fn with_limits(root: &Path, online: bool, limits: super::observe::Limits) -> Self {
+        let identity_root = root.to_path_buf();
         Self {
             root: root.to_path_buf(),
-            repository: super::reference::repository_identity(root),
             online,
             now: super::now_secs(),
-            tasks: None,
-            pulls: BTreeMap::new(),
-            branches: BTreeMap::new(),
-            lines: None,
+            limits,
+            repository: super::observe::within(limits.git, move || {
+                super::reference::repository_identity(&identity_root)
+            }),
+            tasks: Cache::new(limits.freshness),
+            pulls: Cache::new(limits.freshness),
+            branches: Cache::new(limits.freshness),
+            commits: Cache::new(limits.freshness),
+            lines: Cache::new(limits.freshness),
         }
     }
 }
@@ -97,12 +115,18 @@ impl RepoObserver {
 impl Observer for RepoObserver {
     fn task(&mut self, id: &str) -> Option<TaskView> {
         let root = self.root.clone();
+        let limit = self.limits.records;
+        // Every task's history, acceptance and binding are read at once,
+        // within one records bound: a stalled Git read makes every task
+        // unknown, never a late answer.
         self.tasks
-            .get_or_insert_with(|| {
-                crate::workgraph::readiness::target_tasks(&root).unwrap_or_default()
+            .get((), || {
+                super::observe::within(limit, move || {
+                    crate::workgraph::readiness::target_tasks(&root).ok()
+                })
+                .flatten()
             })
-            .get(id)
-            .cloned()
+            .and_then(|tasks| tasks.get(id).cloned())
     }
 
     fn pull_request(&mut self, repository: &str, number: u64) -> Option<PullView> {
@@ -110,10 +134,10 @@ impl Observer for RepoObserver {
             return None;
         }
         let root = self.root.clone();
-        self.pulls
-            .entry((repository.to_string(), number))
-            .or_insert_with(|| gh_pull(&root, repository, number))
-            .clone()
+        let limit = self.limits.network;
+        self.pulls.get((repository.to_string(), number), || {
+            gh_pull(&root, repository, number, limit)
+        })
     }
 
     fn branch_deleted(&mut self, remote: &str, name: &str) -> Option<bool> {
@@ -121,15 +145,18 @@ impl Observer for RepoObserver {
             return None;
         }
         let root = self.root.clone();
-        *self
-            .branches
-            .entry((remote.to_string(), name.to_string()))
-            .or_insert_with(|| {
+        let limits = self.limits;
+        self.branches
+            .get((remote.to_string(), name.to_string()), || {
                 // Only a remote this clone configures is contacted: a name
                 // replayed from the log is checked again here, and Git
                 // resolves its URL from the clone's own configuration.
-                let configured = git2::Repository::discover(&root)
-                    .is_ok_and(|repo| repo.find_remote(remote).is_ok());
+                let check = root.clone();
+                let wanted = remote.to_string();
+                let configured = super::observe::within(limits.git, move || {
+                    git2::Repository::discover(&check)
+                        .is_ok_and(|repo| repo.find_remote(&wanted).is_ok())
+                })?;
                 if !configured {
                     return None;
                 }
@@ -159,7 +186,7 @@ impl Observer for RepoObserver {
                         remote,
                     ])
                     .arg(format!("refs/heads/{name}"));
-                let output = bounded(command, OBSERVATION_TIMEOUT)?;
+                let output = super::observe::command(command, limits.network)?;
                 output
                     .status
                     .success()
@@ -168,17 +195,12 @@ impl Observer for RepoObserver {
     }
 
     fn commit_on_target(&mut self, sha: &str) -> Option<(bool, String, String)> {
-        let repo = git2::Repository::discover(&self.root).ok()?;
-        let target = crate::workgraph::default_work_target(&self.root).ok()??;
-        let resolved =
-            crate::workgraph::resolve_work_target_checked(&self.root, Some(&target)).ok()??;
-        let tip = crate::workgraph::work_start::target_reference(&repo, &resolved.target)
-            .ok()??
-            .id();
-        // The guarded ancestry reader: no replace refs, grafts or commit graph.
-        let contained =
-            crate::git::commit_reachable_from(&self.root, sha, &[tip.to_string()]).ok()?;
-        Some((contained, target, tip.to_string()))
+        let root = self.root.clone();
+        let limit = self.limits.git;
+        self.commits.get(sha.to_string(), || {
+            let sha = sha.to_string();
+            super::observe::within(limit, move || commit_on_target(&root, &sha)).flatten()
+        })
     }
 
     fn now(&self) -> u64 {
@@ -186,109 +208,45 @@ impl Observer for RepoObserver {
     }
 
     fn repository(&self) -> Option<String> {
-        Some(self.repository.clone())
+        self.repository.clone()
     }
 
     fn landing_base(&mut self, base: &str) -> bool {
         let root = self.root.clone();
-        let lines = self.lines.get_or_insert_with(|| {
-            crate::workgraph::readiness::landing_lines(&root).unwrap_or_default()
+        let limit = self.limits.git;
+        let lines = self.lines.get((), || {
+            super::observe::within(limit, move || {
+                crate::workgraph::readiness::landing_lines(&root).ok()
+            })
+            .flatten()
         });
-        crate::workgraph::readiness::is_recognised_landing(base, lines)
+        // Unknown landing lines leave only the default lines recognised.
+        crate::workgraph::readiness::is_recognised_landing(base, &lines.unwrap_or_default())
     }
+}
+
+/// Whether `sha` is in the default work target, with the target and its tip.
+fn commit_on_target(root: &Path, sha: &str) -> Option<(bool, String, String)> {
+    let repo = git2::Repository::discover(root).ok()?;
+    let target = crate::workgraph::default_work_target(root).ok()??;
+    let resolved = crate::workgraph::resolve_work_target_checked(root, Some(&target)).ok()??;
+    let tip = crate::workgraph::work_start::target_reference(&repo, &resolved.target)
+        .ok()??
+        .id();
+    // The guarded ancestry reader: no replace refs, grafts or commit graph.
+    let contained = crate::git::commit_reachable_from(root, sha, &[tip.to_string()]).ok()?;
+    Some((contained, target, tip.to_string()))
 }
 
 /// How long one network observation may take before it counts as unknown.
-pub const OBSERVATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+pub const OBSERVATION_TIMEOUT: std::time::Duration = super::observe::NETWORK_TIMEOUT;
 
-/// The most output one observation keeps from each stream.
-const OUTPUT_LIMIT: u64 = 1 << 20;
-
-/// Run `command` with its output captured, everything bounded by `limit`:
-/// the process, its output being drained, and any descendant that inherited
-/// its pipes. On unix the command runs in its own process group, which is
-/// killed at the deadline; output beyond [`OUTPUT_LIMIT`] is dropped. `None`
-/// when it cannot start, fails to read, or does not finish in time.
-fn bounded(
-    mut command: std::process::Command,
+fn gh_pull(
+    root: &Path,
+    repository: &str,
+    number: u64,
     limit: std::time::Duration,
-) -> Option<std::process::Output> {
-    use std::process::Stdio;
-    use std::sync::mpsc;
-    let deadline = std::time::Instant::now() + limit;
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let reader = |stream: Box<dyn std::io::Read + Send>| {
-        let (send, receive) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let read = std::io::Read::read_to_end(
-                &mut std::io::Read::take(stream, OUTPUT_LIMIT),
-                &mut bytes,
-            );
-            let _ = send.send(read.map(|_| bytes));
-        });
-        receive
-    };
-    let stdout = reader(Box::new(child.stdout.take()?));
-    let stderr = reader(Box::new(child.stderr.take()?));
-    let stop = |child: &mut std::process::Child| {
-        #[cfg(unix)]
-        if let Ok(group) = i32::try_from(child.id()) {
-            // SAFETY: kill has no memory preconditions; a negative pid names
-            // the process group this command was started in.
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    };
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            _ => {
-                stop(&mut child);
-                return None;
-            }
-        }
-    };
-    let collect = |receive: &mpsc::Receiver<std::io::Result<Vec<u8>>>| {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        receive.recv_timeout(left).ok()?.ok()
-    };
-    // A descendant holding the pipes past the deadline makes the observation
-    // unknown and is killed with the group; a failed read is unknown too,
-    // never an empty answer (which `ls-remote` would mean as "deleted").
-    let (Some(out), Some(err)) = (collect(&stdout), collect(&stderr)) else {
-        stop(&mut child);
-        return None;
-    };
-    #[cfg(unix)]
-    if let Ok(group) = i32::try_from(child.id()) {
-        // SAFETY: as above; the group's leader has exited, so this only
-        // reaches descendants left behind.
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
-        }
-    }
-    Some(std::process::Output {
-        status,
-        stdout: out,
-        stderr: err,
-    })
-}
-
-fn gh_pull(root: &Path, repository: &str, number: u64) -> Option<PullView> {
+) -> Option<PullView> {
     let mut command = crate::git::process("gh");
     command
         .current_dir(root)
@@ -302,7 +260,7 @@ fn gh_pull(root: &Path, repository: &str, number: u64) -> Option<PullView> {
             "--json",
             "state,baseRefName,mergeCommit,statusCheckRollup",
         ]);
-    let output = bounded(command, OBSERVATION_TIMEOUT)?;
+    let output = super::observe::command(command, limit)?;
     if !output.status.success() {
         return None;
     }

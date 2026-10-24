@@ -5633,7 +5633,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-422: An observation that cannot be made is unknown, and an unknown state never closes a follow-up.
     (
         "crates/codeflow-core/src/coord/due.rs",
-        "RepoObserver::commit_on_target",
+        "commit_on_target",
         "obtain-absent:Repository::discover",
         1,
         "unproven",

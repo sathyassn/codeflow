@@ -16,6 +16,8 @@
 //! - [`store`]: the files, the lock, sequence, sync, idempotency and
 //!   tail repair.
 //! - [`due`]: due times and target-aware fulfilment.
+//! - [`observe`]: the one bounded interface for every outside observation
+//!   and heartbeat refresh, with per-observer limits and freshness.
 //! - [`text`]: free-text bounds, the secret scan and safe rendering.
 //! - [`fixture`]: role binding for tests until the role commands ship.
 //!
@@ -24,6 +26,7 @@
 pub mod actor;
 pub mod due;
 pub mod fixture;
+pub mod observe;
 pub mod reference;
 pub mod schema;
 pub mod store;

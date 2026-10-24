@@ -313,17 +313,20 @@ No fields. Recorded by the holder or the operator.
   not complete to complete, or changes its acceptance block while complete.
   A move that changes neither is no transition. A direct transition is
   judged at its own commit; a merge at the head it brought in, which must
-  hold the same completion and be the clean re-merge of its parents (a
-  merge that edits the record or anything else inherits no proof). The
+  hold the same completion. The merge itself must be a clean re-merge of
+  its parents: a merge that edits the record or anything else inherits no
+  proof. The
   review must be on the judged head's first-parent line, and for a merge no
   reopen of the task may lie on the target's first-parent history between
   the review and the merge. After the completion, the criteria check a pull
   request gets (with its correction route for a completed standalone task)
   must find nothing for the task up to the tip. A landing line is the one
-  remote-tracking ref the declared target names, by the same remote rules
-  `work start` uses (`origin/main` is origin's, never another remote's; a
-  bare name is `origin`'s, never chosen by a local branch's upstream
-  setting; an absent tracking ref is unknown), for `main`, `master` or an `integration/`
+  remote-tracking ref the declared target names: a name that starts with a
+  configured remote is that remote's (`origin/main` is origin's, never
+  another remote's), and a bare name is `origin`'s. This differs from `work
+  start`, which follows a local branch's upstream setting; here that
+  mutable local setting never chooses the remote. An absent tracking ref is
+  unknown. The lines are `main`, `master` or an `integration/`
   line that a task record on the default target names as its target. A
   local branch never counts, nor a pushed line no record on the default
   target names. A pull request counts when the host reports it merged into
@@ -343,10 +346,26 @@ No fields. Recorded by the holder or the operator.
   longer accepted, the pull request reopened, the commit gone from the
   target, the branch recreated, or a prerequisite or `waits_on` follow-up
   or lane open again. The old proof stays in history.
-- **Observations.** `gh` and `git ls-remote` each run with a 20 second
-  limit that covers the process, its output and any descendant holding its
-  output open (killed with its process group); output is capped at 1 MiB.
-  One that does not answer counts as unknown. A branch link contacts only a
+- **Observations.** Every outside observation and every heartbeat refresh
+  goes through one bounded interface (`coord/observe.rs`), each observer
+  with its own limit; one that does not finish in time, or cannot be made,
+  counts as unknown, and the caller goes on:
+
+  | Observer | Limit |
+  |---|---|
+  | Task records on their landing lines (every task's history, acceptance and binding, read at once) | 10 s |
+  | One local Git read: a commit on the work target, the landing lines, the repository identity | 10 s |
+  | `gh` or `git ls-remote` | 20 s |
+  | A heartbeat write to a liveness file | 5 s |
+
+  An observation is reused for 60 seconds and made again after that,
+  unknown answers included, so one invocation waits on a stalled read once.
+  A subprocess (`gh`, `ls-remote`) runs in its own process group, killed at
+  the limit with any descendant holding its output open; output is capped
+  at 1 MiB. In-process reads run on a worker thread that is abandoned at the
+  limit: a stalled Git read it started runs to its own end outside the
+  caller's time, and an abandoned heartbeat may land late, which only
+  refreshes a last-seen time. A branch link contacts only a
   remote this clone configures, over https or ssh, with the stock upload
   pack and the stock ssh client.
 - **Idempotency.** A key is bound to the operation's kind, subject, actor

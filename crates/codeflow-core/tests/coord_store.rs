@@ -1534,6 +1534,26 @@ fn an_unconfigured_remote_is_never_contacted() {
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
+/// AC-13: a configured remote that cannot be reached is unknown, within the
+/// network bound, never "deleted".
+#[test]
+fn an_offline_remote_is_unknown_within_its_bound() {
+    let dir = repo();
+    // Nothing listens on the discard port: the connection is refused.
+    git(
+        dir.path(),
+        &["remote", "add", "origin", "https://127.0.0.1:9/project.git"],
+    );
+    let limits = codeflow_core::coord::observe::Limits {
+        network: Duration::from_secs(5),
+        ..codeflow_core::coord::observe::Limits::default()
+    };
+    let mut observer = due::RepoObserver::with_limits(dir.path(), true, limits);
+    let started = std::time::Instant::now();
+    assert_eq!(observer.branch_deleted("origin", "task/gone"), None);
+    assert!(started.elapsed() < limits.network + Duration::from_secs(2));
+}
+
 /// Security F3: a task completed on a work branch that the record itself
 /// names as its target is never read as complete; only a landing line is.
 #[test]

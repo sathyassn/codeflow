@@ -1239,13 +1239,15 @@ fn completion_bound(
     true
 }
 
-/// Every task's state on its own target tip, from the refs as last fetched,
-/// with the same target resolution `work next` and `work start` use. Only a
-/// landing line counts as a target (a configured remote's tracking ref of
-/// `main`, `master` or an epic's integration line): a record that declares
-/// a work branch or a local-only line is left out, and a task that two landing tips each hold as their own is left
-/// out as ambiguous rather than judged by the first name. Makes no network
-/// call and writes nothing.
+/// Every task's state on its own target tip, from the refs as last fetched.
+/// Only a landing line counts as a target (a configured remote's tracking
+/// ref of `main`, `master` or an epic's integration line): a record that
+/// declares a work branch or a local-only line is left out, and a task that
+/// two landing tips each hold as their own is left out as ambiguous rather
+/// than judged by the first name. The remote is chosen by this reader's own
+/// rule (see `tracking` below), which differs from `work start`'s. Makes no
+/// network call and writes nothing. The coordination ledger calls this only
+/// within its bounded record observer.
 ///
 /// # Errors
 ///
@@ -1256,11 +1258,11 @@ pub fn target_tasks(repo_root: &Path) -> Result<BTreeMap<String, TargetTask>, St
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
     let lines = default_tip_lines(repo_root, &repo);
-    // A declared target as the one remote-tracking ref it names, by the
-    // resolver's own remote rules (`target_fetch_remote`): `origin/main` is
-    // origin's `main`, a bare name is its local branch's upstream remote or
-    // `origin`. Another remote never stands in, and a target whose tracking
-    // ref is absent stays unknown.
+    // A declared target as the one remote-tracking ref it names:
+    // `origin/main` is origin's `main` and a bare name is `origin`'s. Unlike
+    // `work start`, a local branch's upstream never chooses the remote.
+    // Another remote never stands in, and a target whose tracking ref is
+    // absent stays unknown.
     let tracking = |declared: &str| -> Option<(String, String)> {
         let name = declared
             .strip_prefix("refs/remotes/")

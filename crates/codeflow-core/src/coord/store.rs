@@ -662,9 +662,40 @@ fn status_name(instance: &str) -> String {
     }
 }
 
-/// Overwrite the actor's liveness file. Only a bound mutation calls this;
-/// a read never does.
+/// Overwrite the actor's liveness file through the bounded observer, within
+/// the heartbeat limit. Only a bound mutation calls this; a read never does.
 fn heartbeat(paths: &Paths, actor: &RecordedBy, sequence: u64) -> Result<(), CoordError> {
+    heartbeat_within(paths, actor, sequence, super::observe::HEARTBEAT_TIMEOUT)
+}
+
+fn heartbeat_within(
+    paths: &Paths,
+    actor: &RecordedBy,
+    sequence: u64,
+    limit: Duration,
+) -> Result<(), CoordError> {
+    let (paths, actor) = (paths.clone(), actor.clone());
+    let status = paths.status.clone();
+    super::observe::within(limit, move || write_heartbeat(&paths, &actor, sequence)).unwrap_or_else(
+        || {
+            Err(CoordError::Unwritten(format!(
+                "{}: the liveness write did not finish within {} ms",
+                status.display(),
+                limit.as_millis()
+            )))
+        },
+    )
+}
+
+/// A test actor instance whose liveness write stalls, to prove the bound.
+#[cfg(test)]
+const STALLED_INSTANCE: &str = "test-stalled-heartbeat";
+
+fn write_heartbeat(paths: &Paths, actor: &RecordedBy, sequence: u64) -> Result<(), CoordError> {
+    #[cfg(test)]
+    if actor.actor_instance == STALLED_INSTANCE {
+        std::thread::sleep(Duration::from_secs(30));
+    }
     private_dir(&paths.status)?;
     let liveness = Liveness {
         recorded_by: actor.clone(),
@@ -689,9 +720,24 @@ pub fn refresh_liveness(
     actor: &RecordedBy,
     sequence: u64,
 ) -> Result<(), CoordError> {
+    refresh_liveness_within(paths, actor, sequence, super::observe::HEARTBEAT_TIMEOUT)
+}
+
+/// [`refresh_liveness`] within `limit`: a write that does not finish in
+/// time is reported unwritten and the caller goes on.
+///
+/// # Errors
+///
+/// The reason the file could not be written, or that it did not finish.
+pub fn refresh_liveness_within(
+    paths: &Paths,
+    actor: &RecordedBy,
+    sequence: u64,
+    limit: Duration,
+) -> Result<(), CoordError> {
     private_dir(&paths.common_dir.join("codeflow"))?;
     private_dir(&paths.dir)?;
-    heartbeat(paths, actor, sequence)
+    heartbeat_within(paths, actor, sequence, limit)
 }
 
 /// Read every liveness file; unreadable ones are skipped.
@@ -1073,4 +1119,46 @@ pub fn repair(paths: &Paths, wait: Duration) -> Result<Repaired, CoordError> {
         quarantined: Some(kept),
         kept: folded.lines,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actor(instance: &str) -> RecordedBy {
+        RecordedBy {
+            role: "coordinator".into(),
+            actor_instance: instance.into(),
+            generation: Some(1),
+            stream: None,
+            harness: "unknown".into(),
+            model: "unknown".into(),
+            session: "unknown".into(),
+        }
+    }
+
+    #[test]
+    fn a_stalled_heartbeat_refresh_returns_within_its_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let limit = Duration::from_millis(300);
+        let start = std::time::Instant::now();
+        let out = refresh_liveness_within(&paths, &actor(STALLED_INSTANCE), 1, limit);
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(&out, Err(CoordError::Unwritten(why)) if why.contains("did not finish")),
+            "{out:?}"
+        );
+        assert!(elapsed < limit + Duration::from_secs(2), "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_prompt_heartbeat_refresh_writes_the_liveness_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        refresh_liveness(&paths, &actor("lane-one"), 4).unwrap();
+        let live = liveness(&paths);
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].sequence, 4);
+    }
 }
