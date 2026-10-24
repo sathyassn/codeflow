@@ -364,8 +364,9 @@ No fields. Recorded by the holder or the operator.
   the limit with any descendant holding its output open; output is capped
   at 1 MiB. In-process reads run on a worker thread that is abandoned at the
   limit: a stalled Git read it started runs to its own end outside the
-  caller's time, and an abandoned heartbeat may land late, which only
-  refreshes a last-seen time. A branch link contacts only a
+  caller's time. An abandoned heartbeat may land late and overwrite a
+  newer one with its older time and sequence until the actor's next
+  heartbeat replaces it. A branch link contacts only a
   remote this clone configures, over https or ssh, with the stock upload
   pack and the stock ssh client.
 - **Idempotency.** A key is bound to the operation's kind, subject, actor

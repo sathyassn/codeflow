@@ -2546,3 +2546,45 @@ fn a_stalled_record_read_is_unknown_within_its_bound() {
         ItemState::Closed(_)
     ));
 }
+
+/// Codex round 8 (major): an identity read that times out is unknown and
+/// matches no repository, so a link naming another repository is never
+/// machine-verified; the same link with this clone's identity still closes.
+#[test]
+fn an_unknown_repository_identity_never_matches_a_link() {
+    use codeflow_core::coord::due::{self, Identity, Observer, RepoObserver};
+    use codeflow_core::coord::observe::Limits;
+    use codeflow_core::coord::reference::Target;
+    let f = fixture();
+    let paths = bind(&f.root);
+    let by = coordinator("WS-001", "c1");
+    ok(&cli(
+        &f.root,
+        &by,
+        &add_args("watch the cache warmer", &["--link", "fulfils:TSK-001"]),
+    ));
+    land(&f.root, "TSK-001");
+    let ledger = folded(&paths);
+    let own = ledger.items["FU-001"].clone();
+    let mut foreign = own.clone();
+    for link in &mut foreign.record.links {
+        if let Target::Record { repository, .. } = &mut link.target {
+            *repository = "https://example.invalid/other/project".into();
+        }
+    }
+    let timed_out = Limits {
+        git: std::time::Duration::ZERO,
+        ..Limits::default()
+    };
+    // Control: the identity is read; this clone's link closes and the
+    // foreign one does not.
+    let mut observer = RepoObserver::new(&f.root, false);
+    assert!(matches!(observer.repository(), Identity::Known(_)));
+    assert!(due::fulfilment(&own, &ledger, &mut observer).is_some());
+    assert!(due::fulfilment(&foreign, &ledger, &mut observer).is_none());
+    // Timeout: the identity is unknown, and neither link is machine-verified.
+    let mut observer = RepoObserver::with_limits(&f.root, false, timed_out);
+    assert_eq!(observer.repository(), Identity::Unknown);
+    assert!(due::fulfilment(&foreign, &ledger, &mut observer).is_none());
+    assert!(due::fulfilment(&own, &ledger, &mut observer).is_none());
+}

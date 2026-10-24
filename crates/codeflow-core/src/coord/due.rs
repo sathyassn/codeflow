@@ -38,6 +38,18 @@ pub struct PullView {
     pub merge_commit: Option<String>,
 }
 
+/// This clone's repository identity as an observer reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Identity {
+    /// The identity was read.
+    Known(String),
+    /// It could not be read in time: no link matches it.
+    Unknown,
+    /// An observer over no particular repository (a test fixture) that
+    /// judges every link as its own. Never returned by [`RepoObserver`].
+    AnyRepository,
+}
+
 /// What due derivation reads from outside the ledger.
 pub trait Observer {
     /// The task on its target tip.
@@ -51,11 +63,9 @@ pub trait Observer {
     fn commit_on_target(&mut self, sha: &str) -> Option<(bool, String, String)>;
     /// The current time, seconds since the epoch.
     fn now(&self) -> u64;
-    /// This clone's repository identity, when known; a link to another
-    /// repository is then never judged against this one.
-    fn repository(&self) -> Option<String> {
-        None
-    }
+    /// This clone's repository identity. A link is judged only against a
+    /// known identity that matches it; an unknown identity matches nothing.
+    fn repository(&mut self) -> Identity;
     /// Whether a pull request's base (a bare branch name) is a landing line
     /// this project recognises.
     fn landing_base(&mut self, base: &str) -> bool {
@@ -73,7 +83,7 @@ pub struct RepoObserver {
     online: bool,
     now: u64,
     limits: super::observe::Limits,
-    repository: Option<String>,
+    repository: Cache<(), Option<String>>,
     tasks: Cache<(), Option<BTreeMap<String, TaskView>>>,
     pulls: Cache<(String, u64), Option<PullView>>,
     branches: Cache<(String, String), Option<bool>>,
@@ -89,20 +99,15 @@ impl RepoObserver {
         Self::with_limits(root, online, super::observe::Limits::default())
     }
 
-    /// An observer with its own limits and freshness window. The clone's
-    /// repository identity is read here, within the Git limit; unknown when
-    /// it does not finish.
+    /// An observer with its own limits and freshness window.
     #[must_use]
     pub fn with_limits(root: &Path, online: bool, limits: super::observe::Limits) -> Self {
-        let identity_root = root.to_path_buf();
         Self {
             root: root.to_path_buf(),
             online,
             now: super::now_secs(),
             limits,
-            repository: super::observe::within(limits.git, move || {
-                super::reference::repository_identity(&identity_root)
-            }),
+            repository: Cache::new(limits.freshness),
             tasks: Cache::new(limits.freshness),
             pulls: Cache::new(limits.freshness),
             branches: Cache::new(limits.freshness),
@@ -207,8 +212,17 @@ impl Observer for RepoObserver {
         self.now
     }
 
-    fn repository(&self) -> Option<String> {
-        self.repository.clone()
+    fn repository(&mut self) -> Identity {
+        // Read within the Git limit and kept for the freshness window like
+        // every other observation; a timeout is unknown and is read again
+        // once the window has passed.
+        let root = self.root.clone();
+        let limit = self.limits.git;
+        self.repository
+            .get((), || {
+                super::observe::within(limit, move || super::reference::repository_identity(&root))
+            })
+            .map_or(Identity::Unknown, Identity::Known)
     }
 
     fn landing_base(&mut self, base: &str) -> bool {
@@ -566,10 +580,14 @@ enum Judged {
     Unknown,
 }
 
-fn repository_matches(repository: &str, observer: &dyn Observer) -> bool {
-    observer
-        .repository()
-        .is_none_or(|current| current == repository)
+/// Whether a link's repository is this clone's. An unknown identity never
+/// matches, so it never lets another repository's proof close an item.
+fn repository_matches(repository: &str, observer: &mut dyn Observer) -> bool {
+    match observer.repository() {
+        Identity::Known(current) => current == repository,
+        Identity::Unknown => false,
+        Identity::AnyRepository => true,
+    }
 }
 
 #[allow(clippy::too_many_lines)]

@@ -20,8 +20,9 @@
 //!   write) on a worker thread and stops waiting at the deadline. The work
 //!   is abandoned, not cancelled: a stalled Git read it started runs to its
 //!   own end, outside the caller's time. A heartbeat abandoned this way may
-//!   still land after the caller returned; a liveness file is a last-seen
-//!   time, so a late write only refreshes it.
+//!   still land after the caller returned, and can then overwrite a newer
+//!   heartbeat from a later operation with its older time and sequence,
+//!   until the actor's next heartbeat replaces it.
 //!
 //! An observation is kept for its freshness window ([`Cache`]) and made
 //! again after it, unknown answers included, so one invocation never waits

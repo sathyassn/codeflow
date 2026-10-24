@@ -700,8 +700,11 @@ impl Observer for Fake {
     fn now(&self) -> u64 {
         self.now
     }
-    fn repository(&self) -> Option<String> {
-        self.repository.clone()
+    fn repository(&mut self) -> due::Identity {
+        // The fixture without an identity stands for any repository.
+        self.repository
+            .clone()
+            .map_or(due::Identity::AnyRepository, due::Identity::Known)
     }
 }
 

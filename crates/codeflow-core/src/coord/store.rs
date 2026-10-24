@@ -674,28 +674,46 @@ fn heartbeat_within(
     sequence: u64,
     limit: Duration,
 ) -> Result<(), CoordError> {
-    let (paths, actor) = (paths.clone(), actor.clone());
-    let status = paths.status.clone();
-    super::observe::within(limit, move || write_heartbeat(&paths, &actor, sequence)).unwrap_or_else(
-        || {
-            Err(CoordError::Unwritten(format!(
-                "{}: the liveness write did not finish within {} ms",
-                status.display(),
-                limit.as_millis()
-            )))
-        },
-    )
+    bounded_heartbeat(paths, actor, sequence, limit, false)
 }
 
-/// A test actor instance whose liveness write stalls, to prove the bound.
+/// The heartbeat within `limit`: the ledger's directories (when
+/// `prepare`) and the liveness file are all made inside the one bound.
+fn bounded_heartbeat(
+    paths: &Paths,
+    actor: &RecordedBy,
+    sequence: u64,
+    limit: Duration,
+    prepare: bool,
+) -> Result<(), CoordError> {
+    let (paths, actor) = (paths.clone(), actor.clone());
+    let status = paths.status.clone();
+    let work = move || {
+        #[cfg(test)]
+        if actor.actor_instance == STALLED_INSTANCE {
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        if prepare {
+            private_dir(&paths.common_dir.join("codeflow"))?;
+            private_dir(&paths.dir)?;
+        }
+        write_heartbeat(&paths, &actor, sequence)
+    };
+    super::observe::within(limit, work).unwrap_or_else(|| {
+        Err(CoordError::Unwritten(format!(
+            "{}: the liveness write did not finish within {} ms",
+            status.display(),
+            limit.as_millis()
+        )))
+    })
+}
+
+/// A test actor instance whose heartbeat stalls before its first
+/// directory is made, to prove the whole refresh is bounded.
 #[cfg(test)]
 const STALLED_INSTANCE: &str = "test-stalled-heartbeat";
 
 fn write_heartbeat(paths: &Paths, actor: &RecordedBy, sequence: u64) -> Result<(), CoordError> {
-    #[cfg(test)]
-    if actor.actor_instance == STALLED_INSTANCE {
-        std::thread::sleep(Duration::from_secs(30));
-    }
     private_dir(&paths.status)?;
     let liveness = Liveness {
         recorded_by: actor.clone(),
@@ -735,9 +753,7 @@ pub fn refresh_liveness_within(
     sequence: u64,
     limit: Duration,
 ) -> Result<(), CoordError> {
-    private_dir(&paths.common_dir.join("codeflow"))?;
-    private_dir(&paths.dir)?;
-    heartbeat_within(paths, actor, sequence, limit)
+    bounded_heartbeat(paths, actor, sequence, limit, true)
 }
 
 /// Read every liveness file; unreadable ones are skipped.
