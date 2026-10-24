@@ -196,3 +196,89 @@ fn validate_exits_one_on_invalid_policy_and_zero_when_clean() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains(".codeflow/policy.json clean"), "{stdout}");
 }
+
+#[test]
+fn unsupported_security_keys_warn_in_hooks_and_doctor_without_disabling_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let message = dir.path().join("message.txt");
+    std::fs::write(&message, "fix: keep hooks working\n").unwrap();
+    let released: serde_json::Value = serde_json::from_str(include_str!(
+        "../../codeflow-core/tests/fixtures/policy-last-release.json"
+    ))
+    .unwrap();
+    let cases = [
+        ("script_bypass", serde_json::json!("block")),
+        ("script_bypass", serde_json::json!("warn")),
+        ("script_bypass", serde_json::json!("off")),
+        ("script_bypass", serde_json::json!("allow")),
+        ("sandbox_retry", serde_json::json!("block")),
+        ("sandbox_retry", serde_json::json!("allowlist")),
+        ("sandbox_retry_allow", serde_json::json!([])),
+        (
+            "sandbox_retry_allow",
+            released["security"]["sandbox_retry_allow"].clone(),
+        ),
+    ];
+    for (key, value) in cases {
+        write_policy(
+            dir.path(),
+            &serde_json::json!({"security": {key: value}}).to_string(),
+        );
+        for args in [
+            vec!["git-hook", "commit-msg", message.to_str().unwrap()],
+            vec!["git-hook", "pre-push"],
+            vec!["doctor", "--check", "policy-source"],
+        ] {
+            let out = run_in(dir.path(), &args);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(out.status.success(), "{key}: {args:?}: {text}");
+            assert!(
+                text.contains(&format!("security.{key} is not supported, has no effect")),
+                "{args:?}: {text}"
+            );
+        }
+        // Warnings do not bypass the existing commit format enforcement.
+        std::fs::write(&message, "invalid message\n").unwrap();
+        let out = run_in(
+            dir.path(),
+            &["git-hook", "commit-msg", message.to_str().unwrap()],
+        );
+        assert!(!out.status.success());
+        std::fs::write(&message, "fix: keep hooks working\n").unwrap();
+    }
+}
+
+#[test]
+fn unsupported_security_keys_still_refuse_invalid_values() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let message = dir.path().join("message.txt");
+    std::fs::write(&message, "fix: keep hooks working\n").unwrap();
+    for (key, value) in [
+        ("script_bypass", serde_json::json!("deny")),
+        ("script_bypass", serde_json::json!(3)),
+        ("sandbox_retry", serde_json::json!("allow")),
+        ("sandbox_retry", serde_json::json!([])),
+        ("sandbox_retry_allow", serde_json::json!("block")),
+        ("sandbox_retry_allow", serde_json::json!([{"script": "x"}])),
+        ("sandbox_retry_allow", serde_json::json!([{"program": ""}])),
+    ] {
+        write_policy(
+            dir.path(),
+            &serde_json::json!({"security": {key: value}}).to_string(),
+        );
+        let out = run_in(
+            dir.path(),
+            &["git-hook", "commit-msg", message.to_str().unwrap()],
+        );
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{key}: {text}");
+        assert!(text.contains(&format!("security.{key}")), "{text}");
+        assert!(text.contains("policy error"), "{text}");
+    }
+}

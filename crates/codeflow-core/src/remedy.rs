@@ -320,6 +320,10 @@ catalog! {
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
         "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
 
+    /// A policy key with no enforcement reader.
+    POLICY_UNSUPPORTED = Step::Edit(".codeflow/policy.json"),
+        "the operator removes {key} from .codeflow/policy.json; `codeflow update` removes only an unchanged retired default and preserves edited values";
+
     // Protected branches and the sanctioned landing path.
 
     /// A pull request without a valid work class or planning path set.

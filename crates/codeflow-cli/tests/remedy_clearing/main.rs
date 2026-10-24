@@ -122,6 +122,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
     ("POLICY_DEPRECATED", Runs),
+    ("POLICY_UNSUPPORTED", Runs),
     ("PROTECTED_BRANCH", Runs),
     ("PROTECTED_DELETE", Runs),
     ("PROTECTED_REWRITE", Runs),
@@ -1663,6 +1664,36 @@ fn clears_policy_deprecated() {
         |printed| {
             let step = printed_command(printed, "POLICY_DEPRECATED", None);
             run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_policy_unsupported() {
+    let dir = ci_repo(r#"{"security":{"script_bypass":"block"}}"#);
+    let root = dir.path();
+    prove(
+        "POLICY_UNSUPPORTED",
+        "security.script_bypass is not supported, has no effect",
+        || codeflow(root, &["doctor", "--check", "policy-source"]),
+        |printed| {
+            assert!(
+                printed.contains("removes security.script_bypass from .codeflow/policy.json"),
+                "{printed}"
+            );
+            let mut value: serde_json::Value =
+                serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+            value["security"]
+                .as_object_mut()
+                .unwrap()
+                .remove("script_bypass");
+            write(root, ".codeflow/policy.json", &value.to_string());
+            // Doctor also reads committed policy authority, so publish the edit
+            // to this fixture's local authority before checking the remedy.
+            git(
+                root,
+                &["commit", "-q", "-am", "fix: remove unsupported policy"],
+            );
         },
     );
 }

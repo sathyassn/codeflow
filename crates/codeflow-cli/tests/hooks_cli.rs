@@ -10215,3 +10215,78 @@ fn pre_push_fallback_never_reads_a_fake_full_tracking_ref() {
         assert!(text.contains("git.commit_format"), "{shadow}: {text}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
+    for upgraded in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        ok(
+            env!("CARGO_BIN_EXE_codeflow"),
+            root,
+            &["init", "--yes", "--minimal"],
+        );
+        ok("git", root, &["switch", "-c", "feat/policy-compatibility"]);
+        let policy_path = root.join(".codeflow/policy.json");
+        let mut policy: serde_json::Value = if upgraded {
+            // The pinned policy fixture is byte-identical to v3.1.0. The
+            // installed hooks are this build's; no released binary is mocked.
+            let old = include_str!("../../codeflow-core/tests/fixtures/policy-last-release.json");
+            std::fs::write(root.join(".codeflow/.baseline/.codeflow/policy.json"), old).unwrap();
+            serde_json::from_str(old).unwrap()
+        } else {
+            serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap()
+        };
+        assert!(upgraded || policy["security"].get("script_bypass").is_none());
+        policy["security"]["script_bypass"] = serde_json::json!("block");
+        std::fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+        if upgraded {
+            let update = ok(env!("CARGO_BIN_EXE_codeflow"), root, &["update"]);
+            assert!(
+                update.contains("security.script_bypass is not supported, has no effect"),
+                "{update}"
+            );
+            eprintln!("updated from 3.1.0 policy: {update}");
+        }
+        // Exercise the real quick-gate runner with a small fixture target.
+        std::fs::write(root.join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[{"name":"policy-fixture","runner":"custom","modes":{"quick":{"command":"test -f proof.txt"}}}]}"#).unwrap();
+        std::fs::write(root.join("proof.txt"), "policy compatibility journey\n").unwrap();
+        ok("git", root, &["add", "."]);
+        let commit = ok(
+            "git",
+            root,
+            &["commit", "-m", "fix: preserve policy compatibility"],
+        );
+        assert!(
+            commit.contains("security.script_bypass is not supported, has no effect"),
+            "{commit}"
+        );
+        answering_destination(root, "upstream");
+        let push = ok(
+            "git",
+            root,
+            &[
+                "push",
+                "upstream",
+                "HEAD:refs/heads/feat/policy-compatibility",
+            ],
+        );
+        assert!(
+            push.contains("security.script_bypass is not supported, has no effect"),
+            "{push}"
+        );
+        eprintln!("upgraded={upgraded}\ncommit:\n{commit}\npush:\n{push}");
+        let remote = ok(
+            "git",
+            root,
+            &[
+                "ls-remote",
+                "upstream",
+                "refs/heads/feat/policy-compatibility",
+            ],
+        );
+        assert!(remote.starts_with(&rev(root, "HEAD")), "{remote}");
+    }
+}

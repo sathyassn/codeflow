@@ -372,3 +372,83 @@ fn update_leaves_a_last_release_policy_accepted_by_the_last_release_schema() {
         placement_message(".codeflow/policy.json", &problems)
     );
 }
+
+#[test]
+fn update_removes_unsupported_defaults_and_keeps_edited_values() {
+    isolate_git();
+    for edited in [false, true] {
+        let current = DirSource::new(repo_root().join("assets"));
+        // This policy fixture is byte-identical to v3.1.0's shipped policy.
+        let old = Overlay {
+            current: DirSource::new(repo_root().join("assets")),
+            overrides: BTreeMap::from([(
+                "base/policy.json".to_string(),
+                LAST_RELEASE_TEMPLATE.as_bytes().to_vec(),
+            )]),
+        };
+        let project = tempfile::tempdir().unwrap();
+        git_isolation::own_repository(project.path());
+        scaffold::init(
+            &old,
+            project.path(),
+            &InitOptions {
+                tier: Some(Tier::Minimal),
+                force: false,
+                binary_version: "3.1.0".into(),
+                answers: InitAnswers {
+                    product_one_liner: Some("A billing service.".into()),
+                    areas: Some(vec!["api".into()]),
+                    permission_preset: None,
+                },
+            },
+        )
+        .unwrap();
+        let path = project.path().join(".codeflow/policy.json");
+        let mut before: Value = serde_json::from_str(&read(&path)).unwrap();
+        if edited {
+            before["security"]["script_bypass"] = serde_json::json!("block");
+            before["security"]["sandbox_retry"] = serde_json::json!("block");
+            before["security"]["sandbox_retry_allow"] = serde_json::json!([]);
+            std::fs::write(&path, serde_json::to_string_pretty(&before).unwrap()).unwrap();
+        }
+        let options = UpdateOptions {
+            force: false,
+            binary_version: env!("CARGO_PKG_VERSION").into(),
+            diff_out: None,
+        };
+        scaffold::update(&current, project.path(), &options).unwrap();
+        let after: Value = serde_json::from_str(&read(&path)).unwrap();
+        for key in ["script_bypass", "sandbox_retry", "sandbox_retry_allow"] {
+            if edited {
+                assert_eq!(after["security"][key], before["security"][key]);
+            } else {
+                assert!(after["security"].get(key).is_none(), "{key}: {after}");
+            }
+        }
+        let warnings = codeflow_core::hooks::policy_schema::deprecation_warnings(project.path());
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.text.contains("script_bypass") || w.text.contains("sandbox_retry"))
+                .count(),
+            if edited { 3 } else { 0 },
+            "{warnings:?}"
+        );
+        // A refreshed baseline must not erase the edited values on a later run.
+        scaffold::update(&current, project.path(), &options).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&read(&path)).unwrap(), after);
+    }
+}
+
+#[test]
+fn unsupported_script_and_retry_defaults_are_absent() {
+    let shipped: Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    let defaults = codeflow_core::hooks::policy_schema::default_policy_value();
+    for value in [&shipped, &defaults] {
+        for key in ["script_bypass", "sandbox_retry", "sandbox_retry_allow"] {
+            assert!(value["security"].get(key).is_none(), "{key}: {value}");
+        }
+        assert!(!value.to_string().contains("<sha256"));
+    }
+}
