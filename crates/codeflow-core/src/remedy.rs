@@ -498,7 +498,7 @@ catalog! {
 
     /// A push-set target that failed.
     PUSH_SET_FAILED = Step::Codeflow("codeflow test"),
-        "fix the failing target(s), or run `codeflow test --mode quick` to reproduce";
+        "fix the target or gate condition named above, then run `codeflow test --mode quick` to reproduce";
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";

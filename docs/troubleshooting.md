@@ -109,3 +109,17 @@ Work one check at a time, starting with the `FAIL` lines.
 The fix worked when that check prints `ok`, or when a full run exits 0 with no
 `FAIL` line. After a completed trust step the `codex` and `grok` checks
 report a note, since doctor cannot see a live harness run.
+
+## A push is blocked by a quick target
+
+A `git.test_gate_on_push` failure names each failed target and its cause:
+an exit code, a timeout with its limit, a termination signal on Unix, or a
+runner error. Run `codeflow test --mode quick` to reproduce the failure,
+then fix the named target before pushing again. A timeout uses that target's
+`timeout_seconds` value in `.codeflow/test-config.json`, or 600 seconds when
+it is omitted. Check why the command is slow before increasing the limit.
+
+If all target commands pass but tracked files change during the gate, the
+block names those files. Review and commit the intended generated changes,
+then rerun the gate on the resulting checkout. A gate error names the error
+itself, including failures that occur after the configuration has loaded.

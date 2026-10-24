@@ -1510,6 +1510,7 @@ pub fn run_push_targets(
         Ok(GateOutcome::Completed {
             results,
             passed,
+            failure_reasons,
             skipped,
             ..
         }) => {
@@ -1521,11 +1522,23 @@ pub fn run_push_targets(
                     results.len(), skipped.len(), if skipped.is_empty() && !results.is_empty() { "" } else { "; not complete" }
                 ));
             } else {
-                let failed: Vec<String> = results
+                let mut failed: Vec<String> = results
                     .iter()
                     .filter(|r| !r.passed())
-                    .map(|r| r.name.clone())
+                    .map(|r| {
+                        let detail = r
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| format!("exit code {}", r.exit_code));
+                        format!("{} ({detail})", r.name)
+                    })
                     .collect();
+                failed.extend(failure_reasons);
+                if failed.is_empty() {
+                    failed.push(
+                        "gate returned a failed verdict without target failure detail".into(),
+                    );
+                }
                 report.violations.push(Violation::new(
                     "git.test_gate_on_push",
                     policy.test_gate_on_push,
@@ -1546,11 +1559,16 @@ pub fn run_push_targets(
             results.iter().map(target_step).collect()
         }
         Err(e) => {
+            let remedy = if matches!(&e, crate::testing::error::TestingError::Io(_)) {
+                crate::remedy::PUSH_SET_FAILED.remedy()
+            } else {
+                crate::remedy::TEST_CONFIG_REPAIR.remedy()
+            };
             report.violations.push(Violation::new(
                 "git.test_gate_on_push",
                 policy.test_gate_on_push,
-                format!("push set could not load test-config.json: {e}"),
-                crate::remedy::TEST_CONFIG_REPAIR.remedy(),
+                format!("push set gate error: {e}"),
+                remedy,
             ));
             Vec::new()
         }
@@ -3793,6 +3811,158 @@ mod tests {
         assert!(steps[0].configurable);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn push_set_names_candidate_change_when_every_target_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        std::fs::write(dir.path().join("input.txt"), "before").unwrap();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("input.txt")).unwrap();
+        index.write().unwrap();
+        write_test_config(dir.path(), "echo after > input.txt");
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let failure = &report.violations[0].message;
+        assert!(
+            failure.contains("tracked files changed during the gate: input.txt"),
+            "{failure}"
+        );
+        assert!(!failure.contains("failed for:  ("), "{failure}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_set_names_each_target_and_its_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(dir.path(), &serde_json::json!({
+            "schema_version": "1.0",
+            "execution": {"fail_fast": false},
+            "targets": [
+                {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "exit 7"}}},
+                {"name": "check", "runner": "custom", "modes": {"quick": {"command": "exit 124"}}}
+            ]
+        }).to_string());
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let failure = &report.violations[0].message;
+        assert!(failure.contains("lint (exit code 7)"), "{failure}");
+        assert!(failure.contains("check (exit code 124)"), "{failure}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_set_names_timeout_and_configured_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            &serde_json::json!({
+                "schema_version": "1.0",
+                "targets": [{"name": "slow", "runner": "custom", "timeout_seconds": 1,
+                    "modes": {"quick": {"command": "sleep 30"}}}]
+            })
+            .to_string(),
+        );
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(
+            report.violations[0]
+                .message
+                .contains("slow (timeout after 1s)"),
+            "{report:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_set_names_killed_target_and_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_test_config(dir.path(), "kill -TERM $$");
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(
+            report.violations[0]
+                .message
+                .contains("demo (killed by signal 15)"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn push_set_names_target_when_runner_cannot_start_it() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            &serde_json::json!({
+                "schema_version": "1.0",
+                "targets": [{"name": "missing-cwd", "runner": "custom", "cwd": "absent",
+                    "modes": {"quick": {"command": "true"}}}]
+            })
+            .to_string(),
+        );
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let failure = &report.violations[0].message;
+        assert!(failure.contains("missing-cwd (runner error:"), "{failure}");
+        assert!(failure.contains("failed to spawn command"), "{failure}");
+    }
+
+    #[test]
+    fn push_set_names_missing_output_when_producer_command_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(
+            dir.path(),
+            &serde_json::json!({
+                "schema_version": "1.0",
+                "targets": [{"name": "producer", "runner": "custom", "outputs": ["absent.txt"],
+                    "modes": {"quick": {"command": "echo done"}}}]
+            })
+            .to_string(),
+        );
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let failure = &report.violations[0].message;
+        assert!(
+            failure.contains("producer (producer output missing:")
+                && failure.contains("absent.txt)"),
+            "{failure}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_set_names_snapshot_error_after_target_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_test_config(dir.path(), "rm base.txt && mkdir base.txt");
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let violation = &report.violations[0];
+        assert!(
+            violation.message.contains("push set gate error: io error:"),
+            "{violation:?}"
+        );
+        assert!(
+            violation.message.contains("cannot snapshot"),
+            "{violation:?}"
+        );
+        assert!(violation.message.contains("base.txt"), "{violation:?}");
+        assert!(violation.remedy.contains("codeflow test --mode quick"));
+        assert!(!violation
+            .remedy
+            .contains("repair .codeflow/test-config.json"));
+    }
+
+    #[test]
+    fn push_set_names_gate_error_when_configuration_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        write_raw_test_config(dir.path(), "{");
+        let (report, _) = run_targets(dir.path(), &GitPolicy::default());
+        let failure = &report.violations[0].message;
+        assert!(failure.contains("push set gate error:"), "{failure}");
+        assert!(failure.contains("EOF"), "{failure}");
+    }
+
     #[test]
     fn test_gate_pass_is_quiet() {
         let dir = tempfile::tempdir().unwrap();
@@ -3884,7 +4054,7 @@ mod tests {
             .filter(|v| v.rule == "git.test_gate_on_push")
             .collect();
         assert_eq!(gate.len(), 1, "{:?}", report.violations);
-        assert!(gate[0].message.contains("could not load"));
+        assert!(gate[0].message.contains("push set gate error:"));
         assert!(gate[0].message.contains("invalid test config"));
         assert!(!report.notes.iter().any(|n| n.text.contains("skipped")));
     }
