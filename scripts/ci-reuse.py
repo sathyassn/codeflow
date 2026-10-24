@@ -42,6 +42,12 @@ Anything else, an API or git error included, runs every job.
 Usage: ci-reuse.py --repo OWNER/NAME --sha SHA --event EVENT --workflow-ref REF --ref REF
                    --image-os OS --image-version VERSION
                    --push-only NAME --require NAME [--require NAME ...]
+
+`ci-reuse.py admit --repo OWNER/NAME --head SHA --workflow PATH --require NAME
+[--wait SECONDS]` is the merge admission `commit standards` runs (TSK-449):
+it passes only when the newest pull_request run of PATH at exactly that head
+completed with success and every named verdict job succeeded, waiting up to
+SECONDS for a pending or absent run, and refuses everything else.
 """
 
 from __future__ import annotations
@@ -53,6 +59,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -167,6 +174,70 @@ def decide(event: str, sha: str, workflow_path: str, push_only: set[str], requir
     return run["id"]
 
 
+class Pending(Skip):
+    """An admission that may still pass once the head's run finishes."""
+
+
+def admit(head: str, workflow_path: str, required: set[str], api) -> int:
+    """Merge admission for a pull request (TSK-449 AC-6): the id of the
+    newest codeflow-ci pull_request run at exactly `head` when it completed
+    with success and every required verdict job concluded success. A draft's
+    run skips its verdicts (neutral), so it never admits; a pending, absent,
+    cancelled or failed run, or one only for another head, refuses."""
+    if not SHA.match(head):
+        raise Skip(f"the head {head!r} is not a commit id")
+    runs = [run for run in api.runs(head)
+            if run.get("event") == "pull_request" and run.get("head_sha") == head
+            and run.get("path") == workflow_path and isinstance(run.get("id"), int)]
+    if not runs:
+        raise Pending(f"no {workflow_path} pull_request run exists for head {head}")
+    run = max(runs, key=lambda r: (r.get("run_number", 0), r.get("run_attempt", 0), r["id"]))
+    if run.get("status") != "completed":
+        raise Pending(f"run {run['id']} for head {head} is {run.get('status')}")
+    if run.get("conclusion") != "success":
+        raise Skip(f"run {run['id']} for head {head} concluded {run.get('conclusion')}")
+    jobs = {job.get("name"): job.get("conclusion") for job in api.jobs(run["id"])}
+    for name in sorted(required):
+        if jobs.get(name) != "success":
+            raise Skip(f"verdict {name!r} of run {run['id']} concluded {jobs.get(name) or 'nothing'}; "
+                       "a draft's verdicts are skipped, so mark the pull request ready to run them at this head")
+    return run["id"]
+
+
+def admit_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="ci-reuse.py admit", description=admit.__doc__.split("\n\n")[0])
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--head", required=True)
+    parser.add_argument("--workflow", required=True, help="the workflow file whose run must pass")
+    parser.add_argument("--require", action="append", default=[], help="a verdict job that must succeed")
+    parser.add_argument("--wait", type=int, default=0, help="seconds to wait for a pending or absent run")
+    parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
+    args = parser.parse_args(argv)
+    api = Api(args.api, args.repo, os.environ.get("GH_TOKEN", ""))
+    deadline = time.monotonic() + max(args.wait, 0)
+    while True:
+        try:
+            run = admit(args.head, args.workflow, set(args.require), api)
+        except Pending as reason:
+            if time.monotonic() + POLL_SECONDS > deadline:
+                print(f"ci-reuse admit: refused: {reason}; re-run this check once that run completes")
+                return 1
+            print(f"ci-reuse admit: waiting: {reason}")
+            time.sleep(POLL_SECONDS)
+            continue
+        except Skip as reason:
+            print(f"ci-reuse admit: refused: {reason}")
+            return 1
+        except Exception as error:  # noqa: BLE001 - any failure refuses admission
+            print(f"ci-reuse admit: refused: the decision failed ({type(error).__name__}: {error})")
+            return 1
+        print(f"ci-reuse admit: run {run} passed every verdict at head {args.head}")
+        return 0
+
+
+POLL_SECONDS = 30
+
+
 class Git:
     def __init__(self, cwd: str = "."):
         self.cwd = cwd
@@ -249,6 +320,8 @@ def workflow_path(ref: str, repo: str) -> str:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["admit"]:
+        return admit_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", required=True)
     parser.add_argument("--sha", required=True)
