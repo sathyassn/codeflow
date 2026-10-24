@@ -275,7 +275,24 @@ fn branch_only_exceptions_and_disabled_level_cannot_relax_target_policy() {
     f.stage(".codeflow/policy.json", 0o100_644, local.as_bytes());
     f.stage("private/data", 0o100_644, b"public");
     verdict(&f.hook(), true);
-    verdict(&f.ci(f.commit(&[f.base])), true);
+    let head = f.commit(&[f.base]);
+    verdict(&f.ci(head), true);
+    let under_warn = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args([
+            "ci",
+            "--base",
+            &f.base.to_string(),
+            "--head",
+            &head.to_string(),
+            "--branch",
+            "feat/paths",
+            "--run-level",
+            "warn",
+        ])
+        .output()
+        .unwrap();
+    verdict(&under_warn, true);
 }
 
 #[test]
