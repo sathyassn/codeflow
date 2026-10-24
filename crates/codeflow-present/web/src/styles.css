@@ -1665,19 +1665,18 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-saved-part { outline: 2px solid var(--cf-accent); outline-offset: 2px; }
 .cf-dock .hd { align-items: center; }
 .cf-dock { background: var(--cf-surface); }
-.cf-dock .list { flex: 1 1 160px; min-height: 80px; scrollbar-gutter: stable; }
-.cf-dock .list:has(.empty) { flex: 0 0 auto; min-height: 0; }
+/* One scroll area: drafts and Earlier feedback at their natural height. */
+.cf-dock-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; background: var(--cf-surface); }
+.cf-dock .list, .cf-dock .list:has(.empty) { flex: none; overflow: visible; min-height: 0; display: block; }
+.cf-more-below { flex: none; padding: 6px 14px; text-align: center; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); background: var(--cf-surface); border-top: 1px solid var(--cf-border); }
 .cf-dock .empty { padding: 12px; gap: 4px; }
 .cf-dock .empty::before, .cf-dock .empty .h { display: none; }
-.cf-dock .list[data-more-below="true"]::after { content: "More notes below \2193"; display: block; position: sticky; bottom: 0; z-index: 1; background: var(--cf-surface); border-top: 1px solid var(--cf-border); color: var(--cf-text-muted); font-size: var(--cf-fs-caption); padding: 6px 14px; text-align: center; }
 .cf-dock .ft { flex: 0 0 auto; padding: 10px 14px; }
-.cf-dock .ft .path { margin-bottom: 6px; }
+.cf-dock .ft .path { margin-bottom: 6px; font-family: var(--cf-font-sans); font-size: var(--cf-fs-caption); }
 .cf-dock .cf-status { margin: 4px 0 0; }
 .cf-capture-options { flex: none; }
 .cf-capture-options > details { padding: 4px 12px; font-size: var(--cf-fs-caption); }
-.cf-feedback-history { flex: 1 1 auto; min-height: 36px; }
-.cf-feedback-history:not([open]) { flex: none; }
-.cf-feedback-history[open] { max-height: 30vh; }
+.cf-dock .cf-feedback-history, .cf-dock .cf-feedback-history[open] { flex: none; min-height: 0; max-height: none; overflow: visible; }
 .cf-discard { padding: 8px; border: 1px solid var(--cf-border-strong); }
 .cf-discard p { margin: 0 0 8px; }
 .cf-discard button { padding: 8px; }
@@ -1687,13 +1686,24 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-dock .cf-review-sent.in-rail { position: static; flex: none; margin: 10px 12px 4px; max-width: none; box-shadow: none; border-color: var(--cf-accent); border-inline-start-width: 4px; }
 .cf-pending-text { border-bottom-style: dashed; }
 .cf-feedback-history[open] { border-bottom: 1px solid var(--cf-border); }
-/* After a send the sent card stands in for the empty draft list, so the
-   opened Earlier feedback keeps room to be read. */
+/* After a send the sent card stands in for the empty draft list. */
 .cf-dock[data-sent="true"] .list:has(.empty) { display: none; }
-.cf-dock[data-sent="true"] .cf-feedback-history[open] { min-height: 132px; }
+.cf-restore { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 12px 4px; padding: 8px 10px; border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); color: var(--cf-text); font-size: var(--cf-fs-caption); }
+.cf-restore button, .cf-withdraw-confirm button, .cf-sent-meta { font: inherit; color: var(--cf-text); background: var(--cf-surface-raised); border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); padding: 4px 8px; cursor: pointer; }
+.cf-withdraw-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--cf-fs-caption); color: var(--cf-text); }
+.cf-sent-meta { font-size: var(--cf-fs-caption); color: var(--cf-accent-strong); white-space: nowrap; }
+.cf-field-error { display: block; margin-top: 4px; color: var(--cf-danger, #b42318); font-size: var(--cf-fs-caption); font-weight: 600; }
+.cf-field-hint { display: block; margin: 2px 0 4px; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); }
+.cf-verdict select[aria-invalid="true"], .cf-verdict textarea[aria-invalid="true"] { border-color: var(--cf-danger, #b42318); box-shadow: 0 0 0 1px var(--cf-danger, #b42318); }
+.cf-pending-part { outline-style: dashed; }
+/* Submit with no notes stays pressable, so a missing verdict can be named;
+   it keeps a readable outline style on hover and focus. */
+.cf-dock .ft button.pri.is-empty:not(:disabled) { color: var(--cf-text); cursor: pointer; }
+.cf-dock .ft button.pri.is-empty:hover:not(:disabled) { background: var(--cf-surface-raised); }
+.cf-tools-help { margin: 4px 0 8px; color: var(--cf-text-muted); font-size: var(--cf-fs-caption); font-family: var(--cf-font-sans); text-transform: none; letter-spacing: 0; }
 @media (max-width: 879.98px) {
-  .cf-dock { height: min(70dvh, 620px); overflow: hidden; }
-  .cf-dock .list { flex: 1 1 100px; min-height: 60px; }
+  .cf-dock { height: min(80dvh, 680px); overflow: hidden; }
+  .cf-dock .ft { align-items: start; }
   .cf-dock .hd { flex: none; }
   .cf-dock[data-expanded="false"] { height: 56px; }
   .cf-dock .ft { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -1709,3 +1719,9 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 }
 
 .cf-capture-options > .cf-capture-tools { grid-template-columns: 1fr 1fr; }
+
+/* A touch phone has no keyboard capture to offer; its rows go to the notes.
+   A narrow window with a pointer keeps the keyboard tools. */
+@media (max-width: 879.98px) and (pointer: coarse) {
+  .cf-capture-options > .cf-tools { display: none; }
+}

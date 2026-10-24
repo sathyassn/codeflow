@@ -195,6 +195,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const [discardPrompt, setDiscardPrompt] = useState(false);
   const [removedNote, setRemovedNote] = useState<{ note: PendingFeedback; index: number } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sentCount, setSentCount] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [markerLayer, setMarkerLayer] = useState<HTMLElement | null>(null);
@@ -216,7 +217,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const hintRef = useRef<HTMLDivElement>(null);
   const floatRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  const [verdictError, setVerdictError] = useState<string | null>(null);
+  const [instructionError, setInstructionError] = useState<string | null>(null);
   const [moreBelow, setMoreBelow] = useState(false);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
@@ -266,15 +270,19 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   useLayoutEffect(() => {
     const float = composerOpen ? composerRef.current : floatRef.current;
     if (!float) return;
+    // Beside a desktop notes rail the editor and chip stay left of it, so
+    // they never cover the notes or the verdict.
+    const dock = dockRef.current;
+    const right = dock && dock.dataset.open === "true" && !sheetLayout() ? dock.getBoundingClientRect().left : window.innerWidth;
     const target = pendingPin?.targetRect ?? (editAtRef.current ? new DOMRect(editAtRef.current.x, editAtRef.current.y, 0, 0) : null);
     if (target) {
       const width = float.offsetWidth;
       const height = float.offsetHeight;
       const clampTop = (top: number) => Math.min(Math.max(8, top), window.innerHeight - height - 8);
-      let left = Math.min(Math.max(8, target.left), window.innerWidth - width - 8);
+      let left = Math.min(Math.max(8, target.left), right - width - 8);
       let top = target.bottom + 12;
       if (top + height > window.innerHeight - 64) top = target.top - height - 12;
-      if (top < 8 && target.right + width + 8 <= window.innerWidth - 8) {
+      if (top < 8 && target.right + width + 8 <= right - 8) {
         left = target.right + 8;
         top = clampTop(target.top);
       } else if (top < 8 && target.left - width - 8 >= 8) {
@@ -284,22 +292,32 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       float.style.left = `${left}px`;
       float.style.top = `${top}px`;
     }
-    const overflow = float.getBoundingClientRect().right - (window.innerWidth - 8);
+    const overflow = float.getBoundingClientRect().right - (right - 8);
     if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
   }, [pendingPin, composerOpen, discardPrompt]);
   settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
+  // The restore notice is read in the panel: it clears itself a few seconds
+  // after the panel first shows it.
+  useEffect(() => {
+    if (!restoreNotice || !railVisible) return undefined;
+    const timer = window.setTimeout(() => setRestoreNotice(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [restoreNotice, railVisible]);
   // The notes list says when more notes sit below its fold, and stops saying
   // it once the reviewer has scrolled to the last one.
   useLayoutEffect(() => {
-    const list = listRef.current;
+    const list = bodyRef.current;
     if (!list) return undefined;
     const measure = (): void => setMoreBelow(list.scrollTop + list.clientHeight < list.scrollHeight - 2);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(list);
+    // Earlier feedback loads and opens on its own, so content changes count too.
+    const content = new MutationObserver(measure);
+    content.observe(list, { childList: true, subtree: true, attributes: true, characterData: true });
     list.addEventListener("scroll", measure, { passive: true });
-    return () => { observer.disconnect(); list.removeEventListener("scroll", measure); };
+    return () => { observer.disconnect(); content.disconnect(); list.removeEventListener("scroll", measure); };
   }, [notes, railVisible, sheetExpanded, historyOpen, removedNote, sentReview]);
   // A timed hint about the sheet ("the Comment button opens your notes") is
   // stale once the sheet is open; a sticky notice stays.
@@ -417,8 +435,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (!closedRef.current) writeDraft(config.session_id, config.revision, notes, verdict, instruction);
   }, [notes, verdict, instruction]);
   useEffect(() => {
+    // A restored draft is named in the notes panel, never over the editor,
+    // and the notice clears itself after a few seconds.
     const notice = draftNotice(draft, config.revision);
-    if (notice) showToast(notice, { sticky: true });
+    if (notice) setRestoreNotice(notice);
   }, []);
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   // A form refused with session_closed reports it on the document root.
@@ -987,7 +1007,6 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     // A capture on the document collapses the phone sheet so the captured
     // words stay in view; a whole-document note keeps it, beside its button.
     if (targetKindOf(captured) !== "document") setSheetExpanded(false);
-    setHistoryOpen(false);
     clearHot();
     // The chip is placed off the pinned part's box: the element, or the
     // selected text.
@@ -1085,7 +1104,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           ...(excerpt ? { excerpt } : {}),
         },
       ]);
-      setStatus(`Note saved for ${c.summary}.`);
+      setStatus(`Note saved for ${c.summary.replace(/[.…]+$/u, "")}.`);
       lastPinnedSelectionRef.current = "";
       window.getSelection()?.removeAllRanges();
     }
@@ -1172,7 +1191,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const submitReview = async (): Promise<void> => {
-    if (submittingRef.current || !verdict) return;
+    if (submittingRef.current) return;
+    if (!verdict) {
+      setVerdictError("Choose a verdict first.");
+      document.getElementById("cf-review-verdict")?.focus();
+      return;
+    }
     // What this review carries: exactly these notes and this instruction.
     const sentNotes = notes;
     const sentInstruction = instruction;
@@ -1182,7 +1206,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       return;
     }
     if (verdict === "request_changes" && !sentInstruction.trim()) {
-      setStatus("Request changes needs a clear instruction.");
+      setInstructionError("Write the change you require.");
+      document.getElementById("cf-review-instruction")?.focus();
       return;
     }
     if (
@@ -1243,6 +1268,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"}.${cropNotice}${pending}`;
       setStatus(confirmation);
       const verdictLabel = verdict === "request_changes" ? "Request changes" : verdict === "approve" ? "Approve" : "Approve with notes";
+      setSentCount((count) => count + 1);
+      // The card and the newest sent review sit at the top of the panel.
+      requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
       setSentReview(`Review sent: ${sentNotes.length} ${sentNotes.length === 1 ? "note" : "notes"} · ${verdictLabel}.`);
       setToast(null);
     } catch (error) {
@@ -1328,7 +1356,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }, [config.shortcuts_enabled]);
 
   function handleEvent(event: SessionEvent): void {
-    setEventMessage(event.message ?? null);
+    // The panel names a sent review itself; the service's generic state
+    // message would only repeat it ("Review state changed.").
+    setEventMessage(event.kind === "feedback_state" ? null : event.message ?? null);
     documentRoot.dispatchEvent(new CustomEvent(THREAD_EVENT, {detail:event.kind}));
     // Forms keep their drafts in the page and show the notice themselves.
     if (event.kind === "revision") {
@@ -1368,12 +1398,21 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 return rectangles.map((rect, index) => <div key={`${note.client_id}-${index}`} class={note.selector ? "cf-saved-text" : "cf-saved-part"} data-testid={note.selector ? "saved-text" : "saved-part"}
                   style={`left:${rect.left - root.left}px;top:${rect.top - root.top}px;width:${rect.width}px;height:${rect.height}px`} aria-hidden="true" />);
               })}
-              {composerOpen && pendingPin?.captured.selector ? (() => {
-                // The captured words stay marked while the note is written.
+              {pendingPin && targetKindOf(pendingPin.captured) !== "document" ? (() => {
+                // The captured target stays marked from capture until the
+                // note is saved: the words, the part or the area.
                 const root = documentRoot.getBoundingClientRect();
-                return resolveTextRanges(documentRoot, pendingPin.captured.blockId, pendingPin.captured.selector).flatMap(range => [...range.getClientRects()])
-                  .map((rect, index) => <div key={`pending-${index}`} class="cf-saved-text cf-pending-text" data-testid="pending-text"
-                    style={`left:${rect.left - root.left}px;top:${rect.top - root.top}px;width:${rect.width}px;height:${rect.height}px`} aria-hidden="true" />);
+                const c = pendingPin.captured;
+                const place = (rect: DOMRect): string => `left:${rect.left - root.left}px;top:${rect.top - root.top}px;width:${rect.width}px;height:${rect.height}px`;
+                if (c.selector) {
+                  if (!composerOpen) return null;
+                  return resolveTextRanges(documentRoot, c.blockId, c.selector).flatMap(range => [...range.getClientRects()])
+                    .map((rect, index) => <div key={`pending-${index}`} class="cf-saved-text cf-pending-text" data-testid="pending-text" style={place(rect)} aria-hidden="true" />);
+                }
+                const rect = targetRect(documentRoot, { block_id: c.blockId, element_selector: c.element_selector, entity_selector: c.entity_selector, region_selector: c.region_selector } as unknown as PendingFeedback, markerEpoch);
+                if (!rect) return null;
+                const area = targetKindOf(c) === "region";
+                return <div class={area ? "cf-region-saved cf-pending-area" : "cf-saved-part cf-pending-part"} data-testid={area ? "pending-area" : "pending-part"} style={place(rect)} aria-hidden="true" />;
               })() : null}
               {(() => {
                 const spots = markerPlacements(documentRoot, notes, markerMetaRef.current, markerEpoch);
@@ -1418,6 +1457,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count" hidden={notes.length === 0}>
             {notes.length} {notes.length === 1 ? "note" : "notes"}
           </span>
+          {notes.length === 0 && sentCount > 0 ? (
+            <button type="button" class="cf-sent-meta" data-testid="sent-count" title="Show the sent review under Earlier feedback"
+              onClick={() => { setHistoryOpen(true); if (!commentModeRef.current) armComment(true); setPanelOpen(true); setSheetExpanded(true); }}>
+              {sentCount === 1 ? "Review sent" : `${sentCount} reviews sent`}
+            </button>
+          ) : null}
           <button
             type="button"
             class="cf-settings-btn"
@@ -1704,6 +1749,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
         </div>
 
+      {/* One scroll area holds the drafts and Earlier feedback at their
+          natural height; the capture buttons and the verdict stay fixed. */}
+      <div class="cf-dock-body" data-testid="notes-body" ref={bodyRef}>
+      {restoreNotice ? <div class="cf-restore" role="status" data-testid="restore-notice"><span>{restoreNotice}</span>
+        <button type="button" onClick={() => setRestoreNotice(null)}>Dismiss</button></div> : null}
       {sentReview && railVisible && !(sheetLayout() && !sheetExpanded) ? (
         <div class="cf-review-sent in-rail" role="status" data-testid="review-sent">
           <span>{sentReview} It is listed under Earlier feedback below.</span>
@@ -1718,7 +1768,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         }}>Undo</button>
       </div> : null}
 
-        <div id="cf-queued-notes" class="list" data-testid="notes-list" ref={listRef} data-more-below={moreBelow && notes.length > 0 ? "true" : "false"}>
+        <div id="cf-queued-notes" class="list" data-testid="notes-list">
           {!notes.length ? (
             <div class="empty" data-testid="notes-empty">
               <span class="t">No draft notes</span>
@@ -1777,7 +1827,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           )}
         </div>
 
-        <ThreadRail config={config} documentRoot={documentRoot} expanded={historyOpen} />
+        <ThreadRail config={config} documentRoot={documentRoot} expanded={historyOpen} onToggle={setHistoryOpen} />
+      </div>
+      {moreBelow ? <div class="cf-more-below" data-testid="more-below" aria-hidden="true">More below ↓</div> : null}
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <div class="cf-capture-options">
@@ -1820,7 +1872,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               Whole document
             </button>
           </div>
-          <details class="cf-tools"><summary>Keyboard capture options</summary><div class="cf-capture-tools">            <button
+          <details class="cf-tools"><summary>Capture with the keyboard</summary>
+            <p class="cf-tools-help">Select text with the keyboard, then Add selected text. Or press Pick part, Tab to a part and press Enter.</p>
+            <div class="cf-capture-tools">            <button
               class="cf-secondary-action"
               type="button"
               data-testid="tool-add-text"
@@ -1843,7 +1897,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 captureModeRef.current = next;
               }}
             >
-              Pick element
+              Pick part
             </button>
 </div></details>
         </div>
@@ -1858,30 +1912,38 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               id="cf-review-verdict"
               disabled={busy}
               value={verdict}
-              onChange={(e) => setVerdict(e.currentTarget.value as ReviewVerdict)}
+              aria-invalid={verdictError ? "true" : undefined}
+              aria-describedby={verdictError ? "cf-verdict-error" : undefined}
+              onChange={(e) => { setVerdict(e.currentTarget.value as ReviewVerdict); setVerdictError(null); setInstructionError(null); }}
             >
               <option value="" disabled>Choose a verdict</option>
               <option value="approve">Approve</option>
               <option value="approve_with_notes">Approve with notes</option>
               <option value="request_changes">Request changes</option>
             </select>
+            {verdictError ? <span class="cf-field-error" id="cf-verdict-error" data-testid="verdict-error">{verdictError}</span> : null}
           </label>
           <label class="cf-verdict">
             <span>{verdict === "request_changes" ? "Required change" : "Review summary (optional)"}</span>
+            {verdict === "request_changes" ? <span class="cf-field-hint" data-testid="instruction-hint">Needed for Request changes.</span> : null}
             <textarea
+              id="cf-review-instruction"
+              aria-invalid={instructionError ? "true" : undefined}
+              aria-describedby={instructionError ? "cf-instruction-error" : undefined}
               rows={2}
               maxLength={config.review_limits.max_text_utf16}
               disabled={busy}
               value={instruction}
-              onInput={(e) => setInstruction(e.currentTarget.value)}
+              onInput={(e) => { setInstruction(e.currentTarget.value); setInstructionError(null); }}
             />
+            {instructionError ? <span class="cf-field-error" id="cf-instruction-error" data-testid="instruction-error">{instructionError}</span> : null}
           </label>
           <button
             type="button"
             class={`pri${notes.length === 0 ? " is-empty" : ""}`}
             id="submitAllBtn"
             data-testid="submit-all"
-            disabled={busy || !verdict || (notes.length === 0 && verdict === "approve_with_notes")}
+            disabled={busy || (notes.length === 0 && verdict === "approve_with_notes")}
             onClick={() => void submitReview()}
           >
             {busy ? "Submitting…" : notes.length === 0 ? "Submit review" : `Submit review (${notes.length})`}

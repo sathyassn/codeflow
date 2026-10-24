@@ -187,8 +187,19 @@ try {
           const b = await page.getByTestId('float-chip').boundingBox();
           assert.ok(!(b.x < capturedWords.right && capturedWords.left < b.x + b.width && b.y < capturedWords.bottom && capturedWords.top < b.y + b.height));
         });
+        if (kind === 'part') await verify('a clicked part is marked before the note is written', async () => assert.ok(await page.getByTestId('pending-part').isVisible()));
         await shot(`capture-${kind}`);
+        if (kind === 'region') {
+          if (!(await page.getByTestId('composer').count())) await page.getByTestId('float-comment').click();
+          await verify('the area box stays visible while the note is written', async () => assert.ok(await page.getByTestId('pending-area').isVisible()));
+        }
+        if (width === 1600 && await page.getByTestId('composer').count()) await verify(`${kind} editor stays left of the notes panel`, async () => {
+          const editor = await page.getByTestId('composer').boundingBox();
+          const dock = await page.getByTestId('notes-dock').boundingBox();
+          assert.ok(editor.x + editor.width <= dock.x + 1, `editor ends at ${editor.x + editor.width}, panel starts at ${dock.x}`);
+        });
         await save(`${kind} note`);
+        await verify('the saved status has one full stop', async () => assert.doesNotMatch(await page.locator('.cf-dock .cf-status').textContent(), /\.\.$|…\.$/u));
         await hideNotes();
         await shot(`saved-target-${kind}`);
         if (kind === 'prose') await verify('note number leaves the complete prose line readable', async () => {
@@ -212,16 +223,38 @@ try {
         assert.equal(await page.getByTestId('note-row').filter({ hasText: 'prose note' }).locator('.a').innerText(), 'Review the handoff');
         assert.equal(await page.getByTestId('note-row').filter({ hasText: 'document note' }).locator('.a').innerText(), 'Whole document');
       });
-      await verify('a list taller than its panel says more notes are below', async () => {
-        const list = page.getByTestId('notes-list');
-        const overflow = await list.evaluate(el => el.scrollHeight > el.clientHeight + 2);
-        assert.equal(await list.getAttribute('data-more-below'), overflow ? 'true' : 'false');
+      await verify('one scroll area says more is below until its end, never over a note', async () => {
+        const body = page.getByTestId('notes-body');
+        const overflow = await body.evaluate(el => el.scrollHeight > el.clientHeight + 2);
+        assert.equal(await page.getByTestId('more-below').count(), overflow ? 1 : 0);
+        assert.ok(await page.getByTestId('notes-list').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'the draft list scrolls on its own');
         if (overflow) {
           await shot('more-notes-below');
-          await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
-          await page.waitForFunction(() => document.querySelector('[data-testid=notes-list]').dataset.moreBelow === 'false');
-          await list.evaluate(el => { el.scrollTop = 0; });
+          await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
+          await page.getByTestId('more-below').waitFor({ state: 'detached' });
+          const last = await page.getByTestId('note-row').last().boundingBox();
+          const area = await body.boundingBox();
+          assert.ok(last.y + last.height <= area.y + area.height + 1, 'the last note is cut off');
+          await shot('notes-end');
+          await body.evaluate(el => { el.scrollTop = 0; });
         }
+      });
+      if (width === 1600) await verify('keyboard capture is explained', async () => {
+        assert.equal(await page.locator('.cf-tools summary').innerText(), 'CAPTURE WITH THE KEYBOARD');
+        assert.match(await page.locator('.cf-tools-help').textContent(), /Add selected text/);
+      });
+      // A reload keeps the drafts and names them in the panel, not over the page.
+      await page.reload();
+      await page.locator('[data-cf-figure-block="ready"]').waitFor();
+      await page.getByTestId('comment-btn').click();
+      await showNotes();
+      await verify('restored drafts are named in the panel and can be dismissed', async () => {
+        const notice = page.getByTestId('notes-dock').getByTestId('restore-notice');
+        assert.match(await notice.innerText(), /Restored 5 unsent notes/);
+        assert.equal(await page.getByTestId('toast').count(), 0);
+        await shot('restored');
+        await notice.getByRole('button', { name: 'Dismiss' }).click();
+        assert.equal(await page.getByTestId('restore-notice').count(), 0);
       });
       if (width === 375) await verify('phone sheet controls have distinct plain labels', async () => {
         assert.equal(await page.getByTestId('notes-expand').innerText(), 'Back to document');
@@ -255,7 +288,26 @@ try {
         await shot('undo-remove');
         await page.getByTestId('note-row').filter({ hasText: 'part note' }).getByTestId('note-remove').click();
       });
+      await page.getByTestId('submit-all').click();
+      await verify('Submit without a verdict says so at the verdict', async () => {
+        const error = page.getByTestId('verdict-error');
+        assert.equal(await error.innerText(), 'Choose a verdict first.');
+        const field = await page.locator('#cf-review-verdict').boundingBox();
+        const box = await error.boundingBox();
+        assert.ok(box.y >= field.y && box.y - (field.y + field.height) < 24, 'the verdict error is not at its field');
+      });
+      await shot('verdict-missing');
       await page.locator('#cf-review-verdict').selectOption('request_changes');
+      await verify('Request changes says what the field now needs', async () => {
+        assert.equal(await page.getByTestId('verdict-error').count(), 0);
+        assert.match(await page.getByTestId('instruction-hint').innerText(), /Needed for Request changes/);
+      });
+      await page.getByTestId('submit-all').click();
+      await verify('a missing required change is named at its field', async () => {
+        assert.equal(await page.getByTestId('instruction-error').innerText(), 'Write the change you require.');
+        assert.equal(await page.locator('#cf-review-instruction').getAttribute('aria-invalid'), 'true');
+      });
+      await shot('instruction-missing');
       await page.locator('.cf-verdict textarea').fill('Clarify the handoff.');
       await verify('verdict and submit remain reachable without scrolling the sheet', async () => {
         for (const selector of ['#cf-review-verdict', '#submitAllBtn']) assert.ok(await page.locator(selector).evaluate(el => { const b = el.getBoundingClientRect(); return b.top >= 0 && b.bottom <= innerHeight; }));
@@ -285,9 +337,40 @@ try {
         assert.ok(shown >= 120, `Earlier feedback shows ${shown} px`);
         assert.equal(await page.getByTestId('comment-btn').getAttribute('aria-pressed'), 'true');
       });
+      await verify('after a send the scroll cue still matches the panel', async () => {
+        await page.waitForTimeout(300);
+        const overflow = await page.getByTestId('notes-body').evaluate(el => el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+        assert.equal(await page.getByTestId('more-below').count(), overflow ? 1 : 0);
+      });
+      if (width === 375) await verify('the phone sheet gives the notes room', async () => {
+        const body = await page.getByTestId('notes-body').boundingBox();
+        assert.ok(body.height >= 200, `the notes area is ${body.height} px`);
+      });
+      await verify('the sent review is listed first, read-only, in plain words', async () => {
+        const newest = page.getByTestId('feedback-history').locator('li[data-review]').first();
+        assert.match(await newest.innerText(), /Sent review: Request changes/);
+        assert.equal(await page.getByTestId('feedback-history').getByRole('button', { name: 'Delete note' }).count(), 0);
+        assert.doesNotMatch(await page.getByTestId('feedback-history').innerText(), /in place|Review state changed/);
+        assert.doesNotMatch(await page.getByTestId('notes-dock').innerText(), /Review state changed/);
+        const top = await page.getByTestId('notes-body').evaluate(el => el.scrollTop);
+        assert.equal(top, 0, 'the newest sent review is not in view');
+      });
       await shot('sent');
+      await page.getByTestId('review-sent').getByRole('button', { name: 'Dismiss' }).click();
       await page.getByTestId('comment-leave').click();
-      await verify('sent state stays visible after leaving Comment mode', async () => assert.match(await page.getByTestId('review-sent').innerText(), /Review sent: 4 notes/));
+      await verify('after leaving Comment the header still says a review was sent', async () => {
+        assert.equal(await page.getByTestId('sent-count').innerText(), 'Review sent');
+        await shot('sent-header');
+        await page.getByTestId('sent-count').click();
+        await page.getByTestId('feedback-history').waitFor();
+        assert.ok(await page.getByTestId('feedback-history').evaluate(el => el.open), 'Earlier feedback did not open');
+        assert.match(await page.getByTestId('feedback-history').locator('li[data-review]').first().innerText(), /Request changes/);
+        await shot('sent-reopened');
+      });
+      await page.getByTestId('comment-leave').click();
+      await page.getByTestId('comment-btn').click();
+      await verify('Earlier feedback keeps its state between visits', async () => assert.ok(await page.getByTestId('feedback-history').evaluate(el => el.open)));
+      await page.getByTestId('comment-leave').click();
       await page.evaluate(() => scrollTo(0, 260));
       await verify('scrolled content never shows through the header', async () => assert.ok(await page.locator('.cf-topbar').evaluate(el => {
         const bg = getComputedStyle(el).backgroundColor;

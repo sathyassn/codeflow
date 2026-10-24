@@ -604,7 +604,8 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   await armComment(page);
-  const restored = await page.getByTestId("toast").innerText();
+  // The restore notice sits in the notes panel, never over the page (TSK-443 AC-8).
+  const restored = await page.getByTestId("restore-notice").innerText();
   assert.match(restored, /Restored 3 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
   await armComment(page);
   assert.equal(await page.getByTestId("note-row").count(), 3, "lifecycle, draft: an unsent note is gone");
@@ -1003,6 +1004,8 @@ async function phoneWidth(page) {
         return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
       }, RECIPES.narrative.text.words);
       await markerClear(line, "the selected line");
+      // The taller phone sheet (TSK-443 AC-8) is collapsed before a marker is pressed.
+      await closeCoveringRail(page);
       await page.getByTestId("note-marker").first().click();
       await page.getByTestId("composer-delete").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });

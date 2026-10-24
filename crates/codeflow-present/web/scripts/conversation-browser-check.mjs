@@ -123,7 +123,8 @@ for (const engine of selected) for (const width of widths) {
     await note.getByTestId("thread-reply").waitFor();
     await note.getByTestId("thread-reply").scrollIntoViewIfNeeded();
     await page.screenshot({path:join(evidence,`${engine}-${width}-conversation.png`),fullPage:true});
-    await note.getByRole("button",{name:"Delete note",exact:true}).click();
+    await note.getByRole("button",{name:"Withdraw note",exact:true}).click();
+    await note.getByTestId("withdraw-confirm").getByRole("button",{name:"Withdraw",exact:true}).click();
     await note.getByTestId("thread-tombstone").waitFor();
     assert.doesNotMatch(await page.locator("[data-testid=feedback-history]").innerText(),/Please clarify this explanation|I will clarify the explanation/u);
     assert.equal(parsed(["present","history",id]).response_events.filter(e => e.event === "tombstone")[0].revision,2);

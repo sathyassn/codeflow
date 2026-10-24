@@ -429,8 +429,8 @@ async function checkPhoneSurface(browser, origin) {
     // A pin keeps the sheet collapsed so the captured words stay in view (TSK-443 AC-8).
     assert.equal(await dock.getAttribute("data-expanded"), "false", "a pin expanded the notes over the document");
     // On a fresh page, pulling the peek bar up expands the sheet, to no more
-    // than the dock height, min(70dvh, 620px), which keeps the verdict and
-    // Submit in view (TSK-443 AC-8).
+    // than the dock height, min(80dvh, 680px), which keeps the notes, the
+    // verdict and Submit in view (TSK-443 AC-8).
     const fresh = await context.newPage();
     await fresh.goto(`${origin}/app`, { waitUntil: "networkidle" });
     await fresh.getByTestId("comment-btn").click();
@@ -440,7 +440,7 @@ async function checkPhoneSurface(browser, origin) {
     await peek.locator(".hd").dispatchEvent("pointerdown", { clientY: 740 });
     await peek.locator(".hd").dispatchEvent("pointerup", { clientY: 700 });
     await fresh.locator("[data-testid=notes-dock][data-expanded='true']").waitFor();
-    assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.7, 620) + 1, "the expanded sheet is taller than the dock");
+    assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.8, 680) + 1, "the expanded sheet is taller than the dock");
     process.stdout.write("375 px surface passed: notes peek, pull to expand, html stage floor and pan, no block ids in the rail, chip clear of its target\n");
   } finally { await context.close(); }
 }
@@ -474,7 +474,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const headings = await page.getByTestId("feedback-history").locator(".cf-note-heading").evaluateAll((nodes) =>
     nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
   // "moved" only when the anchor reports a change (round 3).
-  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "in place"], ["Removed detail", "unpositioned"], ["Implementation", "moved"], ["Flow", "in place"], ["Whole document", "in place"]]);
+  // Sent reviews are listed newest first (TSK-443 AC-8); notes keep their order.
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Whole document", "same place"], ["Implementation", "moved"], ["Flow", "same place"], ["Summary", "same place"], ["Removed detail", "unpositioned"]]);
   await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
   await page.getByText("Still the whole document in this revision.").waitFor();
   assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
