@@ -64,6 +64,8 @@ const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
 pub struct TargetRunResult {
     pub target_name: String,
     pub exit_code: i32,
+    /// Failure detail when no ordinary process exit code explains the result.
+    pub error: Option<String>,
     pub stdout: String,
     pub stderr: String,
     pub stdout_truncated: bool,
@@ -132,7 +134,16 @@ pub fn run_target(
         (outcome.exit_code, outcome.stderr)
     };
 
+    let error = if outcome.timed_out {
+        Some(format!("timeout after {timeout_secs}s"))
+    } else {
+        outcome
+            .signal
+            .map(|signal| format!("killed by signal {signal}"))
+    };
+
     Ok(TargetRunResult {
+        error,
         evidence: None,
         target_name: target.name.clone(),
         exit_code,
@@ -448,7 +459,8 @@ pub fn run_dependency_targets(
             if passed { "passed" } else { "FAILED" }
         );
         completed.insert(targets[index].name.clone(), passed);
-        results.insert(index, result);
+        let result = result.unwrap_or_else(|error| runner_failure(&targets[index], &error));
+        results.insert(index, Ok(result));
     }
     results.into_values().collect()
 }
@@ -463,11 +475,19 @@ fn parallel_bound(parallel: bool, configured: Option<usize>) -> usize {
     }
 }
 
+// Keep the target identity when setup, artifact recording or the worker fails
+// before it can return a command result.
+fn runner_failure(target: &TargetConfig, error: &TestingError) -> TargetRunResult {
+    let detail = super::evidence::redact(target, &error.to_string());
+    not_run(target, &format!("runner error: {detail}"))
+}
+
 fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     TargetRunResult {
         evidence: None,
         target_name: target.name.clone(),
         exit_code: -1,
+        error: Some(reason.into()),
         stdout: String::new(),
         stderr: reason.into(),
         stdout_truncated: false,
@@ -515,6 +535,7 @@ fn run_owed_target(
     })?);
 
     if !target.outputs.is_empty() && result.exit_code == 0 {
+        let mut failures = Vec::new();
         let after = super::delivery::tracked(root)?;
         let changed: Vec<_> = after
             .iter()
@@ -522,6 +543,10 @@ fn run_owed_target(
             .map(|(p, _)| p.as_str())
             .collect();
         if !changed.is_empty() {
+            failures.push(format!(
+                "generation changed the candidate: {}",
+                changed.join(", ")
+            ));
             result.exit_code = 1;
             let _ = write!(
                 result.stderr,
@@ -531,9 +556,13 @@ fn run_owed_target(
         }
         for output in &target.outputs {
             if !root.join(output).exists() {
+                failures.push(format!("producer output missing: {output}"));
                 result.exit_code = 1;
                 let _ = write!(result.stderr, "\nproducer output missing: {output}");
             }
+        }
+        if !failures.is_empty() {
+            result.error = Some(super::evidence::redact(declared, &failures.join("; ")));
         }
     }
     let directory = if !target.name.is_empty()
@@ -632,6 +661,7 @@ fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, 
 /// produced and whether the wall-clock timeout fired.
 struct CommandOutcome {
     exit_code: i32,
+    signal: Option<i32>,
     stdout: String,
     stderr: String,
     timed_out: bool,
@@ -741,7 +771,16 @@ fn spawn_command(
     #[cfg(unix)]
     crate::testing::gate_guard::target_group_finished(child.id());
 
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal = None;
+
     Ok(CommandOutcome {
+        signal,
         exit_code: status.code().unwrap_or(-1),
         stdout: render_capture(&stdout),
         stderr: render_capture(&stderr),

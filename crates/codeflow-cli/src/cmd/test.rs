@@ -145,6 +145,7 @@ pub fn run(args: &TestArgs) -> i32 {
             skipped,
             evidence_skipped,
             complete,
+            ..
         }) => {
             for r in &results {
                 let verdict = if r.passed() { "ok" } else { "FAILED" };

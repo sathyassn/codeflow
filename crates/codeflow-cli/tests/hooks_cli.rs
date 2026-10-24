@@ -5685,6 +5685,64 @@ fn push_set_refuses_a_submodule_at_another_commit() {
 
 #[cfg(unix)]
 #[test]
+fn installed_push_hook_names_timeout_and_allows_passing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        dir.path(),
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", dir.path(), &["switch", "-c", "feat/probe"]);
+    let config = dir.path().join(".codeflow/test-config.json");
+    let write_config = |command: &str| {
+        std::fs::write(
+            &config,
+            serde_json::json!({
+                "schema_version": "1.0",
+                "targets": [{"name": "slow-check", "runner": "custom",
+                    "timeout_seconds": 1, "modes": {"quick": {"command": command}}}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        ok("git", dir.path(), &["add", ".codeflow/test-config.json"]);
+        ok(
+            "git",
+            dir.path(),
+            &["commit", "-m", "chore: configure quick target"],
+        );
+    };
+    write_config("sleep 30");
+    answering_destination(dir.path(), "upstream");
+    let refused = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    let output = both_streams(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{output}");
+    assert!(output.contains("slow-check (timeout after 1s)"), "{output}");
+    assert!(output.contains("codeflow test --mode quick"), "{output}");
+    assert!(ok("git", dir.path(), &["ls-remote", "upstream"]).is_empty());
+    eprintln!("timeout journey: {output}");
+    write_config("true");
+    let allowed = with_installed_hooks(
+        "git",
+        dir.path(),
+        &["push", "upstream", "HEAD:refs/heads/feat/probe"],
+    );
+    let output = both_streams(&allowed);
+    assert!(allowed.status.success(), "{output}");
+    assert!(
+        output.contains("quick targets passed on the working checkout (executed 1; skipped 0;"),
+        "{output}"
+    );
+    assert!(ok("git", dir.path(), &["ls-remote", "upstream"]).contains(&rev(dir.path(), "HEAD")));
+    eprintln!("passing journey: {output}");
+}
+
+#[cfg(unix)]
+#[test]
 fn installed_push_hook_refuses_an_uncommitted_fix_and_leaves_remote_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     ok(

@@ -31,8 +31,8 @@ pub struct GateTargetResult {
     pub duration_ms: u64,
     pub stdout: String,
     pub stderr: String,
-    /// Set when the target failed before producing an exit code
-    /// (spawn failure, missing mode, panic).
+    /// Failure detail beyond an ordinary exit code (timeout, signal, runner
+    /// error, or a target that could not run).
     pub error: Option<String>,
     /// Structured failure detail parsed from the target's JUnit/CTRF report
     /// artifact, when one was configured and produced. `None` when the target
@@ -113,6 +113,8 @@ pub enum GateOutcome {
     Completed {
         results: Vec<GateTargetResult>,
         passed: bool,
+        /// Conditions that fail the gate independently of target exit statuses.
+        failure_reasons: Vec<String>,
         coverage: Vec<CoverageReport>,
         /// Targets omitted by selection or CI configuration.
         skipped: Vec<String>,
@@ -362,12 +364,12 @@ fn run_gate_resolved(
                     duration_ms: run.duration_ms,
                     stdout: run.stdout,
                     stderr: run.stderr,
-                    error: None,
+                    error: run.error,
                     report,
                 }
             }
             Err(e) => GateTargetResult {
-                name: "(unrunnable)".to_string(),
+                name: "(gate)".to_string(),
                 exit_code: -1,
                 duration_ms: 0,
                 stdout: String::new(),
@@ -378,15 +380,19 @@ fn run_gate_resolved(
         })
         .collect();
 
+    let mut failure_reasons = Vec::new();
     if !generation_unchanged {
-        let changed: Vec<_> = after
-            .iter()
-            .filter(|(p, hash)| before.get(*p) != Some(*hash))
-            .map(|(p, _)| p.as_str())
+        let changed: std::collections::BTreeSet<_> = before
+            .keys()
+            .chain(after.keys())
+            .filter(|path| before.get(*path) != after.get(*path))
+            .map(String::as_str)
             .collect();
+        let changed = changed.into_iter().collect::<Vec<_>>().join(", ");
+        failure_reasons.push(format!("tracked files changed during the gate: {changed}"));
         progress!(
             "[codeflow test] generation changed the candidate: {}",
-            changed.join(", ")
+            changed
         );
     }
     let passed = generation_unchanged && gate_verdict(&results, &coverage);
@@ -424,6 +430,7 @@ fn run_gate_resolved(
         "selection": selection, "passed": passed, "complete": complete, "clean": clean,
         "ci_skipped": ci_skipped,
         "generation_unchanged": generation_unchanged, "dirty_paths": dirty_paths,
+        "failure_reasons": failure_reasons,
         "results": results, "coverage": coverage,
         "targets": targets.iter().map(|t| serde_json::json!({"name":t.name,"command":super::evidence::redact(declarations.iter().find(|d| d.name == t.name).unwrap_or(t), &t.modes[&effective_mode].command),"requires":t.requires})).collect::<Vec<_>>(),
         "environment": {"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"target_dir":target_dir},
@@ -457,6 +464,7 @@ fn run_gate_resolved(
         complete,
         results,
         passed,
+        failure_reasons,
         coverage,
     })
 }
