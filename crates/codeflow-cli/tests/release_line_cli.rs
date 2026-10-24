@@ -9,6 +9,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[path = "support/fixture_seed.rs"]
+mod fixture_seed;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -121,7 +123,7 @@ fn record(id: &str, status: &str, criteria: &str, closeout: &str) -> String {
 }
 
 struct Fx {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     root: PathBuf,
     origin: PathBuf,
 }
@@ -135,15 +137,26 @@ impl Fx {
     }
 
     fn with_policy(holder: bool, extra_policy: &str) -> Self {
+        // Custom policy variants are uncommon and keep their own construction.
+        if !extra_policy.is_empty() {
+            return Self::build(holder, extra_policy);
+        }
+        let dir = fixture_seed::copy(&format!("release-line-{holder}"), || {
+            Self::build(holder, "").dir
+        });
+        Self {
+            root: dir.path().join("work"),
+            origin: dir.path().join("origin.git"),
+            dir,
+        }
+    }
+
+    fn build(holder: bool, extra_policy: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("work");
         let origin = dir.path().join("origin.git");
         std::fs::create_dir_all(&root).unwrap();
-        let fx = Self {
-            _dir: dir,
-            root,
-            origin,
-        };
+        let fx = Self { dir, root, origin };
         run_git(
             fx.root.parent().unwrap(),
             &["init", "-q", "--bare", "-b", "main", "origin.git"],

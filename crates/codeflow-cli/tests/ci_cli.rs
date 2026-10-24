@@ -30,6 +30,8 @@ mod secret_scan_exemption;
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/fixture_seed.rs"]
+mod fixture_seed;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;

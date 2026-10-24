@@ -17,6 +17,21 @@ test-group = "serial"
 # Essential uses the full gate's isolation and serial group without coverage.
 # Keep its overrides equal to profile.codeflow; doctests run after nextest.
 [profile.essential]
+# Exhaustive installation combinations, recovery cut points and generated shell
+# inputs belong to full coverage. Fixed security examples and all installed
+# hook/harness boundaries remain in essential (including tier_floor_e2e).
+default-filter = '''not (
+    test(=init_writes_the_compaction_default_at_every_tier_and_preset)
+    | test(=split_references_install_and_update_replaces_whole_files_at_standard_and_full)
+    | test(=init_and_update_bring_the_plain_writing_rule_at_every_tier)
+    | test(=scaffold::state::tests::an_update_after_a_crash_at_any_point_installs_the_new_version)
+    | test(=scaffold::state::tests::a_crash_with_the_file_on_another_drive_still_installs_the_new_version)
+    | test(=hooks::git_guard::tests::test_random_shell_patterns_never_match_less_than_bash)
+    | test(=hooks::git_guard::tests::test_random_words_are_refused_whenever_bash_reaches_an_enforcement_file)
+    | test(=hooks::git_guard::tests::test_random_words_are_refused_whenever_zsh_reaches_an_enforcement_file)
+    | test(=every_harness_wiring_judges_composed_deletions_and_help_at_every_tier)
+    | test(=push::push_budget_is_reported_after_a_real_slow_target)
+)'''
 fail-fast = false
 # Eight workers were chosen by this task (dbc79ec7b) on the 10-core reference host; not measured because timing trials stopped.
 test-threads = 8

@@ -232,8 +232,7 @@ fn clears_push_destination_silent() {
     );
 }
 
-/// A test-config with a fast target and one whose quick mode sleeps past
-/// the push set's 60 s budget.
+/// A fast executable stand-in for a target whose measured duration is injected.
 fn slow_target_config() -> serde_json::Value {
     let mut config: serde_json::Value = serde_json::from_str(QUICK_CONFIG).unwrap();
     config["targets"]
@@ -243,7 +242,7 @@ fn slow_target_config() -> serde_json::Value {
             "name": "slow",
             "enabled": true,
             "runner": "custom",
-            "modes": {"quick": {"command": "sleep 61"}, "full": {"command": "sleep 61"}},
+            "modes": {"quick": {"command": "echo slow target"}, "full": {"command": "echo slow target"}},
         }));
     config
 }
@@ -262,7 +261,8 @@ fn clears_push_over_budget_target() {
     commit_all(&root, "chore: add a slow quick target");
     let finding = "over its 60s budget";
     let before = pushed(&root);
-    let printed = block(&before, finding).to_string();
+    assert!(before.contains("quick targets passed"), "{before}");
+    let printed = target_budget_finding(&root).expect("slow quick target exceeds budget");
     assert_prints_row(&printed, "PUSH_OVER_BUDGET_TARGET");
     assert!(printed.contains("target 'slow'"), "{printed}");
     config["targets"][1]["modes"]
@@ -275,10 +275,38 @@ fn clears_push_over_budget_target() {
         &serde_json::to_string_pretty(&config).unwrap(),
     );
     commit_all(&root, "chore: move the slow target to the full gate");
+    assert!(target_budget_finding(&root).is_none());
     let after = pushed(&root);
     assert!(
         !after.contains(finding) && after.contains("quick targets passed"),
         "{after}"
+    );
+}
+
+/// Full-gate control for the real hook clock and process boundary. The two
+/// remedy tests use measured durations; this one still crosses the real budget.
+#[test]
+fn push_budget_is_reported_after_a_real_slow_target() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    let mut config = slow_target_config();
+    config["targets"][1]["modes"]["quick"]["command"] = "sleep 61".into();
+    write(
+        &root,
+        ".codeflow/test-config.json",
+        &serde_json::to_string_pretty(&config).unwrap(),
+    );
+    commit_all(&root, "chore: add a slow quick target");
+    let out = pushed(&root);
+    let printed = block(&out, "over its 60s budget");
+    assert_prints_row(printed, "PUSH_OVER_BUDGET_TARGET");
+    assert!(printed.contains("target 'slow'"), "{printed}");
+    assert!(out.contains("push set finished"), "{out}");
+    assert_eq!(
+        text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
+        head_sha(&root),
+        "the budget note must leave the push's verdict intact: {out}"
     );
 }
 
@@ -299,46 +327,41 @@ fn python_stand_in(bin: &Path, script: &str) {
     assert!(made.status.success(), "{}", text(&made));
 }
 
-/// A `python3` that takes 61 s to start: a release preflight slower than
-/// the push set's budget.
-#[cfg(unix)]
-fn slow_python(root: &Path) -> PathBuf {
-    let bin = root.parent().unwrap().join("slow-bin");
-    python_stand_in(&bin, "sleep 61\n");
-    bin
+/// Run the real quick-target selector, replacing only the stand-in's measured
+/// duration. Removing `modes.quick` must remove that step from the budget too.
+fn target_budget_finding(root: &Path) -> Option<String> {
+    use codeflow_core::hooks::git_hook::{
+        over_budget_note, run_push_targets, StageReport, PUSH_SET_BUDGET,
+    };
+    use codeflow_core::hooks::policy::GitPolicy;
+    let mut report = StageReport::default();
+    let mut steps = run_push_targets(root, &GitPolicy::default(), &mut report);
+    assert!(report.violations.is_empty(), "{report:?}");
+    for step in &mut steps {
+        if step.name == "slow" {
+            step.duration = std::time::Duration::from_secs(61);
+        }
+    }
+    let total = steps.iter().map(|step| step.duration).sum();
+    over_budget_note(&steps, total, PUSH_SET_BUDGET).map(|note| note.line("codeflow", "note"))
 }
 
-/// The same stand-in on Windows, which starts only a `python3.exe` by that
-/// name: a small program, compiled here, that waits and runs the real one.
-#[cfg(windows)]
-fn slow_python(root: &Path) -> PathBuf {
-    let bin = root.parent().unwrap().join("slow-bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.join("python3.exe"))
-        .find(|path| path.is_file())
-        .expect("python3 on PATH");
-    let source = bin.join("slow_python.rs");
-    std::fs::write(
-        &source,
-        format!(
-            "fn main() {{\n    std::thread::sleep(std::time::Duration::from_secs(61));\n    \
-             let status = std::process::Command::new(r\"{}\")\n        \
-             .args(std::env::args_os().skip(1))\n        .status()\n        \
-             .expect(\"python3 runs\");\n    std::process::exit(status.code().unwrap_or(1));\n}}\n",
-            real.display()
-        ),
-    )
-    .unwrap();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let built = Command::new(rustc)
-        .arg(&source)
-        .arg("-o")
-        .arg(bin.join("python3.exe"))
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "{}", text(&built));
-    bin
+/// Exercise the production budget comparison and rendered remedy with measured
+/// durations. No clock override enters the binary or its environment.
+fn budget_finding(name: &str, configurable: bool) -> String {
+    use codeflow_core::hooks::git_hook::{over_budget_note, PushStep, PUSH_SET_BUDGET};
+    use std::time::Duration;
+    let steps = [PushStep {
+        name: name.into(),
+        duration: Duration::from_secs(61),
+        configurable,
+    }];
+    for total in [Duration::from_secs(59), PUSH_SET_BUDGET] {
+        assert!(over_budget_note(&steps, total, PUSH_SET_BUDGET).is_none());
+    }
+    over_budget_note(&steps, Duration::from_secs(61), PUSH_SET_BUDGET)
+        .expect("over-budget finding")
+        .line("codeflow", "note")
 }
 
 #[test]
@@ -347,24 +370,23 @@ fn clears_push_over_budget_builtin() {
     let root = project(&dir);
     let dest = with_destination(&root);
     released(&root, &dest);
-    let slow = slow_python(&root);
-    prove(
-        "PUSH_OVER_BUDGET_BUILTIN",
-        "over its 60s budget",
-        || push_with_path(&root, &slow, &["origin", "HEAD"]),
-        |printed| {
-            assert!(printed.contains("built-in `release preflight"), "{printed}");
-            let policy = read(&root, ".codeflow/policy.json");
-            let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
-            value["git"]["test_gate_on_push"] = serde_json::json!("off");
-            write(
-                &root,
-                ".codeflow/policy.json",
-                &serde_json::to_string_pretty(&value).unwrap(),
-            );
-            commit_all(&root, "chore: drop the push set");
-        },
+    let before = preflighted(&root);
+    assert!(before.contains("push set finished"), "{before}");
+    let printed = budget_finding("release preflight", false);
+    assert_prints_row(&printed, "PUSH_OVER_BUDGET_BUILTIN");
+    assert!(printed.contains("built-in `release preflight"), "{printed}");
+    let policy = read(&root, ".codeflow/policy.json");
+    let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
+    value["git"]["test_gate_on_push"] = serde_json::json!("off");
+    write(
+        &root,
+        ".codeflow/policy.json",
+        &serde_json::to_string_pretty(&value).unwrap(),
     );
+    commit_all(&root, "chore: drop the push set");
+    let after = pushed(&root);
+    assert!(!after.contains("release preflight"), "{after}");
+    assert!(!after.contains("over its 60s budget"), "{after}");
 }
 
 /// A copy of the binary under test, first on the hook's `PATH` so it is the

@@ -1072,6 +1072,17 @@ mod guard_forms;
 #[cfg(unix)]
 #[test]
 fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
+    assert_harness_command_matrix(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn fixed_commands_and_each_installed_harness_boundary_are_kept_in_essential() {
+    assert_harness_command_matrix(false);
+}
+
+#[cfg(unix)]
+fn assert_harness_command_matrix(exhaustive: bool) {
     // TSK-141 AC-5: at every tier, the Claude, Codex and Grok wiring refuse
     // each composed deletion, pass each project deletion, and judge each
     // help invocation and its data twin as the unit tests do. The guard
@@ -1088,7 +1099,14 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                 .into_iter()
                 .find(|command| command.contains("hook exec-guard"))
                 .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
-            for (form, _) in guard_forms::COMPOSED_PAIRS {
+            // Keep every fixed example on one wiring, and refusal/allow
+            // controls for each command family on every installed boundary.
+            let all_forms = exhaustive || tier == "--minimal" && wiring == ".claude/settings.json";
+            for (form, _) in guard_forms::COMPOSED_PAIRS.iter().take(if all_forms {
+                guard_forms::COMPOSED_PAIRS.len()
+            } else {
+                1
+            }) {
                 let out = run_wired(&root, &hook, form);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
@@ -1101,7 +1119,11 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                     "{tier} {wiring} {form}: {stderr}"
                 );
             }
-            for command in guard_forms::PROJECT_DELETIONS {
+            for command in guard_forms::PROJECT_DELETIONS.iter().take(if all_forms {
+                guard_forms::PROJECT_DELETIONS.len()
+            } else {
+                1
+            }) {
                 let out = run_wired(&root, &hook, command);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
@@ -1111,7 +1133,11 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                 );
                 assert!(stderr.is_empty(), "{tier} {wiring} {command}: {stderr}");
             }
-            for (help, twin) in guard_forms::HELP_PAIRS {
+            for (help, twin) in guard_forms::HELP_PAIRS.iter().take(if all_forms {
+                guard_forms::HELP_PAIRS.len()
+            } else {
+                1
+            }) {
                 let out = run_wired(&root, &hook, help);
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 assert_eq!(
@@ -1177,12 +1203,29 @@ fn update(root: &Path) -> String {
 /// at every tier and with every permission preset the init prompt offers.
 #[test]
 fn init_writes_the_compaction_default_at_every_tier_and_preset() {
-    for tier_flag in ["--minimal", "--standard", "--full"] {
+    assert_compaction_defaults(true);
+}
+
+#[test]
+fn init_writes_the_compaction_default_for_a_representative_preset() {
+    assert_compaction_defaults(false);
+}
+
+fn assert_compaction_defaults(exhaustive: bool) {
+    let tiers: &[&str] = if exhaustive {
+        &["--minimal", "--standard", "--full"]
+    } else {
+        &["--full"]
+    };
+    for &tier_flag in tiers {
         for (answer, mode) in [
             ("default", None),
             ("acceptEdits", Some("acceptEdits")),
             ("bypassPermissions", Some("bypassPermissions")),
-        ] {
+        ]
+        .into_iter()
+        .take(if exhaustive { 3 } else { 1 })
+        {
             let (_tmp, root) = project();
             let out = codeflow_with_input(
                 &root,
