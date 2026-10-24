@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-MDM2S4P6.css.br",
-      "name": "service/app-MDM2S4P6.css.br",
+      "bom-ref": "service/app-76F74YT6.css.br",
+      "name": "service/app-76F74YT6.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "30731be4d8c1bc0a33475e90726736687ca1a441ca3e8a0b50d9f9ccb646a1cb"
+          "content": "f718dc852af95074168559f47ae4e1dad22297e964b9127a5b7ca3d4493ce90c"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-MDM2S4P6.css.gz",
-      "name": "service/app-MDM2S4P6.css.gz",
+      "bom-ref": "service/app-76F74YT6.css.gz",
+      "name": "service/app-76F74YT6.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "df6875182e49ffe727c2f36ee27089b89fb878748154085e00ce96eb24a927b7"
+          "content": "23c761a3c2dad0b6f480d3942459847c1d47fc8aba0a2bec72b4d301e82b043a"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-XSOKGUIO.js.br",
-      "name": "service/app-XSOKGUIO.js.br",
+      "bom-ref": "service/app-WYSTRGIU.js.br",
+      "name": "service/app-WYSTRGIU.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9efc6adba3255e166f99b749bd153edfc1b45423095b6f4620559884ef72b28d"
+          "content": "205469fe13188268b8f9eaf20116fd742a61ab73cea629f07b68382dcab382b9"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-XSOKGUIO.js.gz",
-      "name": "service/app-XSOKGUIO.js.gz",
+      "bom-ref": "service/app-WYSTRGIU.js.gz",
+      "name": "service/app-WYSTRGIU.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9425455d79d17548eb4dca3e883beafa7c2ed736070ae66f382b6a5605170611"
+          "content": "2c18d4a7a9dce5b3b2b54612d5d707373ed4a6ddd5cdfc5f4c1e9d75f96b8ae4"
         }
       ]
     },

@@ -4958,6 +4958,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
+    ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:var_os",
+        1,
+        "unproven",
+    ),
     // Rejects whitespace-only alternative text. Accepted image identity configuration stays unchanged.
     (
         "crates/codeflow-present/src/config.rs",
