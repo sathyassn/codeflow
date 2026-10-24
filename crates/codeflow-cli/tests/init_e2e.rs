@@ -1480,6 +1480,42 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     .unwrap();
 }
 
+/// The installed doctrine sentences a fresh scaffold must carry.
+const DOCTRINE_PINS: [(&str, &str); 9] = [
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Every blocker or major finding carries the smallest evidenced remedy",
+    ),
+    // TSK-452: the review cadence has one home, "Review verdicts" in
+    // the discipline rules; findings points there.
+    (
+        ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Review runs at four stages, and only these:",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Between stages the finder confirms each material fix on the delta plus the affected tests",
+    ),
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "An already approved departure is reused and not asked again.",
+    ),
+    (
+        ".claude/skills/cf-develop/SKILL.md",
+        "No cycle count decides: continue while repairs produce relevant evidence",
+    ),
+    (
+        ".claude/agents/cf-reviewer.md",
+        "remedy: <blocker and major",
+    ),
+    (".codeflow/rules/writing.md", "## Copy guide"),
+    (".codeflow/rules/writing.md", "### Microcopy"),
+];
+
 #[test]
 fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     const FINDINGS_ROW: &str = "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |\n";
@@ -1500,40 +1536,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             );
         }
         // The doctrine an agent in this project reads.
-        for (rel, sentence) in [
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Every blocker or major finding carries the smallest evidenced remedy",
-            ),
-            // TSK-452: the review cadence has one home, "Review verdicts" in
-            // the discipline rules; findings points there.
-            (
-                ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
-            ),
-            (
-                ".codeflow/rules/workflow-discipline.md",
-                "Review runs at four stages, and only these:",
-            ),
-            (
-                ".codeflow/rules/workflow-discipline.md",
-                "Between stages the finder confirms each material fix on the delta plus the affected tests",
-            ),
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-                "An already approved departure is reused and not asked again.",
-            ),
-            (
-                ".claude/skills/cf-develop/SKILL.md",
-                "No cycle count decides: continue while repairs produce relevant evidence",
-            ),
-            (
-                ".claude/agents/cf-reviewer.md",
-                "remedy: <blocker and major",
-            ),
-            (".codeflow/rules/writing.md", "## Copy guide"),
-            (".codeflow/rules/writing.md", "### Microcopy"),
-        ] {
+        for (rel, sentence) in DOCTRINE_PINS {
             let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 words(&read(&root, rel)).contains(sentence),
