@@ -382,3 +382,44 @@ fn every_line_is_shown_even_beyond_the_base_digest_guideline() {
         "{out}"
     );
 }
+
+#[test]
+fn copied_and_renamed_reflogs_do_not_prove_the_current_refs_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let today = now();
+    let old = today - 30 * 86_400;
+    init(root, old);
+    write(
+        root,
+        ".codeflow/policy.json",
+        r#"{"git":{"line_sync_interval":1}}"#,
+    );
+    commit(root, "base", old);
+    git(root, &["checkout", "-qb", "integration/original"], old);
+    commit(root, "own", old);
+    git(root, &["checkout", "main"], today);
+    git(
+        root,
+        &["branch", "-c", "integration/original", "integration/copied"],
+        today,
+    );
+    git(
+        root,
+        &[
+            "branch",
+            "-m",
+            "integration/original",
+            "integration/renamed",
+        ],
+        today,
+    );
+    let out = run(root, false);
+    for name in ["copied", "renamed"] {
+        let line = row(&out, name);
+        assert!(
+            line.contains("creation unknown") && !line.contains("overdue"),
+            "{line}"
+        );
+    }
+}

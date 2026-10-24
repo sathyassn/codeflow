@@ -203,9 +203,18 @@ fn creation(repo: &Repository, reference: &str) -> Result<Option<i64>, git2::Err
         Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
+    // A copy or rename carries the old ref's reflog, including its creation
+    // entry. That entry does not prove when this ref was created.
+    if log.iter().any(|entry| {
+        entry.message().ok().flatten().is_some_and(|message| {
+            message.starts_with("Branch: copied ") || message.starts_with("Branch: renamed ")
+        })
+    }) {
+        return Ok(None);
+    }
     Ok(log
         .iter()
-        .last()
+        .next_back()
         .filter(|entry| {
             entry.id_old().is_zero()
                 && entry
