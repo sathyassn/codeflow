@@ -84,13 +84,21 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.script_bypass` | Level | `warn` | off \| warn \| allow \| block | Refused actions found inside a script file a command runs (ADR-0075). | Default warn: a script is read on a best-effort basis. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
 | `security.interpreter_scan` | Level | `block` | off \| warn \| allow \| block | Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075). | Default block. |
-| `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. See [secret-path matching](#secret-path-matching) for spellings, carve-outs and sandbox limits. |
+| `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
 | `security.enforcement_baseline` | Level | `block` | off \| warn \| allow \| block | Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075). | Default block. |
 | `security.workflow_pushes` | enum | `queue` | queue \| allow | A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9). | Default queue: refused and queued for the operator, whose login can push workflows. `allow` is for an agent credential with workflow rights. |
 | `security.sandbox_retry` | enum | `allowlist` | allowlist \| block | Claude's unsandboxed retry from a primary session (ADR-0075 decision 6). | Default allowlist: only an argument vector an entry of sandbox_retry_allow spells out. `block` refuses every retry. |
 | `security.sandbox_retry_allow` | entry list | `[{"program":"node","script":"~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs","program_options":[],"cwd":"project","refuse_if_env":["NODE_OPTIONS","NODE_PATH","NODE_REPL_EXTERNAL_MODULE"],"subcommands":{"review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":0},"adversarial-review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":"text"},"task":{"flags":["--background","--write","--resume-last","--resume","--fresh","--json"],"values":{"--model":"word","--effort":["none","minimal","low","medium","high","xhigh"]},"positionals":"text"},"status":{"flags":["--all","--wait","--json"],"values":{"--timeout-ms":"integer","--poll-interval-ms":"integer"},"positionals":"job-id"},"result":{"flags":["--json"],"values":{},"positionals":"job-id"},"cancel":{"flags":["--json"],"values":{},"positionals":"job-id"}},"program_path":"<absolute path recorded at qualification, outside every sandbox-writable directory>","script_digest":{"scripts/codex-companion.mjs":"<sha256 at qualification>","scripts/lib/*.mjs":"<sha256 per file at qualification>"},"child_executables":{"codex":"<absolute path recorded at qualification>"},"refuse_writable_path_entries":true}]` | an array of entry objects, each naming its `program` | The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6). | The shipped entry is the Codex plugin companion, pinned by path, version and digest at qualification. |
 
-### Secret-path matching
+## Top-level keys
+
+| Key | Type | Default | Valid values | Purpose | Notes |
+|---|---|---|---|---|---|
+| `guidance.prompt_reminders` | enum | `warn` | off \| allow \| warn | The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation. | Advisory only: warn adds the line, off and allow add nothing; block is refused because a reminder never stops a prompt. |
+
+<!-- codeflow-derived policy-reference end -->
+
+## Secret-path matching
 
 `security.secret_reads` checks named reader operands and literals in inline
 interpreter code against hard-secret patterns. A recursive directory glob
@@ -120,13 +128,6 @@ sandbox behavior require separate platform evidence; the macOS fixture does
 not run there. A seat without an active filesystem sandbox has no such
 backstop.
 
-## Top-level keys
-
-| Key | Type | Default | Valid values | Purpose | Notes |
-|---|---|---|---|---|---|
-| `guidance.prompt_reminders` | enum | `warn` | off \| allow \| warn | The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation. | Advisory only: warn adds the line, off and allow add nothing; block is refused because a reminder never stops a prompt. |
-
-<!-- codeflow-derived policy-reference end -->
 
 ## Planning amendment paths
 
