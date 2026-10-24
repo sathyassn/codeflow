@@ -267,10 +267,11 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target; see cf-method/references/project-organization.md#acceptance-waivers-and-redactions for its field and format, or the record-only redaction route ({note})";
-    /// A PR body whose Reviews section does not approve the commit the
-    /// task's acceptance block binds (issue 121).
+    /// A PR body whose Reviews row names another commit or verdict than the
+    /// task's acceptance block, from which the row is derived (issue 121,
+    /// TSK-451).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
-        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
+        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; or leave the section out or point it at the task's acceptance block, from which `codeflow ci` derives the row (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
@@ -499,24 +500,12 @@ catalog! {
 
     // The push set.
 
-    /// A push-set target that failed.
-    PUSH_SET_FAILED = Step::Codeflow("codeflow test"),
-        "fix the target or gate condition named above, then run `codeflow test --mode quick` to reproduce";
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";
-    /// A `codeflow validate` run in the push set that found problems.
-    PUSH_SET_VALIDATE = Step::Codeflow("codeflow validate"),
-        "fix the findings above, then rerun `codeflow validate {args}`";
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
-        "run `codeflow ci` and `codeflow validate --docs` by hand";
-    /// A pushed ref whose tree checks did not run at a nonblocking level.
-    PUSH_TREE_UNCHECKED = Step::Codeflow("codeflow validate"),
-        "run `codeflow validate --docs` and `codeflow test --mode quick` in a clean, complete checkout of the pushed commit";
-    /// A pushed ref whose unchecked tree must refuse at block level.
-    PUSH_TREE_REQUIRED = Step::Git("git switch"),
-        "push from a clean, complete checkout of each pushed commit. Select its branch with `git switch <branch>`";
+        "run `codeflow ci` by hand";
     /// A new branch whose `codeflow ci` range has no base.
     PUSH_RANGE_UNRESOLVED = Step::Git("git fetch"),
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
@@ -526,18 +515,9 @@ catalog! {
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";
-    /// A push set over its time budget, slowest at a test target.
-    PUSH_OVER_BUDGET_TARGET = Step::Edit(".codeflow/test-config.json"),
-        "remove the `modes.quick` of target '{target}' in .codeflow/test-config.json to move it to the full gate";
     /// A push set over its time budget, slowest at a built-in check.
     PUSH_OVER_BUDGET_BUILTIN = Step::Edit(".codeflow/policy.json"),
         "run the slowest step alone to see what makes it slow, or set `git.test_gate_on_push` to off in .codeflow/policy.json to drop the push set";
-    /// A push set with no test configuration.
-    PUSH_TARGETS_UNCONFIGURED = Step::Edit(".codeflow/test-config.json"),
-        "create .codeflow/test-config.json (the /cf-stack skill adds a stack) with a target that has a `quick` mode";
-    /// A test configuration with no quick target.
-    PUSH_TARGETS_NONE = Step::Edit(".codeflow/test-config.json"),
-        "give a target a `quick` mode in .codeflow/test-config.json";
     /// Pending id reservations not published by this push.
     IDS_PENDING_LOCAL = Step::Codeflow("codeflow ids sync"),
         "publish them to the authority with `codeflow ids sync`, or push to the authority remote";
@@ -553,9 +533,6 @@ catalog! {
     /// A push that breaks the release tree.
     RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
         "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
-    /// A test configuration that does not load.
-    TEST_CONFIG_REPAIR = Step::Edit(".codeflow/test-config.json"),
-        "repair .codeflow/test-config.json, then run `codeflow test --mode quick`";
 
     // Doctor.
 

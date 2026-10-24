@@ -271,8 +271,10 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
         "  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n  push:"
     ));
     assert!(trigger.contains("integration/**"));
-    let condition = "github.event_name == 'pull_request' && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
+    // TSK-449: a draft of any base runs no gate job.
+    let condition = "github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
     for id in [
+        "gates-build",
         "gates",
         "gates-coverage",
         "gates-coverage-report",
@@ -291,8 +293,9 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
         assert!(
             job(&workflow, id)
                 .lines()
-                .any(|line| line == "    if: always()"),
-            "{id} must report the selected gate results"
+                .any(|line| line
+                    == "    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"),
+            "{id} must report the selected gate results on every event but a draft"
         );
     }
     for id in ["secret-scan", "gitleaks-canary", "security-review"] {

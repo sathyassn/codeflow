@@ -15,13 +15,27 @@ fn tmp_claude_re() -> &'static Regex {
 /// Convert a glob pattern to a Rust regex pattern.
 ///
 /// Handles `**` (recursive), `*` (single segment), `?` (single char).
+/// A whole `**/` component matches zero or more directories.
 #[must_use]
 pub fn glob_to_regex(pattern: &str) -> String {
-    let escaped = regex::escape(pattern);
-    // Order matters: handle ** before * since escape turns * to \*
-    let escaped = escaped.replace(r"\*\*", ".*");
-    let escaped = escaped.replace(r"\*", "[^/]*");
-    escaped.replace(r"\?", ".")
+    let mut regex = String::new();
+    let mut segments = pattern.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        if segment == "**" && segments.peek().is_some() {
+            // Only a whole recursive directory component can be absent.
+            regex.push_str("(?:.*/)?");
+        } else {
+            let escaped = regex::escape(segment)
+                .replace(r"\*\*", ".*")
+                .replace(r"\*", "[^/]*")
+                .replace(r"\?", ".");
+            regex.push_str(&escaped);
+            if segments.peek().is_some() {
+                regex.push('/');
+            }
+        }
+    }
+    regex
 }
 
 /// Strip `/tmp/claude...` path segments from a command to prevent false
@@ -80,6 +94,27 @@ pub fn matches_extended_glob(path: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recursive_directory_glob_includes_zero_components() {
+        for path in ["id_rsa", "./id_rsa", "keys/id_rsa", "/home/test/id_rsa"] {
+            assert!(matches_extended_glob(path, "**/id_rsa*"), "{path}");
+        }
+        for path in ["root/file", "root/a/file", "root/a/b/file"] {
+            assert!(matches_extended_glob(path, "root/**/file"), "{path}");
+        }
+        for (path, pattern) in [
+            ("id_rsa", "keys/id_rsa*"),
+            ("rootfile", "root/**/file"),
+            ("rootish/file", "root/**/file"),
+            ("file", "root/**/file"),
+            ("notes/id_rsa", "*/keys/id_rsa*"),
+            (".ssh-notes/key", ".ssh/**"),
+            ("abfile", "ab**/file"),
+        ] {
+            assert!(!matches_extended_glob(path, pattern), "{path}: {pattern}");
+        }
+    }
 
     #[test]
     fn test_glob_to_regex_star() {

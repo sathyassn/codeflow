@@ -95,7 +95,7 @@ pub(crate) fn evaluate(
     home: Option<&Path>,
 ) -> Vec<Violation> {
     let _scope = edit_guard::RepoFactsScope::enter();
-    let calls = outward::interpreter_calls(line, payload_cwd);
+    let calls = outward::interpreter_calls_with_home(line, payload_cwd, home);
     let (opaque, runs) = outward::code_sources(line);
     if calls.is_empty() && !runs && !opaque && outward::interpreter_bodies(line).is_empty() {
         return Vec::new();
@@ -244,6 +244,10 @@ impl Facts<'_> {
         let found = git_guard::line_path_readings(self.line)
             .into_iter()
             .find(|(word, pattern)| {
+                // A function declaration is shell syntax, not a path glob.
+                if word.ends_with("()") && self.line.contains(&format!("{word} {{")) {
+                    return false;
+                }
                 // A glob the guard cannot list is left to the enforcement
                 // reading of the line, which refuses it near protected paths.
                 literal_paths(word, *pattern, from, self.payload_cwd, self.home)
@@ -641,6 +645,16 @@ fn strongest_over_dirs(
     enforcement
 }
 
+fn strongest(first: Option<Reach>, next: Option<Reach>) -> Option<Reach> {
+    match (first, next) {
+        (Some(value @ Reach::Authority(_)), _) | (_, Some(value @ Reach::Authority(_))) => {
+            Some(value)
+        }
+        (Some(value), _) | (_, Some(value)) => Some(value),
+        _ => None,
+    }
+}
+
 fn call_reaches(
     call: &outward::InterpreterCall,
     line_dirs: &outward::DirSet,
@@ -648,6 +662,28 @@ fn call_reaches(
 ) -> Vec<Reach> {
     let dirs = dir_options(&call_dirs(call, line_dirs, facts));
     let mut found = Vec::new();
+    if !call.unresolved.is_empty()
+        && (!facts.names.checkouts.is_empty()
+            || facts.names.unknown
+            || dirs
+                .iter()
+                .flatten()
+                .any(|dir| crate::hooks::repo::open(dir).is_ok_and(|repo| repo.is_some())))
+    {
+        for word in &call.unresolved {
+            // A supplier can prove a script argument's paths. It cannot
+            // prove interpreter code supplied through a shell parameter.
+            let positional = git_guard::command_argv(word);
+            if call.positional_source == outward::PositionalSource::Supplier
+                && call.code.is_empty()
+                && matches!(positional.as_slice(), [value]
+                if matches!(value.as_str(), "$1" | "${1}" | "$@" | "${@}" | "$*" | "${*}"))
+            {
+                continue;
+            }
+            found.push(Reach::Enforcement(format!("cannot verify interpreter expansion `{word}` where a checkout or enforcement path is reachable")));
+        }
+    }
     for (word, pattern) in call.args.iter().zip(&call.patterns) {
         // `find` and `xargs -I {}` fill in `{}`; what they supply is judged
         // below.
@@ -666,7 +702,21 @@ fn call_reaches(
             // merge, and a fixed authority finding is never hidden because
             // every authority reach is judged before any enforcement one.
             found.extend(strongest_over_dirs(value, &dirs, |dir| {
-                value_reach(value, *pattern, dir, facts)
+                let mut reached = value_reach(value, *pattern, dir, facts);
+                let paths = match composed::paths::linked_paths(
+                    value,
+                    dir.unwrap_or(facts.payload_cwd),
+                    &call.links,
+                ) {
+                    Ok(paths) => paths,
+                    Err(why) => return strongest(reached, Some(Reach::Enforcement(why))),
+                };
+                for path in paths {
+                    if let Some(path) = path.to_str() {
+                        reached = strongest(reached, value_reach(path, *pattern, dir, facts));
+                    }
+                }
+                reached
             }));
             // A Tcl or brace-quoted word loses one `{}` pair before it runs
             // (`expect -c 'spawn ... {.git/config}'`, review round 7 F2).
@@ -685,7 +735,21 @@ fn call_reaches(
     for code in &call.code {
         for word in code_literal_words(code) {
             found.extend(strongest_over_dirs(&word, &dirs, |dir| {
-                code_reach(&word, dir, facts)
+                let mut reached = code_reach(&word, dir, facts);
+                let paths = match composed::paths::linked_paths(
+                    &word,
+                    dir.unwrap_or(facts.payload_cwd),
+                    &call.links,
+                ) {
+                    Ok(paths) => paths,
+                    Err(why) => return strongest(reached, Some(Reach::Enforcement(why))),
+                };
+                for path in paths {
+                    if let Some(path) = path.to_str() {
+                        reached = strongest(reached, code_reach(path, dir, facts));
+                    }
+                }
+                reached
             }));
         }
     }
