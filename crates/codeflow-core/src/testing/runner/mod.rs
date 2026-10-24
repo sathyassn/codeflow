@@ -616,6 +616,8 @@ fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     }
 }
 
+// The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
+// meet here; one flow keeps each outcome next to the step that causes it.
 #[allow(clippy::too_many_lines)]
 fn run_owed_target(
     target: &TargetConfig,
@@ -847,12 +849,12 @@ pub fn run_reserved_command(
     let result = spawn_prepared(command, "reserve", timeout, true, true)?;
     Ok(TargetRunResult {
         target_name: "reserve".into(),
+        error: None,
         exit_code: if result.timed_out {
             TIMEOUT_EXIT_CODE
         } else {
             result.exit_code
         },
-        error: None,
         stdout: result.stdout,
         stderr: result.stderr,
         stdout_truncated: result.stdout_truncated,
@@ -864,6 +866,8 @@ pub fn run_reserved_command(
     })
 }
 
+// The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
+// meet here; one flow keeps each outcome next to the step that causes it.
 #[allow(clippy::too_many_lines)]
 fn spawn_prepared(
     mut cmd: Command,

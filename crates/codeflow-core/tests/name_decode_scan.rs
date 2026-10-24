@@ -1486,6 +1486,15 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Rejects blank human explanations only; patterns and paths retain their
+    // exact components and use the fixed NFC/ASCII comparison in normalize.
+    (
+        "crates/codeflow-core/src/hooks/path_policy.rs",
+        "PathPolicy::from_git",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
     // A reader error blocks active integrity unless authority or integrity
     // already denies it. Inactive integrity retains independent branch checks.
     (

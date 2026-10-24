@@ -57,6 +57,7 @@ fn sync_merge() -> (Line, String, String) {
     f.commit("docs: complete main work");
     f.git(&["switch", "-q", "main"]);
     f.merge("task/TSK-002-work");
+    f.git(&["push", "-q", "origin", "main"]);
     f.git(&["switch", "-q", LINE]);
     f.merge("main");
     let head = f.git(&["rev-parse", "HEAD"]);
@@ -196,7 +197,7 @@ fn unknown_commit_target_uses_repository_default() {
 }
 
 #[test]
-fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
+fn explicit_head_reports_context_without_blame_for_imported_work() {
     let (f, base, head) = sync_merge();
     for source in ["GITHUB_HEAD_REF", "checkout HEAD"] {
         let env = if source == "checkout HEAD" {
@@ -212,8 +213,11 @@ fn explicit_head_reports_ci_and_checkout_context_before_binding_findings() {
             "{text}"
         );
         let guidance = text.find("pass --branch").expect(&text);
-        let finding = text.find("reopen").expect(&text);
-        assert!(guidance < finding, "{text}");
+        assert!(!text.contains("reopen"), "{text}");
+        assert!(!text.contains("work.acceptance_binding"), "{text}");
+        if let Some(finding) = text.find("BLOCKED") {
+            assert!(guidance < finding, "{text}");
+        }
     }
 }
 
@@ -275,13 +279,14 @@ fn unresolved_declared_target_warns_before_findings() {
 #[test]
 fn integration_branch_uses_default_target_and_ci_base_keeps_precedence() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     let main = f.git(&["rev-parse", "main"]);
     f.land_task();
     let out = ci(&f, &["--branch", LINE], None);
     passes(&out);
     let text = output(&out);
     assert!(text.contains(&format!("range {}..", &main[..8])), "{text}");
-    assert!(text.contains("declared target 'main'"), "{text}");
+    assert!(text.contains("declared target 'origin/main'"), "{text}");
 
     let tip = f.git(&["rev-parse", "HEAD"]);
     let out = ci(

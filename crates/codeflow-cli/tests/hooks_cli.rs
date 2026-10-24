@@ -8071,11 +8071,8 @@ fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
     assert!(output(&refused).contains(&format!("git reset --keep refs/remotes/origin/{LINE}")));
     assert!(output(&refused).contains("line_adoptions"));
     // The already shared direct commit must not prevent unrelated merges.
-    f.git(&["switch", "-qc", "task/TSK-001-work"]);
-    f.write("src/lib.rs", "pub fn work() {}\n");
-    f.commit("feat: build work");
-    f.git(&["switch", "-q", LINE]);
-    f.merge("task/TSK-001-work");
+    f.git(&["push", "-q", "origin", "main"]);
+    f.land_task();
     passes(&f.push(&direct));
     f.land_adoption(&direct);
     passes(&f.push(ZERO));
@@ -8114,13 +8111,11 @@ fn epic_line_first_push_reads_the_full_default_ref_beside_an_origin_main_shadow(
 /// the line's first push.
 #[test]
 fn epic_line_adoption_pre_push_merge_only_control() {
-    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    use line_adoption_fixture::{passes, Line, ZERO};
     let f = Line::new();
     let old = f.git(&["rev-parse", "HEAD"]);
-    f.git(&["switch", "-qc", "task/TSK-001-work"]);
-    f.direct();
-    f.git(&["switch", "-q", LINE]);
-    f.merge("task/TSK-001-work");
+    f.git(&["push", "-q", "origin", "main"]);
+    f.land_task();
     passes(&f.push(&old));
     passes(&f.push(ZERO));
 }
@@ -9208,7 +9203,7 @@ fn standalone_task_push_refuses_decoy_lines_and_other_epic_through_installed_hoo
             text.contains("uses advertised target 'main'"),
             "{case}: {text}"
         );
-        assert!(text.contains("work.criteria_frozen"), "{case}: {text}");
+        assert!(text.contains("work.import_authority"), "{case}: {text}");
         assert!(
             f.git(&["ls-remote", "origin", "refs/heads/task/TSK-002-repair"])
                 .is_empty(),
@@ -9234,7 +9229,7 @@ fn local_origin_main_branch_cannot_bind_a_line_through_installed_hook() {
         assert!(!out.status.success(), "{text}");
         assert!(text.contains("is not a bound epic line"), "{text}");
         assert!(text.contains("uses advertised target 'main'"), "{text}");
-        assert!(text.contains("work.criteria_frozen"), "{text}");
+        assert!(text.contains("work.import_authority"), "{text}");
     }
     assert!(!text.contains(&format!("--into={LINE}")), "{text}");
     assert!(

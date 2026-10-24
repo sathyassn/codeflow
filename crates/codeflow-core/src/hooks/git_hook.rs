@@ -142,6 +142,20 @@ pub fn pre_commit(
             &crate::root_checkout::process_env,
         ));
 
+    match super::landed_policy::staged_paths(root, policy)
+        .and_then(|paths| super::path_policy::staged(&repo, &paths))
+    {
+        Ok(paths) => {
+            report.violations.extend(paths.violations);
+            report.status.extend(paths.notes);
+        }
+        Err(error) => report.violations.push(Violation::always_blocking(
+            "git.path_policy",
+            format!("cannot verify staged paths: {error}"),
+            "repair the named policy source or Git object, then retry",
+        )),
+    }
+
     if policy.secret_scan.is_active() {
         scan_staged(&repo, policy, &mut report, false);
     }
@@ -1792,12 +1806,19 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_allows_env_example() {
+    fn test_pre_commit_env_example_needs_a_path_exception() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
         let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
@@ -1817,7 +1838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_commit_secret_scan_off_skips() {
+    fn test_pre_commit_secret_scan_off_keeps_path_policy() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "X=1\n");
@@ -1826,7 +1847,14 @@ mod tests {
             ..scan_policy()
         };
         let report = pre_commit(dir.path(), &policy, false, false).unwrap();
-        assert!(report.violations.is_empty());
+        assert!(report
+            .violations
+            .iter()
+            .all(|v| v.rule != "git.secret_scan"));
+        assert!(report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"));
     }
 
     #[test]
