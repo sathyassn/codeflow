@@ -2710,9 +2710,19 @@ fn review_cadence_and_security_lens_are_stated_once() {
         "assets/base/claude/agents/cf-reviewer.md",
         "assets/base/claude/agents/cf-security-reviewer.md",
         "assets/base/claude/skills/cf-method/references/delivery-process.md",
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/rule-map.toml",
+        "assets/base/CLAUDE.md.tmpl",
+        "CLAUDE.md",
     ] {
         let text = normalize_whitespace(&read(path));
         for retired in [
+            // Review round 1 of TSK-452: the same class in other words.
+            "inside your next whole-unit pass",
+            "`cf-reviewer` as the same-family fresh-context pass",
+            "`cf-security-reviewer` on its trigger",
+            "then independent re-review",
             "reviews the whole unit again at the new head",
             "not only the delta",
             "Review verdicts require `cf-reviewer`",
@@ -2730,6 +2740,17 @@ fn review_cadence_and_security_lens_are_stated_once() {
     assert!(
         security.contains("This agent runs as its own pass only when no other-lineage seat exists")
     );
+    assert!(discipline.contains(
+        "an extra-family review on the routing policy's security trigger joins that one review as another lineage, not a pass on top."
+    ));
+    let reviewer = normalize_whitespace(&read("assets/base/claude/agents/cf-reviewer.md"));
+    assert!(
+        reviewer.contains("Confirm a fix to your own finding on the delta plus the affected tests")
+    );
+    let map = normalize_whitespace(&read("assets/base/rule-map.toml"));
+    assert!(map.contains(
+        "`cf-reviewer` runs only as the same-family fallback when no other-lineage seat exists"
+    ));
     let policy: serde_json::Value = serde_json::from_str(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
     ))

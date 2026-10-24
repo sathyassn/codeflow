@@ -698,7 +698,7 @@ fn lifecycle_tracked_claude_reviewers_return_in_foreground() {
     assert_contains(
         DEVELOP,
         &[
-            "For lifecycle-tracked Claude runs",
+            "When that fallback runs, for lifecycle-tracked Claude runs",
             "invoke `cf-reviewer` in the foreground",
             "`run_in_background: false` when offered",
             "collect its actual verdict before the primary turn ends",

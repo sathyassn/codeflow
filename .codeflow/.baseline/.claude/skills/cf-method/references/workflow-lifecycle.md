@@ -140,7 +140,8 @@ evidence returns to its owning stage for repair and proportional re-verification
   version;
 - implementation defect -> responsible primary and executor via `cf-develop`,
   a reported one first through `issue-handling.md`;
-- review concern -> the affected producer, then independent re-review;
+- review concern -> the affected producer, then the finder's delta
+  confirmation the discipline rules' "Review verdicts" states;
 - documentation or PR evidence gap -> `cf-ship` or the standalone docs owner;
 - deterministic gate failure -> fix or honor the gate, never bypass it;
 - unavailable required capability -> bounded recovery, then an explicit

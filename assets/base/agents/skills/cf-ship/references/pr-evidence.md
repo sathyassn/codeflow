@@ -142,8 +142,9 @@ behavioral evaluations; distinguish added cases from live trials actually
 run. Delete unused template lines. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence
 before marking ready; a prior review carries only across a clean re-merge
-of the target, as `codeflow ci` binds it; any other change gets a new
-whole-unit review at the new head. Lint with
+of the target, as `codeflow ci` binds it. A fix to a review finding is
+confirmed by its finder on the delta, as "Review verdicts" in the discipline
+rules states; any other change gets a new whole-unit review at the new head. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 

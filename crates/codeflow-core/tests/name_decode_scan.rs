@@ -1491,34 +1491,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // printed as unavailable, never as configured or observed.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_profiles",
-        "lines",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_profiles",
-        "trim",
-        2,
-        "display",
-    ),
-    (
-        "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_profiles",
-        "trim_matches",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-cli/src/cmd/doctor.rs",
-        "codex_profiles",
-        "trim_start",
-        1,
-        "display",
-    ),
-    (
-        "crates/codeflow-cli/src/cmd/doctor.rs",
         "find_on_path",
         "obtain-absent:var_os",
         1,

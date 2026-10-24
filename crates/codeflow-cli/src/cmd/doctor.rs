@@ -198,31 +198,19 @@ fn seat_lines(
 }
 
 /// The `default_permissions` value and the permission profile names a Codex
-/// `config.toml` declares, read from its top-level key and its
-/// `[permissions.<name>]` headers.
-fn codex_profiles(text: &str) -> (Option<&str>, Vec<&str>) {
-    let mut default = None;
-    let mut profiles = Vec::new();
-    let mut top_level = true;
-    for line in text.lines().map(str::trim) {
-        if let Some(header) = line.strip_prefix('[') {
-            top_level = false;
-            let name = header.trim_end_matches(']');
-            if let Some(profile) = name.strip_prefix("permissions.") {
-                if !profile.contains('.') && !profiles.contains(&profile) {
-                    profiles.push(profile);
-                }
-            }
-        } else if top_level {
-            if let Some(value) = line
-                .strip_prefix("default_permissions")
-                .and_then(|rest| rest.trim_start().strip_prefix('='))
-            {
-                default = Some(value.trim().trim_matches('"'));
-            }
-        }
-    }
-    (default, profiles)
+/// `config.toml` declares, or `None` when it is not valid TOML.
+fn codex_profiles(text: &str) -> Option<(Option<String>, Vec<String>)> {
+    let config = text.parse::<toml::Table>().ok()?;
+    let default = config
+        .get("default_permissions")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    let profiles = config
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default();
+    Some((default, profiles))
 }
 
 /// The sandbox lines: what the project settings request, never what a
@@ -249,18 +237,20 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
     }
     let codex = ".codex/config.toml";
     match std::fs::read_to_string(root.join(codex)) {
-        Ok(text) => {
-            let (default, profiles) = codex_profiles(&text);
-            lines.push(format!(
+        Ok(text) => match codex_profiles(&text) {
+            Some((default, profiles)) => lines.push(format!(
                 "sandbox codex: configured default profile {default}, profiles {profiles} ({codex})",
-                default = default.unwrap_or("unset"),
+                default = default.as_deref().unwrap_or("unset"),
                 profiles = if profiles.is_empty() {
                     "none".to_string()
                 } else {
                     profiles.join("|")
                 }
-            ));
-        }
+            )),
+            None => lines.push(format!(
+                "sandbox codex: unavailable: {codex} is not valid TOML"
+            )),
+        },
         Err(_) => lines.push(format!("sandbox codex: unavailable: no readable {codex}")),
     }
     lines.push(

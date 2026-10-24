@@ -86,8 +86,8 @@ evidence" define; the brief follows
      whole-flow proof
    On a batch candidate, confirm each landing merge is clean and that a
    hand-resolved product hunk returned its task to a whole-unit review at
-   its new head. Confirm a fix to your own finding inside your next
-   whole-unit pass ("Review verdicts" in the discipline rules); nits need no
+   its new head. Confirm a fix to your own finding on the delta plus the
+   affected tests ("Review verdicts" in the discipline rules); nits need no
    confirmation.
 5. For a user-facing change, apply
    `.claude/skills/cf-model-orchestrator/resources/quality/ui-design.md`

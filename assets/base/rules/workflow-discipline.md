@@ -307,7 +307,9 @@ whole-unit review runs with the `cf-security-reviewer` checklist as its
 attacker lens, and the Claude side triages the deterministic scanner output
 inside its integrated judgment. Without an other-lineage seat, the
 same-family fallback above runs that checklist. There is no separate
-security pass on top.
+security pass on top; an extra-family review on the routing policy's
+security trigger joins that one review as another lineage, not a pass on
+top.
 
 Only material findings block; each nit gets a disposition.
 

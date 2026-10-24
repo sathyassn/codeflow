@@ -71,7 +71,7 @@ fn configured_values_are_marked_configured_and_never_observed() {
         "seat claude-primary: configured claude-opus-5-5 through claude-code, efforts medium|high|xhigh",
         "seat codex-primary: configured gpt-6-astra through codex-cli",
         "sandbox claude: configured enabled true, failIfUnavailable true (.claude/settings.json)",
-        "sandbox codex: configured default profile cf-guard, profiles cf-guard|cf-builder (.codex/config.toml)",
+        "sandbox codex: configured default profile cf-guard, profiles cf-builder|cf-guard (.codex/config.toml)",
         "executable claude: unavailable: not found on PATH",
         "executable codex: unavailable: not found on PATH",
         "tool gh: unavailable: not found on PATH",
@@ -125,4 +125,20 @@ fn missing_evidence_is_reported_unavailable() {
         assert!(out.contains(line), "missing {line:?} in\n{out}");
     }
     assert!(!out.contains("configured"), "nothing is configured:\n{out}");
+}
+
+#[test]
+fn an_unparsable_codex_config_is_reported_unavailable() {
+    let project = configured_project();
+    write(
+        project.path(),
+        ".codex/config.toml",
+        "default_permissions = [\n",
+    );
+    let empty = tempfile::tempdir().unwrap();
+    let out = preflight(project.path(), empty.path());
+    assert!(
+        out.contains("sandbox codex: unavailable: .codex/config.toml is not valid TOML"),
+        "{out}"
+    );
 }
