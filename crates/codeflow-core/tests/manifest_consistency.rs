@@ -3257,7 +3257,7 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
         problems.join("\n  ")
     );
     // Negative control (Codex review R1, finding 1): a section gutted to its
-    // heading, the Unit line and a comment that still names the release
+    // heading, one field line and a comment that still names the release
     // script and the changelog marker fails.
     let start = live
         .find("## Release impact\n")
@@ -3266,7 +3266,7 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
         .find("<!-- Conditional sections")
         .map_or(live.len(), |offset| start + offset);
     let gutted = format!(
-        "{}## Release impact\n\n- Unit: `codeflow`\n\n<!-- Read by `scripts/release.py`. Put a \
+        "{}## Release impact\n\n- Rationale:\n\n<!-- Read by `scripts/release.py`. Put a \
          codeflow:release-impact patch|minor|major HTML marker before each entry. -->\n\n{}",
         &live[..start],
         &live[end..]
@@ -3325,8 +3325,6 @@ fn release_impact_problems(template: &str) -> Vec<String> {
         "- Breaking: `yes | no`",
         "- Rationale:",
         "- Migration: `none`, steps, or \"see Breaking change\"",
-        "- Unit: `codeflow`",
-        "- Evidence:",
     ] {
         if !lines.contains(field) {
             problems.push(format!("field line missing from the section: {field}"));
@@ -3337,8 +3335,8 @@ fn release_impact_problems(template: &str) -> Vec<String> {
         "Breaking states compatibility",
         "Choose each value; never leave the alternatives",
         "Migration is normally `none` for nonbreaking work",
-        "Read by `scripts/release.py` with the fields above",
-        "Breaking is yes if and only if Impact is major",
+        "Judged by `codeflow ci`'s one evaluator, which `scripts/release.py`",
+        "A major pending entry needs Breaking: yes",
         "put a codeflow:release-impact patch|minor|major HTML marker directly before each pending changelog entry",
         "Impact must equal the highest one this PR adds or edits",
         "Declared impact cannot be below conventional commit markers",

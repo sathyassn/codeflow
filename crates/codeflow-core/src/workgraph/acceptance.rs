@@ -34,6 +34,11 @@ pub const BINDING_RULE: &str = "work.acceptance_binding";
 /// Criteria changes outside the own-task or planning allowance, including
 /// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
+/// A criterion a task pull request removes from its own record (TSK-451):
+/// a note whose message is `<task> <criterion>`, which `codeflow ci` holds
+/// against the pull request body, since removing one without a reason there
+/// is refused.
+pub const REMOVAL_RULE: &str = "work.criteria_removal";
 /// The selected criteria version, distinct from the run's policy authority.
 pub const AUTHORITY_NOTE: &str = "work.criteria_authority";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
@@ -2510,6 +2515,7 @@ pub fn frozen_criteria(
                             note: true,
                         });
                     }
+                    found.extend(removals(record, old));
                 }
                 Landed::Landed { witness } => found.push(finding(
                     FROZEN_RULE,
@@ -2532,6 +2538,88 @@ pub fn frozen_criteria(
         } else if authority.is_some() {
             found.push(finding(FROZEN_RULE, frozen_message(record)));
         }
+    }
+    found
+}
+
+/// A task pull request's findings for its own task `id` (TSK-451): its
+/// criteria as [`frozen_criteria`] judges them, and what it changes outside
+/// its own record.
+fn own_task_findings(
+    (head, target): (&Graph, &Graph),
+    paths: &[String],
+    id: &str,
+    correctable: &std::collections::BTreeSet<String>,
+    stacked: &[StackedHead],
+    judging: &mut Judging<'_>,
+) -> Vec<Finding> {
+    let mut found = frozen_criteria(
+        head,
+        target,
+        paths,
+        &std::collections::BTreeSet::from([id.to_string()]),
+        correctable,
+        stacked,
+        judging,
+    );
+    found.extend(outside_own_record(head, target, paths, id, stacked));
+    found
+}
+
+/// One [`REMOVAL_RULE`] note per criterion of `old` that `record` no longer
+/// holds (TSK-451).
+fn removals(record: &RecordView, old: &[Criterion]) -> Vec<Finding> {
+    old.iter()
+        .filter(|item| !record.criteria.items.iter().any(|next| next.id == item.id))
+        .map(|item| Finding {
+            epic_record: None,
+            rule: REMOVAL_RULE,
+            message: format!("{} {}", record.id, item.id),
+            note: true,
+        })
+        .collect()
+}
+
+/// What a task pull request for `own` changes outside its own record that
+/// only a planning amendment may change (TSK-451): an epic's criteria, and
+/// another task's status. A predecessor's record kept as the reviewed head
+/// this branch stacks on has it (`stacked`) is that pull request's change.
+fn outside_own_record(
+    head: &Graph,
+    target: &Graph,
+    changed_paths: &[String],
+    own: &str,
+    stacked: &[StackedHead],
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for record in head
+        .records
+        .values()
+        .filter(|record| record.id != own && changed_paths.contains(&record.path))
+    {
+        if stacked
+            .iter()
+            .any(|stack| stack.task_id == record.id && stack.record.content == record.content)
+        {
+            continue;
+        }
+        let Some(before) = target.records.get(&record.id) else {
+            continue;
+        };
+        let change = match record.kind {
+            RecordKind::Epic if before.criteria.signature() != record.criteria.signature() => {
+                format!("{} changes its criteria", record.id)
+            }
+            RecordKind::Task if before.status != record.status => format!(
+                "{} changes its status from {} to {}",
+                record.id, before.status, record.status
+            ),
+            _ => continue,
+        };
+        found.push(finding(
+            FROZEN_RULE,
+            format!("{change} in {own}'s pull request; a task pull request amends only its own record, and this change goes through a planning amendment that names its epic (ADR-0078)"),
+        ));
     }
     found
 }
@@ -3529,11 +3617,10 @@ pub fn pull_request_findings_judged(
                 target_tip,
                 &mut judging,
             )),
-            Criteria::OwnTask(id) => found.extend(frozen_criteria(
-                &at_head,
-                &at_target,
+            Criteria::OwnTask(id) => found.extend(own_task_findings(
+                (&at_head, &at_target),
                 &paths,
-                &std::collections::BTreeSet::from([id.clone()]),
+                id,
                 &correcting(id),
                 &stacked,
                 &mut judging,
