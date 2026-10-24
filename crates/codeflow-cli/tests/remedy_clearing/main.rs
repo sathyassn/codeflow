@@ -1883,7 +1883,7 @@ fn clears_test_config_repair() {
     commit_all(&root, "chore: add a broken test config");
     prove(
         "TEST_CONFIG_REPAIR",
-        "could not load test-config.json",
+        "push set gate error:",
         || pushed(&root),
         |printed| {
             assert!(
