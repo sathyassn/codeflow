@@ -613,12 +613,12 @@
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-5d3c5cefffb0d85a.js.gz",
+      "stored_path": "export/renderer-6146b43a3c422e40.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 978939,
-      "encoded_bytes": 272468,
-      "sha256": "5d3c5cefffb0d85a3d6fd0b247dbe69dd38cb05cc4cea09457144b3bcc450004"
+      "raw_bytes": 978994,
+      "encoded_bytes": 272494,
+      "sha256": "6146b43a3c422e40b6e690b3b2bc0c5d9550c73f14b52afa64810075ee51aa5e"
     }
   },
   "budgets": {
@@ -630,5 +630,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "7e45bf97ee93f522f59e0322cb706fa228b679e77f526997b46579e8ffafbe7f"
+  "corpus_sha256": "609e7d1c881fd6460bb993e7460c114828da34f687307dea13d0ec30ace9a539"
 }

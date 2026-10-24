@@ -22,7 +22,7 @@ if (!document.querySelector("style[data-cf-present-export-style]")) {
 // Carry the computed theme into the existing sandbox without adding permissions
 // or duplicating the entire interface stylesheet in every exported stage.
 const stages = [...documentRoot.querySelectorAll<HTMLIFrameElement>("iframe[data-cf-export-stage]")]
-  .map(frame => ({ frame, source: frame.srcdoc }));
+  .map((frame): { frame: HTMLIFrameElement; source: string } => ({ frame, source: frame.srcdoc }));
 const styleStages = (): void => {
   const computed = getComputedStyle(document.documentElement);
   const carried = document.createElement("div").style;
@@ -35,8 +35,14 @@ const styleStages = (): void => {
   // CSS serialization keeps values intact; a less-than sign must never close
   // the generated style element, even in a project-provided font name.
   const css = carried.cssText.replaceAll("<", "\\3c ");
-  for (const { frame, source } of stages) {
-    frame.srcdoc = `<!doctype html><meta charset="utf-8"><style>:root{${css}}</style>${source}`;
+  // A loaded sandboxed frame is never navigated again: the browser reports
+  // blocked scripts for the second document. A fresh frame with the same
+  // sandbox takes the themed document as its first and only load.
+  for (const stage of stages) {
+    const fresh = stage.frame.cloneNode(false) as HTMLIFrameElement;
+    fresh.srcdoc = `<!doctype html><meta charset="utf-8"><style>:root{${css}}</style>${stage.source}`;
+    stage.frame.replaceWith(fresh);
+    stage.frame = fresh;
   }
 };
 const requestedMode = document.documentElement.dataset.cfMode ?? "system";

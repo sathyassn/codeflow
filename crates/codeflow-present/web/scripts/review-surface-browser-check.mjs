@@ -163,12 +163,13 @@ try {
     await themed.emulateMedia({ colorScheme: 'dark' });
     await themed.goto(pathToFileURL(systemOut).href);
     await themed.waitForFunction(() => document.documentElement.dataset.cfExport === 'true');
-    const handle = await themed.locator('#stage iframe').elementHandle();
-    const frame = await handle.contentFrame();
     for (const scheme of ['dark', 'light']) {
       await themed.emulateMedia({ colorScheme: scheme });
       await themed.waitForFunction(mode => document.documentElement.dataset.cfModeResolved === mode, scheme);
       await themed.locator('#stage').scrollIntoViewIfNeeded();
+      // Each scheme change replaces the sandboxed frame (it is never
+      // navigated twice), so the current frame is taken after the change.
+      const frame = await (await themed.locator('#stage iframe').elementHandle()).contentFrame();
       const expected = await themed.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--cf-text').trim());
       await frame.waitForFunction(color => {
         const text = document.querySelector('text');
