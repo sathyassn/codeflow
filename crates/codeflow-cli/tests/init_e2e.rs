@@ -2521,7 +2521,9 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     git_with_binary(root, &["commit", "-q", "-m", "docs: record a legacy task"]);
     seed(root, dest, target);
 
-    // A pre-push with a ci finding at warn and the stale task.
+    // A pre-push with a ci finding at warn; the stale task is a record
+    // finding `codeflow validate --docs` names, which the push set no longer
+    // runs (TSK-449).
     git_with_binary(root, &["switch", "-q", "-c", "feat/x", &base]);
     std::fs::write(root.join("x.txt"), "x\n").unwrap();
     git_with_binary(root, &["add", "x.txt"]);
@@ -2532,15 +2534,20 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     assert!(
         err.contains("warning — policy rule git.commit_format (warn)")
             && err.contains("reword it with `git commit --amend` as `type(scope): description`")
-            && err.contains("stale status: in_progress with no active branch carrying TSK-001")
+            && !err.contains("stale status")
             && err.contains("codeflow pre-push: push not stopped")
             && !err.contains("BLOCKED"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(
+        validated.contains("stale status: in_progress with no active branch carrying TSK-001"),
+        "{validated}"
+    );
 
     // Each step, run as printed.
     git_with_binary(root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
-    let step = printed_step(&err, "stale status: in_progress");
+    let step = printed_step(&validated, "stale status: in_progress");
     assert_eq!(step[..2], ["codeflow", "task"], "{step:?}");
     let args: Vec<&str> = step[1..].iter().map(String::as_str).collect();
     let status = codeflow(root, &args);
@@ -2561,9 +2568,11 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
         !err.contains("git.commit_format")
             && !err.contains("stale status")
             && !err.contains("warning")
-            && err.contains("codeflow pre-push: push not stopped"),
+            && err.contains("codeflow pre-push: push set finished"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(!validated.contains("stale status"), "{validated}");
 }
 
 /// The refusals line of `codeflow report ceremony` over every date.

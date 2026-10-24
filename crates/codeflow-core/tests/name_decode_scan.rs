@@ -2137,15 +2137,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Reads NUL-separated index entries and LF-separated submodule status records;
-    // the unchanged leading status byte decides incompleteness in both formats.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-        "split_terminator",
-        2,
-        "framing:index-and-submodule-status-records",
-    ),
     // Formats already-emitted finding text only, without establishing guard verdicts or rewriting operands.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -5005,6 +4996,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
+    ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:var_os",
+        1,
+        "unproven",
+    ),
     // Rejects whitespace-only alternative text. Accepted image identity configuration stays unchanged.
     (
         "crates/codeflow-present/src/config.rs",
@@ -5884,11 +5891,6 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "shell-quotes",
         "crates/codeflow-core/src/hooks/git_guard.rs",
         "shell_words",
-    ),
-    (
-        "index-and-submodule-status-records",
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
     ),
     (
         "template-placeholder-lines",
