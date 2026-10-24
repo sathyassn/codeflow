@@ -306,6 +306,93 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     })
 }
 
+/// Identify a standalone cancellation carried by a planning branch. A new
+/// standalone record must be cancelled; a cancellation already anchored at
+/// the merge-base stays on the ordinary task route. Other amendments return
+/// `None`. Callers restrict this check to `plan/` branches.
+///
+/// # Errors
+/// Returns a diagnostic for unreadable history or an invalid cancellation
+/// range. Lifecycle validation still checks the record's full schema.
+pub fn cancelled_standalone(
+    root: &std::path::Path,
+    base: &str,
+    head: &str,
+    paths: &[crate::git::GitName],
+) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|error| error.to_string())?;
+    let oid = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| error.to_string())
+    };
+    let (base, head) = (oid(base)?, oid(head)?);
+    let anchor = history::merge_base(&repo, base, head).map_err(|error| error.to_string())?;
+    let before = Graph::from_revision(&repo, &anchor.to_string())?;
+    let after = Graph::from_revision(&repo, &head.to_string())?;
+    let changed = |record: &&RecordView| {
+        paths
+            .iter()
+            .any(|path| path.bytes() == record.path.as_bytes())
+    };
+    let candidates: Vec<_> = after
+        .records
+        .values()
+        .filter(changed)
+        .filter(|record| {
+            record.kind == RecordKind::Task
+                && record.epic_id.is_none()
+                && before
+                    .records
+                    .get(&record.id)
+                    .is_none_or(|old| old.status != record.status && record.status == "cancelled")
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let [record] = candidates.as_slice() else {
+        return Err("a standalone cancellation amendment names and adds one task record".into());
+    };
+    let id = &record.id;
+    if before.records.contains_key(id) || record.status != "cancelled" {
+        return Err(format!(
+            "{id} is not a new cancelled standalone record; use its own task branch and the ordinary task status route (run `codeflow work start {id}` before starting work)"
+        ));
+    }
+    let missing = super::record_text::parse_cancellation(&record.body).missing();
+    if !missing.is_empty() {
+        return Err(format!("{id} needs Closeout lines `- cancelled: <reason>` and `- scope: <where it went>` (missing {})", missing.join(", ")));
+    }
+    let texts = paths
+        .iter()
+        .map(|path| path.rule_text().map(str::to_string))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if texts
+        .iter()
+        .any(|path| !path.starts_with("project-management/"))
+    {
+        return Err("a standalone cancellation amendment changes only project-management/ paths; keep product changes on the task branch".into());
+    }
+    if let Some(problem) = range_problem(&repo, base, head, &texts) {
+        return Err(problem);
+    }
+    if before
+        .records
+        .values()
+        .chain(after.records.values())
+        .filter(changed)
+        .any(|other| other.id != *id)
+    {
+        return Err(format!(
+            "a standalone cancellation amendment for {id} cannot change another work record"
+        ));
+    }
+    Ok(Some(id.clone()))
+}
+
 /// Why a planning amendment judged at `head` on the target `base` cannot
 /// name `epic`: it has no epic record at the head, or it was cancelled
 /// before this range. Cancelling it in this range is a planning change of

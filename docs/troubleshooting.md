@@ -109,3 +109,19 @@ Work one check at a time, starting with the `FAIL` lines.
 The fix worked when that check prints `ok`, or when a full run exits 0 with no
 `FAIL` line. After a completed trust step the `codex` and `grok` checks
 report a note, since doctor cannot see a live harness run.
+
+## A cancelled standalone task has no planning anchor
+
+If a standalone task was cancelled before its record reached the target,
+record the decision in a `plan/` pull request. On the task branch, run
+`codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>`.
+Cut the planning branch from the target and copy only the cancelled record
+onto it, retaining the Closeout's `- cancelled:` and `- scope:` lines. Set
+`Task: TSK-NNN` in the PR body. The range must stay inside
+`project-management/`; it must not bring the abandoned product commits.
+
+`codeflow ci` and pre-push accept this planning amendment without a
+`codeflow work start` claim and report its task under `no epic`. This route
+requires the record to be absent from the merge-base. An active task still
+uses its own task branch and `work start`; a record already on the target
+uses the ordinary task status route.
