@@ -3136,7 +3136,8 @@ def evaluator_directory(path: Path) -> bool:
                         # TUI is alive. They are not config imports. Permit only
                         # their exact native location, names and binary target.
                         runtime = (path.name == "codex" and len(parts) == 4
-                                   and parts[:2] == ("tmp", "arg0")
+                                   and parts[0] == "tmp"
+                                   and re.fullmatch(r"arg0(?:-[A-Za-z0-9]+)?", parts[1])
                                    and re.fullmatch(r"codex-arg0[A-Za-z0-9]+", parts[2])
                                    and parts[3] in {"applypatch", "apply_patch", "codex-execve-wrapper"}
                                    and executable is not None
