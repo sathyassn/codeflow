@@ -93,7 +93,8 @@ DESIGN_INTENT:
       governing one. Carrier: figure.css only.
     baseline: the runtime today, rendered as real figure blocks and a mock of
       the present head.
-  SETTLED_DIRECTION: recommended, pending the operator's answers:
+  SETTLED_DIRECTION: the phase 1 proposal, kept as written; the operator
+    settled the direction on 2026-10-23 (see Operator sign-off below):
     A1 (head and headings), S2 (wider steps), C2 (accent and two companions),
     no dedicated section block.
     Why: A1 fixes the head and the leads with the fields the schema already
@@ -142,7 +143,9 @@ DESIGN_INTENT:
 
 **Direction (AC-1): settled by the operator on 2026-10-23**, over two review
 rounds of the rendered document (revision 1, then revision 2 for the
-palette):
+palette). The answers reached the phase 2 builder through the coordinator
+before any token or style change; this entry was written to the repository
+during phase 2, so the commit order is not the decision order:
 
 - Page anatomy A1, head and headings, with the note that body text is short
   prose paragraphs plus points where they fit; no schema change.
