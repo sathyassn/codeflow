@@ -337,7 +337,7 @@ Upgrade the binary once, then run `codeflow update` in each repository.
    example `git.policy_characters`, ADR-0067).
 2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
    report with unified diffs.
-3. Resolve each `<name>.new` file against the file beside it.
+3. Resolve each `<name>.new`, move it over the live file, then rerun `codeflow update`.
 
 | Case | What `update` does |
 |---|---|
@@ -346,6 +346,10 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 | Binary released before this safeguard | Can still lower the pin and replace managed files with older assets |
 | Unmodified managed file | Replaced |
 | Managed file you changed | 3-way merged from the baseline; anything that cannot merge is written beside it as `<name>.new` with a report entry, never clobbered or skipped. `--force` replaces instead of merging |
+| Pending conflict resolution | Keep `.codeflow/.pending-update/` until update accepts the resolution. It holds pristine candidate content; the baseline and manifest always describe shipped content, never the resolved file |
+| Resolved file with no `.new` | Removing the proposal confirms the live resolution, including a choice to keep the original file. Update records the saved shipped baseline. The same release reports retained customisation as `kept (user-modified)`; later changes merge from that base |
+| Proposal still present or conflict markers remain | Refuses before writes, including with `--force`. Resolve the markers, move the proposal over the live file and retry |
+| Unreadable pending record, or baseline or manifest hash outside the recorded old and new shipped versions | Refuses before writes. Restore the inconsistent metadata from a known-good copy and retry |
 | Unmodified managed file the new version no longer ships | Removed with its baseline and manifest record, so it cannot collide with its replacement (ADR-0011), as when `.claude/commands/*` became `.claude/skills/*` |
 | No longer shipped, but could hold your content: a modified managed file, a managed-region file, a user-owned file | Kept and left unmanaged, never deleted |
 | New `.codeflow/policy.json` key, such as those added in ADR-0007 | Inserted with its shipped default and reported; values you set are untouched |

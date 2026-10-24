@@ -143,7 +143,7 @@ adrs: [ADR-0011, ADR-0019]
 | Case | Update action |
 |---|---|
 | Unmodified file | Replaces it |
-| User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and a report |
+| User-modified file | Three-way merge from `.codeflow/.baseline/`; a conflict produces a `.new` file and saves the pending shipped content. After resolution, the next update records that shipped baseline, so the conflict does not repeat |
 | Managed region | Updates it in place |
 | User-owned schema-versioned file | Adds new keys with defaults |
 | Missing in-tier manifest entry | Installs it |
