@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-MDM2S4P6.css.br",
-      "name": "service/app-MDM2S4P6.css.br",
+      "bom-ref": "service/app-INIKLP56.css.br",
+      "name": "service/app-INIKLP56.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "30731be4d8c1bc0a33475e90726736687ca1a441ca3e8a0b50d9f9ccb646a1cb"
+          "content": "4cbd991b9a0879684e23718c0eacac94dacc7b658b3e0d5d9a2d86401e3cbc03"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-MDM2S4P6.css.gz",
-      "name": "service/app-MDM2S4P6.css.gz",
+      "bom-ref": "service/app-INIKLP56.css.gz",
+      "name": "service/app-INIKLP56.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "df6875182e49ffe727c2f36ee27089b89fb878748154085e00ce96eb24a927b7"
+          "content": "352be6d2f4db886014be8862f915954d9e9e349c611e88c76547b8445b8459ef"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-XSOKGUIO.js.br",
-      "name": "service/app-XSOKGUIO.js.br",
+      "bom-ref": "service/app-VSQNMC4W.js.br",
+      "name": "service/app-VSQNMC4W.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9efc6adba3255e166f99b749bd153edfc1b45423095b6f4620559884ef72b28d"
+          "content": "a2d122b0cbedd515778b0185562305529580d9ba98f9d8e66fec5cac380db645"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-XSOKGUIO.js.gz",
-      "name": "service/app-XSOKGUIO.js.gz",
+      "bom-ref": "service/app-VSQNMC4W.js.gz",
+      "name": "service/app-VSQNMC4W.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9425455d79d17548eb4dca3e883beafa7c2ed736070ae66f382b6a5605170611"
+          "content": "07f8614854dbb449f78ecbe0af6e823c1c3404de0efb482052ff82fb8e073101"
         }
       ]
     },
@@ -115,23 +115,23 @@
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-figure-HAJA2WKB.js.br",
-      "name": "service/chunk-figure-HAJA2WKB.js.br",
+      "bom-ref": "service/chunk-figure-ZQX66N7I.js.br",
+      "name": "service/chunk-figure-ZQX66N7I.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a9cff0e9a436a2fd21d988640760a1ce547f716b62c9697c9a23f15703aeebac"
+          "content": "6a793b54f6430d6db410923dd4dcd61c29f0d776eac584159a11ac6a3e73b904"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-figure-HAJA2WKB.js.gz",
-      "name": "service/chunk-figure-HAJA2WKB.js.gz",
+      "bom-ref": "service/chunk-figure-ZQX66N7I.js.gz",
+      "name": "service/chunk-figure-ZQX66N7I.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9a3cbd2b0aff9b88d21cbec468d80cf1c568e8251d825a73f55ecc61846e3ce6"
+          "content": "b2f9a6e4c26a25e400636ddd5c80ce94cde3981269d63e391ec75acd213688cf"
         }
       ]
     },

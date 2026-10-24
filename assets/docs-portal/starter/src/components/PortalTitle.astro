@@ -26,3 +26,4 @@ const parents = (ancestors(sidebar) ?? []).map(item => ({
 ---
 <nav class="cf-crumbs" aria-label="Breadcrumb"><ol><li><a href={siteTitleHref}>Guide</a></li>{parents.map((parent, index) => <li class={index === parents.length - 1 ? "cf-crumb-parent" : undefined}>{parent.href ? <a href={parent.href}>{parent.label}</a> : <span>{parent.label}</span>}</li>)}<li><span aria-current="page">{entry.data.title}</span></li></ol></nav>
 <h1 class="cf-title" id="_top">{entry.data.title}</h1>
+{entry.data.description && <p class="cf-lede">{entry.data.description}</p>}

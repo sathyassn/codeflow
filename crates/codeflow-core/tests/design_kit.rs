@@ -312,7 +312,7 @@ fn tokens_css_carries_the_json_value_of_every_role_in_every_pair() {
     let css = read_kit("tokens.css");
     let block = Regex::new(r#"(?s)\[data-cf-skin="(\w+)"\]\[data-cf-theme="(\w+)"\] \{(.*?)\}"#)
         .expect("block pattern");
-    let declaration = Regex::new(r"--cf-([a-z-]+):\s*([^;]+);").expect("declaration pattern");
+    let declaration = Regex::new(r"--cf-([a-z0-9-]+):\s*([^;]+);").expect("declaration pattern");
     let mut blocks = BTreeMap::new();
     for found in block.captures_iter(&css) {
         let pair = format!("{}-{}", &found[1], &found[2]);
@@ -755,7 +755,7 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
     let root = repo_root();
     let expected = tokens();
     let pair = Regex::new(r#"(?s)\[data-(?:cfp-skin|cf-theme)="(graphite|slate|sage)"\]\[data-(?:theme|cf-mode-resolved)="(light|dark)"\] \{(.*?)\}"#).unwrap();
-    let property = Regex::new(r"--cf-([a-z-]+):\s*([^;]+);").unwrap();
+    let property = Regex::new(r"--cf-([a-z0-9-]+):\s*([^;]+);").unwrap();
     for path in [
         "docs-portal/src/styles/utility-tokens.css",
         "assets/docs-portal/starter/src/styles/utility-tokens.css",
@@ -808,6 +808,323 @@ fn product_sheets_match_every_kit_role_and_measured_floor() {
                 println!("{path} | {mode} | {first}/{second} | canvas {canvas:.2} | surface {surface:.2}");
                 assert!(canvas >= 3.0 && surface >= 1.5);
             }
+        }
+    }
+}
+
+/// The figure companion palette the operator chose (TSK-444, palette A
+/// "Cobalt and plum"): one set of four values per mode, the same in every
+/// skin, so a companion never shifts when the reader changes skin.
+const COMPANIONS: [(&str, [(&str, &str); 4]); 2] = [
+    (
+        "light",
+        [
+            ("fig-cat1", "#3860ac"),
+            ("fig-cat1-soft", "#e4edfe"),
+            ("fig-cat2", "#722756"),
+            ("fig-cat2-soft", "#f0d5e3"),
+        ],
+    ),
+    (
+        "dark",
+        [
+            ("fig-cat1", "#9bbeff"),
+            ("fig-cat1-soft", "#2a3852"),
+            ("fig-cat2", "#cf82ae"),
+            ("fig-cat2-soft", "#3d2131"),
+        ],
+    ),
+];
+
+/// In both kits (cf-present and cf-docs-portal), every companion ink carries
+/// text at WCAG AA (4.5:1) on the surface, the
+/// canvas, the figure fill and its own tint, and the figure ink keeps 4.5:1
+/// on each tint a toned region can carry, in all six skin and mode pairs.
+#[test]
+fn companion_inks_and_tints_meet_the_contrast_floor_in_every_pair() {
+    let root = repo_root();
+    let mut table = Vec::new();
+    for (skill, pair) in SKILLS
+        .iter()
+        .flat_map(|skill| PAIRS.iter().map(move |pair| (*skill, *pair)))
+    {
+        let path = kit_dir(&root, SKILL_ROOTS[0], skill).join("tokens.json");
+        let tokens: BTreeMap<String, BTreeMap<String, String>> =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("kit tokens are readable"))
+                .expect("tokens.json is pair -> role -> hex");
+        let roles = &tokens[pair];
+        let mode = pair.rsplit('-').next().expect("pair names a mode");
+        let (_, values) = COMPANIONS
+            .iter()
+            .find(|(name, _)| *name == mode)
+            .expect("a companion set per mode");
+        for (role, value) in values {
+            assert_eq!(
+                roles.get(*role).map(String::as_str),
+                Some(*value),
+                "{skill} {pair} {role} must be the chosen palette value"
+            );
+        }
+        let mut checks: Vec<(String, f64)> = Vec::new();
+        for ink in ["fig-cat1", "fig-cat2"] {
+            let tint = format!("{ink}-soft");
+            for ground in ["surface", "canvas", "fig-fill", tint.as_str()] {
+                checks.push((
+                    format!("{ink} on {ground}"),
+                    contrast(&roles[ink], &roles[ground]),
+                ));
+            }
+        }
+        for tint in ["fig-cat1-soft", "fig-cat2-soft", "fig-accent-soft"] {
+            checks.push((
+                format!("fig-line on {tint}"),
+                contrast(&roles["fig-line"], &roles[tint]),
+            ));
+        }
+        for (name, ratio) in checks {
+            table.push(format!("{skill} | {pair} | {name} | {ratio:.2}:1"));
+            assert!(
+                ratio >= 4.5,
+                "{skill} {pair} {name} is {ratio:.2}:1, under the 4.5:1 floor"
+            );
+        }
+    }
+    println!("{}", table.join("\n"));
+}
+
+/// The companions read as hues of their own: apart from each other and from
+/// the accent, and clear of the reserved warn and stop hues, in CIEDE2000.
+#[test]
+fn companion_inks_stay_apart_from_the_accent_and_the_reserved_hues() {
+    let tokens = tokens();
+    for pair in PAIRS {
+        let roles = &tokens[pair];
+        for (first, second, floor) in [
+            ("fig-cat1", "fig-cat2", 20.0),
+            ("fig-cat1", "fig-accent", 20.0),
+            ("fig-cat2", "fig-accent", 20.0),
+            ("fig-cat1", "fig-warn", 20.0),
+            ("fig-cat2", "fig-warn", 20.0),
+            ("fig-cat1", "fig-stop", 20.0),
+            ("fig-cat2", "fig-stop", 10.0),
+        ] {
+            let distance = delta_e_2000(&roles[first], &roles[second]);
+            println!("{pair} | {first}/{second} | dE {distance:.2}");
+            assert!(
+                distance >= floor,
+                "{pair} {first} and {second} are only dE {distance:.2} apart (floor {floor})"
+            );
+        }
+    }
+}
+
+/// The S2 type scale (TSK-444): the value each size role takes at the
+/// default size, and the floor it keeps at any size step.
+const TYPE_SCALE: [(&str, f64, Option<f64>); 8] = [
+    ("display", 34.0, None),
+    ("lede", 19.0, None),
+    ("h2", 24.0, None),
+    ("h3", 18.0, None),
+    ("title", 15.0, Some(15.0)),
+    ("body", 15.0, Some(15.0)),
+    ("caption", 13.0, Some(13.0)),
+    ("micro", 12.5, Some(12.5)),
+];
+const SIZE_STEPS: [(&str, f64); 3] = [("compact", 0.94), ("default", 1.0), ("large", 1.12)];
+
+/// The computed px of a `--cf-fs-*` value: `calc(Npx * var(--cf-ui-scale))`,
+/// optionally inside `max(Fpx, ...)`.
+fn font_size(value: &str, scale: f64) -> f64 {
+    let pattern =
+        Regex::new(r"^(?:max\(([\d.]+)px, )?calc\(([\d.]+)px \* var\(--cf-ui-scale\)\)\)?$")
+            .expect("size pattern compiles");
+    let captures = pattern
+        .captures(value.trim())
+        .unwrap_or_else(|| panic!("unexpected size value {value}"));
+    let scaled = captures[2].parse::<f64>().expect("size is a number") * scale;
+    captures.get(1).map_or(scaled, |floor| {
+        scaled.max(floor.as_str().parse().expect("floor is a number"))
+    })
+}
+
+fn size_roles(css: &str) -> BTreeMap<String, String> {
+    let pattern = Regex::new(r"--cf-fs-([a-z0-9]+):\s*([^;]+);").expect("role pattern compiles");
+    let mut roles = BTreeMap::new();
+    for capture in pattern.captures_iter(css) {
+        assert!(
+            roles
+                .insert(capture[1].to_owned(), capture[2].trim().to_owned())
+                .is_none(),
+            "--cf-fs-{} is declared twice",
+            &capture[1]
+        );
+    }
+    roles
+}
+
+/// One type scale in the kit and every product sheet: the S2 values at the
+/// default size, the floors at every size step, and title > section >
+/// subsection > block title >= body at compact, default and large.
+#[test]
+fn the_type_scale_keeps_its_order_and_floors_at_every_size_step() {
+    let root = repo_root();
+    for path in [
+        "assets/base/agents/skills/cf-present/resources/design-system/tokens.css",
+        "docs-portal/src/styles/utility-tokens.css",
+        "assets/docs-portal/starter/src/styles/utility-tokens.css",
+        "crates/codeflow-present/web/src/styles.css",
+    ] {
+        let css = std::fs::read_to_string(root.join(path)).expect("sheet is readable");
+        let roles = size_roles(&css);
+        for (role, at_default, floor) in TYPE_SCALE {
+            let value = roles
+                .get(role)
+                .unwrap_or_else(|| panic!("{path} lacks --cf-fs-{role}"));
+            assert!(
+                (font_size(value, 1.0) - at_default).abs() < 1e-9,
+                "{path} --cf-fs-{role} is {value}, S2 sets {at_default}px"
+            );
+            if let Some(floor) = floor {
+                assert!(
+                    (font_size(value, 0.5) - floor).abs() < 1e-9,
+                    "{path} --cf-fs-{role} must keep its {floor}px floor"
+                );
+            }
+        }
+        for (step, scale) in SIZE_STEPS {
+            let size = |role: &str| font_size(&roles[role], scale);
+            let ladder = [
+                ("display", size("display")),
+                ("h2", size("h2")),
+                ("h3", size("h3")),
+                ("title", size("title")),
+            ];
+            println!("{path} | {step} | {ladder:?}");
+            for window in ladder.windows(2) {
+                assert!(
+                    window[0].1 >= window[1].1 + 1.0,
+                    "{path} at {step}: {} ({:.2}px) must exceed {} ({:.2}px) by 1px or more",
+                    window[0].0,
+                    window[0].1,
+                    window[1].0,
+                    window[1].1
+                );
+            }
+            assert!(
+                size("title") >= size("body") && size("lede") > size("body"),
+                "{path} at {step}: a block title and the lede never fall below body text"
+            );
+        }
+    }
+}
+
+/// The present runtime and the portal draw their headings from the scale
+/// roles, so the order the tokens hold is the order the page shows: the
+/// document title on display, a section on h2, a subsection on h3 and every
+/// block title (comparison column, decision, form, callout, tree, figure and
+/// frame title) on the block title role.
+#[test]
+fn present_and_portal_headings_take_the_scale_roles() {
+    let root = repo_root();
+    let present = std::fs::read_to_string(root.join("crates/codeflow-present/web/src/styles.css"))
+        .expect("present styles are readable");
+    let rule = |css: &str, selector: &str| -> String {
+        let start = css
+            .find(&format!("{selector} {{"))
+            .unwrap_or_else(|| panic!("no rule for {selector}"));
+        let body = &css[start..];
+        body[..body.find('}').expect("rule closes")].to_owned()
+    };
+    for (selector, role) in [
+        ("#cf-present-document h1", "display"),
+        ("#cf-present-document .cf-doc-summary", "lede"),
+        ("#cf-present-document .cf-doc-meta", "micro"),
+        ("#cf-present-document h2", "h2"),
+        ("#cf-present-document h3", "h3"),
+        ("#cf-present-document .block--narrative h2 + p", "lede"),
+        (
+            "#cf-present-document .comparison h2, #cf-present-document .decision h2, #cf-present-document .tabs > h2",
+            "title",
+        ),
+        ("#cf-present-document .cf-form__title", "title"),
+        (
+            "#cf-present-document .callout > h2, #cf-present-document .block--tree > h2",
+            "title",
+        ),
+        (".cf-frame-title", "title"),
+    ] {
+        let body = rule(&present, selector);
+        assert!(
+            body.contains(&format!("font-size: var(--cf-fs-{role});")),
+            "present {selector} must size with --cf-fs-{role}: {body}"
+        );
+    }
+    for path in [
+        "docs-portal/src/styles/portal.css",
+        "assets/docs-portal/starter/src/styles/portal.css",
+    ] {
+        let css = std::fs::read_to_string(root.join(path)).expect("portal styles are readable");
+        for (selector, role) in [
+            (".cf-title", "display"),
+            (".cf-lede", "lede"),
+            (".cf-main .sl-markdown-content h2", "h2"),
+            (".cf-main .sl-markdown-content h3", "h3"),
+            (
+                ".cf-main .sl-markdown-content :is(h2, .sl-heading-wrapper:has(> h2)) + p",
+                "lede",
+            ),
+        ] {
+            let body = rule(&css, selector);
+            assert!(
+                body.contains(&format!("font-size: var(--cf-fs-{role});")),
+                "{path} {selector} must size with --cf-fs-{role}: {body}"
+            );
+        }
+    }
+    let figure = read_kit("figure.css");
+    assert!(
+        rule(&figure, ".cf-fig-title")
+            .contains("font-size: max(15px, calc(15px * var(--cf-ui-scale, 1)));"),
+        "the figure title line sits on the 15px block title step"
+    );
+}
+
+/// The figure sheet's tones change hue only (rule 3): every tone rule sets
+/// fill or stroke from a tone role, and nothing else, so a toned mark keeps
+/// the kind, width, dash and shape its state draws with.
+#[test]
+fn figure_tones_change_hue_only() {
+    let figure = read_kit("figure.css");
+    let tone_rules: Vec<&str> = figure
+        .lines()
+        .filter(|line| line.starts_with("[data-cf-tone"))
+        .collect();
+    assert!(
+        tone_rules.len() >= 6,
+        "the figure sheet keys three tones and their marks"
+    );
+    for tone in ["accent", "cat1", "cat2"] {
+        assert!(
+            figure.contains(&format!("[data-cf-tone=\"{tone}\"] {{ --cf-fig-tone: var(--cf-fig-{tone}); --cf-fig-tone-soft: var(--cf-fig-{tone}-soft); }}")),
+            "tone {tone} maps to its ink and tint"
+        );
+    }
+    for line in tone_rules {
+        let body =
+            &line[line.find('{').expect("rule opens") + 1..line.rfind('}').expect("rule closes")];
+        for declaration in body
+            .split(';')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            let (property, value) = declaration.split_once(':').expect("a declaration");
+            assert!(
+                matches!(
+                    property.trim(),
+                    "fill" | "stroke" | "--cf-fig-tone" | "--cf-fig-tone-soft"
+                ) && value.trim().starts_with("var(--cf-fig-"),
+                "a tone rule may set only a hue from a figure role: {declaration}"
+            );
         }
     }
 }

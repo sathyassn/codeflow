@@ -112,7 +112,7 @@ test("two states that draw the same legend key are refused", async () => {
 // wrapped onto a second; the short extent control pins a narrow row whose
 // value sits under its label.
 test("the committed rendered specimens are what the grammar draws", async () => {
-  const controls = await Promise.all(["controls/coverage-derived.json", "controls/coverage-wrapped.json", "controls/extent-short.json"].map(async (name) => ({ name, declaration: await specimen(name) })));
+  const controls = await Promise.all(["controls/coverage-derived.json", "controls/coverage-wrapped.json", "controls/extent-short.json", "controls/layering-toned.json"].map(async (name) => ({ name, declaration: await specimen(name) })));
   for (const { name, declaration } of [...await specimens(), ...controls]) {
     const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
     const html = `${renderFigure(declaration, { idPrefix: "cf-fig-0", bound })}\n`;
@@ -165,6 +165,39 @@ test("declarations are refused where the grammar can tell without a browser", as
 // leave less than the minimum is refused before drawing, and a derived value
 // too long for the budget is refused when the figure is composed; the
 // narrow scale of anything drawn runs forwards, at least that wide.
+// Tones (TSK-444): a labelled peer may carry a companion hue and the
+// governing region the accent. The tone is written on the mark group, and on
+// the legend key only when every drawn mark of the state shares it; anything
+// that would let hue stand alone, or touch the governing path, is refused.
+test("a toned mark draws its tone and keys it only when its state shares one", async () => {
+  const base = (await specimens()).find(({ name }) => name === "03-layering.json").declaration;
+  const toned = structuredClone(base);
+  const label = (composition, text, id) => { composition.draw.find((item) => item.text === text).for = [id]; };
+  const tone = (composition, id, value) => { composition.draw.find((item) => item.id === id).tone = value; };
+  for (const [composition, labels] of [[toned.figure.wide, [["Git hooks", "m1"], ["Session git-guard", "m2"], ["CI", "m3"], ["Remote branch protection", "m4"]]], [toned.figure.narrow, [["Hooks", "l1"], ["Guard", "l2"], ["CI", "l3"], ["Remote", "l4"]]]]) {
+    for (const [text, id] of labels) label(composition, text, id);
+  }
+  tone(toned.figure.wide, "m1", "cat1");
+  tone(toned.figure.wide, "m3", "cat2");
+  tone(toned.figure.wide, "m4", "accent");
+  tone(toned.figure.narrow, "l4", "accent");
+  validateDeclaration(toned);
+  const html = renderFigure(toned, { idPrefix: "t" });
+  assert.match(html, /<g data-state="layer" id="t-enforcement-planes-wide-m1" data-cf-entity="m1" data-cf-entity-label="Git hooks" data-cf-tone="cat1">/);
+  assert.match(html, /<g data-state="layer" id="t-enforcement-planes-wide-m3" data-cf-entity="m3" data-cf-entity-label="CI" data-cf-tone="cat2">/);
+  assert.match(html, /<g data-state="layer" id="t-enforcement-planes-wide-m2" data-cf-entity="m2" data-cf-entity-label="Session git-guard">/);
+  assert.match(html, /<li data-state="layer-remote" data-cf-entity="legend-layer-remote" data-cf-entity-label="[^"]*" data-cf-tone="accent">/);
+  assert.match(html, /<li data-state="layer" data-cf-entity="legend-layer" data-cf-entity-label="[^"]*">/);
+  // An untoned figure draws exactly what it drew before tones existed.
+  assert.doesNotMatch(renderFigure(base, { idPrefix: "t" }), /data-cf-tone/);
+  const variant = (change) => { const copy = structuredClone(toned); change(copy.figure); return copy; };
+  for (const [change, expected] of [
+    [(figure) => { tone(figure.wide, "m2", "teal"); }, /tone must be one of accent, cat1, cat2/],
+    [(figure) => { tone(figure.wide, "m6", "cat1"); }, /tone cat1 goes only on the/],
+    [(figure) => { figure.wide.draw.find((item) => item.text === "Git hooks").for = undefined; }, /toned but no text item labels m1: hue is never alone/],
+  ]) assert.throws(() => validateDeclaration(variant(change)), expected);
+});
+
 test("an extent layout keeps a positive, usable plot width or is refused", async () => {
   const base = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
   const bound = (derived) => ({ source: base.figure.source, derived });
