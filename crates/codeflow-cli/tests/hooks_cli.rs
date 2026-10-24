@@ -10222,31 +10222,28 @@ fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
     for upgraded in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        ok(
+        let init = ok(
             env!("CARGO_BIN_EXE_codeflow"),
             root,
             &["init", "--yes", "--minimal"],
         );
+        assert!(!init.contains("not supported"), "{init}");
         ok("git", root, &["switch", "-c", "feat/policy-compatibility"]);
-        let policy_path = root.join(".codeflow/policy.json");
-        let mut policy: serde_json::Value = if upgraded {
-            // The pinned policy fixture is byte-identical to v3.1.0. The
-            // installed hooks are this build's; no released binary is mocked.
+        if upgraded {
+            // The pinned policy is byte-identical to v3.1.0. This build installs
+            // the hooks; the fixture does not stand in for a released binary.
             let old = include_str!("../../codeflow-core/tests/fixtures/policy-last-release.json");
             std::fs::write(root.join(".codeflow/.baseline/.codeflow/policy.json"), old).unwrap();
-            serde_json::from_str(old).unwrap()
-        } else {
-            serde_json::from_str(&std::fs::read_to_string(&policy_path).unwrap()).unwrap()
-        };
-        assert!(upgraded || policy["security"].get("script_bypass").is_none());
-        policy["security"]["script_bypass"] = serde_json::json!("block");
-        std::fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
-        if upgraded {
+            let mut policy: serde_json::Value = serde_json::from_str(old).unwrap();
+            policy["security"]["script_bypass"] = serde_json::json!("block");
+            policy["security"]["interpreter_scan"] = serde_json::json!("warn");
+            std::fs::write(
+                root.join(".codeflow/policy.json"),
+                serde_json::to_string_pretty(&policy).unwrap(),
+            )
+            .unwrap();
             let update = ok(env!("CARGO_BIN_EXE_codeflow"), root, &["update"]);
-            assert!(
-                update.contains("security.script_bypass is not supported, has no effect"),
-                "{update}"
-            );
+            assert_unsupported_notices(&update, true);
             eprintln!("updated from 3.1.0 policy: {update}");
         }
         // Exercise the real quick-gate runner with a small fixture target.
@@ -10259,10 +10256,14 @@ fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
             root,
             &["commit", "-m", "fix: preserve policy compatibility"],
         );
-        assert!(
-            commit.contains("security.script_bypass is not supported, has no effect"),
-            "{commit}"
+        // Doctor uses the local committed authority before the bare push
+        // destination, which has no default branch, is attached.
+        let doctor = ok(
+            env!("CARGO_BIN_EXE_codeflow"),
+            root,
+            &["doctor", "--check", "policy-source"],
         );
+        assert_unsupported_notices(&doctor, upgraded);
         answering_destination(root, "upstream");
         let push = ok(
             "git",
@@ -10273,10 +10274,17 @@ fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
                 "HEAD:refs/heads/feat/policy-compatibility",
             ],
         );
-        assert!(
-            push.contains("security.script_bypass is not supported, has no effect"),
-            "{push}"
-        );
+        for text in [&commit, &push] {
+            assert_eq!(text.contains("not supported"), upgraded, "{text}");
+            if upgraded {
+                for key in ["script_bypass", "interpreter_scan"] {
+                    assert!(
+                        text.contains(&format!("security.{key} is not supported, has no effect")),
+                        "{text}"
+                    );
+                }
+            }
+        }
         eprintln!("upgraded={upgraded}\ncommit:\n{commit}\npush:\n{push}");
         let remote = ok(
             "git",
@@ -10288,5 +10296,24 @@ fn unsupported_policy_fresh_and_updated_projects_commit_and_push() {
             ],
         );
         assert!(remote.starts_with(&rev(root, "HEAD")), "{remote}");
+    }
+}
+
+#[cfg(unix)]
+fn assert_unsupported_notices(text: &str, edited: bool) {
+    assert_eq!(
+        text.matches("not supported").count(),
+        if edited { 2 } else { 0 },
+        "{text}"
+    );
+    if edited {
+        for key in ["script_bypass", "interpreter_scan"] {
+            assert_eq!(
+                text.matches(&format!("security.{key} is not supported, has no effect"))
+                    .count(),
+                1,
+                "{text}"
+            );
+        }
     }
 }

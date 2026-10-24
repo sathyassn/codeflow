@@ -1045,6 +1045,23 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
     warnings
 }
 
+/// Claim an unsupported-key diagnostic before printing it. Repeated policy
+/// loads and multiple reporting paths share this process-wide set. Collection
+/// and validation stay pure, and a later load can still report a different key.
+/// Other diagnostic text is not deduplicated here.
+#[must_use]
+pub fn first_unsupported_warning(text: &str) -> bool {
+    static REPORTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if !text.starts_with("policy key ") || !text.ends_with(" is not supported, has no effect") {
+        return true;
+    }
+    REPORTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(text.to_string())
+}
+
 /// Compatibility diagnostics for controls with no enforcement reader.
 #[must_use]
 pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding> {
@@ -1609,9 +1626,13 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 5] = [
+        const OPTIONAL: [&str; 9] = [
             "git.pr_section_mapping",
             "git.release_branch_pattern",
+            "git.clean_regenerable",
+            "security.interpreter_scan",
+            "security.enforcement_baseline",
+            "security.workflow_pushes",
             "security.script_bypass",
             "security.sandbox_retry",
             "security.sandbox_retry_allow",

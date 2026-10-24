@@ -72,7 +72,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.discard_uncommitted` | Level | `block` | off \| warn \| allow \| block | Commands in an agent session that discard locally unique uncommitted work (ADR-0075). | Default block. The in-session guard judges it; a human terminal and the git hooks are unaffected. |
-| `git.clean_regenerable` | string list | `["target/","node_modules/","dist/","build/",".venv/","__pycache__/","coverage/"]` | an array of directory paths, each ending with `/` | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `git.clean_regenerable` | string list | `absent` | an array of directory paths, each ending with `/` | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 
 ## Security keys
 
@@ -83,10 +83,10 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.headless_peer_runs` | Level | `block` | off \| warn \| allow \| block | Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate). | Default block (ADR-0075 D4): a project that needs a headless run sets security.headless_peer_runs to warn or off. `codeflow update` moves a project still at the old warn default to block. |
 | `security.script_bypass` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
-| `security.interpreter_scan` | Level | `block` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `security.interpreter_scan` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
-| `security.enforcement_baseline` | Level | `block` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
-| `security.workflow_pushes` | enum | `queue` | queue \| allow | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `security.enforcement_baseline` | Level | `absent` | off \| warn \| allow \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
+| `security.workflow_pushes` | enum | `absent` | queue \| allow | Not supported, has no effect. Accepted only for compatibility with older policy files. | No enforcement code reads this key. Existing guard rules apply independently of its value. |
 | `security.sandbox_retry` | enum | `absent` | allowlist \| block | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 | `security.sandbox_retry_allow` | entry list | `absent` | an array of entry objects, each naming its `program` | Not supported, has no effect. Accepted only for compatibility with older policy files. | There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value. |
 
@@ -106,7 +106,7 @@ does not add protection. Hooks warn when these keys are present, and
 `codeflow doctor` reports them. Valid legacy values remain accepted;
 invalid types and values still fail policy validation.
 
-The shipped policy and built-in defaults omit these three keys. `codeflow
+The shipped policy and built-in defaults omit these keys. `codeflow
 update` removes a value only when it matches the recorded shipped baseline.
 An edited value, or a value with no recorded baseline, stays and is warned
 about. The legacy retry entries have no effect, including their placeholder
@@ -114,9 +114,10 @@ digests; they do not authorize an unsandboxed retry.
 
 The reader contract also identifies `git.clean_regenerable`,
 `security.interpreter_scan`, `security.enforcement_baseline` and
-`security.workflow_pushes` as unsupported. Their retained values do not
-configure the existing guards. The table above labels every unsupported key.
-
+`security.workflow_pushes` as unsupported. These four keys are also omitted
+from shipped and built-in defaults and follow the same update rules. Retained
+values do not configure the existing guards. Each key warns once per process.
+The table above labels every unsupported key.
 
 ## Planning amendment paths
 

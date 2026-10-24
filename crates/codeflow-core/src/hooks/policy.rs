@@ -437,7 +437,8 @@ pub struct GitPolicy {
     /// Default `block`.
     pub discard_uncommitted: PolicyLevel,
     /// Unsupported legacy key; discard checks do not read this list.
-    pub clean_regenerable: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clean_regenerable: Option<Vec<String>>,
 }
 
 thread_local! {
@@ -579,18 +580,7 @@ impl Default for GitPolicy {
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
             discard_uncommitted: PolicyLevel::Block,
-            clean_regenerable: [
-                "target/",
-                "node_modules/",
-                "dist/",
-                "build/",
-                ".venv/",
-                "__pycache__/",
-                "coverage/",
-            ]
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            clean_regenerable: None,
         }
     }
 }
@@ -770,13 +760,16 @@ pub struct SecuritySection {
     /// Default `block`.
     pub outward_actions: PolicyLevel,
     /// Unsupported legacy key; interpreter checks do not read this level.
-    pub interpreter_scan: PolicyLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter_scan: Option<PolicyLevel>,
     /// Shell reads of the secret stores (TSK-172). Default `block`.
     pub secret_reads: PolicyLevel,
     /// Unsupported legacy key; landed-policy checks do not read this level.
-    pub enforcement_baseline: PolicyLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement_baseline: Option<PolicyLevel>,
     /// Unsupported legacy key; workflow push checks do not read this value.
-    pub workflow_pushes: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_pushes: Option<String>,
     /// Unsupported legacy key; accepted values have no effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_retry: Option<String>,
@@ -793,10 +786,10 @@ impl Default for SecuritySection {
             headless_peer_runs: PolicyLevel::Block,
             script_bypass: None,
             outward_actions: PolicyLevel::Block,
-            interpreter_scan: PolicyLevel::Block,
+            interpreter_scan: None,
             secret_reads: PolicyLevel::Block,
-            enforcement_baseline: PolicyLevel::Block,
-            workflow_pushes: "queue".to_string(),
+            enforcement_baseline: None,
+            workflow_pushes: None,
             sandbox_retry: None,
             sandbox_retry_allow: None,
         }
@@ -894,7 +887,10 @@ impl Policy {
     /// Policy or project configuration cannot be read.
     pub fn load_effective(root: &Path) -> Result<(Self, bool), String> {
         let mut policy = Self::load(root)?;
-        for warning in super::policy_schema::deprecation_warnings(root) {
+        for warning in super::policy_schema::deprecation_warnings(root)
+            .into_iter()
+            .filter(|warning| super::policy_schema::first_unsupported_warning(&warning.text))
+        {
             eprintln!("{}", warning.line("codeflow policy", "warning"));
         }
         let armed = effective_armed(root)?;
@@ -1222,15 +1218,12 @@ mod tests {
         assert_eq!(s.privilege_escalation, PolicyLevel::Block);
         assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
         assert!(s.script_bypass.is_none());
-        for level in [
-            s.outward_actions,
-            s.interpreter_scan,
-            s.secret_reads,
-            s.enforcement_baseline,
-        ] {
+        for level in [s.outward_actions, s.secret_reads] {
             assert_eq!(level, PolicyLevel::Block);
         }
-        assert_eq!(s.workflow_pushes, "queue");
+        assert!(s.interpreter_scan.is_none());
+        assert!(s.enforcement_baseline.is_none());
+        assert!(s.workflow_pushes.is_none());
         assert!(s.sandbox_retry.is_none());
         assert!(s.sandbox_retry_allow.is_none());
     }

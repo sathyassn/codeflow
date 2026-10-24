@@ -1243,7 +1243,7 @@ fn key_change_note(key: &str) -> String {
     }
 }
 
-/// Remove an unsupported security key only when its value matches the
+/// Remove an unsupported policy key only when its value matches the
 /// recorded shipped baseline. Without that evidence, preserve the value.
 fn remove_unsupported_defaults(
     user: &mut serde_json::Value,
@@ -1254,7 +1254,7 @@ fn remove_unsupported_defaults(
     let mut removed = Vec::new();
     for spec in schema()
         .iter()
-        .filter(|spec| spec.path.starts_with("security.") && spec.is_unsupported())
+        .filter(|spec| spec.path.contains('.') && spec.is_unsupported())
     {
         let previous = old.and_then(|value| lookup(value, spec.path));
         if previous.is_some()

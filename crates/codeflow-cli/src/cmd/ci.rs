@@ -253,7 +253,10 @@ fn policy_verifiable(root: &Path) -> bool {
         report_invalid_policy(&errors);
         return false;
     }
-    for warning in policy_schema::deprecation_warnings(root) {
+    for warning in policy_schema::deprecation_warnings(root)
+        .into_iter()
+        .filter(|warning| policy_schema::first_unsupported_warning(&warning.text))
+    {
         eprintln!("{}", warning.line("codeflow ci", "warning"));
     }
     true

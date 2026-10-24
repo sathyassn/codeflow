@@ -239,14 +239,6 @@ fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<Stri
 fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>), String> {
     let read = |path: &str| read_at(repo, reference, path);
     let policy_text = read(".codeflow/policy.json")?;
-    if let Some(value) = policy_text
-        .as_deref()
-        .and_then(policy_schema::parse_lenient)
-    {
-        for warning in policy_schema::unsupported_control_warnings(&value) {
-            eprintln!("{}", warning.line("codeflow policy", "warning"));
-        }
-    }
     let policy = policy_text
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
         .map_err(|e| {

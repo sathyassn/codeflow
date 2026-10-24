@@ -406,6 +406,10 @@ fn update_removes_unsupported_defaults_and_keeps_edited_values() {
         let path = project.path().join(".codeflow/policy.json");
         let mut before: Value = serde_json::from_str(&read(&path)).unwrap();
         if edited {
+            before["git"]["clean_regenerable"] = serde_json::json!(["custom/"]);
+            before["security"]["interpreter_scan"] = serde_json::json!("warn");
+            before["security"]["enforcement_baseline"] = serde_json::json!("warn");
+            before["security"]["workflow_pushes"] = serde_json::json!("allow");
             before["security"]["script_bypass"] = serde_json::json!("block");
             before["security"]["sandbox_retry"] = serde_json::json!("block");
             before["security"]["sandbox_retry_allow"] = serde_json::json!([]);
@@ -418,20 +422,35 @@ fn update_removes_unsupported_defaults_and_keeps_edited_values() {
         };
         scaffold::update(&current, project.path(), &options).unwrap();
         let after: Value = serde_json::from_str(&read(&path)).unwrap();
-        for key in ["script_bypass", "sandbox_retry", "sandbox_retry_allow"] {
+        for key in [
+            "script_bypass",
+            "sandbox_retry",
+            "sandbox_retry_allow",
+            "interpreter_scan",
+            "enforcement_baseline",
+            "workflow_pushes",
+        ] {
             if edited {
                 assert_eq!(after["security"][key], before["security"][key]);
             } else {
                 assert!(after["security"].get(key).is_none(), "{key}: {after}");
             }
         }
+        if edited {
+            assert_eq!(
+                after["git"]["clean_regenerable"],
+                before["git"]["clean_regenerable"]
+            );
+        } else {
+            assert!(after["git"].get("clean_regenerable").is_none());
+        }
         let warnings = codeflow_core::hooks::policy_schema::deprecation_warnings(project.path());
         assert_eq!(
             warnings
                 .iter()
-                .filter(|w| w.text.contains("script_bypass") || w.text.contains("sandbox_retry"))
+                .filter(|w| w.text.contains("not supported"))
                 .count(),
-            if edited { 3 } else { 0 },
+            if edited { 7 } else { 0 },
             "{warnings:?}"
         );
         // A refreshed baseline must not erase the edited values on a later run.
@@ -441,14 +460,22 @@ fn update_removes_unsupported_defaults_and_keeps_edited_values() {
 }
 
 #[test]
-fn unsupported_script_and_retry_defaults_are_absent() {
+fn unsupported_policy_defaults_are_absent() {
     let shipped: Value =
         serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
     let defaults = codeflow_core::hooks::policy_schema::default_policy_value();
     for value in [&shipped, &defaults] {
-        for key in ["script_bypass", "sandbox_retry", "sandbox_retry_allow"] {
+        for key in [
+            "script_bypass",
+            "sandbox_retry",
+            "sandbox_retry_allow",
+            "interpreter_scan",
+            "enforcement_baseline",
+            "workflow_pushes",
+        ] {
             assert!(value["security"].get(key).is_none(), "{key}: {value}");
         }
+        assert!(value["git"].get("clean_regenerable").is_none());
         assert!(!value.to_string().contains("<sha256"));
     }
 }

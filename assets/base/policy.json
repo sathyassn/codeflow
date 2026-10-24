@@ -46,17 +46,13 @@
     "test_gate_on_push": "block",
     "security_review": "warn",
     "dep_audit": "warn",
-    "discard_uncommitted": "block",
-    "clean_regenerable": ["target/", "node_modules/", "dist/", "build/", ".venv/", "__pycache__/", "coverage/"]
+    "discard_uncommitted": "block"
   },
   "security": {
     "dangerous_commands": "block",
     "privilege_escalation": "block",
     "headless_peer_runs": "block",
     "outward_actions": "block",
-    "interpreter_scan": "block",
-    "secret_reads": "block",
-    "enforcement_baseline": "block",
-    "workflow_pushes": "queue"
+    "secret_reads": "block"
   }
 }

@@ -237,8 +237,10 @@ fn unsupported_security_keys_warn_in_hooks_and_doctor_without_disabling_hooks() 
                 String::from_utf8_lossy(&out.stderr)
             );
             assert!(out.status.success(), "{key}: {args:?}: {text}");
-            assert!(
-                text.contains(&format!("security.{key} is not supported, has no effect")),
+            assert_eq!(
+                text.matches(&format!("security.{key} is not supported, has no effect"))
+                    .count(),
+                1,
                 "{args:?}: {text}"
             );
         }
@@ -280,5 +282,35 @@ fn unsupported_security_keys_still_refuse_invalid_values() {
         assert!(!out.status.success(), "{key}: {text}");
         assert!(text.contains(&format!("security.{key}")), "{text}");
         assert!(text.contains("policy error"), "{text}");
+    }
+}
+
+#[test]
+fn repeated_policy_loads_report_each_unsupported_key_once() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    write_policy(
+        dir.path(),
+        r#"{"security":{"script_bypass":"block","interpreter_scan":"warn"}}"#,
+    );
+    let out = run_in(
+        dir.path(),
+        &[
+            "ci", "--base", "HEAD", "--head", "HEAD", "--branch", "feat/x",
+        ],
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{text}");
+    for key in ["script_bypass", "interpreter_scan"] {
+        assert_eq!(
+            text.matches(&format!("security.{key} is not supported, has no effect"))
+                .count(),
+            1,
+            "{text}"
+        );
     }
 }
