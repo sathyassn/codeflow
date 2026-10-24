@@ -456,9 +456,28 @@ class GatePartControls(unittest.TestCase):
 
     def test_a_target_no_part_names_is_refused(self):
         self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
-                            "no gate part or coverage job runs", "read-benchmark")
-        self.assert_problem(WORKFLOW.replace(",journey-python\n", "\n"),
-                            "no gate part or coverage job runs", "journey-python")
+                            "no gate part, release part or coverage job runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-python,", ","),
+                            "no gate part, release part or coverage job runs", "journey-python")
+
+    def test_release_tier_targets_run_only_in_the_release_job(self):
+        # TSK-449 AC-4: the four release-tier targets leave the hosted
+        # landing gate; a target neither the landing gate nor the release
+        # path runs is refused, and so is a release job on landing events.
+        landing = parity.workflow_jobs(WORKFLOW)["gates"]
+        release = parity.workflow_jobs(WORKFLOW)["gates-release"]
+        for name in parity.RELEASE_TARGETS:
+            self.assertNotIn(name, landing)
+            self.assertIn(name, release)
+        self.assertNotIn("integration/", re.search(r"^ {4}if:\s*(.+?)\s*$", release, re.M).group(1))
+        self.assert_problem(WORKFLOW.replace("only: present-browser,present-binary-delta", "only: present-browser"),
+                            "no gate part, release part or coverage job runs", "present-binary-delta")
+        self.assert_problem(WORKFLOW.replace("only: present-supply-chain,cf-present-qualification",
+                                             "only: present-supply-chain,cf-present-qualification,read-benchmark"),
+                            "landing gate parts name release-tier targets")
+        self.assert_problem(WORKFLOW.replace(parity.RELEASE_IF, parity.RELEASE_IF.replace(
+            "github.event_name == 'schedule'", "github.event_name == 'pull_request' || github.event_name == 'schedule'")),
+                            "gates-release job's condition")
 
     def test_a_new_full_mode_target_must_join_a_part(self):
         def add(c):
@@ -489,9 +508,9 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -508,12 +527,12 @@ class GatePartControls(unittest.TestCase):
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
-                '[ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]',
+                '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
             "a reuse that needs only the parts skipped": WORKFLOW.replace(
-                '[ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
+                '[ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -618,7 +637,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -645,14 +664,23 @@ class VerdictOutcomeControls(unittest.TestCase):
     when all succeeded or the reuse decision named a run and all were
     skipped. Each case runs the committed script in bash."""
 
-    def verdict(self, parts, shards, report, reuse="skipped", reused=""):
+    def verdict(self, parts, shards, report, reuse="skipped", reused="", release="skipped"):
         env = {"PATH": os.environ.get("PATH", ""), "PARTS": parts, "SHARDS": shards, "REPORT": report,
+               "RELEASE": release,
                "REUSE": reuse, "REUSED": reused, "GITHUB_SERVER_URL": "https://github.com",
                "GITHUB_REPOSITORY": "sathyassn/codeflow"}
         return subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True).returncode
 
     def test_it_passes_only_when_every_job_passed(self):
         self.assertEqual(self.verdict("success", "success", "success"), 0)
+
+    def test_the_release_parts_pass_when_run_or_skipped_and_fail_otherwise(self):
+        # TSK-449 AC-4: the release parts are skipped by their own condition
+        # on a landing pull request; a failed or cancelled run fails.
+        for release in ("success", "skipped"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 0, release)
+        for release in ("failure", "cancelled"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 1, release)
 
     def test_a_failed_cancelled_or_skipped_job_fails_it(self):
         for outcome in ("failure", "cancelled", "skipped"):

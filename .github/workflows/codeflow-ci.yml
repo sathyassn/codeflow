@@ -143,26 +143,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Exclusive: the benchmark times reads, so it runs alone.
-          # visual-eval-controls sits here to balance the parts. Both portal
-          # targets require docs-portal-deps, the one target that runs
-          # `npm ci` for docs-portal, so a part installs it once (gate-parity
-          # refuses a second installer).
-          - part: benchmark
-            only: read-benchmark,visual-eval-controls
-          # The prose exemption's two exhaustive checks (TSK-233): every
-          # certified line in real shells and the full differential against
-          # the 3.0.0 verdicts. The target sets CODEFLOW_ORACLE_FULL; quick
-          # mode and the coverage run keep the sampled default.
-          - part: prose
-            only: prose-exhaustive
+          # The hosted landing gate (TSK-449). The four release-tier
+          # targets run in the gates-release job below.
           - part: present
-            only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
+            only: present-supply-chain,cf-present-qualification
           # The journey gate's Python journeys need no test results, so they
           # run here; the coverage report job reads the Rust journeys from
-          # the shards' results (TSK-270).
+          # the shards' results (TSK-270). Both portal targets and
+          # visual-eval-controls require docs-portal-deps, the one target
+          # that runs `npm ci` for docs-portal, so this part installs it once.
           - part: checks
-            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,skill-triggers,herdr-delivery,docs-validation,docs-portal,docs-portal-windows,journey-python,visual-eval-controls
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -183,6 +174,109 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.part }}-v1
+      # Each Node target pins its version in a version file, and the full
+      # gate runs it through scripts/with-node.py, which finds that version
+      # here in the tool cache (TSK-142). gate-parity holds these pins to
+      # the version files. The later setup is first on PATH.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: docs-portal/package-lock.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 26.4.0
+          cache: npm
+          cache-dependency-path: crates/codeflow-present/web/package-lock.json
+
+      - name: Install exact npm for the owned presentation renderer
+        run: npm install --global npm@11.17.0
+
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
+        run: |
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
+
+      # What adopters get passes their secret scan (TSK-206): fresh scaffolds
+      # of every tier from the binary just built, and the adopter CI
+      # template's own gitleaks step, with the pinned gitleaks.
+      - name: Scaffold secret scan
+        if: matrix.part == 'checks'
+        run: |
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+
+      # The Linux candidate has one full gate, split into the parts above and
+      # the coverage jobs below. Windows independently runs raw Rust checks;
+      # Unix-only journeys and the read benchmark remain Linux-only. No part
+      # runs the instrumented suite now; the profile name would keep its
+      # profiles small if one did (see the coverage shards).
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+
+  # The release-tier parts of the full gate (TSK-449): the exhaustive
+  # prose oracle, the read benchmark and the present browser and
+  # binary-delta checks. They run on ready pull requests into main or
+  # master (the release candidate), pushes to main or master, the weekly
+  # schedule and manual runs, never on a pull request into integration/**:
+  # the hosted landing gate is the gates job above. A local
+  # `codeflow test --mode full` still runs them, since the test config has
+  # no tier between full and the schedule. scripts/gate-parity.py refuses a
+  # full-mode target that neither job nor the coverage jobs run.
+  gates-release:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/master"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow gates (release ${{ matrix.part }})
+    needs: [reuse, gates-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Exclusive: the benchmark times reads, so it runs alone.
+          - part: benchmark
+            only: read-benchmark
+          # The prose exemption's two exhaustive checks (TSK-233): every
+          # certified line in real shells and the full differential against
+          # the 3.0.0 verdicts. The target sets CODEFLOW_ORACLE_FULL; quick
+          # mode and the coverage run keep the sampled default.
+          - part: prose
+            only: prose-exhaustive
+          - part: present
+            only: present-browser,present-binary-delta
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # This repo IS codeflow, so it builds the binary from source rather than
+      # using the release installer a consumer project would. These gates block.
+      # The toolchain is pinned in rust-toolchain.toml (the single source of
+      # truth rustup honors locally and here); installing from it means a
+      # floating stable clippy cannot break CI out from under a green local run.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # Each part builds different things (debug, test and benchmark
+      # builds), so each keeps its own cache. A cache is saved only under a
+      # new key, so the key changes
+      # when what a part keeps in target/ changes: v1 holds the binary-delta
+      # check's build, now named by the locked dependencies (TSK-270).
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-${{ matrix.part }}-v1
       # Each Node target pins its version in a version file, and the full
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
@@ -276,20 +370,6 @@ jobs:
         run: |
           chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
           echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
-
-      # What adopters get passes their secret scan (TSK-206): fresh scaffolds
-      # of every tier from the binary just built, and the adopter CI
-      # template's own gitleaks step, with the pinned gitleaks.
-      - name: Scaffold secret scan
-        if: matrix.part == 'checks'
-        run: |
-          GITLEAKS_VERSION=8.30.1
-          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
-          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
-          sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
 
       # The exhaustive prose oracle runs real zsh as well as bash.
       - name: Install zsh for the prose oracle
@@ -458,7 +538,7 @@ jobs:
   gates-verdict:
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: codeflow gates
-    needs: [reuse, gates, gates-coverage, gates-coverage-report]
+    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -466,12 +546,13 @@ jobs:
         shell: bash
         env:
           PARTS: ${{ needs.gates.result }}
+          RELEASE: ${{ needs.gates-release.result }}
           SHARDS: ${{ needs.gates-coverage.result }}
           REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
         run: |
-          if [ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
+          if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
             exit 0
           fi
@@ -481,6 +562,12 @@ jobs:
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${PARTS} coverage shards=${SHARDS} coverage report=${REPORT}; see the codeflow gates jobs"
+            exit 1
+          fi
+          # The release parts run only on the release path; elsewhere their
+          # job is skipped by its own condition, never by a failure.
+          if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
+            echo "::error::the release parts concluded ${RELEASE}; see the codeflow gates (release) jobs"
             exit 1
           fi
           echo "every part of the full gate passed"

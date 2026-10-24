@@ -174,6 +174,34 @@ class GateContracts(unittest.TestCase):
         self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
         self.assertNotIn('pull_request.head.ref', step)
 
+    def test_release_tier_targets_leave_the_hosted_landing_gate(self):
+        # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
+        # present-binary-delta run in gates-release, which runs on the release
+        # candidate (a pull request into main or master), pushes to main or
+        # master, the weekly schedule and manual runs, and never on a pull
+        # request into integration/**. The landing gate parts name none of them.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        release_targets = ('prose-exhaustive', 'read-benchmark', 'present-browser', 'present-binary-delta')
+        def named(job):
+            return {n for line in re.findall(r'^\s*only:\s*(\S+)$', jobs[job], re.M) for n in line.split(',')}
+        self.assertFalse(set(release_targets) & named('gates'))
+        self.assertEqual(named('gates-release'), set(release_targets))
+        condition = re.search(r'^    if: (.+)$', jobs['gates-release'], re.M).group(1)
+        self.assertNotIn('integration/', condition)
+        self.assertIn("contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref)", condition)
+        for event in ("github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'"):
+            self.assertIn(event, condition)
+        self.assertIn('    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n',
+                      jobs['gates-verdict'])
+        # The local full gate keeps them: the test config still gives them a
+        # full mode, since a schedule tier would change the adopter schema.
+        config = json.loads(read('.codeflow/test-config.json'))
+        modes = {t['name']: set(t['modes']) for t in config['targets']}
+        for name in release_targets:
+            self.assertEqual(modes[name], {'full'}, name)
+
     def test_the_release_binary_is_built_once_and_windows_skips_fmt(self):
         # TSK-449 AC-5: one release build per workflow, shared by every gate
         # part; Windows runs clippy, doctests, rustdoc and the partitions,
