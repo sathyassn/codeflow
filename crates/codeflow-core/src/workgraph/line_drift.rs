@@ -69,7 +69,8 @@ pub fn read(root: &Path, remote: Option<&str>) -> Result<Vec<LineDrift>, String>
         .map_err(|e| e.to_string())?;
     refs.into_iter()
         .map(|reference| {
-            let name = reference.name().map_err(|e| e.to_string())?;
+            let reference_name = crate::git::name::reference_name(&reference);
+            let name = reference_name.rule_text().map_err(|e| e.to_string())?;
             let line = name
                 .strip_prefix(&prefix)
                 .ok_or("integration ref outside its namespace")?;
@@ -96,7 +97,8 @@ fn target_reference(
         match repo.find_reference(&format!("{prefix}HEAD")) {
             Ok(reference) => {
                 let resolved = reference.resolve().map_err(|e| e.to_string())?;
-                let name = resolved.name().map_err(|e| e.to_string())?;
+                let reference_name = crate::git::name::reference_name(&resolved);
+                let name = reference_name.rule_text().map_err(|e| e.to_string())?;
                 if !name.starts_with(prefix) {
                     return Err("remote HEAD points outside its tracking namespace".into());
                 }

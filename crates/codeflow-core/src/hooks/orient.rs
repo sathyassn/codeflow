@@ -199,10 +199,10 @@ fn append_line_drift(
 
 fn append_open_epics(root: &Path, out: &mut crate::git::TextBlock) {
     let pm = root.join("project-management");
-    if !pm.is_dir() {
-        return;
-    }
     let result = (|| {
+        if crate::absence::proven_absent(&pm).map_err(|e| e.to_string())? {
+            return Ok(());
+        }
         let store = MarkdownStore::new(&pm).map_err(|e| e.to_string())?;
         let epics = store
             .list_epics(EpicFilter::default())

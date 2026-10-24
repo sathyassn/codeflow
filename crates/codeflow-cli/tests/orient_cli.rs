@@ -328,6 +328,16 @@ fn open_epics_count_each_claimed_task_once() {
 }
 
 #[test]
+fn non_directory_work_records_are_reported_without_failing_the_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path(), now());
+    write(dir.path(), "project-management", "not a directory");
+    commit(dir.path(), "invalid work records", now());
+    let output = run(dir.path(), false);
+    assert!(output.contains("open epics unavailable:"), "{output}");
+}
+
+#[test]
 fn orient_fetches_at_most_once() {
     let source = tempfile::tempdir().unwrap();
     let clone = tempfile::tempdir().unwrap();
