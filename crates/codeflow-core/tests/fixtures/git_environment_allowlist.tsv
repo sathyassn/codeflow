@@ -39,9 +39,6 @@ crates/codeflow-cli/tests/hooks_cli.rs	"git ship $[GIT_CONFIG_COUNT=1]"	1	Inert 
 crates/codeflow-cli/tests/hooks_cli.rs	"git zz $[GIT_CONFIG_COUNT=1]"	1	Inert arithmetic guard regression input; parsed by hooks only, never executed as a shell command.
 crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_COUNT,X}=1 {GIT_CONFIG_KEY_0,Y}=alias.ship {GIT_CONFIG_VALUE_0,Z}='push origin v9.9.9' git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
 crates/codeflow-cli/tests/hooks_cli.rs	"{GIT_CONFIG_PARAMETERS,X}=\"'alias.ship=push origin v9.9.9'\" git ship"	1	Inert guard regression input; parsed by hooks only, never executed as a shell command.
-crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_COUNT","1")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
-crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_KEY_0","core.sparseCheckout")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
-crates/codeflow-cli/tests/hooks_cli.rs	env("GIT_CONFIG_VALUE_0","true")	1	TSK-304 regression deliberately injects sparse-checkout configuration into only the hook child; judging reads must remove it.
 crates/codeflow-cli/tests/hooks_cli.rs	env(key,value)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.
 crates/codeflow-cli/tests/hooks_cli.rs	env(variable,&parent)	1	TSK-283 doctor probes a temporary global or system include file; the child only reads configuration and performs no Git mutation.
 crates/codeflow-cli/tests/hooks_cli.rs	env_remove(key)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.

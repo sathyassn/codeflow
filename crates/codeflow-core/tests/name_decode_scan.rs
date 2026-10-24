@@ -2090,15 +2090,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Reads NUL-separated index entries and LF-separated submodule status records;
-    // the unchanged leading status byte decides incompleteness in both formats.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-        "split_terminator",
-        2,
-        "framing:index-and-submodule-status-records",
-    ),
     // Formats already-emitted finding text only, without establishing guard verdicts or rewriting operands.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -5837,11 +5828,6 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "shell-quotes",
         "crates/codeflow-core/src/hooks/git_guard.rs",
         "shell_words",
-    ),
-    (
-        "index-and-submodule-status-records",
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
     ),
     (
         "template-placeholder-lines",
