@@ -2716,14 +2716,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Formats or bounds orientation prose (product summary or ADR titles); no command or filesystem routing uses the normalized text.
-    (
-        "crates/codeflow-core/src/hooks/orient.rs",
-        "generate",
-        "lines",
-        1,
-        "display",
-    ),
     // Compares the fixed hooks-version marker; mismatch only produces an orientation warning.
     (
         "crates/codeflow-core/src/hooks/orient.rs",
