@@ -335,7 +335,7 @@ fn referenced_doctrine_keeps_every_moved_duty() {
             ),
             (
                 "independent review",
-                "Review verdicts require `cf-reviewer`",
+                "This is the one statement of when `cf-reviewer` runs.",
             ),
             (
                 "input trust boundary",
@@ -1033,7 +1033,8 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "every finding recorded",
-                "every finding from every review, material and minor, is recorded in the PR body as finding, severity, disposition and evidence",
+                // TSK-452: findings live in one record linked from the PR.
+                "every finding from every review, material and minor, is recorded in the one findings record linked from the PR's review row (the reviewer's verdict) as finding, severity, disposition and evidence",
             ),
             (
                 "minor findings recorded",
@@ -2243,11 +2244,11 @@ fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
         &[
             (
                 "class covered",
-                "For a reported defect, require the fix to cover its class, not one site, with the sweep recorded",
+                "For a reported defect, require the fix to cover its class, not one site, with the sweep recorded, each site with file:line",
             ),
             (
                 "re-diagnosis",
-                "a new instance of the class found in review sends the unit back to design (`cf-method/references/issue-handling.md`)",
+                "a new instance of the class found in review sends the unit back to the sweep and its design (`cf-method/references/issue-handling.md`)",
             ),
         ],
     );
@@ -3028,12 +3029,12 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
     (
         "assets/base/agents/skills/cf-editorial-review/SKILL.md",
         &[
-            "**Write plainly.** Everything an agent writes, replies and status updates included, is simple, straightforward, clear and unambiguous, with the detail the reader needs and no more. Avoid mannered prose, writing that performs for effect: slogans, \"not X but Y\" turns, rhetorical triplets, dramatic fragments, stacked hedges, colon reveals, self-narration, ceremonial framing and walls of text. State the fact directly, and check what a reader could take it to mean.",
-            "Default to short prose and bullets, and write long prose only when the reader asks for it or the artifact is prose by nature.",
-            "\"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
+            // TSK-452: the rule is stated in full once, in writing.md.
+            "Write every review and rewrite plainly:",
+            "That file is the one statement of the plain-writing rule, and \"Mannered prose\" in [references/editorial-smells.md](references/editorial-smells.md) lists each pattern with its plain rewrite.",
             "In a Markdown file (a README, doc, record or PR body) that form is fenced ASCII, and on a docs-portal page it is the portal's figure grammar.",
         ],
-        &[],
+        &["Everything an agent writes, replies and status updates included"],
     ),
     ("assets/base/agents/skills/cf-consult/SKILL.md", &["Write the synthesis plainly:"], &[]),
     (
@@ -3086,8 +3087,9 @@ const PLAIN_WRITING_SURFACES: &[(&str, &[&str], &[&str])] = &[
 ];
 
 /// The faults of one surface: a placing clause missing, a retired line
-/// kept, or the short form stated other than once (the full-form files
-/// state the rule in their own words and carry no short form).
+/// kept, or the short form stated other than once (`writing.md`, the one
+/// full form since TSK-452, states the rule in its own words and carries no
+/// short form).
 fn plain_writing_faults(path: &str, text: &str, placed: &[&str], retired: &[&str]) -> Vec<String> {
     let text = normalized(text);
     let mut faults = Vec::new();
@@ -3101,7 +3103,7 @@ fn plain_writing_faults(path: &str, text: &str, placed: &[&str], retired: &[&str
             faults.push(format!("{path} keeps {line:?}"));
         }
     }
-    let full_form = path.ends_with("rules/writing.md") || path.contains("cf-editorial-review");
+    let full_form = path.ends_with("rules/writing.md");
     let count = text.matches(PLAIN_SHORT_FORM).count();
     if !full_form && count != 1 {
         faults.push(format!("{path} states the short form {count} times"));

@@ -1021,7 +1021,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "the design options and recommendation, or the recorded constraint when the brief already dictates one clear direction",
         "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
         "The Claude judgment primary owns integrated Claude judgment.",
-        "they do not replace the required other-lineage review or primary judgment.",
+        "Same-family passes do not replace the required other-lineage review or primary judgment.",
         "separate interactive Claude session in auto mode under the same fail-closed sandbox (not plan or bypass mode)",
     ] {
         assert!(
@@ -1346,7 +1346,8 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
         "HOTSPOT_OWNER:",
         "CONCURRENCY_CAP:",
         "one writer, branch and worktree per task",
-        "one full gate runs on that exact candidate before the integration line moves",
+        // TSK-452: batch landing is stated once, in cf-method.
+        "Reviewed task heads land as the `cf-method` skill's \"Managing a body of work\" states",
         "Both seats grade design proportionality before approval",
         "smallest coherent solution",
         "Material avoidable complexity is `changes_requested`",
@@ -1789,13 +1790,13 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D23 conflict", "Conflicting remedies are investigated against the mechanism, the impact evidence and the accepted contract.", TSK131_FINDINGS),
     ("D23 escalation", "One consolidated decision goes to the operator in the departure form under [blocker navigation](blockers-and-gates.md) only when resolution needs operator-owned intent, authority or risk acceptance.", TSK131_FINDINGS),
     ("D23 one cycle", "Apply the accepted batch as one apply-and-verify cycle (stacked dependents from Change impact stay separate) and re-verify the impact set.", TSK131_FINDINGS),
-    // Issue 121: a fix is confirmed inside the finder's next whole-unit pass;
-    // the probe rerun is the one pass that is not a round, and its home is
-    // the discipline file every tier installs.
-    ("D23 re-review", "The finder confirms each material fix inside its next pass, as \"Review verdicts\" in `.codeflow/rules/workflow-discipline.md` says.", TSK131_FINDINGS),
-    ("D23 re-review home", "The finder confirms each material fix inside its next pass, a round over the whole unit at the new head;", TSK131_DISCIPLINE),
-    ("D23 probe rerun", "a small fix whose finding came with a failing probe is confirmed by rerunning that probe and the affected tests", TSK131_DISCIPLINE),
-    ("D23 not a round", "that rerun is the one pass that is not a round", TSK131_DISCIPLINE),
+    // Issue 121, revised by TSK-452: the finder confirms a fix on the delta
+    // between review stages; the probe rerun needs no model turn, and its
+    // home is the discipline file every tier installs.
+    ("D23 re-review", "The finder confirms each material fix on the delta, as \"Review verdicts\" in `.codeflow/rules/workflow-discipline.md` says.", TSK131_FINDINGS),
+    ("D23 re-review home", "Between stages the finder confirms each material fix on the delta plus the affected tests;", TSK131_DISCIPLINE),
+    ("D23 probe rerun", "a small fix whose finding came with a failing probe is confirmed by rerunning that probe and those tests", TSK131_DISCIPLINE),
+    ("D23 not a round", "confirmed by rerunning that probe and those tests, with no model turn", TSK131_DISCIPLINE),
     ("D23 failed cycle", "A cycle that introduces an attributable regression is a failed cycle.", TSK131_FINDINGS),
     ("D23 gates unchanged", "The required gates and the [completion](completion.md) section are unchanged.", TSK131_FINDINGS),
     // TSK-184 removed the cycle cap (change list WP3 findings row, WP4
@@ -1803,7 +1804,7 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D23 progress", "Continue while repairs produce relevant evidence; diagnose a stalled mechanism, an invalid assumption or a materially changed scope", TSK131_FINDINGS),
     ("D23 strategic", "then split, redesign or take the intent question to the operator. That decision is never made by a round counter and never by automatic acceptance.", TSK131_FINDINGS),
     ("D23 develop", "No cycle count decides: continue while repairs produce relevant evidence", TSK131_DEVELOP),
-    ("D23 develop owner", "act on the round's findings as `cf-model-orchestrator/resources/quality/findings.md` sets out", TSK131_DEVELOP),
+    ("D23 develop owner", "act on the findings as `cf-model-orchestrator/resources/quality/findings.md` sets out", TSK131_DEVELOP),
     ("D23 eval kit", "\"diagnose a stalled mechanism, an invalid assumption or a materially changed scope\"", TSK131_EVAL_REQUIREMENTS),
 ];
 
@@ -1842,12 +1843,10 @@ fn holistic_fix_pins_fail_when_a_duty_is_deleted() {
 #[test]
 fn working_method_rounds_agree_across_the_shipped_skills() {
     let findings = normalize_whitespace(&read(TSK131_FINDINGS));
-    // TSK-184: one holistic pass per revision, finder confirmation, no round
-    // or cycle cap.
+    // TSK-184: no round or cycle cap. TSK-452: the cadence and the finder's
+    // confirmation are stated once in "Review verdicts"; findings points there.
     for required in [
-        "Review is one holistic pass per revision: every assigned reviewer reviews the whole change in parallel on that revision, with no minimum or maximum number of passes.",
-        "The finder confirms each material fix inside its next pass",
-        "Nits need no confirmation.",
+        "The review stages, the finder's delta confirmation between them, the one final holistic pass, the pre-review sibling sweep and the rule that only material findings block are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\".",
         "That decision is never made by a round counter and never by automatic acceptance.",
     ] {
         assert!(
@@ -1893,7 +1892,8 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
     }
     assert!(
         normalize_whitespace(&read(TSK131_DISCIPLINE))
-            .contains("The finder confirms each material fix inside its next pass")
+            .contains("Between stages the finder confirms each material fix on the delta plus the affected tests")
+            && normalize_whitespace(&read(TSK131_DISCIPLINE)).contains("Nits need no confirmation.")
             && normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
                 "There is no round cap: continue while repairs produce relevant evidence"
             ),
@@ -2616,5 +2616,161 @@ fn review_and_research_briefs_name_the_whole_unit_and_no_fence() {
             normalize_whitespace(&read(path)).contains(&normalize_whitespace(required)),
             "{path} lost {required:?}"
         );
+    }
+}
+
+/// TSK-452 AC-9 and AC-10: the pace of planned work has one canonical home,
+/// the cf-method workflow lifecycle reference, and each other home points
+/// there instead of restating it.
+#[test]
+fn planned_work_speed_rule_has_one_home_and_pointers() {
+    const HOME: &str = "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md";
+    const CANONICAL: [&str; 9] = [
+        "## Planned work moves at speed",
+        "Once work is planned into an epic and tasks with criteria, builders execute it without re-planning, re-litigating settled decisions or confirmation work for its own sake.",
+        "The operator set the throughput expectation as an explicit decision of 2026-10-23: each build lane delivers at least one planned task to ready-for-review per hour, preferably two.",
+        "Quality is not traded for speed: the criteria, the tests that prove them and real security stay.",
+        "run targeted tests in the worktree and the quick gate once before ready, and never run the full gate locally;",
+        "push once, at ready, and never rerun a check on an unchanged tree;",
+        "report any stop longer than 15 minutes at once;",
+        "The coordinator starts every task whose edges allow, up to host capacity, measures each lane's time on its task at every sweep and acts on any lane past an hour.",
+        "Estimates come from this planned throughput and are never extrapolated from a slow pace (`cf-estimate`).",
+    ];
+    let home = normalize_whitespace(&read(HOME));
+    for sentence in CANONICAL {
+        assert_eq!(
+            home.matches(sentence).count(),
+            1,
+            "{HOME} must state once: {sentence}"
+        );
+    }
+    let pointers: [(&str, &[&str]); 4] = [
+        (
+            "assets/base/agents/skills/cf-develop/SKILL.md",
+            &["\"Planned work moves at speed\"", "push once, at ready"],
+        ),
+        (
+            "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+            &[
+                "\"Planned work moves at speed\": the coordinator starts every task whose edges allow, up to host capacity, measures each lane's time on its task at every sweep and acts on any lane past an hour.",
+            ],
+        ),
+        (
+            "assets/base/agents/skills/cf-estimate/SKILL.md",
+            &[
+                "Base every estimate of planned work on planned throughput, the pace the `cf-method` workflow lifecycle reference sets in \"Planned work moves at speed\"",
+                "never extrapolate from a slow pace.",
+            ],
+        ),
+        (
+            "assets/base/rule-map.toml",
+            &["planned work moves at speed, at least one task per lane per hour", "section = \"Planned work moves at speed\""],
+        ),
+    ];
+    for (path, required) in pointers {
+        let text = normalize_whitespace(&read(path));
+        for sentence in required {
+            assert!(
+                text.contains(sentence),
+                "{path} lost its pointer: {sentence}"
+            );
+        }
+        // A pointer never restates the operator's decision in full.
+        assert!(
+            !text.contains("explicit decision of 2026-10-23"),
+            "{path} restates the speed rule instead of pointing to {HOME}"
+        );
+    }
+}
+
+/// TSK-452 AC-1 and AC-2: the review cadence, the sibling sweep, the
+/// blocking rule, the same-family fallback and the security lens are stated
+/// once in "Review verdicts"; the retired whole-unit-every-round and
+/// mandatory-reviewer sentences are gone, and the routing policy keeps only
+/// the security and irreversible triggers of the two it dropped.
+#[test]
+fn review_cadence_and_security_lens_are_stated_once() {
+    let discipline = normalize_whitespace(&read("assets/base/rules/workflow-discipline.md"));
+    for sentence in [
+        "Review runs at four stages, and only these:",
+        "Between stages the finder confirms each material fix on the delta plus the affected tests;",
+        "One final holistic pass over the whole unit on the final substantive revision precedes approval;",
+        "Before the first review of a class fix (a defect whose mechanism can recur elsewhere), the builder sweeps for siblings and lists each site with file:line in the PR.",
+        "Only material findings block; each nit gets a disposition.",
+        "This is the one statement of when `cf-reviewer` runs.",
+        "the one other-lineage whole-unit review runs with the `cf-security-reviewer` checklist as its attacker lens, and the Claude side triages the deterministic scanner output inside its integrated judgment.",
+    ] {
+        assert_eq!(discipline.matches(sentence).count(), 1, "Review verdicts must state once: {sentence}");
+    }
+    for path in [
+        "assets/base/rules/workflow-discipline.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/claude/agents/cf-reviewer.md",
+        "assets/base/claude/agents/cf-security-reviewer.md",
+        "assets/base/claude/skills/cf-method/references/delivery-process.md",
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        "assets/base/agents/skills/cf-ship/references/pr-evidence.md",
+        "assets/base/rule-map.toml",
+        "assets/base/CLAUDE.md.tmpl",
+        "CLAUDE.md",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        for retired in [
+            // Review round 1 of TSK-452: the same class in other words.
+            "inside your next whole-unit pass",
+            "`cf-reviewer` as the same-family fresh-context pass",
+            "`cf-security-reviewer` on its trigger",
+            "then independent re-review",
+            "reviews the whole unit again at the new head",
+            "not only the delta",
+            "Review verdicts require `cf-reviewer`",
+            "may deepen the pass",
+            "Do not spawn two reviewer passes",
+            "evidence ledger",
+        ] {
+            assert!(
+                !text.contains(retired),
+                "{path} keeps the retired {retired:?}"
+            );
+        }
+    }
+    let security = normalize_whitespace(&read("assets/base/claude/agents/cf-security-reviewer.md"));
+    assert!(
+        security.contains("This agent runs as its own pass only when no other-lineage seat exists")
+    );
+    assert!(discipline.contains(
+        "an extra-family review on the routing policy's security trigger joins that one review as another lineage, not a pass on top."
+    ));
+    let reviewer = normalize_whitespace(&read("assets/base/claude/agents/cf-reviewer.md"));
+    assert!(
+        reviewer.contains("Confirm a fix to your own finding on the delta plus the affected tests")
+    );
+    let map = normalize_whitespace(&read("assets/base/rule-map.toml"));
+    assert!(map.contains(
+        "`cf-reviewer` runs only as the same-family fallback when no other-lineage seat exists"
+    ));
+    let policy: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ))
+    .expect("routing policy parses");
+    let triggers: Vec<&str> = policy["extra_family_review"]["triggers"]
+        .as_array()
+        .expect("triggers")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    for dropped in ["material technical depth", "high or xhigh complexity"] {
+        assert!(
+            !triggers.contains(&dropped),
+            "routing policy keeps {dropped}"
+        );
+    }
+    for kept in [
+        "security-sensitive change",
+        "consequential or irreversible work",
+    ] {
+        assert!(triggers.contains(&kept), "routing policy lost {kept}");
     }
 }

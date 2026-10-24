@@ -118,6 +118,10 @@ const C1_HEADINGS: &[(&str, &str)] = &[
         "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
         "Review rounds",
     ),
+    (
+        "claude/skills/cf-method/references/workflow-lifecycle.md",
+        "Planned work moves at speed",
+    ),
 ];
 
 const REFERENCES: &[&str] = &[
@@ -480,7 +484,11 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
     let discipline = normalized(&read(
         &repo_root().join("assets/base/rules/workflow-discipline.md"),
     ));
-    assert!(discipline.contains("Review verdicts require `cf-reviewer`"));
+    // TSK-452: the same-family fallback is stated once, in "Review verdicts".
+    assert!(discipline.contains(
+        "Only when no other-lineage seat exists does the same-family fallback give it: `cf-reviewer` in Claude Code"
+    ));
+    assert!(discipline.contains("This is the one statement of when `cf-reviewer` runs."));
     // Issue 121: the kernel's land row names the hand-resolved hunk, and the
     // dependents rule lives in the file the minimal tier's land row opens.
     let git_rules = normalized(&read(&repo_root().join("assets/base/rules/git-rules.md")));

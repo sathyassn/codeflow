@@ -348,15 +348,18 @@ key = "build"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
-action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick`; the full gate belongs to the landing candidate"
-see = [{ target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" }]
+action = "planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
+see = [
+  { target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" },
+  { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work moves at speed" },
+]
 
 [[moment]]
 key = "build"
 group = "delivery"
 tiers = ["minimal"]
 when = "build"
-action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; push for durability; merge the current line in before review; cite targeted tests and `codeflow test --mode quick`; the full gate belongs to the landing candidate"
+action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; push once, at ready; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Write only what earns its keep" }]
 
 [[moment]]
@@ -410,10 +413,11 @@ key = "review"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "give a review"
-action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; include the standing reviews `codeflow models resolve` owes for touched areas"
+action = "review at four stages (plan settlement, PR ready, a landing candidate with a hand-resolved hunk, epic close); verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block; include the standing reviews `codeflow models resolve` owes for touched areas"
 see = [
+  { target = ".codeflow/rules/workflow-discipline.md", section = "Review verdicts", note = "for the stages, the sibling sweep and the security lens" },
   { target = "cf-reviewer", must_open = true, reason = "the verdict format" },
-  { target = "cf-security-reviewer", note = "on hooks, guards, policy, CI, credentials, untrusted input or dependencies" },
+  { target = "cf-security-reviewer", note = "for the checklist that is the attacker lens on hooks, guards, policy, CI, credentials, untrusted input or dependencies" },
   { target = "cf-consult", note = "for the other lineage" },
 ]
 
@@ -422,7 +426,7 @@ key = "review"
 group = "delivery"
 tiers = ["minimal"]
 when = "give a review"
-action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; look harder when hooks, guards, policy, CI, credentials, untrusted input or dependencies change"
+action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block; look harder when hooks, guards, policy, CI, credentials, untrusted input or dependencies change"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Review verdicts" }]
 
 [[moment]]
@@ -737,7 +741,7 @@ check; when unsure, route.
 |---|---|
 | take a new request (routed work; when unsure, route) | `/cf-model-orchestrator` once per brief, with the seat selectors and efforts in `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`; the other lineage through an interactive seat as `.claude/skills/cf-model-orchestrator/resources/routing/transport.md` states; the Claude seat owns design and the integrated verdict; a missing seat degrades legibly after preflight and is recorded; after mode selection, follow `.claude/skills/cf-method/references/workflow-lifecycle.md`. Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate. `/cf-plan` and `/cf-develop` are supporting or solo flows, not alternate entry points |
 | build | this session stays the orchestrator; wide search goes to the `Explore` subagent, bounded routine work to a capable worker as a native subagent of this session, never a separate CLI session or Herdr tab; parallel branches use separate worktrees, bounded fan-out from host memory and CPU, explicit file ownership and serialized landing |
-| give or ask for a review | the other lineage first; `cf-reviewer` as the same-family fresh-context pass, in the foreground (`run_in_background: false`) so its verdict lands before the turn ends; `cf-security-reviewer` on its trigger |
+| give or ask for a review | the other lineage reviews, at the stages "Review verdicts" in `.codeflow/rules/workflow-discipline.md` names; `cf-reviewer` runs only as the same-family fallback when no other-lineage seat exists, in the foreground (`run_in_background: false`) so its verdict lands before the turn ends; on a security trigger the other-lineage review carries the `cf-security-reviewer` checklist, and that agent runs as its own pass only inside the fallback |
 | show something complex | when the session offers the inline widget tool (`show_widget`), the figure goes in the reply as an inline HTML widget; when it offers the Artifact tool, a page to share or comment on is an Artifact page, or `/cf-present` when anchored review is needed; with neither (the terminal), fenced ASCII |
 | unattended, batch or parallel runs | `.claude/workflows/pipeline.workflow.js`, composed through `args.stages` and `args.models`, never hardcoded; the pipeline is single-vendor and never substitutes for the interactive duo; the file is user-owned and `codeflow update` never touches it |
 | release | the release route in `cf-ship` and the project's own authority; no Claude-specific versioning, and a normal merge is not publication approval |
