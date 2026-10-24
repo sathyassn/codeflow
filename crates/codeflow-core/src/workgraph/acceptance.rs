@@ -2600,7 +2600,13 @@ fn own_task_findings(
         stacked,
         judging,
     );
-    found.extend(outside_own_record(head, target, paths, id, stacked));
+    found.extend(outside_own_record(
+        (head, target),
+        paths,
+        id,
+        correctable,
+        stacked,
+    ));
     found
 }
 
@@ -2618,45 +2624,53 @@ fn removals(record: &RecordView, old: &[Criterion]) -> Vec<Finding> {
         .collect()
 }
 
-/// What a task pull request for `own` changes outside its own record that
-/// only a planning amendment may change (TSK-451): an epic's criteria, and
-/// another task's status. A predecessor's record kept as the reviewed head
-/// this branch stacks on has it (`stacked`) is that pull request's change.
+/// What a task pull request for `own` changes in another task's or an
+/// epic's record, which only a planning amendment may change (TSK-451): any
+/// change to its content, or its removal. A record the range adds is new
+/// work, not an amendment; a predecessor's record kept as the reviewed head
+/// this branch stacks on has it (`stacked`) is that pull request's change;
+/// and a record in `correctable` (ADR-0080) is judged by
+/// [`frozen_criteria`].
 fn outside_own_record(
-    head: &Graph,
-    target: &Graph,
+    (head, target): (&Graph, &Graph),
     changed_paths: &[String],
     own: &str,
+    correctable: &std::collections::BTreeSet<String>,
     stacked: &[StackedHead],
 ) -> Vec<Finding> {
     let mut found = Vec::new();
-    for record in head
-        .records
-        .values()
-        .filter(|record| record.id != own && changed_paths.contains(&record.path))
-    {
-        if stacked
-            .iter()
-            .any(|stack| stack.task_id == record.id && stack.record.content == record.content)
+    for before in target.records.values().filter(|record| {
+        record.id != own
+            && matches!(record.kind, RecordKind::Epic | RecordKind::Task)
+            && !correctable.contains(&record.id)
+    }) {
+        let after = head.records.get(&before.id);
+        let touched = changed_paths.contains(&before.path)
+            || after.is_some_and(|record| changed_paths.contains(&record.path));
+        if !touched
+            || after.is_some_and(|record| {
+                record.content == before.content
+                    || stacked.iter().any(|stack| {
+                        stack.task_id == record.id && stack.record.content == record.content
+                    })
+            })
         {
             continue;
         }
-        let Some(before) = target.records.get(&record.id) else {
-            continue;
-        };
-        let change = match record.kind {
-            RecordKind::Epic if before.criteria.signature() != record.criteria.signature() => {
-                format!("{} changes its criteria", record.id)
-            }
-            RecordKind::Task if before.status != record.status => format!(
+        let change = match after {
+            None => format!("{} removes its record", before.id),
+            Some(record) if before.status != record.status => format!(
                 "{} changes its status from {} to {}",
                 record.id, before.status, record.status
             ),
-            _ => continue,
+            Some(record) if before.criteria.signature() != record.criteria.signature() => {
+                format!("{} changes its criteria", record.id)
+            }
+            Some(record) => format!("{} changes its record", record.id),
         };
         found.push(finding(
             FROZEN_RULE,
-            format!("{change} in {own}'s pull request; a task pull request amends only its own record, and this change goes through a planning amendment that names its epic (ADR-0078)"),
+            format!("{change} in {own}'s pull request; a task pull request amends only its own record, and another task's or an epic's record changes through a planning amendment that names its epic (ADR-0078)"),
         ));
     }
     found

@@ -1105,21 +1105,58 @@ fn a_task_pull_request_amends_its_own_record_with_a_reason_per_removal() {
     );
     git(root, &["reset", "-q", "--hard", "HEAD~1"]);
 
-    // An epic's record needs a planning pull request.
-    write(
-        root,
-        "project-management/epics/EPC-001.md",
-        &epic("EPC-001").replace("shall finish the flow.", "shall mostly finish the flow."),
-    );
-    commit(root, "docs: amend the epic");
-    let epic_change = ci_body(
-        root,
-        branch,
-        "Task: TSK-001",
-        "- AC-1 removed: AC-2's journey covers the same command\n",
-    );
-    assert_eq!(epic_change.0, 1, "an epic change: {}", epic_change.1);
-    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    // Any change to an epic's or another task's record needs a planning
+    // pull request: its description and its dependencies, not only its
+    // criteria (TSK-451 review F1; each passed at 1c46e7574).
+    let epic_path = "project-management/epics/EPC-001.md";
+    let edits: [(&str, String, &str); 5] = [
+        (
+            epic_path,
+            epic("EPC-001").replace("shall finish the flow.", "shall mostly finish the flow."),
+            "EPC-001 changes its criteria",
+        ),
+        (
+            epic_path,
+            epic("EPC-001").replace("An outcome.", "An outcome, redescribed."),
+            "EPC-001 changes its record",
+        ),
+        (
+            epic_path,
+            epic("EPC-001").replace("specs: []\n", "specs: []\ndepends_on: [EPC-002]\n"),
+            "EPC-001 changes its record",
+        ),
+        (
+            &record_path("TSK-002"),
+            task("TSK-002", Some("EPC-002"), "main", "todo", CRITERIA)
+                .replace("Work.\n", "Work, redescribed.\n"),
+            "TSK-002 changes its record",
+        ),
+        (
+            &record_path("TSK-002"),
+            task("TSK-002", Some("EPC-002"), "main", "todo", CRITERIA)
+                .replace("depends_on: []", "depends_on: [TSK-003]"),
+            "TSK-002 changes its record",
+        ),
+    ];
+    for (path, text, needle) in &edits {
+        write(root, path, text);
+        commit(root, "docs: amend a record that is not this task's");
+        assert_blocks(
+            &ci_body(
+                root,
+                branch,
+                "Task: TSK-001",
+                "- AC-1 removed: AC-2's journey covers the same command\n",
+            ),
+            needle,
+            &[
+                "work.criteria_frozen",
+                needle,
+                "in TSK-001's pull request; a task pull request amends only its own record",
+            ],
+        );
+        git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    }
 
     // Another task's status needs a planning pull request.
     write(
@@ -1138,6 +1175,13 @@ fn a_task_pull_request_amends_its_own_record_with_a_reason_per_removal() {
     assert_eq!(
         status_change.0, 1,
         "another task's status: {}",
+        status_change.1
+    );
+    assert!(
+        status_change
+            .1
+            .contains("TSK-003 changes its status from todo to cancelled"),
+        "{}",
         status_change.1
     );
 }
