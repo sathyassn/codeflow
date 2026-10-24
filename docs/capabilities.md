@@ -402,14 +402,19 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["cargo test workgraph::line_drift", "codeflow-cli tests/orient_cli.rs", "cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-001, EPC-004, EPC-023, EPC-025]
 adrs: [ADR-0013, ADR-0044]
 ```
 
-`codeflow orient` builds the session-start digest live. It is at most 30 lines
-of pointers: the product line, branch and worktree state, work and capability
-counts, recent ADR titles and gate status. The `session-summary` SessionEnd
+`codeflow orient` builds the session-start digest live. Its base has a
+30-line guideline of pointers: the product line, branch and worktree state, work and capability
+counts, recent ADR titles and gate status. It also lists every fetched
+integration line with behind count, evidenced sync or creation state and
+oldest unlanded task age, falling back to labelled local lines offline.
+The optional `git.line_sync_interval` enables overdue reminders. Every open
+epic has a started-task count from visible unlanded claims. These inventories
+are not truncated to the base guideline. The `session-summary` SessionEnd
 hook appends a session record to the ledger that recall searches. Claude wires
 both through `.claude/settings.json`, and an interactive Codex session gets
 the same digest through `.codex/hooks.json` (ADR-0013).

@@ -137,7 +137,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 70] = [
+pub const SCHEMA: [KeySpec; 71] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -327,6 +327,14 @@ pub const SCHEMA: [KeySpec; 70] = [
                 shell grammar, so a path built by interpreter code, such as \
                 Python adjacent string literals or a node `+` concatenation, \
                 is part of that residual.",
+    },
+    KeySpec {
+        path: "git.line_sync_interval",
+        kind: KeyKind::UInt,
+        valid: "days; 0 disables reminders",
+        purpose: "Orient flags integration lines past this interval since their last sync or evidenced creation.",
+        notes: "Unknown creation without a sync and lines with no own commits are never flagged. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
@@ -1696,6 +1704,19 @@ mod tests {
                 errors.iter().all(|error| error.key == "git.claim_remotes"),
                 "{errors:?}"
             );
+        }
+    }
+
+    #[test]
+    fn line_sync_interval_accepts_days_and_defaults_off() {
+        assert_eq!(default_policy_value()["git"]["line_sync_interval"], 0);
+        for value in ["0", "7", "4294967295"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_ok(), "{text}");
+        }
+        for value in ["-1", "1.5", "4294967296", "\"7d\"", "null"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_err(), "{text}");
         }
     }
 

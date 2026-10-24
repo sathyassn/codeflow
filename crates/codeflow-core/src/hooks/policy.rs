@@ -246,6 +246,8 @@ pub struct GitPolicy {
     /// Additional remotes whose branches count as advisory work claims.
     /// Origin and the target's fetch remote always count. Empty by default.
     pub claim_remotes: Vec<String>,
+    /// Days since a line sync before orient suggests syncing; zero disables it.
+    pub line_sync_interval: u32,
     /// The status check names a protected branch requires before merging,
     /// on a branch that is up to date with its base (`codeflow remote
     /// protect`, `codeflow doctor --check remote-perimeter`). Default
@@ -509,6 +511,7 @@ impl Default for GitPolicy {
                 .map(ToString::to_string)
                 .collect(),
             claim_remotes: Vec::new(),
+            line_sync_interval: 0,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
                 .map(ToString::to_string)
