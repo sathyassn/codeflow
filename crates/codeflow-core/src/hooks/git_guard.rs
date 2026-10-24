@@ -12150,13 +12150,17 @@ pub(crate) fn redirect_reads(segment: &str) -> Vec<String> {
         else {
             continue;
         };
-        let operator = word.text[..len].trim_start_matches(|c: char| c.is_ascii_digit());
+        // The operator ends the matched span after any descriptor digits;
+        // `<<`, `<<<`, `<<-` and `<&` never read a file source.
+        let operator = &word.text[..len];
+        let input =
+            operator.ends_with("<>") || (operator.ends_with('<') && !operator.ends_with("<<"));
         let target = if len == word.text.len() {
             words.next().map(|word| word.text)
         } else {
             Some(word.text[len..].to_string())
         };
-        if matches!(operator, "<" | "<>") {
+        if input {
             sources.extend(target);
         }
     }
