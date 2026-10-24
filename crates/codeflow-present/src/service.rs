@@ -7,7 +7,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -140,9 +140,57 @@ struct AppState {
     cookie_value: Arc<String>,
     bootstrap_path: Arc<PathBuf>,
     last_activity: Arc<AtomicU64>,
+    windows: Arc<WindowPresence>,
     shutdown: Arc<Notify>,
     assets: Arc<AssetManifest>,
     tokens: Arc<Option<UtilityTokens>>,
+}
+
+/// Whether a review window is open, read from the long polls in flight: each
+/// open page keeps one poll waiting, so none in flight for the grace period
+/// means every window has closed.
+#[derive(Default)]
+struct WindowPresence {
+    /// Polls in flight now.
+    polls: AtomicUsize,
+    /// Set by the first poll after a browser opens; the grace runs only once
+    /// a page has been seen, so a slow first load is never taken for a close.
+    seen: AtomicBool,
+    /// When the last poll in flight ended.
+    last_seen: AtomicU64,
+}
+
+impl WindowPresence {
+    fn enter(self: &Arc<Self>) -> WindowPoll {
+        self.polls.fetch_add(1, Ordering::AcqRel);
+        self.seen.store(true, Ordering::Release);
+        self.last_seen.store(now_unix(), Ordering::Release);
+        WindowPoll(Arc::clone(self))
+    }
+
+    /// True when a page was seen and none has polled for the grace period.
+    fn all_closed_for(&self, now: u64, grace: u64) -> bool {
+        self.seen.load(Ordering::Acquire)
+            && self.polls.load(Ordering::Acquire) == 0
+            && now.saturating_sub(self.last_seen.load(Ordering::Acquire)) >= grace
+    }
+
+    /// Forget the pages of a browser that quit, so the next one's first load
+    /// starts a new grace.
+    fn reset(&self) {
+        self.seen.store(false, Ordering::Release);
+    }
+}
+
+/// One poll in flight; dropping it, when the poll answers or its page goes
+/// away, records when the page was last seen.
+struct WindowPoll(Arc<WindowPresence>);
+
+impl Drop for WindowPoll {
+    fn drop(&mut self) {
+        self.0.last_seen.store(now_unix(), Ordering::Release);
+        self.0.polls.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 struct BootstrapState {
@@ -289,6 +337,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         cookie_value: Arc::new(cookie_value),
         bootstrap_path: Arc::new(bootstrap_path.clone()),
         last_activity: Arc::new(AtomicU64::new(now)),
+        windows: Arc::new(WindowPresence::default()),
         shutdown: Arc::new(Notify::new()),
         assets,
         tokens,
@@ -309,6 +358,7 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/api/threads/reopen", post(reopen_thread))
         .route("/app/api/notes/tombstone", post(tombstone_note))
         .route("/app/api/events/poll", post(poll_events))
+        .route("/app/api/session/end", post(end_session))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
         .with_state(state);
@@ -886,6 +936,7 @@ async fn poll_events(
         },
     };
     state.last_activity.store(now_unix(), Ordering::Release);
+    let _window = state.windows.enter();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(limits::EVENT_POLL_SECONDS);
     loop {
         let session = match state.store.load(state.session_id) {
@@ -937,6 +988,19 @@ async fn poll_events(
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// End review from the page: the page has already sent its queued notes as a
+/// review, so this closes the session as `present close` does; the monitor
+/// then quits the isolated browser and the service exits.
+async fn end_session(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    if let Err(response) = require_application_request(&state, &headers, true) {
+        return response;
+    }
+    match state.store.close(state.session_id) {
+        Ok(_) => Json(serde_json::json!({"state": "closed"})).into_response(),
+        Err(error) => plain(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
     }
 }
 
@@ -1508,7 +1572,18 @@ async fn monitor_session(state: AppState, mut owner: Option<OwnerLifeline>) {
                 state.shutdown.notify_waiters();
                 return;
             }
-            Ok(_) => {}
+            Ok(session) => {
+                // Every window closed: the browser quits after the grace and
+                // the session stays open for `present show`.
+                if session.browser_instance.is_some()
+                    && state
+                        .windows
+                        .all_closed_for(now, limits::WINDOW_CLOSE_GRACE_SECONDS)
+                {
+                    cleanup_owned_browser(&state);
+                    state.windows.reset();
+                }
+            }
             Err(_) => {
                 state.shutdown.notify_waiters();
                 return;
@@ -1714,6 +1789,29 @@ fn change_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grace runs only once a page was seen, never while a poll is in
+    /// flight, and from when the last poll ended (TSK-441 AC-7).
+    #[test]
+    fn window_presence_counts_the_grace_from_the_last_poll() {
+        let windows = Arc::new(WindowPresence::default());
+        let grace = limits::WINDOW_CLOSE_GRACE_SECONDS;
+        let far = now_unix() + 10 * grace;
+        assert!(!windows.all_closed_for(far, grace), "no page seen yet");
+        let poll = windows.enter();
+        assert!(!windows.all_closed_for(far, grace), "a poll is in flight");
+        drop(poll);
+        let ended = windows.last_seen.load(Ordering::Acquire);
+        assert!(!windows.all_closed_for(ended + grace - 1, grace));
+        assert!(windows.all_closed_for(ended + grace, grace));
+        let first = windows.enter();
+        let second = windows.enter();
+        drop(first);
+        assert!(!windows.all_closed_for(far, grace), "one window still polls");
+        drop(second);
+        windows.reset();
+        assert!(!windows.all_closed_for(far, grace), "a quit browser's pages are forgotten");
+    }
 
     #[tokio::test]
     async fn r15_invalid_origin_is_not_absent() {

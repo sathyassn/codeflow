@@ -948,34 +948,18 @@ fn close_stops_the_browser_open_launched() {
     assert!(named.is_empty(), "clear left state: {named:?}");
 }
 
-/// `present show` on a session whose browser still runs says the browser is
-/// already open and how to reach it, and exits 4. The running browser is a
-/// stand-in process that carries the session's profile and instance
-/// arguments, the identity `CodeFlow` checks, so no window opens.
+/// `present show --no-launch` on a session whose browser still runs prints the
+/// session's address and opens nothing. The running browser is a stand-in
+/// process that carries the session's profile and instance arguments, the
+/// identity `CodeFlow` checks. Without `--no-launch`, `show` opens a window in
+/// the running browser instead of refusing (TSK-441 AC-8); the real-browser
+/// lifecycle check proves that path, since it needs a real browser.
 #[test]
-fn show_says_the_browser_is_already_open() {
+fn show_no_launch_prints_the_address_while_the_browser_runs() {
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
     let browser = register_stand_in_browser(&fixture, &session_id);
 
-    let shown = codeflow(
-        &fixture.project,
-        &fixture.home,
-        &["present", "show", &session_id],
-    );
-    assert_eq!(shown.status.code(), Some(4), "{shown:?}");
-    let message = failure(&shown);
-    for expected in [
-        format!("the browser for presentation session {session_id} is already open"),
-        "Switch to its window, or quit that browser and run".to_string(),
-        "on macOS the browser can keep running after its last window closes".to_string(),
-        format!("`codeflow present show {session_id}` again"),
-        format!("`codeflow present show {session_id} --no-launch` prints the session's address"),
-    ] {
-        assert!(message.contains(&expected), "{message}");
-    }
-    assert!(!message.contains("not qualified"), "{message}");
-    // The named step works: --no-launch prints the address of the session.
     let address = require_success(&codeflow(
         &fixture.project,
         &fixture.home,
@@ -3619,4 +3603,44 @@ fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
         assert!(revision.get("snapshots").is_none());
     }
     close_and_clear(&fixture, id);
+}
+
+/// End review's route (TSK-441 AC-6) refuses a request without the session's
+/// cookie, origin and marker, and with them closes the session as
+/// `present close` does: the session reads closed and its service exits.
+#[test]
+fn tsk441_end_review_route_closes_the_session() {
+    let fixture = setup_project();
+    let running = open_recover_and_bootstrap(&fixture);
+    let body = "{}";
+    let unauthenticated = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, body.len()));
+    assert!(unauthenticated.starts_with("HTTP/1.1 401"), "{unauthenticated}");
+    let foreign = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://example.invalid\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.cookie, body.len()));
+    assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
+    let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    )))
+    .unwrap();
+    assert_eq!(listed[0]["status"], "active", "{listed}");
+
+    let ended = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, running.cookie, body.len()));
+    assert!(ended.starts_with("HTTP/1.1 200"), "{ended}");
+    assert!(ended.contains(r#""state":"closed""#), "{ended}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "list"],
+        )))
+        .unwrap();
+        if listed[0]["status"] == "closed" && listed[0].get("service_pid").is_none() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "service still runs: {listed}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    close_and_clear(&fixture, &running.session_id);
 }

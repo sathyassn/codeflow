@@ -1626,3 +1626,10 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
 .cf-thread-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-block: 8px; }
 .cf-thread-actions button { font: inherit; padding: 8px 12px; min-height: 44px; cursor: pointer; }
 .cf-feedback-history dd { margin-inline-start: 0; overflow-wrap: anywhere; }
+
+/* End review: a plain outlined control at the end of the header (TSK-441). */
+.cf-end-btn { height: 32px; min-height: 32px; padding: 0 12px; border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-pill); background: var(--cf-surface-raised); color: var(--cf-text); font: 500 var(--cf-fs-ui) var(--cf-font-sans); white-space: nowrap; cursor: pointer; }
+.cf-end-btn:hover:not(:disabled) { background: var(--cf-surface-subtle); }
+.cf-end-btn:focus-visible { outline: 2px solid var(--cf-focus, var(--cf-accent)); outline-offset: 2px; }
+.cf-end-btn:disabled { color: var(--cf-text-muted); cursor: default; }
+@media (max-width: 599.98px) { .cf-end-btn { padding: 0 8px; } }
