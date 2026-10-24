@@ -329,9 +329,49 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
     blockId,
     blockLabel: block.dataset.cfBlockLabel ?? blockId,
     selector: selectorFromOffsets(canonical, offsets.start, offsets.end),
-    summary: `Text: ${truncate(exact.trim(), 96)}`,
-    excerptText: exact.trim(),
+    summary: `Text: ${truncate(selectionExcerpt(canonical, offsets.start, offsets.end), 96)}`,
+    excerptText: selectionExcerpt(canonical, offsets.start, offsets.end),
   };
+}
+
+/** Preserve the exact anchor; disclose a word cut in its displayed excerpt. */
+function selectionExcerpt(text: string, start: number, end: number): string {
+  const word = (char: string) => /[\p{L}\p{N}\p{M}_]/u.test(char);
+  return `${word(text.charAt(start - 1)) && word(text.charAt(start)) ? "…" : ""}${text.slice(start, end).trim()}${word(text.charAt(end - 1)) && word(text.charAt(end)) ? "…" : ""}`;
+}
+
+/** Resolve the same canonical offsets used during capture, including each SVG occurrence. */
+export function resolveTextRanges(documentRoot: HTMLElement, blockId: string, selector: TextSelector): Range[] {
+  const block = documentRoot.querySelector(`[data-cf-block-id="${CSS.escape(blockId)}"]`);
+  if (!block) return [];
+  const ranges: Range[] = [];
+  for (const root of block.querySelectorAll<HTMLElement>("[data-cf-review-text-root]")) {
+    const canonicalRoot = root.hasAttribute("data-cf-review-text-base") ? root.parentElement?.closest("[data-cf-review-text-root]") : root;
+    const canonical = canonicalRoot?.getAttribute("data-cf-canonical-text") ?? root.textContent ?? "";
+    if (canonical.slice(selector.start_utf16, selector.end_utf16) !== selector.exact) continue;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (node.parentElement?.closest("[data-cf-review-text-root]") !== root || node.parentElement?.closest("script,style,svg title,svg desc")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const offsets = canonicalRangeOffsets(root, range, canonical);
+      if (!offsets || offsets.end <= selector.start_utf16 || offsets.start >= selector.end_utf16) continue;
+      let position = offsets.start;
+      let first = -1;
+      let last = -1;
+      for (let i = 0; i < node.length; i++) {
+        if (/\s/u.test(node.data.charAt(i))) continue;
+        while (/\s/u.test(canonical.charAt(position)) && position < canonical.length) position++;
+        if (position >= selector.start_utf16 && position < selector.end_utf16) { if (first < 0) first = i; last = i + 1; }
+        position++;
+      }
+      if (first < 0) continue;
+      range.setStart(node, first); range.setEnd(node, last);
+      if ([...range.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) ranges.push(range);
+    }
+  }
+  return ranges;
 }
 
 function canonicalRangeOffsets(root: HTMLElement, range: Range, canonical: string): { start: number; end: number } | null {

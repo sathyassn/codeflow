@@ -11,6 +11,7 @@ import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./exce
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { renderFigure } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
@@ -128,6 +129,24 @@ async function closeOwned(name, instance) {
 }
 const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
+// Figure words are review text (TSK-443 AC-5): the fixture's canonical text
+// is the title, the drawn labels and the legend meanings, in the order
+// web/src/figure.ts reads them, so the guard there accepts the drawing.
+const figureCanonical = await (async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setContent(renderFigure(JSON.parse(figureDeclaration), { idPrefix: "canonical", number: null }));
+    return await page.evaluate(() => {
+      const figure = document.querySelector("figure");
+      let text = figure.querySelector(".cf-fig-name")?.textContent ?? "";
+      const add = (part) => { if (!part) return; if (text && !text.endsWith("\n")) text += "\n"; text += part; };
+      add(figure.querySelector(".cf-fig-caption")?.textContent ?? "");
+      for (const word of figure.querySelectorAll("svg[data-cf-variant] text")) add(word.textContent ?? "");
+      for (const entry of figure.querySelectorAll(".cf-legend li")) add([...entry.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(""));
+      return text;
+    });
+  } finally { await page.close(); }
+})();
 
 try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
@@ -282,6 +301,7 @@ async function checkSubmitRace(browser, origin, reviewPosts) {
     assert.equal(await page.getByTestId("composer").count(), 1, "the held save finished early");
 
     reviewPosts.length = 0;
+    await page.getByLabel("Verdict").selectOption("approve_with_notes");
     await page.getByTestId("submit-all").evaluate((button) => button.click());
     await page.waitForFunction(() => window.__gates.decode.waiting === 1);
     // Fitting is under way: nothing that goes into the review takes an edit.
@@ -300,7 +320,7 @@ async function checkSubmitRace(browser, origin, reviewPosts) {
     await page.evaluate(() => window.__gates.blob.release());
     await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 2);
     await page.evaluate(() => window.__gates.decode.release());
-    await page.getByTestId("toast").getByText(/Review received.* 1 note saved while it was sent is still pending\./u).waitFor({ timeout: 10_000 });
+    await page.locator("#cf-feedback-panel .cf-status").getByText(/Review received.* 1 note saved while it was sent is still in Draft notes\./u).waitFor({ timeout: 10_000 });
     assert.equal(reviewPosts.length, 1, "a second press sent the review again");
     assert.deepEqual(reviewPosts[0].notes.map((note) => note.body), ["Sent note."]);
     assert.equal(reviewPosts[0].instruction, "Sent instruction.");
@@ -309,6 +329,8 @@ async function checkSubmitRace(browser, origin, reviewPosts) {
     const draft = await page.evaluate(() => JSON.parse(sessionStorage.getItem("cf-present-draft:019f9b53-a341-7fa7-84c2-5f198ceea001") ?? "null"));
     assert.deepEqual(draft?.notes.map((note) => note.body), ["Held note."], "the held note left the draft");
 
+    // The verdict resets after each send, so the second review chooses again.
+    await page.getByLabel("Verdict").selectOption("approve_with_notes");
     await page.getByTestId("submit-all").click();
     await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 0);
     assert.equal(reviewPosts.length, 2);
@@ -404,9 +426,11 @@ async function checkPhoneSurface(browser, origin) {
       return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
     });
     assert.equal(overlap, 0, "the selection chip covers its target");
-    assert.equal(await dock.getAttribute("data-expanded"), "true", "a pin should expand notes");
+    // A pin keeps the sheet collapsed so the captured words stay in view (TSK-443 AC-8).
+    assert.equal(await dock.getAttribute("data-expanded"), "false", "a pin expanded the notes over the document");
     // On a fresh page, pulling the peek bar up expands the sheet, to no more
-    // than the dock height, min(46vh, 440px).
+    // than the dock height, min(70dvh, 620px), which keeps the verdict and
+    // Submit in view (TSK-443 AC-8).
     const fresh = await context.newPage();
     await fresh.goto(`${origin}/app`, { waitUntil: "networkidle" });
     await fresh.getByTestId("comment-btn").click();
@@ -416,7 +440,7 @@ async function checkPhoneSurface(browser, origin) {
     await peek.locator(".hd").dispatchEvent("pointerdown", { clientY: 740 });
     await peek.locator(".hd").dispatchEvent("pointerup", { clientY: 700 });
     await fresh.locator("[data-testid=notes-dock][data-expanded='true']").waitFor();
-    assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.46, 440) + 1, "the expanded sheet is taller than the dock");
+    assert.ok((await peek.boundingBox()).height <= Math.min(760 * 0.7, 620) + 1, "the expanded sheet is taller than the dock");
     process.stdout.write("375 px surface passed: notes peek, pull to expand, html stage floor and pan, no block ids in the rail, chip clear of its target\n");
   } finally { await context.close(); }
 }
@@ -450,11 +474,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const headings = await page.getByTestId("feedback-history").locator(".cf-note-heading").evaluateAll((nodes) =>
     nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
   // "moved" only when the anchor reports a change (round 3).
-  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "anchored"], ["Removed detail", "unpositioned"], ["Implementation", "moved"], ["Flow", "anchored"], ["Whole document", "anchored"]]);
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "in place"], ["Removed detail", "unpositioned"], ["Implementation", "moved"], ["Flow", "in place"], ["Whole document", "in place"]]);
   await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
   await page.getByText("Still the whole document in this revision.").waitFor();
   assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
-  await page.getByRole("button", { name: "Hide notes" }).click();
+  await page.getByRole("button", { name: "Back to document" }).click();
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
@@ -518,12 +542,14 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByTestId("comment-btn").click();
   await page.locator(".cf-hint.on").waitFor();
-  // One instruction in the hint, the empty rail and the status line (P3-2).
-  const instruction = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
+  // One instruction in the hint and the status line (P3-2); the empty rail
+  // names its state and leaves the instruction to them (TSK-443 AC-8).
+  // At 320 px the instruction is the touch one: a phone has no Shift key.
+  const instruction = "Select words, tap a part, or use Select area to drag a box.";
   assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), `Comment mode. ${instruction}`);
   await openSheet();
-  await page.getByText("No notes queued").waitFor();
-  assert.equal(await page.getByTestId("notes-empty").locator(".h").innerText(), instruction);
+  await page.getByText("No draft notes").waitFor();
+  assert.equal(await page.getByTestId("notes-empty").locator(".h").isVisible(), false);
   assert.equal(await page.locator(".cf-dock .cf-status").innerText(), instruction);
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
@@ -578,7 +604,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
     if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
-    const pinned = await page.getByTestId("float-chip").locator(".q").innerText();
+    // A quote cut inside a word shows an ellipsis at the cut (TSK-443 AC-8).
+    const pinned = (await page.getByTestId("float-chip").locator(".q").innerText()).replace(/^…|…$/gu, "");
     if (pinned !== quote) throw new Error(`${label} pinned ${JSON.stringify(pinned)}, expected ${quote}`);
   }
   async function prepareProse() {
@@ -610,7 +637,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const status = await page.waitForFunction(
       () => {
         const text = document.querySelector(".cf-status")?.textContent?.trim() ?? "";
-        return text.startsWith("Pinned:") ? false : text || "(empty)";
+        return text.startsWith("Captured:") ? false : text || "(empty)";
       },
       undefined,
       { timeout: 2000 },
@@ -847,12 +874,12 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     capturedReviews.length = 0;
     await openSheet();
     await page.mouse.move(0, 0);
+    await page.getByLabel("Verdict").selectOption("approve_with_notes");
     await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
-    await page.locator('.cf-chrome-frame[data-commenting="false"]').waitFor({ state: "attached" });
-    await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
-    // The reviewer reads a plain receipt; the event id is the agent's (P3-4).
-    assert.equal(await page.getByTestId("toast").innerText(), "Review received.");
+    await page.getByTestId("review-sent").waitFor();
+    assert.match(await page.getByTestId("review-sent").innerText(), /Review sent:.*Earlier feedback/s);
+    await page.getByTestId("comment-leave").click();
     if (capturedReviews.length !== 1) {
       throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
     }
@@ -929,10 +956,10 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
   }
   async function revealDocumentForGestures() {
-    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") {
-      await page.locator(".cf-feedback-close").click({ force: true });
+    if (await page.getByTestId("notes-expand").isVisible() && (await page.locator("#cf-feedback-panel").getAttribute("data-expanded")) === "true") {
+      await page.getByTestId("notes-expand").click();
       await page.waitForFunction(() =>
-        document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
+        document.getElementById("cf-feedback-panel")?.getAttribute("data-expanded") === "false"
       );
     }
   }
@@ -1015,7 +1042,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.keyboard.press("c");
   await page.waitForFunction(() =>
     document.querySelector(".cf-chrome-frame")?.getAttribute("data-commenting") === "false"
-    && document.getElementById("cf-feedback-panel")?.getAttribute("data-open") === "false"
+    && document.getElementById("cf-feedback-panel")?.getAttribute("data-expanded") === "false"
   );
 
   await page.getByTestId("settings-btn").click();
@@ -1228,7 +1255,7 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limit
       </section>
       <section class="block block--figure" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
         <h2 id="flow">Flow</h2>
-        <div data-cf-review-text-root data-cf-canonical-text="Figure">
+        <div data-cf-review-text-root data-cf-canonical-text="${escapeAttribute(figureCanonical)}">
           <div class="figure-block" data-cf-figure-block="pending" data-cf-figure-declaration="${escapeAttribute(figureDeclaration)}">
             <div data-cf-figure-output><p class="figure-block__title">Figure</p></div>
             <p data-cf-figure-status class="sr-only" role="status"></p>

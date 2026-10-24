@@ -108,7 +108,7 @@ try {
     await save(page, `${theme} empty region`);
   }
   await page.setViewportSize({ width: 375, height: 812 });
-  if (await page.locator('.cf-feedback-close').isVisible()) await page.locator('.cf-feedback-close').click();
+  if (await page.getByTestId('notes-expand').isVisible() && await page.getByTestId('notes-dock').getAttribute('data-expanded') === 'true') await page.getByTestId('notes-expand').click();
   const narrow = page.locator('svg[data-cf-variant="narrow"] text').filter({ hasText: /^Author$/u });
   await drag(page, narrow, 'Author');
   await page.getByTestId('float-chip').waitFor();
@@ -116,6 +116,7 @@ try {
   await page.screenshot({ path: join(root, 'narrow-selection.png') });
   await save(page, 'narrow label words');
   expected.push({ body: 'narrow label words', words: 'Author' });
+  await page.getByLabel('Verdict').selectOption('approve_with_notes');
   await page.getByRole('button', { name: 'Submit review' }).click();
   await page.getByRole('status').getByText(/Review received/u).waitFor();
   for (const { body, words } of expected) await check(`${body} stored as exact text`, async () => {
@@ -205,6 +206,7 @@ try {
     await check(`${kind} layout selects generated words`, async () => assert.equal((await layoutPage.getByTestId('float-chip').locator('.lab').innerText()).trim(), 'Text'));
     await layoutPage.screenshot({ path: join(root, `${kind}-selection.png`) });
     await save(layoutPage, `${kind} words`);
+    await layoutPage.getByLabel('Verdict').selectOption('approve_with_notes');
     await layoutPage.getByRole('button', { name: 'Submit review' }).click();
     await layoutPage.getByRole('status').getByText(/Review received/u).waitFor();
     await check(`${kind} generated words stored as text`, async () => assert.equal(notes().find(note => note.body === `${kind} words`)?.selector?.exact, words));

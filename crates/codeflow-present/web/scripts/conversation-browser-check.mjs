@@ -81,8 +81,10 @@ for (const engine of selected) for (const width of widths) {
     await page.getByTestId("composer-text").fill("Please clarify this explanation.");
     await page.getByTestId("composer-save").click();
     await page.getByTestId("composer").waitFor({state:"detached"});
+    await page.getByLabel("Verdict").selectOption("approve_with_notes");
     await page.getByTestId("submit-all").click();
-    await page.locator('.cf-chrome-frame[data-commenting="false"]').waitFor({state:"attached"});
+    await page.getByTestId("review-sent").waitFor();
+    await page.getByTestId("comment-leave").click();
     const form = page.locator("article[data-cf-form='question']");
     await form.locator("input[type=radio][value=true]").check();
     await form.locator("[data-cf-form-action='submit']").click();
@@ -95,7 +97,8 @@ for (const engine of selected) for (const width of widths) {
     cli(["present","reply",id,review.event_id,"--note",review.notes[0].id,"I will clarify the explanation."]);
     cli(["present","reply",id,answer.event_id,"I will keep this approach."]);
     await openComments();
-    await page.locator("[data-testid=feedback-history] > summary").click();
+    // A sent review leaves Earlier feedback open; open it only if it was closed.
+    if (!(await page.getByTestId("feedback-history").evaluate(el => el.open))) await page.locator("[data-testid=feedback-history] > summary").click();
     const note = page.locator(`[data-note='${review.notes[0].id}']`);
     await note.getByTestId("thread-reply").waitFor();
     assert.match(await note.innerText(),/I will clarify the explanation/u);

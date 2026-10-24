@@ -29,7 +29,7 @@ function snapshot(value: unknown, config: ChromeConfig): value is Snapshot {
 }
 
 /** Stored conversation lives separately from the unsent comment draft. */
-export function ThreadRail({config, documentRoot}: {config: ChromeConfig; documentRoot: HTMLElement}) {
+export function ThreadRail({config, documentRoot, expanded = false}: {config: ChromeConfig; documentRoot: HTMLElement; expanded?: boolean}) {
   const [data, setData] = useState<Snapshot>({feedback:config.feedback ?? {items:[],omitted_older:0},answers:[],replies:[],reopens:[],tombstones:[],acknowledged:[],omitted_older:0});
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);
@@ -76,7 +76,7 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
     {note ? <button type="button" disabled={busy || closed} onClick={() => void change(target,note,true)}>Delete note</button> : null}
   </div>;
   if (!data.feedback.items.length && !data.answers.length && !error) return null;
-  return <details class="cf-feedback-history" data-testid="feedback-history">
+  return <details open={expanded} class="cf-feedback-history" data-testid="feedback-history">
     <summary id="cf-feedback-history-title">Earlier feedback</summary>
     {error ? <p role="alert">{error}</p> : null}
     {data.omitted_older + data.feedback.omitted_older > 0 ? <p>{data.omitted_older + data.feedback.omitted_older} older entries in session history</p> : null}
@@ -84,7 +84,7 @@ export function ThreadRail({config, documentRoot}: {config: ChromeConfig; docume
       {data.feedback.items.map(item => <li key={item.event_id} data-review="true" data-thread={item.event_id}>
         <div class="cf-history-meta"><strong>{item.verdict.replaceAll("_"," ")}</strong><span>{item.lifecycle}</span>
           {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged by agent</span> : null}
-          <span>Revision {item.source_revision}</span><span>Version {item.event_version}</span>
+          <span>Revision {item.source_revision}</span><span>Review update {item.event_version}</span>
           {item.source_revision < config.revision ? <span>Carried from revision {item.source_revision}</span> : null}
         </div>
         {item.instruction ? <p>{item.instruction}</p> : null}
@@ -113,9 +113,9 @@ function anchorWords(anchor: FeedbackAnchor): string {
   switch (anchor.state) {
     case "orphaned": return "unpositioned";
     case "block_fallback": return "on the block";
-    case "reanchored": return anchor.changed ? "moved" : "anchored";
-    case "entity_reanchored": return anchor.label_changed ? "moved" : "anchored";
-    default: return "anchored";
+    case "reanchored": return anchor.changed ? "moved" : "in place";
+    case "entity_reanchored": return anchor.label_changed ? "moved" : "in place";
+    default: return "in place";
   }
 }
 
