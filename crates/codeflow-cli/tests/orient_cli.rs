@@ -173,11 +173,10 @@ fn remote_lines_distinguish_sync_creation_and_inherited_history() {
     let today = now();
     let month = today - 30 * 86_400;
     seed_remote_lines(root, today);
-    git(
-        clone.path(),
-        &["clone", "-q", root.to_str().unwrap(), "."],
-        today,
-    );
+    codeflow_fixture::clone(clone.path(), root, ".")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(
         root,
         &["branch", "integration/advertised-later", "main"],
@@ -336,11 +335,10 @@ fn orient_fetches_at_most_once() {
     commit(source.path(), "base", now());
     git(source.path(), &["branch", "integration/one"], now());
     git(source.path(), &["branch", "integration/two"], now());
-    git(
-        clone.path(),
-        &["clone", "-q", source.path().to_str().unwrap(), "."],
-        now(),
-    );
+    codeflow_fixture::clone(clone.path(), source.path(), ".")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let trace = clone.path().join("trace.json");
     let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .current_dir(clone.path())
