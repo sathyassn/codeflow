@@ -428,14 +428,15 @@ fn a_linked_worktree_and_a_relocated_git_dir_share_their_clones_ledger() {
         &["init", "-q", "--separate-git-dir", gitdir.to_str().unwrap()],
     );
     let relocated = paths(&work);
+    // Compared through the existing common directory: the ledger directory
+    // does not exist yet, and Windows spells a canonical path verbatim.
     assert_eq!(
-        relocated
-            .dir
-            .canonicalize()
-            .unwrap_or(relocated.dir.clone())
-            .parent()
-            .map(Path::to_path_buf),
-        Some(gitdir.canonicalize().unwrap().join("codeflow"))
+        relocated.common_dir.canonicalize().unwrap(),
+        gitdir.canonicalize().unwrap()
+    );
+    assert_eq!(
+        relocated.dir,
+        relocated.common_dir.join("codeflow").join("coord")
     );
     fixture::open_stream(&relocated, "WS-001", "c1").unwrap();
     assert!(gitdir.join("codeflow/coord/events.jsonl").is_file());

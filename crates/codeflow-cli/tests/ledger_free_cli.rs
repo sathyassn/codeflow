@@ -151,6 +151,12 @@ fn run(root: &Path, args: &[&str], stdin: Option<String>) -> (Option<i32>, Strin
     )
     .replace(&canonical, "<dir>")
     .replace(&parent, "<dir>");
+    // Windows prints a path with forward slashes, and canonical paths there
+    // carry the verbatim prefix: compare those spellings too.
+    let slashed = |path: &str| path.trim_start_matches(r"\\?\").replace('\\', "/");
+    let text = text
+        .replace(&slashed(&canonical), "<dir>")
+        .replace(&slashed(&parent), "<dir>");
     let text = regex::Regex::new("[0-9a-f]{40}")
         .unwrap()
         .replace_all(&text, "<sha>")

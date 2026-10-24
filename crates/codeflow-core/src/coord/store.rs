@@ -227,6 +227,8 @@ fn unwritten(path: &Path, error: &std::io::Error) -> CoordError {
 /// On a write, an existing directory or file of the ledger must belong to
 /// this user; group and other access is removed. Unix only: Windows keeps
 /// the ACL the directory inherits from the git directory.
+// The result carries the unix ownership refusal; elsewhere it is always Ok.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn make_private(path: &Path, meta: &fs::Metadata, mode: u32) -> Result<(), CoordError> {
     #[cfg(unix)]
     {
@@ -270,9 +272,14 @@ fn private_dir(path: &Path) -> Result<(), CoordError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(unwritten(path, &error)),
     }
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = {
+        let mut builder = fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = fs::DirBuilder::new();
     match builder.create(path) {
         Ok(()) => sync_dir(path.parent().unwrap_or(Path::new("."))),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => private_dir(path),
@@ -291,9 +298,19 @@ fn private_file(path: &Path, append: bool) -> Result<fs::File, CoordError> {
     }
     let mut options = fs::OpenOptions::new();
     options.read(true).create(true);
+    // The log is appended on unix with O_APPEND. Windows grants an append
+    // handle no right to cut the file, so a torn-tail or damage repair
+    // (`set_len`) would be denied there: the log opens for writing and every
+    // append seeks to the end first, under the lock.
+    #[cfg(unix)]
     if append {
         options.append(true);
     } else {
+        options.write(true).truncate(false);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = append;
         options.write(true).truncate(false);
     }
     #[cfg(unix)]
@@ -339,6 +356,8 @@ fn durable_write(path: &Path, bytes: &[u8]) -> Result<(), CoordError> {
 /// Sync a directory so a new or renamed entry survives a crash; a failure is
 /// reported, never ignored. Windows cannot open a directory for this; NTFS
 /// journals the rename, so there it is a no-op.
+// The result carries the unix sync failure; elsewhere it is always Ok.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 fn sync_dir(dir: &Path) -> Result<(), CoordError> {
     #[cfg(unix)]
     {
@@ -595,7 +614,8 @@ where
     }
     locked
         .events
-        .write_all(text.as_bytes())
+        .seek(std::io::SeekFrom::End(0))
+        .and_then(|_| locked.events.write_all(text.as_bytes()))
         .and_then(|()| locked.events.sync_all())
         .map_err(|error| unwritten(&paths.events, &error))?;
     let last = envelopes.last().map_or(0, |envelope| envelope.sequence);
@@ -977,6 +997,14 @@ pub fn purge(
         .map_err(CoordError::Refused)?;
     out.push_str(&serde_json::to_string(&envelope).unwrap_or_default());
     out.push('\n');
+    // Windows refuses to rename over a file that is open: close the log
+    // before replacing it. The lock file stays held until the purge ends.
+    let Locked {
+        _lock: _held,
+        events,
+        repaired_tail: _,
+    } = locked;
+    drop(events);
     durable_write(&paths.events, out.as_bytes())?;
     let (quarantine_removed, retained) = purge_quarantine(paths, subject)?;
     let _ = heartbeat(paths, actor, envelope.sequence);
