@@ -281,6 +281,11 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   the plan tier cannot apply.
 - `codeflow doctor` runs twenty-three health checks on the repository and the
   tools around it, including the default branch's host rules.
+- `codeflow doctor --preflight` prints the seat, sandbox and tool evidence
+  the orchestrator preflight reads: each standing seat's catalog binding and
+  the project sandbox settings as configured, executables found on `PATH` as
+  observed (never run), and the live model, effort and enforced boundary as
+  unavailable, since doctor cannot observe a running session.
 
 | Doctor check | Reports |
 |---|---|
