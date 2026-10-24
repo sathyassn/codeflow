@@ -29,6 +29,9 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
     }
 
     let remote = refresh_lines(root);
+    // Load again on purpose: the fetch above may move the protected
+    // remote-tracking ref the landed policy is read from, so the interval
+    // and the policy lines below follow the refreshed authority.
     let authority = super::landed_policy::load(root);
 
     // Each `writeln!` is one line under the block rule (TSK-388).
@@ -194,6 +197,14 @@ fn append_line_drift(
             row.behind,
             crate::git::display_text(&row.target)
         );
+        if !row.undated_tasks.is_empty() {
+            let _ = writeln!(
+                out,
+                "line note: {} skipped task records with a missing or invalid created date: {}",
+                crate::git::display_text(&row.line),
+                crate::git::display_text(&row.undated_tasks.join(", "))
+            );
+        }
     }
 }
 

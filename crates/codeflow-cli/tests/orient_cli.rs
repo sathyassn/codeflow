@@ -431,3 +431,31 @@ fn copied_and_renamed_reflogs_do_not_prove_the_current_refs_creation() {
         );
     }
 }
+
+#[test]
+fn an_undated_task_record_is_named_and_hides_no_line_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init(root, now());
+    commit(root, "base", now());
+    git(root, &["checkout", "-qb", "integration/dated"], now());
+    for (id, created) in [
+        (1, "created: 2026-01-01\n"),
+        (2, ""),
+        (3, "created: 2026-02-30\n"),
+    ] {
+        write(root, &format!("project-management/tasks/TSK-{id:03}.md"), &format!("---\nid: TSK-{id:03}\nepic_id: EPC-001\ntitle: Task {id}\nstatus: todo\nwork_type: feat\nintegration_target: integration/dated\n{created}---\n"));
+    }
+    commit(root, "records", now());
+    git(root, &["checkout", "main"], now());
+    git(root, &["branch", "integration/other"], now());
+    let out = run(root, false);
+    assert!(
+        row(&out, "dated").contains("oldest unlanded task")
+            && !row(&out, "dated").contains("oldest unlanded task none")
+            && out.contains("line note: integration/dated skipped task records with a missing or invalid created date: TSK-002, TSK-003")
+            && row(&out, "other").contains("fresh, no own commits")
+            && !out.contains("integration lines unavailable"),
+        "{out}"
+    );
+}

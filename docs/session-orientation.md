@@ -11,7 +11,9 @@ The protected target is the remote's default branch, falling back to
 
 Each row shows commits behind the target, the latest own sync merge date
 or creation state, and the oldest nonterminal task's age in days. Task
-records are read from the line's committed tree. A sync is an own
+records are read from the line's committed tree. A task record with a
+missing or invalid `created` date is left out of the age, and a
+`line note:` row after the line names it. A sync is an own
 first-parent merge with another parent on the target; its date is the
 merge commit's date. Inherited target merges do not count.
 

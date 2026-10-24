@@ -23,6 +23,9 @@ pub struct LineDrift {
     pub oldest_divergent_commit: Option<i64>,
     /// Earliest creation date among nonterminal task records on this line.
     pub oldest_unlanded_task: Option<String>,
+    /// Nonterminal task records on this line skipped for a missing or
+    /// invalid `created`; one bad record never hides the line's other facts.
+    pub undated_tasks: Vec<String>,
     pub local: bool,
 }
 
@@ -161,6 +164,7 @@ fn read_line(
             created,
             oldest_divergent_commit: oldest,
             oldest_unlanded_task: None,
+            undated_tasks: Vec::new(),
             local,
         })
     };
@@ -180,14 +184,15 @@ fn read_line(
                 .map(work_start::logical_target)
                 == Some(line)
     }) {
-        let date = record
+        let Some(day) = record
             .created
             .as_deref()
-            .ok_or_else(|| format!("{}: missing creation date", record.id))?;
-        let day = date
-            .get(..10)
+            .and_then(|date| date.get(..10))
             .filter(|d| date_seconds(d).is_some())
-            .ok_or_else(|| format!("{}: invalid creation date", record.id))?;
+        else {
+            row.undated_tasks.push(record.id.clone());
+            continue;
+        };
         if row
             .oldest_unlanded_task
             .as_deref()
@@ -349,6 +354,7 @@ mod tests {
             created: None,
             oldest_divergent_commit: Some(0),
             oldest_unlanded_task: None,
+            undated_tasks: Vec::new(),
             local: true,
         };
         assert!(!row.sync_due(10 * 86_400, 1));
