@@ -97,6 +97,8 @@ pub enum KeyKind {
     SectionMapping,
     /// A list of argument-bound retry entry objects (TSK-174).
     RetryEntries,
+    /// Path denial declarations with explained exceptions.
+    PathRules,
 }
 
 impl KeyKind {
@@ -112,6 +114,7 @@ impl KeyKind {
             Self::Profiles => "profile list",
             Self::SectionMapping => "object",
             Self::RetryEntries => "entry list",
+            Self::PathRules => "path rule list",
         }
     }
 }
@@ -137,7 +140,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 70] = [
+pub const SCHEMA: [KeySpec; 73] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -697,6 +700,23 @@ pub const SCHEMA: [KeySpec; 70] = [
                 `{prefix}/{name}` branch.",
     },
     // ---- git: gates --------------------------------------------------------
+    KeySpec {
+        path: "git.path_policy", kind: KeyKind::Level, valid: LEVEL_VALID,
+        purpose: "Refuse blocked names and protected prefixes in staged changes and introduced commits.",
+        notes: "Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.blocked_names", kind: KeyKind::PathRules,
+        valid: "strings or {pattern, except_under: [root-relative prefix], reason}",
+        purpose: "Block final-component globs or component sequences at any depth.",
+        notes: "Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
+        path: "git.protected_paths", kind: KeyKind::PathRules,
+        valid: "{prefix, allow: [{path, reason}]} entries",
+        purpose: "Refuse every change under root-anchored component prefixes.",
+        notes: "Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
     KeySpec {
         path: "git.secret_scan",
         kind: KeyKind::Level,
@@ -1318,6 +1338,7 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
         KeyKind::Profiles => validate_profiles(path, value, errors),
         KeyKind::SectionMapping => validate_mapping(path, value, errors),
         KeyKind::RetryEntries => validate_retry_entries(path, value, errors),
+        KeyKind::PathRules => validate_path_rules(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -1327,6 +1348,26 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                 ));
             }
         }
+    }
+}
+
+fn validate_path_rules(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let parsed = if path == "git.blocked_names" {
+        serde_json::from_value(value.clone()).map(|blocked_names| super::policy::GitPolicy {
+            blocked_names,
+            ..Default::default()
+        })
+    } else {
+        serde_json::from_value(value.clone()).map(|protected_paths| super::policy::GitPolicy {
+            protected_paths,
+            ..Default::default()
+        })
+    };
+    if let Err(error) = parsed
+        .map_err(|e| e.to_string())
+        .and_then(|git| super::path_policy::PathPolicy::from_git(&git))
+    {
+        nested_error(errors, path, &error);
     }
 }
 
