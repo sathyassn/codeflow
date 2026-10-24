@@ -184,6 +184,8 @@ enum Command {
     Adr(cmd::new::AdrArgs),
     /// Operator feedback items: record (FB-NNN), move by the transition table, list.
     Feedback(cmd::feedback::FeedbackArgs),
+    /// Follow-ups in the clone's coordination ledger (FU-NNN): add, check, close, list. The `CODEFLOW_COORD_*` role binding is cooperative ownership, not authentication.
+    Follow(cmd::follow::FollowArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),
     /// Check forecast allocations and compare outcomes derived from git, without writes.
@@ -209,6 +211,7 @@ fn touches_registry(command: &Command) -> bool {
             | Command::Estimate(_)
             | Command::Models(_)
             | Command::Report(_)
+            | Command::Follow(_)
     )
 }
 
@@ -479,6 +482,7 @@ fn run() -> anyhow::Result<()> {
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
         Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
         Command::Feedback(args) => std::process::exit(cmd::feedback::run(&args)),
+        Command::Follow(args) => std::process::exit(cmd::follow::run(&args)),
         Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),

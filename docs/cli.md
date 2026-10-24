@@ -240,6 +240,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
+| `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
 
 ### Remember
 
@@ -258,6 +259,64 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--prs <FIRST..LAST>` | Pull request numbers, first and last included: `568..644`. |
 | | `--since <DATE>` | Pull requests merged on this UTC date or later (`YYYY-MM-DD`). |
 | | `--until <DATE>` | With `--since`: merged on this UTC date or earlier. |
+| `codeflow follow add` | | Add a follow-up: reserve the next FU number and record the full item. Similar items, open tasks, epic criteria and feedback are suggested, never refused; only an exact duplicate is |
+| | `--title <TITLE>` | One line a cold reader understands. Required. |
+| | `--description <DESCRIPTION>` | What this is about, for someone without the conversation. Required. |
+| | `--done-when <CONDITION>` | The observable condition that finishes it. Required. |
+| | `--source <SOURCE>` | Where it comes from: operator, coordinator, lane, review, issue or outside. Required. |
+| | `--source-reference <REFERENCE>` | The source's own reference (a review id, an issue URL, a message). |
+| | `--stream <WS-NNN\|intake>` | The stream it belongs to (WS-NNN), or `intake`. Default: your own. |
+| | `--holder <coordinator\|LN-NNN>` | `coordinator` or a lane id. Default: yourself. |
+| | `--link <KIND:TARGET>...` | A typed link, repeat: fulfils:TSK-NNN, prerequisite:PR#N, context:EPC-NNN. |
+| | `--no-link-reason <REASON>` | Why the item links to nothing. |
+| | `--next-check <WHEN>` | When to check next: a duration (30m, 2h, 1d) or a UTC time. Default 10m. |
+| | `--waits-on <FU-NNN\|LN-NNN>...` | A follow-up or lane, possibly another stream's, this waits on. Repeat. |
+| | `--awaiting-operator <CONDITION>` | A condition the operator must settle (never a holder). |
+| | `--reject <ID=REASON>...` | A suggestion considered and rejected: ID=REASON. Repeat. |
+| | `--idempotency-key <KEY>` | A key that makes a retried add record once. |
+| `codeflow follow update <ID>` | | Change an open follow-up's text, links, schedule or waits (never its source). The holder or the operator |
+| | `<ID>` | The follow-up, FU-NNN. |
+| | `--title <TITLE>` | A new title. |
+| | `--description <DESCRIPTION>` | A new description. |
+| | `--done-when <CONDITION>` | A new finishing condition. |
+| | `--link <KIND:TARGET>...` | Replace the links, repeat. |
+| | `--no-link-reason <REASON>` | Replace the links with a reason for having none. |
+| | `--next-check <WHEN>` | When to check next: a duration (30m, 2h, 1d) or a UTC time. |
+| | `--waits-on <FU-NNN\|LN-NNN>...` | Replace the waits, repeat. |
+| | `--awaiting-operator <CONDITION>` | Set the operator condition; an empty value clears it. |
+| | `--expect-revision <N>` | The revision you read; refused when the item changed since. |
+| `codeflow follow check [ID]` | | Record what was observed and the next check. With no id, check every open item you hold: close those whose fulfils links are done on their target, reopen those whose proof was reverted, and list the due ones |
+| | `[ID]` | One follow-up; omit to check every open item you hold. |
+| | `--observed <TEXT>` | What you observed, in words. Default: the observed link states. |
+| | `--next-check <WHEN>` | When to check next: a duration or a UTC time. Default 10m; an item waiting on a prerequisite is rechecked at least daily. |
+| | `--answer-source <SOURCE>` | Whose answer this records when it is not yours (operator, a review). |
+| | `--offline` | Make no network observation (pull requests, remote branches). |
+| | `--expect-revision <N>` | The revision you read; refused when the item changed since. |
+| `codeflow follow hand-over <ID>` | | Give an open follow-up to another holder or stream |
+| | `<ID>` | The follow-up, FU-NNN. |
+| | `--to <coordinator\|LN-NNN>` | The new holder: `coordinator` or a lane id. Required. |
+| | `--stream <WS-NNN\|intake>` | Move it to another stream (WS-NNN) or `intake`. |
+| | `--comment <COMMENT>` | A note recorded with the event. |
+| `codeflow follow close <ID>` | | Close an open follow-up you hold, with evidence a fresh session can open (commit:SHA, PR#N, TSK-NNN or an https URL) |
+| | `<ID>` | The follow-up, FU-NNN. |
+| | `--evidence <REFERENCE>` | commit:SHA, PR#N, TSK-NNN or an https URL. Required. |
+| | `--comment <COMMENT>` | A note recorded with the event. |
+| `codeflow follow drop <ID>` | | Drop an open follow-up with a reason and what happens to what it leaves. The holder, the stream's coordinator or the operator |
+| | `<ID>` | The follow-up, FU-NNN. |
+| | `--reason <REASON>` | Why it is dropped. Required. |
+| | `--disposition <DISPOSITION>` | What happens to what it leaves (relinked to, filed as, nothing left). Required. |
+| `codeflow follow reopen <ID>` | | Reopen a closed or dropped follow-up; the old proof stays in history |
+| | `<ID>` | The follow-up, FU-NNN. |
+| | `--reason <REASON>` | Why it is open again. Required. |
+| `codeflow follow list [ID]` | | Show the folded ledger: counts, the urgent subset and a pointer to the rest. Reads only: never writes, claims a role or takes a lock |
+| | `[ID]` | Show one follow-up in full. |
+| | `--md` | Markdown instead of a table. |
+| | `--all` | Every item, closed and dropped included. |
+| `codeflow follow snapshot` | | Print a redacted Markdown export of every follow-up. Never committed; write it where you choose |
+| | `--output <PATH>` | Write here instead of standard output; an existing file is refused. |
+| `codeflow follow purge <ID>` | | Replace a follow-up's free text with `[purged]` in the live log, keeping its ids, links and history. The holder or the operator |
+| | `<ID>` | The follow-up, FU-NNN. |
+| `codeflow follow repair` | | Move a damaged suffix of the log to quarantine so the ledger is writable again. The operator only; nothing is deleted here (a later purge removes only the purged item's lines from quarantine) |
 
 ### Delegate
 
@@ -527,6 +586,9 @@ other remotes appear as information in `work next` and `work claim`; they do not
 make a task active or create a conflict. `work next --json` keeps these in
 `informational_branches`, separate from the claim `branches`. Claim lists its
 remotes live as well as reading fetched refs, so a narrow fetch cannot hide work.
+
+`codeflow follow` is described in the
+[coordination ledger reference](coordination-ledger.md#the-command).
 
 ### Delegate notes
 
