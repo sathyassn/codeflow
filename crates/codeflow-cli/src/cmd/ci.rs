@@ -977,6 +977,7 @@ fn work_checks<'a>(
         if pr_context && !release_range {
             classification::bodyless_line_check(root, branch, range_parts.as_ref(), tagged, ran);
         }
+        classification::cancellation_push_check(root, branch, range_parts.as_ref(), tagged);
         classification::branch_journey(
             root,
             git,

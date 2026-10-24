@@ -13,6 +13,8 @@
 mod acceptance_fix;
 #[path = "ci_cli/base_policy.rs"]
 mod base_policy;
+#[path = "ci_cli/cancelled_standalone.rs"]
+mod cancelled_standalone;
 #[path = "ci_cli/change_class_probes.rs"]
 mod change_class_probes;
 #[cfg(unix)]
