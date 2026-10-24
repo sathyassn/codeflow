@@ -214,6 +214,14 @@ pub struct WorkStartReport {
 #[derive(Debug, Clone)]
 pub(crate) struct Record {
     pub(crate) id: String,
+    /// The hidden record identity, when the record carries one.
+    pub(crate) uid: Option<String>,
+    /// For a complete task whose active acceptance block passes the
+    /// structural acceptance rules against its own criteria, the block's
+    /// `reviewed` commit; its binding is judged separately.
+    pub(crate) reviewed: Option<String>,
+    /// The text of the record's one active acceptance block, valid or not.
+    pub(crate) acceptance: Option<String>,
     pub(crate) kind: RecordKind,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -2997,10 +3005,19 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
     if !valid {
         return Err(format!("unsupported id {id}"));
     }
+    let status = string(&data, "status").unwrap_or_default();
+    let reviewed = if kind == RecordKind::Task && status == "complete" {
+        accepted_block(content)
+    } else {
+        None
+    };
     Ok(Record {
         id,
+        uid: string(&data, "uid"),
+        reviewed,
+        acceptance: active_block_text(content),
         kind,
-        status: string(&data, "status").unwrap_or_default(),
+        status,
         epic_id: string(&data, "epic_id"),
         standalone_reason: string(&data, "standalone_reason"),
         title: string(&data, "title").unwrap_or_default(),
@@ -3016,6 +3033,33 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
             Vec::new()
         },
     })
+}
+
+/// The text of the record's one active acceptance block.
+fn active_block_text(content: &str) -> Option<String> {
+    let blocks = super::record_text::acceptance_blocks(content);
+    let mut active = blocks.iter().filter(|block| !block.is_superseded());
+    let block = active.next()?;
+    active.next().is_none().then(|| block.inner.clone())
+}
+
+/// The `reviewed` commit of the record's one active acceptance block, when
+/// that block parses and passes the structural acceptance rules for its
+/// criteria. Two active blocks are ambiguous and give none.
+fn accepted_block(content: &str) -> Option<String> {
+    use super::record_text::{acceptance_blocks, check_acceptance, parse_criteria};
+    let blocks = acceptance_blocks(content);
+    let mut active = blocks.iter().filter(|block| !block.is_superseded());
+    let block = active.next()?;
+    if active.next().is_some() {
+        return None;
+    }
+    match &block.parsed {
+        Ok(parsed) if check_acceptance(parsed, &parse_criteria(content).items).is_empty() => {
+            Some(parsed.reviewed.clone())
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn target_reference<'repo>(

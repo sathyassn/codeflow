@@ -2099,6 +2099,13 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
         }
     }
     out.extend(standards::pr_body_policy_character(git, body));
+    if let Some(id) = codeflow_core::validate::docs::ledger_citation(body) {
+        out.push(Violation::always_blocking(
+            "coord.ledger_citation",
+            format!("PR body cites the coordination ledger id {id}"),
+            "name the task, pull request or commit instead; FU, LN and WS ids are local to one clone's coordination ledger (ADR-0086)",
+        ));
+    }
     out
 }
 
@@ -3923,6 +3930,22 @@ mod tests {
     #[test]
     fn pr_body_clean_passes() {
         assert!(evaluate_pr_body(&git(), "Summary of a clean PR body.").is_empty());
+    }
+
+    /// TSK-422 AC-8: a pull request body that cites a coordination ledger
+    /// id is refused; CI reads only the body text, never the ledger.
+    #[test]
+    fn pr_body_citing_a_ledger_id_blocks() {
+        for planted in ["FU-001", "LN-002", "WS-003"] {
+            let found = evaluate_pr_body(&git(), &format!("Closes the ask in {planted}."));
+            assert!(
+                found.iter().any(|v| v.rule == "coord.ledger_citation"
+                    && v.level == PolicyLevel::Block
+                    && v.message.contains(planted)),
+                "{planted}: {found:?}"
+            );
+        }
+        assert!(evaluate_pr_body(&git(), "Adds FU-NNN follow-ups.").is_empty());
     }
 
     // -- policy characters (ADR-0067) ---------------------------------------
