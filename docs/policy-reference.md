@@ -26,7 +26,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
-| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. When a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
+| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
 | `git.root_branch` | string | `""` | empty, or a valid branch name | The branch the root checkout holds; empty means the repository's default branch. | Set it only for an umbrella repository whose root is a working checkout; `codeflow init --workspace` writes the convention name. |
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
@@ -170,6 +170,44 @@ The gate exempts its own inputs, in the same normalized spelling:
 Other rules still apply to those files. `git.secret_scan` continues to own
 both the existing environment-file check and the content secret scan;
 `git.path_policy: off` disables only the new path gate.
+
+## Secret-path matching
+
+`security.secret_reads` checks named reader operands and literals in inline
+interpreter code against hard-secret patterns. A recursive directory glob
+(`**/`) includes zero directories, so `id_rsa`, `./id_rsa`, nested and
+absolute forms receive the same refusal. The same applies to `id_ed25519`,
+`.pem`, `.key`, `.p12`, `.pfx` and `.netrc` patterns. `~`, `$HOME` and
+`${HOME}` spellings, repeated separators and named-user tildes reach the
+configured home-store rules. Comparisons fold ASCII case, including on
+case-sensitive volumes. Relative reader paths use the working directories
+followed by the command parser, including literal `cd` changes. Directory
+boundaries matter: `~/.ssh-notes/file` is not inside `~/.ssh`.
+
+The shell check skips entire read-rule groups that have carve-outs. It does
+not enforce the `.env` or `secret`/`credentials` source-name groups, including
+`.env.production` and `credentials.json`. Claude's file-tool rules still
+apply those groups and preserve their example and source exceptions, such as
+`.env.example` and `secret_scan.rs`. Fixing recursive glob matching does not
+extend those groups to shell reads.
+
+Reader patterns and brace operands are checked by their literal prefix;
+store directories and input-redirection sources are checked too. Ordinary
+patterns such as `src/*.rs` and `*.md` remain readable. A quoted wildcard is
+text the shell does not expand, so a search pattern such as
+`rg '^/etc/.*' docs` is not read by its prefix. The check does not
+resolve symlinks, paths computed by program code, operands supplied by
+`xargs`, command substitutions or process substitutions. Directory changes
+that the parser cannot resolve and directory changes inside interpreter
+code remain limits. Native
+filesystem denies are a separate backstop for the stores they cover. The
+macOS fixture exercises Seatbelt with the installed Claude `denyRead` paths:
+store reads fail, while a workspace `id_rsa` or `.env` remains readable under
+that store-only profile. This fixture does not establish live harness hook
+dispatch or profile adoption. Linux/WSL sandbox enforcement and native Windows
+sandbox behavior require separate platform evidence; the macOS fixture does
+not run there. A seat without an active filesystem sandbox has no such
+backstop.
 
 
 ## Planning amendment paths
@@ -738,6 +776,81 @@ counts as an earlier write for later commands on the line. Ordinary outputs such
 and `git diff --output=out.diff` remain available.
 Source-removing rsync spellings protect the checkout's gitfile as well
 as its directory.
+
+### Shell expansions and checkout paths
+
+Exec-guard resolves shell expansions in interpreter arguments, double-quoted
+code, unquoted heredocs, here-strings and piped code before checking checkout
+roots and enforcement files. Git-guard uses the same resolver for shell writer
+operands.
+
+- The resolver reads plain and exported assignments earlier on the line,
+  `$PWD`, `${PWD}`, `$(pwd)`, backtick `pwd`, `$HOME` and `${HOME}`.
+  It tracks `OLDPWD` after `cd`, `pushd` and `popd`, and resolves
+  `~+`, `~-` and known directory-stack indices from that state.
+  Unavailable stack entries, named-user tildes and zsh parameter modifiers
+  remain unresolved. The hook process cannot supply shell directory values.
+  It also reads static substitutions such as `$(printf %s '<literal>')`.
+  It never executes a substitution to discover its output.
+- The working directory starts at the hook payload's directory. Directory
+  changes update it and `PWD`; assigning `PWD` changes only the parameter.
+  Relative operands resolve from the working directory, regardless of the
+  hook process's `PWD`. Brace groups carry their state forward; subshells,
+  substitutions and background jobs keep their changes local. When a
+  directory change or pipeline scope is uncertain, all reachable states
+  remain candidates.
+- An unresolved shell expansion in interpreter arguments, code or writer
+  operands refuses as cannot-verify where a checkout or enforcement path is
+  reachable.
+  The message names the unread word. Interpreter arguments and code do not
+  read inherited variables other than the modeled home and directory values.
+  Writer operands may read other variables from the hook process environment;
+  `PWD`, `OLDPWD`, `DIRSTACK`, `dirstack` and directory-stack forms always use
+  shell state or remain unresolved. Shell-maintained process, call-stack and
+  timing parameters, including `_`, `PPID` and `BASH_SOURCE`, stay unresolved.
+  Substitutions that depend on a file,
+  another program or the network remain unresolved.
+- Single-quoted interpreter code and quoted heredocs remain literal.
+  Shell `eval`, including leading `--` and zsh `-` markers, reparses its
+  argument with the current variable state. Each line permits at most 16 distinct
+  code reparses per shell reading; further code is refused as cannot-verify.
+  Other leading eval options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
+  including BusyBox sh/ash applets, and `source`/`.` share the script-input
+  rule. Their `-c` arguments, here-strings, heredocs and resolved builtin output
+  supplied through pipes or process substitutions are judged as shell code.
+  Words after `-s` are positional arguments. Unknown programs are not treated as shells. Script-file operands,
+  file redirects and unread external producers retain best-effort reading
+  and the existing script-bypass policy; they do not cause a new integrity
+  refusal. Supplied inline code uses the bounded reparse cache. Unresolved
+  expansions retain the cannot-verify rule. Known data readers and interpreter
+  families keep their own input rules.
+  Resolved builtin output piped into an interpreter is read as code; unread
+  external producers retain the trailing-component checks described above.
+  Literal loop word lists and earlier ordinary assignments stay resolvable
+  inside control flow; external input such as `while read` stays unresolved.
+  Paths constructed inside interpreter code at run time, including
+  concatenation, formatting and encoding, remain outside this reading. The OS sandbox and permission
+  preset provide the backstop.
+- A checkout named by an earlier `git worktree add`, including `-b`, `-B`
+  and `--detach` and bundled flags such as `-fb`, stays protected for the rest
+  of the line. Both paths of `git worktree move` receive that protection,
+  including the source basename
+  appended to an existing destination directory. Equivalent paths containing
+  `..`, existing symlinks or case variants on a case-insensitive volume
+  receive the same verdict. An inline Git alias that could create or move a
+  worktree refuses when that prospective location cannot be verified.
+  Writers and interpreter paths follow possible same-line links made by `ln`,
+  `ln -s`, `cp -s`, `cp -l`, `link`, `pax -rwl`, `cpio -pl` and
+  `rsync --link-dest`, including path-qualified program names and GNU
+  spellings. This includes `dd of=` destinations. Both guards judge a GNU
+  program installed with a `g` prefix by its plain name wherever they match
+  program names: the coreutils writers and launchers (`gdd`, `gtee`,
+  `gtruncate`, `ginstall`, `gmv`, `gcp`, `grm`, `gln`, `gtimeout`, `genv`),
+  `gsed`, `gawk`, `gfind`, `gxargs`, `gpatch` and `ggrep`. The list is
+  closed: another `g`-prefixed program keeps its own name. Ordinary
+  targets remain allowed. Add-then-status is allowed when the source
+  configuration proves it needs no callback that the guard cannot judge
+  before the new checkout exists.
 
 ### Git settings that can run a program
 

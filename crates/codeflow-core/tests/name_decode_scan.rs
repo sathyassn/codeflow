@@ -2529,6 +2529,24 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:posix-shell",
     ),
+    // Removes only ASCII digits, dots and hyphens from a shell version suffix;
+    // whitespace and all other executable-name characters remain significant.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "is_shell",
+        "trim_end_matches",
+        1,
+        "grammar:shell-program-version",
+    ),
+    // Uses the same ASCII-only version suffix grammar to select fish's inline
+    // options; it never trims whitespace or a filesystem operand.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "shell_inline_code",
+        "trim_end_matches",
+        1,
+        "grammar:shell-program-version",
+    ),
     // shell_blank explicitly accepts only space, tab and newline, matching the shell reader.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
