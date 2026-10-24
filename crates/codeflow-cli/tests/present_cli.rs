@@ -3614,7 +3614,10 @@ fn tsk441_end_review_route_closes_the_session() {
     let running = open_recover_and_bootstrap(&fixture);
     let body = "{}";
     let unauthenticated = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://{}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.authority, body.len()));
-    assert!(unauthenticated.starts_with("HTTP/1.1 401"), "{unauthenticated}");
+    assert!(
+        unauthenticated.starts_with("HTTP/1.1 401"),
+        "{unauthenticated}"
+    );
     let foreign = http(running.port, &format!("POST /app/api/session/end HTTP/1.1\r\nHost: {}\r\nOrigin: http://example.invalid\r\nCookie: {}\r\nX-CF-Present: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", running.authority, running.cookie, body.len()));
     assert!(foreign.starts_with("HTTP/1.1 403"), "{foreign}");
     let listed: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
@@ -3639,7 +3642,10 @@ fn tsk441_end_review_route_closes_the_session() {
         if listed[0]["status"] == "closed" && listed[0].get("service_pid").is_none() {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "service still runs: {listed}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "service still runs: {listed}"
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
     close_and_clear(&fixture, &running.session_id);

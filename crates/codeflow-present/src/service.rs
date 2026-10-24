@@ -1807,10 +1807,16 @@ mod tests {
         let first = windows.enter();
         let second = windows.enter();
         drop(first);
-        assert!(!windows.all_closed_for(far, grace), "one window still polls");
+        assert!(
+            !windows.all_closed_for(far, grace),
+            "one window still polls"
+        );
         drop(second);
         windows.reset();
-        assert!(!windows.all_closed_for(far, grace), "a quit browser's pages are forgotten");
+        assert!(
+            !windows.all_closed_for(far, grace),
+            "a quit browser's pages are forgotten"
+        );
     }
 
     #[tokio::test]
@@ -1885,6 +1891,7 @@ mod tests {
             cookie_value: Arc::new("cookie".to_string()),
             bootstrap_path: Arc::new(bootstrap_path),
             last_activity: Arc::new(AtomicU64::new(now)),
+            windows: Arc::new(WindowPresence::default()),
             shutdown: Arc::new(Notify::new()),
             assets: Arc::new(load_manifest().unwrap()),
             tokens: Arc::new(None),

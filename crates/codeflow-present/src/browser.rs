@@ -1687,7 +1687,10 @@ mod tests {
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
         for flag in ["--use-mock-keychain", "--password-store=basic"] {
-            assert!(arguments.iter().any(|argument| argument == flag), "{flag} missing: {arguments:?}");
+            assert!(
+                arguments.iter().any(|argument| argument == flag),
+                "{flag} missing: {arguments:?}"
+            );
         }
     }
 
