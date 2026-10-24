@@ -2231,7 +2231,7 @@ fn check_permissions(opts: &Options) -> CheckResult {
             name: "permissions".into(),
             status: Status::Warn(remedy::DOCTOR_GATE_DIRS.with(&[("paths", &paths.join(", "))])),
             message: format!(
-                "a full gate cannot write its lock or evidence directories, so `codeflow test --mode full` refuses or fails here ({}){sandbox}",
+                "essential and full gates cannot write their lock or evidence directories, so `codeflow test --mode essential` or `--mode full` refuses or fails here ({}){sandbox}",
                 errors.join("; ")
             ),
             duration: start.elapsed(),
@@ -2242,7 +2242,7 @@ fn check_permissions(opts: &Options) -> CheckResult {
         name: "permissions".into(),
         status: Status::Pass,
         message: format!(
-            "file permissions correct; the full gate's lock and evidence directories are writable{sandbox}"
+            "file permissions correct; the essential and full gate lock and evidence directories are writable{sandbox}"
         ),
         duration: start.elapsed(),
     }

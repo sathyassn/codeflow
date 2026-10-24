@@ -925,26 +925,7 @@ fn tracked(
     if branch.starts_with("spike/") {
         spike_paths(task_id, files, tagged);
     }
-    // Matched as bytes: an added record whose name is not valid UTF-8 is
-    // never this task's own record, so it counts against the task.
-    let added_records: Vec<&GitName> = changes
-        .iter()
-        .filter(|(status, _)| status == "A")
-        .map(|(_, path)| path)
-        .filter(|path| is_added_work_record(path.bytes()))
-        .collect();
-    if added_records.iter().any(|path| {
-        path.rule_text()
-            .map_or(true, |path| !is_record_of(path, task_id))
-    }) || (added_records.len() > 1)
-    {
-        push(
-            tagged,
-            RULE,
-            "a task PR may add only its own standalone task record".into(),
-            "put the other records in the epic amendment",
-        );
-    }
+    task_record_additions(root, task_id, anchor, changes, tagged);
     // A range of planning records only that corrects a completed
     // standalone task, named by the Task line or followed up by the task
     // it names in any status, starts no work, so there is nothing to admit
@@ -1021,6 +1002,57 @@ fn tracked(
             codeflow_core::remedy::WORK_START_MERGE_PLANNING
                 .with(&[("target", &target), ("id", task_id)]),
         ),
+    }
+}
+
+/// Imported records keep their proven source; new records belong to this task.
+fn task_record_additions(
+    root: &Path,
+    task_id: &str,
+    anchor: Anchor<'_>,
+    changes: &[(String, GitName)],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let imported_paths = match codeflow_core::workgraph::acceptance::imported_record_paths(
+        root,
+        anchor.base,
+        anchor.head,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            push(
+                tagged,
+                codeflow_core::workgraph::acceptance::IMPORT_RULE,
+                error,
+                "fetch and verify the named source history before classifying imported records",
+            );
+            return;
+        }
+    };
+    // Matched as bytes: an added record whose name is not valid UTF-8 is
+    // never this task's own record, so it counts against the task.
+    let added_records: Vec<&GitName> = changes
+        .iter()
+        .filter(|(status, _)| status == "A")
+        .map(|(_, path)| path)
+        .filter(|path| is_added_work_record(path.bytes()))
+        .filter(|path| {
+            !imported_paths
+                .iter()
+                .any(|imported| imported.as_bytes() == path.bytes())
+        })
+        .collect();
+    if added_records.iter().any(|path| {
+        path.rule_text()
+            .map_or(true, |path| !is_record_of(path, task_id))
+    }) || (added_records.len() > 1)
+    {
+        push(
+            tagged,
+            RULE,
+            "a task PR may add only its own standalone task record".into(),
+            "put the other records in the epic amendment",
+        );
     }
 }
 

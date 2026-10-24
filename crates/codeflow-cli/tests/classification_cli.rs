@@ -515,6 +515,19 @@ fn merge(root: &Path, from: &str) {
     );
 }
 
+/// Complete the product task before its merge is judged as reviewed line work.
+fn complete_line_task(root: &Path) {
+    let reviewed = head(root);
+    let path = root.join("project-management/tasks/TSK-003.md");
+    let record = std::fs::read_to_string(&path).unwrap();
+    let complete = format!("{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/1\n  criteria:\n    AC-1: verified | test ran\n    AC-2: verified | journey ran\n  journey: verified | CLI fixture\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n```\n", record.replace("status: todo", "status: complete"));
+    std::fs::write(path, complete).unwrap();
+    git(
+        root,
+        &["commit", "-qam", "docs: complete the reviewed line task"],
+    );
+}
+
 /// An epic line holding one planned and landed task: the whole line lands
 /// as one pull request, and only a verified line does.
 #[test]
@@ -550,6 +563,7 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
     std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
     git(root, &["commit", "-qam", "feat: build on the line"]);
+    complete_line_task(root);
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
 
@@ -928,6 +942,7 @@ fn line_with_planning_landing(root: &Path, approved: &str) -> &'static str {
     git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
     std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
     git(root, &["commit", "-qam", "feat: build on the line"]);
+    complete_line_task(root);
     git(root, &["switch", "-q", line]);
     merge(root, "task/TSK-003-work");
     line
