@@ -76,6 +76,33 @@ rules' "Write only what earns its keep" says. An ADR may be drafted and
 revised while its decision is unresolved and unaccepted; once accepted it is
 append-only, and a reversal is a new ADR that supersedes it.
 
+## Planned work moves at speed
+
+This section is the one home of the pace of planned work; `cf-develop`,
+`cf-model-orchestrator`, `cf-estimate` and the map's build row point here.
+
+Exploration, research and planning stay deliberate. Once work is planned
+into an epic and tasks with criteria, builders execute it without
+re-planning, re-litigating settled decisions or confirmation work for its
+own sake. The operator set the throughput expectation as an explicit
+decision of 2026-10-23: each build lane delivers at least one planned task
+to ready-for-review per hour, preferably two. Quality is not traded for
+speed: the criteria, the tests that prove them and real security stay.
+
+A builder keeps to these practices:
+
+- run targeted tests in the worktree and the quick gate once before ready,
+  and never run the full gate locally;
+- push once, at ready, and never rerun a check on an unchanged tree;
+- keep the PR body lean: the criteria with file:line and the test evidence;
+- report any stop longer than 15 minutes at once;
+- decide reversible choices and disclose them.
+
+The coordinator starts every task whose edges allow, up to host capacity,
+measures each lane's time on its task at every sweep and acts on any lane
+past an hour. Estimates come from this planned throughput and are never
+extrapolated from a slow pace (`cf-estimate`).
+
 ## Execute and integrate
 
 Follow the approved responsible-primary, executor, and cross-lineage reviewer
@@ -85,11 +112,9 @@ keep".
 Each task owns its branch and worktree, and the work-start check in the
 worktree rules runs before the first mutation. For multiple tasks, load the
 task-graph and parallel-execution contracts and parallelize only independent
-work that shortens the critical path. Landing runs as the delivery process
-states: the task merges the current line in before review, reviewed heads
-land as a batch candidate under one full gate, a red candidate is diagnosed
-before a member is dropped, and a shared integration branch is never rebased.
-Task-local green is not integrated evidence.
+work that shortens the critical path. The task merges the current line in
+before review; batch landing is stated once in the `cf-method` skill,
+"Managing a body of work". Task-local green is not integrated evidence.
 
 Cancellation stops execution and preserves approvals, evidence, unfinished
 state, and owned dirty resources for authorized disposition. A mid-run seat or

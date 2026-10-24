@@ -341,15 +341,18 @@ key = "build"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "build"
-action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick`; the full gate belongs to the landing candidate"
-see = [{ target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" }]
+action = "planned work moves at speed, at least one task per lane per hour; the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
+see = [
+  { target = "cf-develop", must_open = true, reason = "the build and verify loop; its naming step for every string a reader sees" },
+  { target = "cf-method/references/workflow-lifecycle.md", section = "Planned work moves at speed" },
+]
 
 [[moment]]
 key = "build"
 group = "delivery"
 tiers = ["minimal"]
 when = "build"
-action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; push for durability; merge the current line in before review; cite targeted tests and `codeflow test --mode quick`; the full gate belongs to the landing candidate"
+action = "the smallest durable change with its tests; a fix shows fail-before and pass-after; an incompatible commit carries `type!:` and a `BREAKING CHANGE:` footer; push once, at ready; merge the current line in before review; cite targeted tests and `codeflow test --mode quick` once before ready; the full gate belongs to the landing candidate"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Write only what earns its keep" }]
 
 [[moment]]
@@ -403,10 +406,11 @@ key = "review"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "give a review"
-action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified"
+action = "review at four stages (plan settlement, PR ready, hand-resolved landing hunks, epic close); verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block"
 see = [
+  { target = ".codeflow/rules/workflow-discipline.md", section = "Review verdicts", note = "the stages, the sibling sweep and the security lens" },
   { target = "cf-reviewer", must_open = true, reason = "the verdict format" },
-  { target = "cf-security-reviewer", note = "on hooks, guards, policy, CI, credentials, untrusted input or dependencies" },
+  { target = "cf-security-reviewer", note = "its checklist is the attacker lens on hooks, guards, policy, CI, credentials, untrusted input or dependencies" },
   { target = "cf-consult", note = "for the other lineage" },
 ]
 
@@ -415,7 +419,7 @@ key = "review"
 group = "delivery"
 tiers = ["minimal"]
 when = "give a review"
-action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; look harder when hooks, guards, policy, CI, credentials, untrusted input or dependencies change"
+action = "verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block; look harder when hooks, guards, policy, CI, credentials, untrusted input or dependencies change"
 see = [{ target = ".codeflow/rules/workflow-discipline.md", section = "Review verdicts" }]
 
 [[moment]]

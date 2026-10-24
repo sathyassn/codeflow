@@ -51,7 +51,8 @@ A missing, empty, malformed, repeated or mismatched line is refused.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope as `whole unit at <reviewed>` (the acceptance block's commit, in
   full) and the verdict, nothing more; the verdict and its native
-  provenance live on the PR and findings live in the linked record. A review
+  provenance live on the PR and every finding lives in the one findings
+  record the row links, the reviewer's verdict. A review
   row is the provenance the quality contract requires, not the AI
   attribution the commit and PR checks block.
 - Tables carry tabular data and fenced blocks carry pasted output. A figure

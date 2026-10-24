@@ -48,24 +48,28 @@ records the required interactive seat unavailable and the reduced assurance.
       and passes after; for a defect that resists a first glance, first run one
       command that fails on the exact reported symptom (a cheap local failing
       test, else the closest executable check). Use small conventional
-      commits; with a remote, push each for durability (backup, not a merge;
-      `--force-with-lease` after a rewrite). At a multi-task node transition,
+      commits and push once, at ready, as the git rules' "One push at ready"
+      says. Planned work moves at the pace
+      [the workflow lifecycle](../cf-method/references/workflow-lifecycle.md)
+      sets in "Planned work moves at speed". At a multi-task node transition,
       verify predecessor and decision evidence against the approved graph;
       stop for Plan vN+1 on a material graph mutation, and log only a
       material dependency or decision change in the task.
    b. **Review**: first merge the current integration line into the task
-      branch and resolve conflicts there. Then get an *independent* review
-      of the whole unit at this head: in Claude Code, spawn the
-      `cf-reviewer` subagent; in another harness, run a separate read-only
-      review pass. For lifecycle-tracked Claude runs, invoke `cf-reviewer`
-      in the foreground (`run_in_background: false` when offered) and collect
-      its actual verdict before the primary turn ends; never defer it to a
-      later callback or bypass review. Claude Code
+      branch and resolve conflicts there; for a class fix, sweep for
+      siblings first. Then get the independent review of the whole unit at
+      this head that `.codeflow/rules/workflow-discipline.md` "Review
+      verdicts" defines, by the other lineage, with `cf-reviewer` only as the
+      fallback it names. A `cf-reviewer` run goes in the foreground
+      (`run_in_background: false` when offered) and its actual verdict is
+      collected before the primary turn ends; never defer it to a later
+      callback or bypass review. Claude Code
       unattended/batch runs use `.claude/workflows/pipeline.workflow.js` for
       the same build/review/verify stages.
-   c. On `changes_requested`, act on the round's findings as
+   c. On `changes_requested`, act on the findings as
       `cf-model-orchestrator/resources/quality/findings.md` sets out: one
-      batch, fixed in this PR, each material fix confirmed by its finder. No
+      batch, fixed in this PR, each material fix confirmed by its finder on
+      the delta. No
       cycle count decides: continue while repairs produce relevant evidence;
       diagnose a stalled mechanism, an invalid assumption or a materially
       changed scope (split, redesign, or surface the operator-owned
@@ -73,8 +77,8 @@ records the required interactive seat unavailable and the reduced assurance.
    d. **Verify**: targeted tests, the checks that read what changed as
       "Prove it at every surface" says (for example `cargo test -p <crate>`,
       `codeflow test --mode essential --only <target>`),
-      `codeflow test --mode quick` (the pre-push run counts for the same
-      tree) and `codeflow validate --docs`, each cited with revision and
+      `codeflow test --mode quick` once before ready (the pre-push run
+      counts for the same tree) and `codeflow validate --docs`, each cited with revision and
       command. The full gate runs once on the landing candidate. Run a
       property, mutation or fitness check only where verification-selection
       earns it.
