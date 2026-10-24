@@ -7,35 +7,40 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
     let project = Project::new();
     let marker = project.root.join("command-ran");
     for harness in ["claude", "codex", "grok"] {
-        for name in [
-            "id_rsa",
-            "id_ed25519",
-            "cert.pem",
-            "key.key",
-            "cert.p12",
-            "cert.pfx",
-            ".netrc",
+        // The core tests carry the full Cartesian matrix. At the installed
+        // boundary, cover each spelling and format once in every harness.
+        for path in [
+            "id_rsa".to_string(),
+            "./id_ed25519".into(),
+            "nested/cert.pem".into(),
+            format!(
+                "{}/key.key",
+                codeflow_core::portable_path::slashed(&project.root)
+            ),
+            "$HOME/cert.p12".into(),
+            "${HOME}/cert.pfx".into(),
+            "~/.netrc".into(),
         ] {
-            for prefix in [
-                String::new(),
-                "./".into(),
-                "nested/".into(),
-                format!("{}/", codeflow_core::portable_path::slashed(&project.root)),
-                "$HOME/".into(),
-                "${HOME}/".into(),
-            ] {
-                let command = format!("cat {prefix}{name} > command-ran");
-                project.shell(harness, &command, Some("security.secret_reads"));
-                assert!(!marker.exists(), "hook executed {command}");
-            }
+            let command = format!("cat {path} > command-ran");
+            project.shell(harness, &command, Some("security.secret_reads"));
+            assert!(!marker.exists(), "hook executed {command}");
         }
         for store in &codeflow_core::security::actions::table().sandbox_read_denies {
             let suffix = store.strip_prefix("~/").unwrap();
             let path = project.home.join(suffix);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "planted fixture\n").unwrap();
+            project.shell(
+                harness,
+                &format!("cat {store}"),
+                Some("security.secret_reads"),
+            );
+            // Every store is covered above; auth.json witnesses the remaining
+            // home and cwd spellings at the installed boundary.
+            if suffix != ".codex/auth.json" {
+                continue;
+            }
             for spelling in [
-                store.clone(),
                 format!("$HOME/{suffix}"),
                 format!("${{HOME}}/{suffix}"),
                 codeflow_core::portable_path::slashed(&path),
@@ -87,6 +92,7 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
 #[cfg(target_os = "macos")]
 #[test]
 fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
+    use std::fmt::Write as _;
     let project = Project::new();
     let settings: Value =
         serde_json::from_slice(&std::fs::read(project.root.join(".claude/settings.json")).unwrap())
@@ -112,10 +118,12 @@ fn native_macos_sandbox_denies_stores_but_not_workspace_key_names() {
         };
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "planted fixture\n").unwrap();
-        profile.push_str(&format!(
+        write!(
+            profile,
             "(deny file-read* (subpath {}))",
             serde_json::to_string(&path).unwrap()
-        ));
+        )
+        .unwrap();
         paths.push(file);
     }
     for path in &paths {

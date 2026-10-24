@@ -237,7 +237,7 @@ mod tests {
                 (parent, format!("./{basename}")),
                 (home, suffix.to_string()),
                 (home, crate::portable_path::slashed(&absolute)),
-                (home, store.to_string()),
+                (home, store.clone()),
                 (home, format!("$HOME/{suffix}")),
                 (home, format!("${{HOME}}/{suffix}")),
             ] {
