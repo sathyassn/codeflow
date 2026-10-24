@@ -84,11 +84,41 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `security.script_bypass` | Level | `warn` | off \| warn \| allow \| block | Refused actions found inside a script file a command runs (ADR-0075). | Default warn: a script is read on a best-effort basis. |
 | `security.outward_actions` | Level | `block` | off \| warn \| allow \| block | Publishing, releases, tag pushes and account changes in spellings the preset rules cannot match (ADR-0075). | Default block. |
 | `security.interpreter_scan` | Level | `block` | off \| warn \| allow \| block | Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075). | Default block. |
-| `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. |
+| `security.secret_reads` | Level | `block` | off \| warn \| allow \| block | Shell reads of the secret stores the presets deny to the file tools (ADR-0075). | Default block. See [secret-path matching](#secret-path-matching) for spellings, carve-outs and sandbox limits. |
 | `security.enforcement_baseline` | Level | `block` | off \| warn \| allow \| block | Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075). | Default block. |
 | `security.workflow_pushes` | enum | `queue` | queue \| allow | A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9). | Default queue: refused and queued for the operator, whose login can push workflows. `allow` is for an agent credential with workflow rights. |
 | `security.sandbox_retry` | enum | `allowlist` | allowlist \| block | Claude's unsandboxed retry from a primary session (ADR-0075 decision 6). | Default allowlist: only an argument vector an entry of sandbox_retry_allow spells out. `block` refuses every retry. |
 | `security.sandbox_retry_allow` | entry list | `[{"program":"node","script":"~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs","program_options":[],"cwd":"project","refuse_if_env":["NODE_OPTIONS","NODE_PATH","NODE_REPL_EXTERNAL_MODULE"],"subcommands":{"review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":0},"adversarial-review":{"flags":["--wait","--background","--json"],"values":{"--base":"git-ref","--scope":["auto","working-tree","branch"],"--model":"word"},"positionals":"text"},"task":{"flags":["--background","--write","--resume-last","--resume","--fresh","--json"],"values":{"--model":"word","--effort":["none","minimal","low","medium","high","xhigh"]},"positionals":"text"},"status":{"flags":["--all","--wait","--json"],"values":{"--timeout-ms":"integer","--poll-interval-ms":"integer"},"positionals":"job-id"},"result":{"flags":["--json"],"values":{},"positionals":"job-id"},"cancel":{"flags":["--json"],"values":{},"positionals":"job-id"}},"program_path":"<absolute path recorded at qualification, outside every sandbox-writable directory>","script_digest":{"scripts/codex-companion.mjs":"<sha256 at qualification>","scripts/lib/*.mjs":"<sha256 per file at qualification>"},"child_executables":{"codex":"<absolute path recorded at qualification>"},"refuse_writable_path_entries":true}]` | an array of entry objects, each naming its `program` | The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6). | The shipped entry is the Codex plugin companion, pinned by path, version and digest at qualification. |
+
+### Secret-path matching
+
+`security.secret_reads` checks named reader operands and literals in inline
+interpreter code against hard-secret patterns. A recursive directory glob
+(`**/`) includes zero directories, so `id_rsa`, `./id_rsa`, nested and
+absolute forms receive the same refusal. The same applies to `id_ed25519`,
+`.pem`, `.key`, `.p12`, `.pfx` and `.netrc` patterns. `~`, `$HOME` and
+`${HOME}` spellings reach the configured home stores. Relative store paths
+are also compared from the hook payload's working directory. Directory
+boundaries matter: `~/.ssh-notes/file` is not inside `~/.ssh`.
+
+The shell check skips entire read-rule groups that have carve-outs. It does
+not enforce the `.env` or `secret`/`credentials` source-name groups, including
+`.env.production` and `credentials.json`. Claude's file-tool rules still
+apply those groups and preserve their example and source exceptions, such as
+`.env.example` and `secret_scan.rs`. Fixing recursive glob matching does not
+extend those groups to shell reads.
+
+The shell check inspects literal names; it does not resolve symlinks or paths
+computed by program code, and relative store matching uses the payload's
+working directory, not later directory changes inside the command. Native
+filesystem denies are a separate backstop for the stores they cover. The
+macOS fixture exercises Seatbelt with the installed Claude `denyRead` paths:
+store reads fail, while a workspace `id_rsa` or `.env` remains readable under
+that store-only profile. This fixture does not establish live harness hook
+dispatch or profile adoption. Linux/WSL sandbox enforcement and native Windows
+sandbox behavior require separate platform evidence; the macOS fixture does
+not run there. A seat without an active filesystem sandbox has no such
+backstop.
 
 ## Top-level keys
 

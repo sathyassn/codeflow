@@ -34,7 +34,11 @@ pub(crate) fn evaluate(
                     | "base64"
                     | "Get-Content"
             ) {
-                if let Some(path) = args.iter().skip(1).find(|word| secret_path(word, home)) {
+                if let Some(path) = args
+                    .iter()
+                    .skip(1)
+                    .find(|word| secret_path(word, cwd, home))
+                {
                     violations.push(Violation::new(
                         "security.secret_reads",
                         levels.secret_reads,
@@ -55,7 +59,7 @@ pub(crate) fn evaluate(
             }
         }
         for word in outward::literal_words(&code) {
-            if levels.secret_reads.is_active() && secret_path(&word, home) {
+            if levels.secret_reads.is_active() && secret_path(&word, cwd, home) {
                 violations.push(Violation::new(
                     "security.secret_reads",
                     levels.secret_reads,
@@ -102,16 +106,32 @@ pub(crate) fn evaluate(
     violations
 }
 
-fn secret_path(word: &str, home: Option<&Path>) -> bool {
+fn secret_path(word: &str, cwd: &Path, home: Option<&Path>) -> bool {
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
         .map(|suffix| format!("~/{suffix}"));
     let word = expanded_word.as_deref().unwrap_or(word);
+    // Keep the literal spelling for home patterns even when HOME is unknown.
+    // Also judge relative store names from the payload cwd, without reading
+    // files or resolving symlinks. Do not reduce paths to their basename:
+    // auth.json is protected in its store, not in every project directory.
+    let absolute = if let Some(suffix) = word.strip_prefix("~/") {
+        home.map(|home| outward::lexical_join(home, Path::new(suffix)))
+    } else {
+        Some(outward::lexical_join(cwd, Path::new(word)))
+    };
+    secret_path_spelling(word, home)
+        || absolute
+            .as_deref()
+            .is_some_and(|path| secret_path_spelling(&crate::portable_path::slashed(path), home))
+}
+
+fn secret_path_spelling(word: &str, home: Option<&Path>) -> bool {
     actions::table().sandbox_read_denies.iter().any(|pattern| {
         let expanded = pattern
             .strip_prefix("~/")
-            .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
+            .and_then(|p| home.map(|home| crate::portable_path::slashed(&home.join(p))));
         let matches = [Some(pattern.as_str()), expanded.as_deref()]
             .into_iter()
             .flatten()
@@ -132,7 +152,7 @@ fn secret_path(word: &str, home: Option<&Path>) -> bool {
                 };
                 let expanded = pattern
                     .strip_prefix("~/")
-                    .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
+                    .and_then(|p| home.map(|home| crate::portable_path::slashed(&home.join(p))));
                 matches_extended_glob(word, pattern)
                     || expanded.is_some_and(|p| matches_extended_glob(word, &p))
             })
@@ -152,6 +172,123 @@ mod tests {
             Path::new("/fixture"),
             Some(Path::new("/fixture-home")),
         )
+    }
+
+    #[test]
+    fn hard_secret_filename_spellings_receive_the_same_verdict() {
+        for name in [
+            "id_rsa",
+            "id_rsa.pub",
+            "id_ed25519",
+            "id_ed25519.pub",
+            "certificate.pem",
+            "private.key",
+            "bundle.p12",
+            "bundle.pfx",
+            ".netrc",
+        ] {
+            for prefix in ["", "./", "nested/", "/fixture/", "~/", "$HOME/", "${HOME}/"] {
+                let path = format!("{prefix}{name}");
+                for command in [
+                    format!("cat {path}"),
+                    format!("python3 -c 'open(\"{path}\")'"),
+                ] {
+                    assert!(
+                        check(&command, &SecuritySection::default())
+                            .iter()
+                            .any(|v| v.rule == "security.secret_reads"),
+                        "{command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn configured_secret_stores_match_relative_to_the_session_directory() {
+        let table = actions::table();
+        let stores = table.sandbox_read_denies.iter().cloned().chain(
+            table
+                .claude_read_groups
+                .iter()
+                .filter(|group| group.carveouts.is_empty())
+                .flat_map(|group| &group.denies)
+                .filter_map(|rule| {
+                    rule.strip_prefix("Read(~/")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                })
+                .map(|path| {
+                    format!(
+                        "~/{}",
+                        path.replace("**/", "nested/")
+                            .replace("**", "entry")
+                            .replace('*', "fixture")
+                    )
+                }),
+        );
+        for store in stores {
+            let suffix = store.strip_prefix("~/").unwrap();
+            let home = Path::new("/fixture-home");
+            let absolute = home.join(suffix);
+            let parent = absolute.parent().unwrap();
+            let basename = absolute.file_name().unwrap().to_str().unwrap();
+            for (cwd, spelling) in [
+                (parent, basename.to_string()),
+                (parent, format!("./{basename}")),
+                (home, suffix.to_string()),
+                (home, crate::portable_path::slashed(&absolute)),
+                (home, store.to_string()),
+                (home, format!("$HOME/{suffix}")),
+                (home, format!("${{HOME}}/{suffix}")),
+            ] {
+                let findings = evaluate(
+                    &format!("cat {spelling}"),
+                    &SecuritySection::default(),
+                    PolicyLevel::Block,
+                    cwd,
+                    Path::new("/fixture"),
+                    Some(home),
+                );
+                assert!(
+                    findings.iter().any(|v| v.rule == "security.secret_reads"),
+                    "{cwd:?}: {spelling}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_names_and_carveout_groups_keep_their_shell_verdict() {
+        for name in [
+            "README.md",
+            "auth.json",
+            "./auth.json",
+            "id_ordinary",
+            "identity_rsa",
+            "certificate.pem.txt",
+            "private.key.rs",
+            ".netrc-notes",
+            "~/.ssh-notes/file",
+            "~/.codex/auth.json.old",
+            "~/.password-store-notes/item",
+            ".env",
+            ".env.production",
+            ".env.example",
+            ".env.sample",
+            ".env.template",
+            ".env.dist",
+            "secret.txt",
+            "credentials.json",
+            "secret_scan.rs",
+            "credentials.py",
+        ] {
+            assert!(
+                !check(&format!("cat {name}"), &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads"),
+                "{name}"
+            );
+        }
     }
 
     #[test]
