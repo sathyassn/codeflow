@@ -17,7 +17,7 @@ pub(crate) fn evaluate(
         for args in outward::unwrapped_commands(command) {
             let name = args
                 .first()
-                .map_or("", |s| s.rsplit('/').next().unwrap_or(s));
+                .map_or("", |s| super::unresolved::writer_name(s));
             if matches!(
                 name,
                 "cat"

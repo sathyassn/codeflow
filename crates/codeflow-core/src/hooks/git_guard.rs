@@ -648,7 +648,7 @@ fn unresolved_writer_word<'a>(
     let mut targets = redirects.targets.clone();
     targets.extend(redirects.unread.iter().cloned());
     if let Some((program, args)) = strip_launchers(tokens) {
-        let name = basename(program);
+        let name = crate::security::unresolved::writer_name(program);
         if let Some(effects) = crate::security::unresolved::writer_effects(name, args, &[]) {
             targets.extend(effects.writes);
             targets.extend(effects.read.dirs);
@@ -908,16 +908,17 @@ fn evaluate_report_with_runners(
             let words = command_argv(segment);
             strip_launchers(&words).is_some_and(|(program, args)| {
                 matches!(
-                    basename(program),
+                    crate::security::unresolved::writer_name(program),
                     "cd" | "chdir"
                         | "pushd"
                         | "popd"
                         | "eval"
                         | "ln"
-                        | "gln"
                         | "cp"
-                        | "gcp"
                         | "link"
+                        | "pax"
+                        | "cpio"
+                        | "rsync"
                 ) || basename(program) == "git"
                     || is_shell(basename(program))
                     || (matches!(basename(program), "source" | ".") && !args.is_empty())
@@ -2088,6 +2089,7 @@ enum UnknownDirUse {
 /// the `find` action checks, the read-only programs `xargs` and `parallel`
 /// run, and the `sed` read clearance.
 fn unknown_dir_use(name: &str, args: &[String], line: &str) -> UnknownDirUse {
+    let name = crate::security::unresolved::writer_name(name);
     let line_words_all = || {
         let text = canonical_text(line);
         line_words(&text).map(str::to_string).collect::<Vec<_>>()
@@ -5817,7 +5819,7 @@ fn integrity_write_violation(
         ));
     }
     let (program, args) = strip_launchers(tokens)?;
-    let cmd = basename(program);
+    let cmd = crate::security::unresolved::writer_name(program);
     // A launcher's own effects apply to the command it runs: `env -C DIR`
     // moves its directory, and a launcher the guard cannot read with
     // certainty is not dropped silently (TSK-216 round 4).

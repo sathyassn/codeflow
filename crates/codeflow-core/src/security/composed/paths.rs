@@ -14,7 +14,7 @@ pub(crate) struct Command {
     pub(crate) unresolved: Vec<String>,
     /// Literal builtin output, captured without executing a program.
     stdout: Option<String>,
-    /// Code a preceding pipeline producer supplies to this command.
+    /// Literal data a preceding pipeline producer supplies to this command.
     pub(crate) input_code: Option<String>,
     pub(crate) links: Vec<Link>,
 }
@@ -97,14 +97,14 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
             // Prospective checkout declarations take effect at their first
             // occurrence. Other repeated commands are judged at their last
             // occurrence, after every checkout declaration that preceded one.
-            let words = crate::hooks::git_guard::command_argv(&prior.text);
+            let words = pipeline_tail_words(&prior.text);
             let declares_checkout =
                 crate::hooks::git_guard::strip_launchers(&words).is_some_and(|(program, args)| {
                     (program.rsplit('/').next() == Some("git")
                         && args.iter().any(|arg| arg == "worktree"))
                         || matches!(
-                            program.rsplit('/').next(),
-                            Some("ln" | "gln" | "link" | "cp" | "gcp")
+                            crate::security::unresolved::writer_name(program),
+                            "ln" | "link" | "cp" | "pax" | "cpio" | "rsync"
                         )
                 });
             if !declares_checkout {
@@ -127,7 +127,11 @@ fn read_commands(line: &str, cwd: &Path, home: Option<&Path>, environment: bool)
         .map(|(_, mut command)| {
             command.links.clone_from(&links);
             if let Some(dir) = &command.cwd {
-                links.extend(created_links(&command.text, dir));
+                links.extend(created_links(
+                    &command.text,
+                    dir,
+                    command.input_code.as_deref(),
+                ));
             }
             command
         })
@@ -142,17 +146,41 @@ pub(crate) struct Link {
     to: PathBuf,
 }
 
-pub(crate) fn created_links(text: &str, cwd: &Path) -> Vec<Link> {
-    let words = crate::hooks::git_guard::command_argv(text);
+fn pipeline_tail_words(text: &str) -> Vec<String> {
+    if !text.contains('|') {
+        return crate::hooks::git_guard::command_argv(text);
+    }
+    // Pipeline records retain their producer for code readers. Link makers
+    // consume the tail's operands and the captured literal producer output.
+    let tail = lex(text).ok().map(|(tokens, _)| {
+        let start = tokens
+            .iter()
+            .rposition(|t| matches!(t, Tok::Op("|" | "|&")))
+            .map_or(0, |at| at + 1);
+        tokens[start..]
+            .iter()
+            .filter_map(|t| match t {
+                Tok::Word(w) => Some(w.raw.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+    crate::hooks::git_guard::command_argv(tail.as_deref().unwrap_or(text))
+}
+
+fn created_links(text: &str, cwd: &Path, input: Option<&str>) -> Vec<Link> {
+    let words = pipeline_tail_words(text);
     let Some((program, args)) = crate::hooks::git_guard::strip_launchers(&words) else {
         return Vec::new();
     };
-    let name = program.rsplit('/').next().unwrap_or(program);
-    let name = match name {
-        "gln" => "ln",
-        "gcp" => "cp",
-        _ => name,
-    };
+    let name = crate::security::unresolved::writer_name(program);
+    if matches!(name, "pax" | "cpio") {
+        return archive_links(name, args, cwd, input);
+    }
+    if name == "rsync" {
+        return rsync_links(args, cwd);
+    }
     let symbolic = args.iter().any(|a| {
         a == "--symbolic-link" || (a.starts_with('-') && !a.starts_with("--") && a.contains('s'))
     });
@@ -201,6 +229,123 @@ pub(crate) fn created_links(text: &str, cwd: &Path) -> Vec<Link> {
     links
 }
 
+/// Pass-through archive tools preserve the source's relative path below the
+/// destination. Unknown file lists or pathname rewrites retain an unresolved
+/// target, which is refused only if a later operation follows that mapping.
+fn archive_links(name: &str, args: &[String], cwd: &Path, input: Option<&str>) -> Vec<Link> {
+    let mut flags = String::new();
+    let mut operands = Vec::new();
+    let mut unknown = false;
+    let mut literal = false;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if literal || !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.clone());
+        } else if arg == "--" {
+            literal = true;
+        } else if arg == "--link" {
+            flags.push('l');
+        } else if arg == "--pass-through" {
+            flags.push('p');
+        } else if arg == "--null" {
+            flags.push('0');
+        } else if arg.starts_with("--") {
+            if matches!(
+                arg.as_str(),
+                "--owner" | "--format" | "--file" | "--message"
+            ) {
+                at += 1;
+            }
+            // These do not change pathname placement or consume operands.
+            if !matches!(
+                arg.as_str(),
+                "--make-directories"
+                    | "--preserve-modification-time"
+                    | "--unconditional"
+                    | "--verbose"
+                    | "--quiet"
+            ) {
+                unknown = true;
+            }
+        } else {
+            for (offset, flag) in arg[1..].char_indices() {
+                flags.push(flag);
+                unknown |= (name == "pax" && flag == 'i') || (name == "cpio" && flag == 'r');
+                let takes_value = if name == "pax" {
+                    "bfopsxBEGTU"
+                } else {
+                    "CEFfHIORM"
+                };
+                if takes_value.contains(flag) {
+                    // A pathname substitution can change every output name.
+                    unknown |= name == "pax" && flag == 's';
+                    if offset + 2 == arg.len() {
+                        at += 1;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    let pass = if name == "pax" {
+        flags.contains('r') && flags.contains('w')
+    } else {
+        flags.contains('p')
+    };
+    if !pass || !flags.contains('l') {
+        return Vec::new();
+    }
+    let Some(dest) = operands.pop() else {
+        return Vec::new();
+    };
+    let dest = lexical_join(cwd, Path::new(&dest));
+    if name == "cpio" || operands.is_empty() {
+        if let Some(input) = input {
+            operands = input
+                .split(if flags.contains('0') { '\0' } else { '\n' })
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+        } else {
+            unknown = true;
+        }
+    }
+    if unknown {
+        return vec![Link {
+            from: dest,
+            to: cwd.join("$__unread_link_source"),
+        }];
+    }
+    operands
+        .into_iter()
+        .map(|source| Link {
+            from: lexical_join(&dest, Path::new(source.trim_start_matches('/'))),
+            to: lexical_join(cwd, Path::new(&source)),
+        })
+        .collect()
+}
+
+fn rsync_links(args: &[String], cwd: &Path) -> Vec<Link> {
+    let Some(effects) = crate::security::unresolved::writer_effects("rsync", args, &[]) else {
+        return Vec::new();
+    };
+    let Some(dest) = effects.copy.and_then(|copy| copy.dest) else {
+        return Vec::new();
+    };
+    let dest = lexical_join(cwd, Path::new(&dest));
+    effects
+        .read
+        .values
+        .into_iter()
+        .filter(|(option, _)| option == "--link-dest")
+        .map(|(_, source)| Link {
+            from: dest.clone(),
+            to: lexical_join(&dest, Path::new(&source)),
+        })
+        .collect()
+}
+
 /// All possible mapped spellings, retaining the original spelling at callers.
 /// A fixed point bound prevents cyclic or repeated link declarations growing.
 pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec<PathBuf>, String> {
@@ -242,6 +387,9 @@ pub(crate) fn linked_paths(word: &str, cwd: &Path, links: &[Link]) -> Result<Vec
     }
     Err("cannot verify paths through too many same-line links".into())
 }
+
+/// Maximum distinct concrete shell-code readings per input line.
+pub(crate) const MAX_SCRIPT_READINGS: usize = 16;
 
 #[derive(Default)]
 struct Reparses {
@@ -622,11 +770,11 @@ fn walk(
                 }) {
                     let mut command = consumer.clone();
                     command.text = format!("{} | {}", producer.text, command.text);
+                    command.input_code.clone_from(&producer.stdout);
                     if crate::security::outward::reads_stdin_code(&consumer.text) {
                         command
                             .unresolved
                             .extend(producer.unresolved.iter().cloned());
-                        command.input_code.clone_from(&producer.stdout);
                     }
                     let words = crate::hooks::git_guard::command_argv(&consumer.text);
                     if crate::hooks::git_guard::reads_shell_stdin(&words) {
@@ -1088,7 +1236,7 @@ fn reparse(
         return after.clone();
     }
     let before = position.clone();
-    if depth < 16 && reparses.count < 16 {
+    if depth < 16 && reparses.count < MAX_SCRIPT_READINGS {
         reparses.count += 1;
         if let Ok((nested, docs)) = lex(script) {
             let first = output.len();

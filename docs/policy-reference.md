@@ -701,12 +701,12 @@ operands.
 - Single-quoted interpreter code and quoted heredocs remain literal.
   Shell `eval`, including leading `--` and zsh `-` markers, reparses its
   argument with the current variable state. Each line permits at most 16 distinct
-  code reparses per shell reading; further code is refused as cannot-verify. Other leading eval
-  options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
+  code reparses per shell reading; further code is refused as cannot-verify.
+  Other leading eval options are unresolved. Bash, sh, zsh, dash, ksh, mksh, yash, fish and ash,
   including BusyBox sh/ash applets, and `source`/`.` share the script-input
   rule. Their `-c` arguments, here-strings, heredocs and resolved builtin output
-  supplied through pipes or process substitutions are judged as shell code. Words after `-s` are positional
-  arguments. Unknown programs are not treated as shells. Script-file operands,
+  supplied through pipes or process substitutions are judged as shell code.
+  Words after `-s` are positional arguments. Unknown programs are not treated as shells. Script-file operands,
   file redirects and unread external producers retain best-effort reading
   and the existing script-bypass policy; they do not cause a new integrity
   refusal. Supplied inline code uses the bounded reparse cache. Unresolved
@@ -716,24 +716,25 @@ operands.
   external producers retain the trailing-component checks described above.
   Literal loop word lists and earlier ordinary assignments stay resolvable
   inside control flow; external input such as `while read` stays unresolved.
-  Paths constructed inside interpreter code at run time, including concatenation, formatting
-  and encoding, remain outside this reading. The OS sandbox and permission
+  Paths constructed inside interpreter code at run time, including
+  concatenation, formatting and encoding, remain outside this reading. The OS sandbox and permission
   preset provide the backstop.
 - A checkout named by an earlier `git worktree add`, including `-b`, `-B`
   and `--detach` and bundled flags such as `-fb`, stays protected for the rest
-  of the line. Both paths of
-  `git worktree move` receive that protection, including the source basename
+  of the line. Both paths of `git worktree move` receive that protection,
+  including the source basename
   appended to an existing destination directory. Equivalent paths containing
   `..`, existing symlinks or case variants on a case-insensitive volume
   receive the same verdict. An inline Git alias that could create or move a
   worktree refuses when that prospective location cannot be verified.
   Writers and interpreter paths follow possible same-line links made by `ln`,
-  `ln -s`, `cp -s`, `cp -l` and `link`, including path-qualified program names
-  and GNU spellings. This includes `dd of=` destinations. Ordinary targets
-  remain allowed. Add-then-status
-  is allowed
-  when the source configuration proves it needs no callback that the guard
-  cannot judge before the new checkout exists.
+  `ln -s`, `cp -s`, `cp -l`, `link`, `pax -rwl`, `cpio -pl` and
+  `rsync --link-dest`, including path-qualified program names and GNU
+  spellings. This includes `dd of=` destinations and GNU-prefixed writers
+  such as `gdd`, `gtee`, `gtruncate`, `ginstall`, `gmv` and `gcp`. Ordinary
+  targets remain allowed. Add-then-status is allowed when the source
+  configuration proves it needs no callback that the guard cannot judge
+  before the new checkout exists.
 
 ### Git settings that can run a program
 

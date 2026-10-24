@@ -10430,6 +10430,38 @@ fn same_line_worktree_status_requires_known_callbacks() {
         .contains("cannot verify status callbacks before the new worktree exists"));
 }
 
+fn shell_directory_chain(count: usize, join: &str) -> String {
+    (0..count)
+        .map(|i| {
+            if join == "process" {
+                format!("bash <(echo \"cd d{i}\")")
+            } else if join == "pipe" {
+                format!("echo \"cd d{i}\" | bash")
+            } else if join == "source" {
+                format!("source <(echo \"cd d{i}\")")
+            } else if join == "here" {
+                format!("bash <<< \"cd d{i}\"")
+            } else if join == "eval" {
+                format!("eval \"cd d{i}\"")
+            } else if join == "eval-or" {
+                format!("eval \"cd d{i} || cd e{i}\"")
+            } else {
+                format!("cd d{i}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(
+            if matches!(
+                join,
+                "eval" | "eval-or" | "here" | "process" | "pipe" | "source"
+            ) {
+                "; "
+            } else {
+                join
+            },
+        )
+}
+
 /// Bound the real CLI route, including both directory readers.
 #[test]
 fn shell_expansion_chains_have_bounded_guard_time() {
@@ -10446,42 +10478,24 @@ fn shell_expansion_chains_have_bounded_guard_time() {
         .unwrap()
         .success());
     let mut failures = Vec::new();
-    for (guard, count, join, tail, seconds) in [
-        ("exec-guard", 10, " || ", "python3 tool.py $PWD/x", 1),
-        ("git-guard", 80, " || ", "rm -rf $PWD/x", 1),
-        ("exec-guard", 20, " || ", "python3 tool.py $PWD/x", 2),
-        ("git-guard", 300, " || ", "rm -rf $PWD/x", 5),
-        ("git-guard", 80, " && ", "rm -rf $PWD/x", 2),
-        ("git-guard", 80, "eval", "rm -rf $PWD/x", 2),
-        ("git-guard", 80, "here", "rm -rf $PWD/x", 2),
-        ("git-guard", 80, "process", "rm -rf $PWD/x", 2),
-        ("git-guard", 80, "pipe", "rm -rf $PWD/x", 2),
-        ("git-guard", 80, "source", "rm -rf $PWD/x", 2),
-    ] {
-        let chain = (0..count)
-            .map(|i| {
-                if join == "process" {
-                    format!("bash <(echo \"cd d{i}\")")
-                } else if join == "pipe" {
-                    format!("echo \"cd d{i}\" | bash")
-                } else if join == "source" {
-                    format!("source <(echo \"cd d{i}\")")
-                } else if join == "here" {
-                    format!("bash <<< \"cd d{i}\"")
-                } else if join == "eval" {
-                    format!("eval \"cd d{i} || cd e{i}\"")
-                } else {
-                    format!("cd d{i}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(
-                if matches!(join, "eval" | "here" | "process" | "pipe" | "source") {
-                    "; "
-                } else {
-                    join
-                },
-            );
+    let mut controls = std::collections::HashMap::new();
+    let routes = [
+        " || ", " && ", "eval", "eval-or", "here", "process", "pipe", "source",
+    ];
+    let cases = [
+        ("git-guard", "rm -rf $PWD/x"),
+        ("exec-guard", "rm -rf $PWD/x"),
+    ]
+    .into_iter()
+    .flat_map(|(guard, tail)| {
+        routes
+            .into_iter()
+            .flat_map(move |join| [20, 80].map(|count| (guard, count, join, tail, 20)))
+    });
+    let cases = cases
+        .chain([10, 20].map(|count| ("exec-guard", count, " || ", "python3 tool.py $PWD/x", 10)));
+    for (guard, count, join, tail, control_count) in cases {
+        let chain = shell_directory_chain(count, join);
         let payload = serde_json::json!({
             "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
             "cwd": tmp.path()
@@ -10490,6 +10504,14 @@ fn shell_expansion_chains_have_bounded_guard_time() {
         let trace = tmp.path().join(format!("{guard}-{count}.stderr"));
         let stderr = std::fs::File::create(&trace).unwrap();
         let mut command = expansion_codeflow();
+        // Four times the input may take six times the adjacent 20-command
+        // control plus two seconds of scheduling slack. This catches the old
+        // quadratic eval growth without a load-sensitive two-second deadline.
+        let limit = controls
+            .get(&(guard, join, tail))
+            .map_or(Duration::from_secs(30), |control: &Duration| {
+                *control * 6 + Duration::from_secs(2)
+            });
         let start = Instant::now();
         let mut child = command
             .args(["hook", guard, "--contract", "3"])
@@ -10506,20 +10528,23 @@ fn shell_expansion_chains_have_bounded_guard_time() {
             .unwrap()
             .write_all(payload.as_bytes())
             .unwrap();
-        while child.try_wait().unwrap().is_none() && start.elapsed() < Duration::from_secs(seconds)
-        {
+        while child.try_wait().unwrap().is_none() && start.elapsed() < limit {
             std::thread::sleep(Duration::from_millis(5));
         }
         if child.try_wait().unwrap().is_none() {
             child.kill().unwrap();
             child.wait().unwrap();
             failures.push(format!(
-                "{guard}: {count} commands joined by {join:?} exceeded {seconds}s\n{}",
+                "{guard}: {count} commands joined by {join:?} exceeded {limit:?}\n{}",
                 std::fs::read_to_string(&trace).unwrap()
             ));
         }
         child.wait().unwrap();
-        println!("{guard}: {:?}", start.elapsed());
+        let elapsed = start.elapsed();
+        if count == control_count {
+            controls.insert((guard, join, tail), elapsed);
+        }
+        println!("{guard} {join:?} N={count}: {elapsed:?}, limit={limit:?}, tail={tail}");
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -11019,6 +11044,10 @@ fn shell_expansions_round_four_review_matrix() {
         (
             "security",
             include_str!("fixtures/shell-round-four-review.json"),
+        ),
+        (
+            "round-five",
+            include_str!("fixtures/shell-round-five-review.json"),
         ),
     ] {
         let cases: Vec<(String, Option<i32>, Option<i32>)> = serde_json::from_str(source).unwrap();
