@@ -2193,8 +2193,9 @@ fn line_without_reads(line: &str, program: &str, args: &[String], reads: &[bool]
     for (at, segment) in segments.iter().enumerate() {
         let mut tokens = shell_tokens(segment);
         strip_reserved_words(&mut tokens);
-        let matches = strip_launchers(&tokens)
-            .is_some_and(|(name, rest)| basename(name) == program && rest == args);
+        let matches = strip_launchers(&tokens).is_some_and(|(name, rest)| {
+            program_name(name) == program_name(program) && rest == args
+        });
         if matches {
             own.push((at, tokens));
         }
@@ -4149,7 +4150,7 @@ fn find_mutating_roots(args: &[String]) -> Option<&[String]> {
                     .position(|arg| matches!(arg.as_str(), ";" | "+"))
                     .unwrap_or(tail.len());
                 if strip_launchers(&tail[..end])
-                    .is_some_and(|(program, _)| matches!(basename(program), "rm" | "chmod"))
+                    .is_some_and(|(program, _)| matches!(program_name(program), "rm" | "chmod"))
                 {
                     return Some(roots);
                 }
@@ -4929,7 +4930,7 @@ fn sed_args_fill(line: &str, args: &[String]) -> Option<Vec<bool>> {
         let mut tokens: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
         strip_reserved_words(&mut tokens);
         let matches = strip_launchers(&tokens)
-            .is_some_and(|(program, rest)| basename(program) == "sed" && rest == args);
+            .is_some_and(|(program, rest)| program_name(program) == "sed" && rest == args);
         if matches {
             if own.is_some() {
                 return None;
@@ -5513,7 +5514,7 @@ fn own_literal(line: &str, program: &str, args: &[String]) -> Vec<bool> {
         let mut tokens: Vec<String> = words.into_iter().map(|word| word.text).collect();
         strip_reserved_words(&mut tokens);
         if let Some((name, rest)) = strip_launchers(&tokens) {
-            if basename(name) == program && rest == args {
+            if program_name(name) == program_name(program) && rest == args {
                 found.push(literal[literal.len() - rest.len()..].to_vec());
             }
         }
@@ -13076,24 +13077,48 @@ fn env_options<'t>(
     Ok(idx)
 }
 
-/// The name a launcher word runs as: its base name, or for the GNU names
-/// Homebrew installs with a `g` prefix (`gtimeout`, `gnice`, `gnohup`,
-/// `gstdbuf`, `gtime`, `genv`, `gxargs`, `gfind`) the name without it, so
-/// the command after one is read as after the plain launcher (TSK-242
-/// review round 15). [`gnu_prefixed`] tells the closed rule which it was.
-pub(crate) fn launcher_name(t: &str) -> &str {
+/// The GNU programs Homebrew and other ports install with a `g` prefix
+/// beside the platform tools (coreutils, findutils, GNU sed, gawk, GNU
+/// patch, GNU grep and GNU time) whose plain names either guard judges.
+/// The list is closed: an arbitrary `g`-prefixed program is not assumed to
+/// be one of them (`grep` stays `grep`, `gunzip` never reads as `unzip`).
+const GNU_PREFIXED: &[&str] = &[
+    "cp", "mv", "ln", "link", "install", "tee", "dd", "truncate", "touch", "mkdir", "mktemp", "rm",
+    "rmdir", "unlink", "chmod", "chown", "chgrp", "shred", "split", "csplit", "sort", "uniq",
+    "timeout", "nice", "nohup", "stdbuf", "env", "chroot", "time", "cat", "head", "tail", "base64",
+    "find", "xargs", "sed", "awk", "patch", "grep",
+];
+
+/// The GNU launchers among [`GNU_PREFIXED`]: the programs that run the
+/// command after them.
+const GNU_LAUNCHERS: &[&str] = &[
+    "timeout", "nice", "nohup", "stdbuf", "time", "env", "xargs", "find",
+];
+
+/// The one name a program word is judged by in both guards: its base name,
+/// or for a GNU program installed with a `g` prefix ([`GNU_PREFIXED`]:
+/// `gsed`, `gfind`, `gxargs`, `gpatch`, `gtee`, `gtimeout`) the name
+/// without it, so every check that reads the plain name reads the GNU one
+/// too (TSK-406, SEC-406-24).
+pub(crate) fn program_name(t: &str) -> &str {
     let name = basename(t);
     match name.strip_prefix('g') {
-        Some(
-            plain @ ("timeout" | "nice" | "nohup" | "stdbuf" | "time" | "env" | "xargs" | "find"),
-        ) => plain,
+        Some(plain) if GNU_PREFIXED.contains(&plain) => plain,
         _ => name,
     }
 }
 
+/// The name a launcher word runs as ([`program_name`]), so the command
+/// after a GNU-prefixed launcher is read as after the plain one (TSK-242
+/// review round 15). [`gnu_prefixed`] tells the closed rule which it was.
+pub(crate) fn launcher_name(t: &str) -> &str {
+    program_name(t)
+}
+
 /// Whether `t` is a GNU-prefixed launcher name ([`launcher_name`]).
 pub(crate) fn gnu_prefixed(t: &str) -> bool {
-    launcher_name(t) != basename(t)
+    let name = launcher_name(t);
+    name != basename(t) && GNU_LAUNCHERS.contains(&name)
 }
 
 /// Zsh precommand modifiers shared by the shell readers.
@@ -13506,6 +13531,33 @@ mod tests {
             paths.is_none() && refusal.is_some(),
             "unreadable leaf: paths={paths:?}, refusal={refusal:?}"
         );
+    }
+
+    /// SEC-406-24: one closed GNU normaliser for every program-name match.
+    #[test]
+    fn program_name_maps_closed_gnu_names_only() {
+        for (word, name) in [
+            ("gsed", "sed"),
+            ("/opt/homebrew/bin/gsed", "sed"),
+            ("gfind", "find"),
+            ("gxargs", "xargs"),
+            ("gpatch", "patch"),
+            ("gawk", "awk"),
+            ("gtee", "tee"),
+            ("gtimeout", "timeout"),
+            ("sed", "sed"),
+            ("grep", "grep"),
+            ("ggrep", "grep"),
+            ("gzip", "gzip"),
+            ("gunzip", "gunzip"),
+            ("git", "git"),
+            ("gtar", "gtar"),
+        ] {
+            assert_eq!(super::program_name(word), name, "{word}");
+        }
+        assert!(super::gnu_prefixed("gtimeout"));
+        assert!(!super::gnu_prefixed("gsed"));
+        assert!(!super::gnu_prefixed("timeout"));
     }
 
     #[test]

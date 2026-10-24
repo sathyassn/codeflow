@@ -78,11 +78,12 @@ fn command_tokens(command: &str) -> Vec<String> {
 }
 
 pub(super) fn program_name(token: &str) -> String {
-    token
+    let name = token
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(token)
-        .to_ascii_lowercase()
+        .to_ascii_lowercase();
+    crate::hooks::git_guard::program_name(&name).to_string()
 }
 
 /// Resolve the common launch layers agents use on supported hosts. The hard

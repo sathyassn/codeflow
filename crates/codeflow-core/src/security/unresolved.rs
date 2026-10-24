@@ -1071,19 +1071,12 @@ pub(crate) struct WriterRead {
     pub(crate) written: Vec<String>,
 }
 
-/// GNU coreutils installed beside the platform tools use the same operands.
-/// Only known writer names are normalized; arbitrary g-prefixed programs are
-/// not assumed to be coreutils.
+/// The name a writer word is judged by: [`program_name`], the one GNU
+/// normaliser both guards share, after a Windows `.exe` suffix.
+///
+/// [`program_name`]: crate::hooks::git_guard::program_name
 pub(crate) fn writer_name(program: &str) -> &str {
-    let name = basename(program).trim_end_matches(".exe");
-    match name.strip_prefix('g') {
-        Some(
-            plain @ ("cp" | "mv" | "ln" | "link" | "install" | "tee" | "dd" | "truncate" | "touch"
-            | "mkdir" | "mktemp" | "rm" | "rmdir" | "unlink" | "chmod" | "chown" | "chgrp"
-            | "shred"),
-        ) => plain,
-        _ => name,
-    }
+    crate::hooks::git_guard::program_name(basename(program).trim_end_matches(".exe"))
 }
 
 /// Read a writer call with the shared scan: its command line, then each

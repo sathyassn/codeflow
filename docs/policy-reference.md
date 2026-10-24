@@ -730,8 +730,12 @@ operands.
   Writers and interpreter paths follow possible same-line links made by `ln`,
   `ln -s`, `cp -s`, `cp -l`, `link`, `pax -rwl`, `cpio -pl` and
   `rsync --link-dest`, including path-qualified program names and GNU
-  spellings. This includes `dd of=` destinations and GNU-prefixed writers
-  such as `gdd`, `gtee`, `gtruncate`, `ginstall`, `gmv` and `gcp`. Ordinary
+  spellings. This includes `dd of=` destinations. Both guards judge a GNU
+  program installed with a `g` prefix by its plain name wherever they match
+  program names: the coreutils writers and launchers (`gdd`, `gtee`,
+  `gtruncate`, `ginstall`, `gmv`, `gcp`, `grm`, `gln`, `gtimeout`, `genv`),
+  `gsed`, `gawk`, `gfind`, `gxargs`, `gpatch` and `ggrep`. The list is
+  closed: another `g`-prefixed program keeps its own name. Ordinary
   targets remain allowed. Add-then-status is allowed when the source
   configuration proves it needs no callback that the guard cannot judge
   before the new checkout exists.

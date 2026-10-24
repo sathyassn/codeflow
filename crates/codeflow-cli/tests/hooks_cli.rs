@@ -11090,3 +11090,109 @@ fn shell_expansions_round_four_review_matrix() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// SEC-406-24: a GNU program installed with a `g` prefix gets the verdict
+/// of its plain name in both guards, for every writer either guard lists,
+/// the deletion reader's `find` and `xargs`, `sed`, `patch` and the GNU
+/// launchers. The plain protected forms must refuse, so parity is not
+/// trivially two allows; the ordinary GNU forms must pass.
+#[cfg(unix)]
+#[test]
+fn gnu_prefixed_programs_share_the_plain_verdict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    enforced_repo(&root);
+    git(&root, &["worktree", "add", "-b", "task/w", ".worktrees/w"]);
+    std::fs::write(root.join("src/app.py"), "print(1)\n").unwrap();
+    let verdict = |guard: &str, line: &str| {
+        let payload =
+            serde_json::json!({"tool_name":"Bash", "tool_input":{"command":line}, "cwd":root})
+                .to_string();
+        run_with_stdin(
+            expansion_codeflow()
+                .args(["hook", guard, "--contract", "3"])
+                .current_dir(&root)
+                .env("HOME", tmp.path())
+                .env_remove("CDPATH"),
+            &payload,
+        )
+        .status
+        .code()
+    };
+    // (program, line with `{}` for the program word, plain git-guard verdict)
+    let protected = [
+        ("sed", "{} -i s/a/b/ .claude/settings.json"),
+        ("sed", "ln -s .claude L && {} -i s/a/b/ L/settings.json"),
+        ("find", "{} .worktrees -delete"),
+        ("xargs", "echo .worktrees/w | {} rm -rf"),
+        ("patch", "{} .claude/settings.json evil.diff"),
+        ("cp", "{} evil .claude/settings.json"),
+        ("mv", "{} evil .claude/settings.json"),
+        ("ln", "{} -sf evil .claude/settings.json"),
+        ("install", "{} evil .claude/settings.json"),
+        ("tee", "{} .claude/settings.json < /dev/null"),
+        ("dd", "{} if=/dev/null of=.claude/settings.json"),
+        ("truncate", "{} -s0 .claude/settings.json"),
+        ("rm", "{} .claude/settings.json"),
+        ("rm", "{} -rf .worktrees/w"),
+        ("unlink", "{} .claude/settings.json"),
+        ("chmod", "{} 644 .claude/settings.json"),
+        ("shred", "{} -u .claude/settings.json"),
+        ("timeout", "{} 5 rm -rf .worktrees/w"),
+        ("env", "{} rm -rf .worktrees/w"),
+    ];
+    let parity_only = [
+        ("link", "{} evil .claude/settings.json"),
+        ("touch", "{} .claude/settings.json"),
+        ("mkdir", "{} .claude/x"),
+        ("mktemp", "{} .claude/settings.XXXX"),
+        ("rmdir", "{} .worktrees/w"),
+        ("chown", "{} me .claude/settings.json"),
+        ("chgrp", "{} me .claude/settings.json"),
+    ];
+    let ordinary = [
+        ("sed", "{} -n p src/app.py"),
+        ("find", "{} src -name x"),
+        ("xargs", "echo src/app.py | {} cat"),
+        ("cp", "{} src/app.py out.py"),
+        ("rm", "{} -rf build"),
+        ("tee", "{} out.log < /dev/null"),
+    ];
+    let mut failures = Vec::new();
+    for (expect_plain, rows) in [
+        (Some(2), &protected[..]),
+        (None, &parity_only[..]),
+        (Some(0), &ordinary[..]),
+    ] {
+        for (program, line) in rows {
+            let plain = line.replace("{}", program);
+            for guard in ["git-guard", "exec-guard"] {
+                let plain_code = verdict(guard, &plain);
+                if guard == "git-guard" && expect_plain.is_some() && plain_code != expect_plain {
+                    failures.push(format!("{guard} plain {plain}: {plain_code:?}"));
+                }
+                for gnu in [
+                    format!("g{program}"),
+                    format!("/opt/homebrew/bin/g{program}"),
+                ] {
+                    let line = line.replace("{}", &gnu);
+                    let code = verdict(guard, &line);
+                    println!("{guard}: plain={plain_code:?} gnu={code:?}: {line}");
+                    if code != plain_code {
+                        failures.push(format!("{guard} {line}: {code:?}, plain {plain_code:?}"));
+                    }
+                }
+            }
+        }
+    }
+    // A `g`-prefixed program outside the closed list keeps its own name.
+    for line in ["grep -r x src", "gzip -k src/app.py", "git status"] {
+        for guard in ["git-guard", "exec-guard"] {
+            if verdict(guard, line) != Some(0) {
+                failures.push(format!("{guard} ordinary {line} refused"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
