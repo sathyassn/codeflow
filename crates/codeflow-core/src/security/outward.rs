@@ -116,7 +116,8 @@ struct Parsed {
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
     stdin_interpreter: usize,
-    commands: Vec<Vec<String>>,
+    commands: Vec<Unwrapped>,
+    home: Option<PathBuf>,
     created_tags: Vec<(PathBuf, String)>,
     calls: Vec<InterpreterCall>,
     /// What gives the command being read more arguments, while the
@@ -178,9 +179,21 @@ pub(crate) enum Supplier {
     },
 }
 
-pub(crate) fn unwrapped_commands(command: &str) -> Vec<Vec<String>> {
-    let mut parsed = Parsed::default();
-    visit(command, None, 0, &mut parsed);
+/// A simple command the line runs, as [`unwrapped_commands`] reaches it.
+pub(crate) struct Unwrapped {
+    pub(crate) args: Vec<String>,
+    /// For each word, whether the shell may expand it as an unquoted glob
+    /// or brace pattern; `None` when the parse that reached it lost that.
+    pub(crate) expands: Option<Vec<bool>>,
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
+    let mut parsed = Parsed {
+        home: home.map(Path::to_path_buf),
+        ..Parsed::default()
+    };
+    visit(command, Some(cwd), 0, &mut parsed);
     parsed.commands
 }
 
@@ -346,6 +359,15 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         let args = assigned.as_slice();
         let before = out.stdin_interpreter;
         for dir in &directories {
+            // The shell reads these files even when the executable is not a
+            // reader. Keep their cwd alongside the unwrapped command's cwd.
+            for source in crate::hooks::git_guard::redirect_reads(&segment) {
+                out.commands.push(Unwrapped {
+                    args: vec!["cat".to_string(), source],
+                    expands: None,
+                    cwd: dir.clone(),
+                });
+            }
             argv(
                 args,
                 Some(&assigned_patterns),
@@ -360,9 +382,22 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             }
         }
         if args.first().is_some_and(|s| s == "cd") {
-            if let Some(path) =
-                cd_operand(&args[1..]).and_then(crate::hooks::git_guard::inherited_path)
-            {
+            if let Some(path) = cd_operand(&args[1..]).and_then(|operand| {
+                let suffix = operand
+                    .strip_prefix("~/")
+                    .or_else(|| operand.strip_prefix("$HOME/"))
+                    .or_else(|| operand.strip_prefix("${HOME}/"))
+                    .or((operand == "~").then_some(""));
+                suffix
+                    .and_then(|suffix| {
+                        out.home.as_ref().map(|home| {
+                            crate::portable_path::slashed(
+                                &home.join(suffix.trim_start_matches('/')),
+                            )
+                        })
+                    })
+                    .or_else(|| crate::hooks::git_guard::inherited_path(operand))
+            }) {
                 let next: Vec<_> = directories
                     .iter()
                     .filter_map(|dir| dir.as_ref().map(|dir| Some(dir.join(&path))))
@@ -881,7 +916,11 @@ fn argv(
         return;
     };
     let name = crate::hooks::git_guard::launcher_name(program);
-    out.commands.push(args.to_vec());
+    out.commands.push(Unwrapped {
+        args: args.to_vec(),
+        expands: patterns.map(<[bool]>::to_vec),
+        cwd: cwd.map(Path::to_path_buf),
+    });
     let rest = &args[1..];
     if name == "git" {
         let sub = global_args("git", rest);

@@ -12139,6 +12139,34 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
     command_argv_patterns(segment).0
 }
 
+/// File sources of input redirections, excluding here-documents, here-strings
+/// and descriptor duplication. Use the same quote provenance as command argv.
+pub(crate) fn redirect_reads(segment: &str) -> Vec<String> {
+    let mut words = shell_words(segment).into_iter();
+    let mut sources = Vec::new();
+    while let Some(word) = words.next() {
+        let Some(len) =
+            redirect_operator_len(&word.text).filter(|len| *len <= word.unquoted_prefix)
+        else {
+            continue;
+        };
+        // The operator ends the matched span after any descriptor digits;
+        // `<<`, `<<<`, `<<-` and `<&` never read a file source.
+        let operator = &word.text[..len];
+        let input =
+            operator.ends_with("<>") || (operator.ends_with('<') && !operator.ends_with("<<"));
+        let target = if len == word.text.len() {
+            words.next().map(|word| word.text)
+        } else {
+            Some(word.text[len..].to_string())
+        };
+        if input {
+            sources.extend(target);
+        }
+    }
+    sources
+}
+
 /// The same argument vector with the parser's expansion provenance for
 /// each word. Keep these parallel vectors together when slicing launchers.
 pub(crate) fn command_argv_patterns(segment: &str) -> (Vec<String>, Vec<bool>) {
