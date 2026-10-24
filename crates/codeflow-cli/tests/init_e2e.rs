@@ -1042,7 +1042,16 @@ fn rewind_to_whole_files(root: &Path) {
 
 #[test]
 fn split_references_install_and_update_replaces_whole_files_at_standard_and_full() {
-    for tier in ["--standard", "--full"] {
+    assert_split_references_install_and_update(&["--standard", "--full"]);
+}
+
+#[test]
+fn split_references_install_and_update_in_a_representative_full_project() {
+    assert_split_references_install_and_update(&["--full"]);
+}
+
+fn assert_split_references_install_and_update(tiers: &[&str]) {
+    for &tier in tiers {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         std::fs::create_dir(&root).unwrap();
@@ -1592,11 +1601,11 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
 
 /// Run the stub delivery cases of `evals/herdr-delivery` against the
 /// `cf-herdr` installed at `skill`.
-fn run_herdr_delivery_cases(skill: &Path) -> Output {
+fn run_herdr_delivery_cases(skill: &Path, case: &str) -> Output {
     Command::new("python3")
         .arg("-B")
         .arg(repo_root().join("evals/herdr-delivery/test_delivery.py"))
-        .arg("StubDeliveryTests")
+        .arg(case)
         .env("CF_HERDR_SKILL_DIR", skill)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env_remove("HERDR_ENV")
@@ -1613,13 +1622,14 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
     const SCRIPT: &str = "skills/cf-herdr/scripts/deliver.py";
     const SKILL: &str = "skills/cf-herdr/SKILL.md";
     let assets = repo_root().join("assets/base/agents");
+    let mut implementations = std::collections::BTreeSet::new();
     for tier in ["--standard", "--full"] {
         let (_tmp, root) = fresh(tier);
         for tree in [".claude", ".agents"] {
             for rel in [SCRIPT, SKILL] {
                 assert_eq!(
-                    normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
-                    normalize_crlf(&std::fs::read_to_string(assets.join(rel)).unwrap()),
+                    std::fs::read(root.join(tree).join(rel)).unwrap(),
+                    std::fs::read(assets.join(rel)).unwrap(),
                     "{tier}: {tree}/{rel} differs from its asset"
                 );
             }
@@ -1628,7 +1638,14 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
             if cfg!(windows) {
                 continue;
             }
-            let cases = run_herdr_delivery_cases(&root.join(tree).join("skills/cf-herdr"));
+            let installed = root.join(tree).join("skills/cf-herdr");
+            let bytes = std::fs::read(installed.join("scripts/deliver.py")).unwrap();
+            let case = if implementations.insert(bytes) {
+                "StubDeliveryTests"
+            } else {
+                "StubDeliveryTests.test_a_seat_that_starts_is_confirmed_after_one_enter"
+            };
+            let cases = run_herdr_delivery_cases(&installed, case);
             assert!(
                 cases.status.success(),
                 "{tier}: installed {tree} cf-herdr fails the delivery cases:\n{}",
@@ -1660,13 +1677,25 @@ fn fresh_scaffolds_install_the_confirmed_herdr_delivery_and_update_brings_it() {
         if cfg!(windows) {
             continue;
         }
-        let cases = run_herdr_delivery_cases(&root.join(".agents/skills/cf-herdr"));
-        assert!(
-            cases.status.success(),
-            "{tier}: updated cf-herdr fails the delivery cases:\n{}",
-            output_text(&cases)
-        );
+        for tree in [".claude", ".agents"] {
+            let installed = root.join(tree).join("skills/cf-herdr");
+            let bytes = std::fs::read(installed.join("scripts/deliver.py")).unwrap();
+            assert!(
+                implementations.contains(&bytes),
+                "updated implementation changed"
+            );
+            let cases = run_herdr_delivery_cases(
+                &installed,
+                "StubDeliveryTests.test_a_seat_that_starts_is_confirmed_after_one_enter",
+            );
+            assert!(
+                cases.status.success(),
+                "{tier}: updated {tree}: {}",
+                output_text(&cases)
+            );
+        }
     }
+    assert_eq!(implementations.len(), usize::from(!cfg!(windows)));
 }
 
 /// TSK-163 AC-4 (serves EPC-020 AC-13): fresh standard and full scaffolds
@@ -2647,11 +2676,20 @@ fn a_refused_push_shows_in_the_ceremony_report_and_a_warned_push_does_not() {
 /// a fresh install within its guidelines.
 #[test]
 fn init_and_update_bring_the_plain_writing_rule_at_every_tier() {
+    assert_plain_writing_install_and_update(&["--minimal", "--standard", "--full"]);
+}
+
+#[test]
+fn plain_writing_installs_and_updates_in_a_representative_full_project() {
+    assert_plain_writing_install_and_update(&["--full"]);
+}
+
+fn assert_plain_writing_install_and_update(tiers: &[&str]) {
     const RULE_LINE: &str =
         "- **Write plainly.** Everything you write, replies and status updates included";
     const LEAD: &str = "**Write plainly.** Everything you write, replies and status updates";
     const SHORT: &str = "Write the synthesis plainly:";
-    for tier in ["--minimal", "--standard", "--full"] {
+    for &tier in tiers {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         std::fs::create_dir(&root).unwrap();

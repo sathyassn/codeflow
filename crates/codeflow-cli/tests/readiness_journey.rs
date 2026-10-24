@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/fixture_seed.rs"]
+mod fixture_seed;
 #[path = "support/process_folders.rs"]
 mod process_folders;
 use process_folders::isolated_home;
@@ -166,8 +168,14 @@ const OTHER: &str = "integration/EPC-002-other";
 /// | TSK-005 Taken | backlog | ready, then claimed elsewhere |
 /// | TSK-006 Across | other | ready |
 /// | TSK-007 Cross | backlog | waiting on TSK-006 on the other line |
-#[allow(clippy::too_many_lines)] // One fixture plans the whole backlog in order.
 fn planned_project() -> (tempfile::TempDir, PathBuf) {
+    let dir = fixture_seed::copy("readiness", || build_planned_project().0);
+    let root = dir.path().join("proj");
+    (dir, root)
+}
+
+#[allow(clippy::too_many_lines)] // One fixture plans the whole backlog in order.
+fn build_planned_project() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
     let bare = dir.path().join("origin.git");
@@ -863,4 +871,94 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
     } else {
         rows.join("\n")
     }
+}
+
+#[test]
+fn fixture_seed_runs_remove_the_previous_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let old = fixture_seed::prepare_run_directory(dir.path(), first);
+    std::fs::write(old.join("unfinished-seed"), "old").unwrap();
+    let current = fixture_seed::prepare_run_directory(dir.path(), second);
+    std::fs::write(current.join("ready-seed"), "current").unwrap();
+    assert!(!old.exists(), "the previous run's seed directory remains");
+    assert_eq!(
+        fixture_seed::prepare_run_directory(dir.path(), second),
+        current
+    );
+    assert_eq!(
+        std::fs::read_to_string(current.join("ready-seed")).unwrap(),
+        "current"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn fixture_seeds_build_once_and_isolate_files_and_remotes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let builds = AtomicUsize::new(0);
+    let key = format!("seed-isolation-{}", uuid::Uuid::new_v4());
+    let copies = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    fixture_seed::copy(&key, || {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        let dir = tempfile::tempdir().unwrap();
+                        let root = dir.path().join("proj");
+                        std::fs::create_dir(&root).unwrap();
+                        git(&root, &["init", "-q"]);
+                        git(dir.path(), &["init", "-q", "--bare", "origin.git"]);
+                        git(
+                            &root,
+                            &[
+                                "remote",
+                                "add",
+                                "origin",
+                                dir.path().join("origin.git").to_str().unwrap(),
+                            ],
+                        );
+                        std::fs::write(root.join("value"), "seed").unwrap();
+                        dir
+                    })
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+    for copy in &copies {
+        let root = copy.path().join("proj");
+        assert_eq!(
+            git(&root, &["remote", "get-url", "origin"]),
+            copy.path().join("origin.git").to_str().unwrap()
+        );
+        assert_eq!(std::fs::read_to_string(root.join("value")).unwrap(), "seed");
+        std::fs::write(root.join("value"), "changed").unwrap();
+        std::fs::write(
+            copy.path().join("origin.git/HEAD"),
+            "ref: refs/heads/changed\n",
+        )
+        .unwrap();
+    }
+    let clean = fixture_seed::copy(&key, || panic!("seed rebuilt"));
+    assert_eq!(
+        std::fs::read_to_string(clean.path().join("proj/value")).unwrap(),
+        "seed"
+    );
+    assert!(
+        !std::fs::read_to_string(clean.path().join("origin.git/HEAD"))
+            .unwrap()
+            .contains("changed")
+    );
 }
