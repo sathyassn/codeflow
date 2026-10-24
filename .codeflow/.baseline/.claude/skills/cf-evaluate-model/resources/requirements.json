@@ -1875,7 +1875,7 @@
         {
           "path": ".agents/skills/cf-present/SKILL.md",
           "markers": [
-            "Keep short or linearly explained answers in the native conversation",
+            "Keep short answers in the native conversation",
             "do not use this skill to build product UI, a durable documentation portal",
             "Decide whether the surface earns its cost",
             "Stay in chat for a short answer",

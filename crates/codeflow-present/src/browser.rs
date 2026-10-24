@@ -119,10 +119,7 @@ pub fn open_window(
     // which takes no second launch, so the window opens over the debugging
     // port instead. A release build always takes the second launch below.
     #[cfg(debug_assertions)]
-    if let Some(port) = std::env::var(TEST_DEBUGGING_PORT_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-    {
+    if let Some(port) = test_debugging_port() {
         return open_test_window(port, &file_url(bootstrap_path)?).map(|()| true);
     }
     let executable = qualified_browser()?;
@@ -178,14 +175,12 @@ fn open_test_window(port: u16, url: &str) -> Result<()> {
         .map_err(unavailable)?;
     let mut buffer = [0_u8; 512];
     let read = stream.read(&mut buffer).map_err(unavailable)?;
-    let response = String::from_utf8_lossy(&buffer[..read]);
-    if response.starts_with("HTTP/1.1 200") {
+    if buffer[..read].starts_with(b"HTTP/1.1 200") {
         Ok(())
     } else {
-        Err(PresentError::BrowserUnavailable(format!(
-            "the test browser refused a new window: {}",
-            response.lines().next().unwrap_or_default()
-        )))
+        Err(PresentError::BrowserUnavailable(
+            "the test browser refused a new window".to_string(),
+        ))
     }
 }
 
@@ -446,6 +441,15 @@ fn terminate_recovery_record(record: &LaunchRecoveryRecord) -> Result<()> {
 #[cfg(debug_assertions)]
 const TEST_DEBUGGING_PORT_ENV: &str = "CF_PRESENT_TEST_DEBUGGING_PORT";
 
+/// The lifecycle check's debugging port, when it set one.
+#[cfg(debug_assertions)]
+fn test_debugging_port() -> Option<u16> {
+    std::env::var_os(TEST_DEBUGGING_PORT_ENV)?
+        .to_str()?
+        .parse::<u16>()
+        .ok()
+}
+
 fn browser_launch_command(executable: &Path) -> Command {
     crate::platform::restricted_command(executable)
 }
@@ -477,10 +481,7 @@ fn configured_browser_launch_command(
     // never opens a window on the host. A release build never reads the
     // variable.
     #[cfg(debug_assertions)]
-    if let Some(port) = std::env::var(TEST_DEBUGGING_PORT_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-    {
+    if let Some(port) = test_debugging_port() {
         command
             .arg("--headless=new")
             .arg(format!("--remote-debugging-port={port}"));
