@@ -35,7 +35,7 @@ async function setComment(page, armed) {
   const button = page.locator('#cf-comment-toggle');
   if ((await button.getAttribute('aria-pressed') === 'true') !== armed) {
     if (armed) await button.click();
-    else await page.getByRole('button', { name: 'Done', exact: true }).click();
+    else await page.getByTestId('comment-leave').click();
   }
   await page.waitForFunction(value => document.querySelector('#cf-present-document')?.getAttribute('data-cf-commenting') === String(value), armed);
   // Let the armed rail finish moving before measuring pointer coordinates.

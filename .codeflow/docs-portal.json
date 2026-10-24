@@ -30,7 +30,7 @@
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "20f925ffec31aaa6bf8859da467541624fec82b63361dac48c3dcb3941ab8aa6"
+      "pristine_sha256": "1b21ac6b9932d628128cbfe3072a7d9692db19e6a6fb319bdd589345786d6efd"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -230,7 +230,7 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "17407d3ceaa3296685197171b17ae1033d085f3e38e4eecd2a005550f780ed1f"
+      "pristine_sha256": "11bc305840024e60e7300d802d92d50a81bf1f244ee4e1fb6d6cbf83d5979e49"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
@@ -391,6 +391,10 @@
     "tsconfig.json": {
       "ownership": "managed",
       "pristine_sha256": "974b0a3b37e52f3649d9df63e72e374794e9e797c8ae61eca4812f844406f7ef"
+    },
+    "tests/present-parity.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "19b677c926547414e7e7358f44674dcabf46e5c7c1ca7efaa3fbaf40db6c64ab"
     }
   }
 }

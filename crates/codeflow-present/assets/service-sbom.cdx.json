@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-Q2LKHFZJ.css.br",
-      "name": "service/app-Q2LKHFZJ.css.br",
+      "bom-ref": "service/app-ERZ7L6ZI.js.br",
+      "name": "service/app-ERZ7L6ZI.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "ed9432e87a885ccf2851bda9490c556f05b242dcd7f864bac66ebce3cbe6272f"
+          "content": "c903917dd8930d5f2c384ecdb614ebaa8e6fdabc5b90a2d4fcfb2ede49c7ed20"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-Q2LKHFZJ.css.gz",
-      "name": "service/app-Q2LKHFZJ.css.gz",
+      "bom-ref": "service/app-ERZ7L6ZI.js.gz",
+      "name": "service/app-ERZ7L6ZI.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "c6bfa43fcc869b5bb5f69c8cf275cbb66f5d4e768b06182a827622ea223ae846"
+          "content": "50882e0e2747a9c59e3519cd3068e8d961791ec420293162a7e5509d0f8b49c1"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZS6E7JDB.js.br",
-      "name": "service/app-ZS6E7JDB.js.br",
+      "bom-ref": "service/app-KOIIPPNC.css.br",
+      "name": "service/app-KOIIPPNC.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "b692dadbf4938636cc0d50794750951956effde5bc0037170c9ee3732c19a507"
+          "content": "5a76fb74172cc0ff346ba5b4521bd8b88f7aac682948169fc0fe86db2a216385"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZS6E7JDB.js.gz",
-      "name": "service/app-ZS6E7JDB.js.gz",
+      "bom-ref": "service/app-KOIIPPNC.css.gz",
+      "name": "service/app-KOIIPPNC.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "eb2ecc9858f278c199dbe6834c63b3af7909e954ff28df78500f3ca827a8b343"
+          "content": "4fdf34a35271a241c53809987a50b3d1cf6e0eecb4473e38dddb735547b8f290"
         }
       ]
     },

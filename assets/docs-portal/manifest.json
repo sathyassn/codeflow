@@ -96,6 +96,7 @@
     { "path": "tests/fixtures/figures/rendered/controls/extent-short.html", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tests/page-shapes.mjs", "ownership": "managed" },
+    { "path": "tests/present-parity.test.mjs", "ownership": "managed" },
     { "path": "tests/portal-fixture.mjs", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }
   ]

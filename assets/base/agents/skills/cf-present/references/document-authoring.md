@@ -151,7 +151,8 @@ depth and total blocks. Avoid tabs when readers need to compare the content
 side by side. A `tabs` block accepts an optional `title`, used above the control
 and in the section list (otherwise "Views"). The first panel opens initially;
 click a tab or use Left, Right, Home and End while its tab has focus. In Comment
-mode a click pins the tab label; leave Comment to change panels.
+mode a click pins the tab label; leave Comment to change panels. An export
+opened with JavaScript off shows only the first tab panel.
 
 ### Sandboxed HTML
 

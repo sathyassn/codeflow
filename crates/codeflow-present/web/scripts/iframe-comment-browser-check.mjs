@@ -22,7 +22,7 @@ export async function checkIframeComments(browser, origin) {
       parent: document.querySelector("#frame-figure").getAttribute("style"),
       root: document.querySelector("#cf-present-document").getAttribute("style"),
     }));
-    const comment = page.getByRole("button", { name: /Comment/ });
+    const comment = page.getByTestId("comment-btn");
     await comment.click();
     await page.waitForFunction(() => getComputedStyle(document.querySelector("iframe")).pointerEvents === "none");
     await frame.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
