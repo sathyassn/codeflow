@@ -436,11 +436,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
   // At phone width arming Comment opens the 56 px notes peek.
-  await page.getByRole("button", { name: /Comment/ }).click();
+  await page.getByTestId("comment-btn").click();
   await page.locator(".cf-hint.on").waitFor();
   assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "true");
   assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-expanded"), "false");
-  await page.getByRole("button", { name: /Comment/ }).click();
+  await page.getByTestId("comment-btn").click();
   await page.locator("#cf-feedback-panel[data-expanded='true']").waitFor();
   await page.getByTestId("feedback-history").waitFor();
   await page.getByTestId("feedback-history").locator("summary").click();
@@ -454,7 +454,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
   await page.getByText("Still the whole document in this revision.").waitFor();
   assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Hide notes" }).click();
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
@@ -516,13 +516,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   });
 
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
-  await page.getByRole("button", { name: /Comment/ }).click();
+  await page.getByTestId("comment-btn").click();
   await page.locator(".cf-hint.on").waitFor();
   // One instruction in the hint, the empty rail and the status line (P3-2).
   const instruction = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
-  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), `${instruction} Esc leaves.`);
+  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), `Comment mode. ${instruction}`);
   await openSheet();
-  await page.getByText("Nothing noted yet").waitFor();
+  await page.getByText("No notes queued").waitFor();
   assert.equal(await page.getByTestId("notes-empty").locator(".h").innerText(), instruction);
   assert.equal(await page.locator(".cf-dock .cf-status").innerText(), instruction);
 

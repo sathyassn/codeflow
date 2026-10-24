@@ -189,6 +189,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // Toast: confirmations and session notices must stay visible when the rail
   // (and its status line) is closed — pass10 grammar. Sticky for session-level
   // notices; timed for confirmations.
+  const [sentReview, setSentReview] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef(0);
   const toastStickyRef = useRef(false);
@@ -200,6 +201,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const dockRef = useRef<HTMLElement>(null);
+  const hintRef = useRef<HTMLDivElement>(null);
   const floatRef = useRef<HTMLDivElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
@@ -278,6 +280,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     window.clearTimeout(toastTimerRef.current);
     setToast(null);
   }, [railVisible]);
+
+  // The instruction can wrap at phone widths or with a larger display scale.
+  // Keep the queue header below it, so its count and actions stay visible.
+  useLayoutEffect(() => {
+    const hint = hintRef.current;
+    const update = (): void => document.documentElement.style.setProperty("--cf-review-hint-height", `${hint?.getBoundingClientRect().height ?? 0}px`);
+    update();
+    const observer = hint ? new ResizeObserver(update) : null;
+    if (hint) observer?.observe(hint);
+    return () => { observer?.disconnect(); document.documentElement.style.removeProperty("--cf-review-hint-height"); };
+  }, [commentMode]);
 
   const clearHot = (): void => {
     hotRef.current?.classList.remove("cf-hot");
@@ -628,7 +641,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
    * Diagram / empty: drag draws a region. Shift+drag forces region anywhere.
    * Priority on release: text selection > deliberate region > element click.
    */
-  useEffect(() => {
+  // Restore pointer listeners with the composer close, before the next drag.
+  useLayoutEffect(() => {
     if (!commentMode || captureMode || busy || composerOpen) return undefined;
 
     shiftRef.current = false;
@@ -677,7 +691,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
       // A form's controls are review targets while commenting; the form
       // runtime keeps the gesture from changing them (SPC-014 B6).
-      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form]")) return;
+      if (event.target.closest("button, a, input, textarea, select") && !event.target.closest("[data-cf-form], [role=tab]")) return;
       let releasedText = false;
       if (pendingPinRef.current) {
         releasedText = capturedSelectionCovers(pendingPinRef.current, event.clientX, event.clientY);
@@ -718,7 +732,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         documentRoot.dataset.cfCursor = textual ? "text" : "cross";
         // SVG words are selectable and still name the part they label, so
         // hover shows the part a click would pin.
-        const drawing = target instanceof SVGElement;
+        const drawing = target instanceof SVGElement || target.closest("[data-cf-review-text-base]") !== null;
         const point = { x: event.clientX, y: event.clientY };
         const candidate = textual && !drawing ? null : annotatableAncestor(documentRoot, target, point);
         setHot(candidate);
@@ -806,9 +820,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         return;
       }
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) {
-        // A selection the review text cannot hold, such as a figure's label,
-        // pins the part the label names; it is never a dead gesture (QA
-        // defect 5 in its figure form).
+        // A selection spanning separate text roots falls back to the part
+        // where it began, rather than silently losing the gesture.
         const node = sel.anchorNode;
         const anchor = node instanceof Element ? node : node?.parentElement ?? null;
         sel.removeAllRanges();
@@ -895,6 +908,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setHot(null);
     };
   }, [busy, captureMode, commentMode, composerOpen, config.review_limits.max_selector_utf16, documentRoot]);
+
+  // A phone sheet changes document padding even when its outer size stays
+  // constant, so ResizeObserver alone cannot notice the moved anchors.
+  useLayoutEffect(() => setMarkerEpoch(value => value + 1), [railVisible]);
 
   // Markers hold document coordinates; anything that reflows the document
   // (viewport resize, type scale, rail open) must re-measure their anchors.
@@ -1170,6 +1187,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const pending = left ? ` ${left} ${left === 1 ? "note saved while it was sent is" : "notes saved while it was sent are"} still pending.` : "";
       const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"}.${cropNotice}${pending}`;
       setStatus(confirmation);
+      const verdictLabel = verdict === "request_changes" ? "Request changes" : verdict === "approve" ? "Approve" : "Approve with notes";
+      setSentReview(`Review sent: ${sentNotes.length} ${sentNotes.length === 1 ? "note" : "notes"} · ${verdictLabel}.`);
       showToast(confirmation);
     } catch (error) {
       // SPC-014 I3: a refused review names its reason; the pending notes stay
@@ -1351,7 +1370,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             aria-controls="cf-feedback-panel"
             aria-expanded={railVisible}
             aria-pressed={commentMode}
-            title={commentMode ? "Exit Comment mode (C or Esc)" : "Comment mode (C)"}
+            title={commentMode ? (!panelOpen || (sheetLayout() && !sheetExpanded) ? "Show queued notes" : "Exit Comment mode (C or Esc)") : "Comment mode (C)"}
             onClick={() => {
               if (commentMode && !panelOpen) { setPanelOpen(true); setSheetExpanded(notes.length > 0); }
               else if (commentMode && sheetLayout() && !sheetExpanded) setSheetExpanded(true);
@@ -1467,11 +1486,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       </header>
 
       {commentMode ? (
-        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode}>
+        <div ref={hintRef} class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" /></svg>
-          <span role="status">{COMMENT_INSTRUCTION} Esc leaves.</span>
+          <span role="status"><strong>Comment mode.</strong> {COMMENT_INSTRUCTION}</span>
           <button type="button" class="cf-hint-leave" data-testid="comment-leave" onClick={() => armComment(false)}>
-            Done
+            Exit Comment
           </button>
         </div>
       ) : null}
@@ -1505,6 +1524,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             </span>
             <span class="lab">{kindLabels[targetKindOf(pendingPin.captured)]}</span>
             <span class="q">{captureQuote(pendingPin.captured)}</span>
+            <span class="cf-float-action">Write note</span>
           </button>
           <button
             type="button"
@@ -1519,7 +1539,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               regionDraftRef.current = null;
             }}
           >
-            esc
+            Cancel
           </button>
         </div>
       ) : null}
@@ -1546,13 +1566,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <textarea
             ref={composerTextRef}
             data-testid="composer-text"
-            placeholder="What should change?"
+            aria-label="Note"
+            placeholder="Write your note"
             maxLength={config.review_limits.max_text_utf16}
             value={composerBody}
             onInput={(e) => setComposerBody(e.currentTarget.value)}
           />
           <div class="row">
-            <button type="button" class="pri" data-testid="composer-save" disabled={busy} onClick={saveComposer}>
+            <button type="button" class="pri" data-testid="composer-save" disabled={busy || !composerBody.trim()} onClick={saveComposer}>
               Save note
             </button>
             {editingId ? (
@@ -1567,7 +1588,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                   setStatus("Note removed.");
                 }}
               >
-                Delete
+                Remove note
               </button>
             ) : null}
             <button type="button" data-testid="composer-cancel" onClick={cancelComposer}>
@@ -1594,10 +1615,15 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           if (Number.isFinite(start) && start - event.clientY >= 20) setSheetExpanded(true);
           dockRef.current?.removeAttribute("data-drag-start");
         }}>
-          <b id="cf-feedback-title">Notes</b>
+          <b id="cf-feedback-title">Queued notes</b>
           <span id="dockCount" class="cf-count" aria-label={`${notes.length} pending notes`}>
             {notes.length}
           </span>
+          <button type="button" class="cf-notes-expand" data-testid="notes-expand"
+            aria-expanded={sheetExpanded} aria-controls="cf-queued-notes"
+            onClick={() => setSheetExpanded((expanded) => !expanded)}>
+            {sheetExpanded ? "Collapse" : "Show notes"}
+          </button>
           <button
             class="cf-feedback-close"
             type="button"
@@ -1606,14 +1632,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               document.getElementById("cf-comment-toggle")?.focus();
             }}
           >
-            Close
+            Hide notes
           </button>
         </div>
 
-        <div class="list" data-testid="notes-list">
+        <div id="cf-queued-notes" class="list" data-testid="notes-list">
           {!notes.length ? (
             <div class="empty" data-testid="notes-empty">
-              <span class="t">Nothing noted yet</span>
+              <span class="t">No notes queued</span>
               <span class="h">{COMMENT_INSTRUCTION}</span>
             </div>
           ) : (
@@ -1626,6 +1652,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 tabindex={0}
                 onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
                 onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     const rect = e.currentTarget.getBoundingClientRect();
@@ -1641,6 +1668,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 <div>
                   <div class="k">
                     {kindLabels[targetKindOf(note)]} · #{index + 1}
+                    <button type="button" class="cf-text-action" data-testid="note-edit"
+                      disabled={busy} aria-label={`Edit note ${index + 1}`}
+                      onClick={(e) => { e.stopPropagation(); openNoteEditor(note, { x: e.clientX, y: e.clientY }); }}>
+                      Edit
+                    </button>
                     <button
                       type="button"
                       class="cf-text-action"
@@ -1668,7 +1700,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">
-          <summary>Tools</summary>
+          <summary>More capture options</summary>
           {/* A tool press takes over from the selection, so a pending selection
               pin must not land between the press and its click; under load
               that lost the click (TSK-159). */}
@@ -1735,7 +1767,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
         <div class="ft">
           <div class="path">
-            Goes to <b>session store</b> → present feedback → harness/chat
+            Notes stay queued until you submit this review.
           </div>
           <label class="cf-verdict">
             <span>Verdict</span>
@@ -1776,6 +1808,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           {eventMessage ? <p class="cf-event-message">{eventMessage}</p> : null}
         </div>
       </aside>
+
+      {sentReview && !commentMode && !toast ? (
+        <div class="cf-review-sent" role="status" data-testid="review-sent">
+          <span>{sentReview}</span>
+          <button type="button" aria-label="Dismiss sent confirmation" onClick={() => setSentReview(null)}>Dismiss</button>
+        </div>
+      ) : null}
 
       {toast ? (
         <div class="cf-toast on" role="status" data-testid="toast">
@@ -2078,7 +2117,7 @@ function observeSections(root: HTMLElement, onChange: (id: string) => void): () 
 // sections list names the disclosure or tabs block only (QA defect 8).
 function sectionElements(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")]
-    .filter((section) => !section.parentElement?.closest("details"));
+    .filter((section) => !section.parentElement?.closest("details, [role=tabpanel]"));
 }
 
 function isEditable(target: EventTarget | null): boolean {

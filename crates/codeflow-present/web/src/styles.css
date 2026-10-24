@@ -638,14 +638,14 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .callout--info, .callout--note { border-color: var(--cf-accent); }
 .comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr)); gap: var(--cf-space-6); }
 .comparison > article { padding-block-start: var(--cf-space-3); border-block-start: 0.2rem solid var(--cf-accent); }
-.comparison h2, .decision h2 { margin: 0 0 var(--cf-space-2); font-size: 1.15rem; }
+#cf-present-document .comparison h2, #cf-present-document .decision h2, #cf-present-document .tabs > h2 { margin: 0 0 var(--cf-space-2); font-size: var(--cf-fs-title); }
 .comparison p { margin-block: var(--cf-space-2) 0; }
 .decision { padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
 .decision > header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--cf-space-4); }
 .decision__status { color: var(--cf-accent-strong); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
 /* Forms and v2 decisions (SPC-014 B6): the runtime renders the controls. */
 .cf-form { display: grid; gap: var(--cf-space-4); padding-block: var(--cf-space-4); border-block: var(--cf-line) solid var(--cf-border); }
-.cf-form__title { margin: 0; font-size: 1.15rem; }
+#cf-present-document .cf-form__title { margin: 0; font-size: var(--cf-fs-title); }
 .cf-form__fields { display: grid; gap: var(--cf-space-5); }
 .cf-field { display: grid; gap: var(--cf-space-2); min-inline-size: 0; margin: 0; padding: 0; border: 0; }
 .cf-field__label { padding: 0; font-weight: 650; }
@@ -1075,7 +1075,7 @@ code { font-family: var(--cf-font-mono); }
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 .cf-marker svg { width: 13px; height: 13px; display: block; flex-shrink: 0; fill: #fff; }
-.cf-marker:hover { transform: scale(1.06); }
+.cf-marker:hover { box-shadow: 0 2px 10px color-mix(in srgb, var(--cf-text) 40%, transparent); }
 .cf-marker .n {
   font: 700 11px/1 var(--cf-font-mono);
   color: #fff;
@@ -1405,13 +1405,11 @@ code { font-family: var(--cf-font-mono); }
 
 /* SVG parts draw no outline: the highlight is a glow that follows the
    shape, thin strokes included, and leaves its fill and dashes alone. */
-svg .cf-hot,
-svg.cf-hot {
+svg :not(svg).cf-hot {
   outline: none;
   filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--cf-accent) 85%, transparent)) drop-shadow(0 0 3px color-mix(in srgb, var(--cf-accent) 55%, transparent));
 }
-svg .cf-hot-sel,
-svg.cf-hot-sel {
+svg :not(svg).cf-hot-sel {
   outline: none;
   background-image: none;
   filter: drop-shadow(0 0 1px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent));
@@ -1567,7 +1565,7 @@ body { font-size: var(--cf-fs-body); font-feature-settings: var(--cf-font-featur
   .cf-title-group .cf-kicker, .cf-revision, .cf-note-count-meta { display: none; }
   .cf-title-line strong { white-space: normal; font-size: 14px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .cf-appearance { gap: 4px; flex-shrink: 0; }
-  .cf-comment-btn > span:nth-child(2) { display: none; }
+  .cf-comment-btn > span:nth-child(2) { display: inline; }
   .cf-settings-panel { position: fixed; top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 76px); overflow-y: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1626,3 +1624,33 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
 .cf-thread-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-block: 8px; }
 .cf-thread-actions button { font: inherit; padding: 8px 12px; min-height: 44px; cursor: pointer; }
 .cf-feedback-history dd { margin-inline-start: 0; overflow-wrap: anywhere; }
+
+/* Peer views keep one panel visible and preserve the existing utility tokens. */
+.tabs__labels { display: flex; flex-wrap: wrap; gap: var(--cf-space-2); border-block-end: 1px solid var(--cf-border); }
+.tabs__labels [role="tab"] { border: 0; border-radius: 0; background: transparent; color: var(--cf-text-muted); padding: 0.6rem 0.8rem; user-select: text; }
+.tabs__labels [aria-selected="true"] { color: var(--cf-text); border-block-end: 2px solid var(--cf-accent); }
+[role="tabpanel"][hidden] { display: none; }
+
+/* Review affordances use the existing controls, rail and surface tokens. */
+.cf-float-action { flex: none; font-weight: 600; color: var(--cf-accent-strong); }
+.cf-notes-expand { display: none; }
+.cf-review-sent { position: fixed; z-index: 55; bottom: 16px; left: 16px; max-width: calc(100vw - 32px); display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); box-shadow: var(--cf-shadow); font-size: var(--cf-fs-ui); }
+.cf-review-sent button, .cf-notes-expand { font: inherit; color: var(--cf-text); background: var(--cf-surface-raised); border: 1px solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); padding: 6px; cursor: pointer; }
+@media (max-width: 879.98px) {
+  .cf-notes-expand { display: block; }
+  .cf-dock .hd { position: sticky; top: 0; z-index: 1; gap: 6px; padding-inline: 12px; }
+  .cf-dock .hd b { font-size: var(--cf-fs-ui); }
+  .cf-dock[data-expanded="false"] > :not(.hd) { display: none; }
+}
+
+@media (min-width: 880px) {
+  .cf-dock { top: calc(var(--cf-topbar-h) + var(--cf-review-hint-height, 0px)); }
+}
+
+/* Leave saved pins and scrolled targets below a wrapped Comment strip. */
+html:has(.cf-chrome-frame[data-commenting="true"]) {
+  scroll-padding-block-start: calc(var(--cf-topbar-h) + var(--cf-review-hint-height, var(--cf-strip-h)) + 3rem);
+}
+html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
+  padding-block-start: calc(var(--cf-topbar-h) + var(--cf-review-hint-height, var(--cf-strip-h)) + 3.75rem);
+}
