@@ -659,7 +659,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "b6b536385899d39e2cc5ea78cf72820fca620596b21898efb7bd72acc9aedd9f",
+      "sha256": "904f171385a6d6f04c29034f845acb63588b81bc6d7f97f179a84bba25f16071",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -1499,7 +1499,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "b6b536385899d39e2cc5ea78cf72820fca620596b21898efb7bd72acc9aedd9f",
+      "sha256": "904f171385a6d6f04c29034f845acb63588b81bc6d7f97f179a84bba25f16071",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -1835,7 +1835,7 @@
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "60b0aeaebd1ffa8734321e8574aa0460dca6b0b486e9e04981c60b89d44cf404",
+      "sha256": "ee9f471e025b7051e0582a1d53b5c346ae99383731439ad889b7e1008f8e5bbd",
       "exec": false
     },
     "docs/architecture.md": {

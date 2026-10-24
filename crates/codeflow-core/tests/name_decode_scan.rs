@@ -4983,6 +4983,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Debug builds only: presence alone asks the lifecycle check's browser to run headed; the value is never read.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_headed",
+        "obtain-absent:var_os",
+        1,
+        "unproven",
+    ),
     // Rejects whitespace-only alternative text. Accepted image identity configuration stays unchanged.
     (
         "crates/codeflow-present/src/config.rs",

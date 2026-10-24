@@ -2,7 +2,10 @@
 // (TSK-441 AC-6 to AC-8). A debug build adds a loopback debugging port to that
 // launch when CF_PRESENT_TEST_DEBUGGING_PORT is set, and runs it headless, so
 // this check drives the real isolated browser, not a browser of its own, and
-// never opens a window on the host:
+// never opens a window on the host. With CF_PRESENT_TEST_HEADED=1 as well, the
+// browser runs headed and the check runs only the AC-8 steps, so `present show`
+// takes the production second launch; it opens a real window briefly and then
+// stops every process it started:
 //
 //   open        the session launches its browser; a window shows the review
 //   AC-8        the window closes, the browser keeps running, and
@@ -29,6 +32,9 @@ const codeflow = codeflowBinary(repoRoot);
 const GRACE_MS = 15_000;
 const QUIT_BOUND_MS = GRACE_MS + 25_000 + 15_000;
 
+// Ends the headed run's try block once its steps passed.
+class HeadedDone extends Error {}
+
 const runRoot = await mkdtemp(join(tmpdir(), "cflife-"));
 const project = join(runRoot, "project");
 const home = join(runRoot, "home");
@@ -36,7 +42,9 @@ const taskTemp = join(runRoot, "tmp");
 const output = process.env.CF_PRESENT_EVIDENCE_DIR ? resolve(process.env.CF_PRESENT_EVIDENCE_DIR) : join(runRoot, "output");
 await Promise.all([mkdir(project), mkdir(home), mkdir(taskTemp), mkdir(output, { recursive: true })]);
 const debuggingPort = await freePort();
+const headed = process.env.CF_PRESENT_TEST_HEADED === "1";
 const env = {
+  ...(headed ? { CF_PRESENT_TEST_HEADED: "1" } : {}),
   PATH: process.env.PATH ?? "",
   LANG: process.env.LANG ?? "en_US.UTF-8",
   HOME: home,
@@ -87,6 +95,11 @@ try {
   if (session().browser_pid !== firstPid || !alive(firstPid)) throw new Error("present show replaced the browser");
   step(`present show opened a window in browser ${firstPid}`);
   await page.screenshot({ path: join(output, "lifecycle-reopened.png") });
+  if (headed) {
+    step(`headed: the second launch handed its window to browser ${firstPid}; ${(await appTargets()).length} review window open`);
+    console.log(JSON.stringify({ result: "pass", mode: "headed", session: sessionId, browser_pid: firstPid, log }, null, 2));
+    throw new HeadedDone();
+  }
 
   // AC-7: a window open past the grace keeps the browser.
   await delay(GRACE_MS + 5_000);
@@ -150,11 +163,15 @@ try {
   step("End review delivered the queued note, quit the browser and closed the session");
   console.log(JSON.stringify({ result: "pass", session: sessionId, log }, null, 2));
 } catch (error) {
-  failure = error;
+  if (!(error instanceof HeadedDone)) failure = error;
 } finally {
   await browser?.close().catch(() => {});
   if (sessionId) {
     try { run(codeflow, ["present", "close", sessionId]); } catch { /* already closed */ }
+  }
+  // Every process this run started names its root; stop any that remain.
+  for (const pid of processesUnder(runRoot)) {
+    try { process.kill(pid, "SIGKILL"); step(`stopped leftover process ${pid}`); } catch { /* gone */ }
   }
   await writeFile(join(output, "lifecycle-log.txt"), `${log.join("\n")}\n`).catch(() => {});
   if (!process.env.CF_PRESENT_EVIDENCE_DIR) await rm(runRoot, { recursive: true, force: true }).catch(() => {});
@@ -162,6 +179,14 @@ try {
 if (failure) {
   console.error(failure);
   process.exit(1);
+}
+
+function processesUnder(root) {
+  const listing = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return listing.split("\n")
+    .filter((line) => line.includes(root))
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
 }
 
 function run(executable, args) {

@@ -175,6 +175,12 @@ impl WindowPresence {
             && now.saturating_sub(self.last_seen.load(Ordering::Acquire)) >= grace
     }
 
+    /// A window is on its way (a bootstrap or rebootstrap): restart the grace
+    /// so the browser is not quit before the new page's first poll.
+    fn touch(&self) {
+        self.last_seen.store(now_unix(), Ordering::Release);
+    }
+
     /// Forget the pages of a browser that quit, so the next one's first load
     /// starts a new grace.
     fn reset(&self) {
@@ -465,6 +471,7 @@ async fn bootstrap(
     }
     bootstrap_state.used = true;
     drop(bootstrap_state);
+    state.windows.touch();
     let _ = remove_runtime_control(&state.store, state.session_id, &state.bootstrap_path);
     state.last_activity.store(now_unix(), Ordering::Release);
     let cookie = format!(
@@ -542,6 +549,8 @@ async fn rebootstrap(
         used: false,
         issued_at: now_unix(),
     };
+    drop(bootstrap);
+    state.windows.touch();
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header(header::CACHE_CONTROL, "no-store")
