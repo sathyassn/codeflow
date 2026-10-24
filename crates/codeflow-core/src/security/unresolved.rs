@@ -840,7 +840,7 @@ fn segment_form(
     if expands(program) {
         return None;
     }
-    let name = launcher_name(program).trim_end_matches(".exe");
+    let name = writer_name(launcher_name(program));
     if is_shell(name) {
         if shell_c_argument(args).is_some() {
             return None;
@@ -960,7 +960,7 @@ impl Scan {
 /// feed the placement check, so an option the table reads is never read
 /// without its value (review round 19).
 fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
-    let known = known_options(name)?;
+    let known = known_options(writer_name(name))?;
     let tar = matches!(name, "tar" | "bsdtar" | "gtar");
     let mut scan = Scan {
         unknown: None,
@@ -1071,6 +1071,14 @@ pub(crate) struct WriterRead {
     pub(crate) written: Vec<String>,
 }
 
+/// The name a writer word is judged by: [`program_name`], the one GNU
+/// normaliser both guards share, after a Windows `.exe` suffix.
+///
+/// [`program_name`]: crate::hooks::git_guard::program_name
+pub(crate) fn writer_name(program: &str) -> &str {
+    crate::hooks::git_guard::program_name(basename(program).trim_end_matches(".exe"))
+}
+
 /// Read a writer call with the shared scan: its command line, then each
 /// variable the line assigns that the writer reads as more options. `None`
 /// for a program with no entry, whose options the guard does not read.
@@ -1079,7 +1087,7 @@ pub(crate) fn writer_read(
     args: &[String],
     assigned: &[(String, String)],
 ) -> Option<WriterRead> {
-    let known = known_options(name)?;
+    let known = known_options(writer_name(name))?;
     let mut read = WriterRead {
         dirs: Vec::new(),
         flags: Vec::new(),
@@ -1248,6 +1256,7 @@ pub(crate) fn writer_effects(
     args: &[String],
     assigned: &[(String, String)],
 ) -> Option<WriterEffects> {
+    let name = writer_name(name);
     let read = writer_read(name, args, assigned)?;
     let copy = copy_of(name, &read);
     let flagged = |names: &[&str]| read.flags.iter().any(|f| names.contains(&f.as_str()));
@@ -1406,7 +1415,7 @@ pub(crate) fn judge_writer<G: WriterGuard>(
 
 /// Whether the table lists `name`, so the shared judge reads its options.
 pub(crate) fn has_writer_entry(name: &str) -> bool {
-    known_options(name).is_some()
+    known_options(writer_name(name)).is_some()
 }
 
 /// Every writer the table lists, each with a call that writes `file` (or,
@@ -1456,7 +1465,7 @@ fn writer_form(name: &str, args: &[String], assigned: &[(String, String)]) -> Op
             "`{name}` is given `{option}`, an option the guard does not know, which could run a command or pick another target"
         ));
     }
-    let known = known_options(name)?;
+    let known = known_options(writer_name(name))?;
     for (var, value) in assigned {
         if known.env_refused.contains(&var.as_str()) {
             return Some(format!(

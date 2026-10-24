@@ -1,4 +1,5 @@
 # file	normalized call span	count	reason
+crates/codeflow-cli/tests/hooks_cli.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.wt GIT_CONFIG_VALUE_0=worktree git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json"	1	Inert TSK-406 report-04 alias payload sent only to the guard for judgment; never executed and never changes a process environment or Git configuration.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hidden GIT_CONFIG_VALUE_0='config core.bare true' git rebase -x 'git hidden' HEAD~1"	1	Inert hook payload for command-local alias inheritance; no process environment or Git configuration is changed by this string.
 crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
 crates/codeflow-cli/src/cmd/ci/adopter.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
