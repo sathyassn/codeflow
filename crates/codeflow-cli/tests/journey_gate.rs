@@ -353,7 +353,7 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
     .contains("--results target/nextest/partitions"));
 }
 
-/// The quick gate, which the pre-push hook runs on every push, is the light
+/// The quick gate, which the pre-push hook runs on every push, is the smaller
 /// set: fmt, clippy, the Python contracts and the repository update replay,
 /// the one cargo test that fails before review when a shipped asset changes
 /// without a resync of this repository's install. The producers (the web
@@ -363,6 +363,8 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
 /// runs.
 #[test]
 fn the_quick_gate_runs_only_the_light_targets() {
+    // Preserve TSK-256's evidence name while checking the heavy declarations
+    // added to the same quick membership by TSK-331.
     let config: serde_json::Value =
         serde_json::from_str(&read(".codeflow/test-config.json")).expect("test config");
     let targets = config["targets"].as_array().expect("targets");
@@ -384,7 +386,20 @@ fn the_quick_gate_runs_only_the_light_targets() {
         ]
         .into_iter()
         .collect(),
-        "the quick gate runs the light targets only"
+        "the quick gate keeps its configured membership"
+    );
+    let heavy: std::collections::BTreeSet<_> = targets
+        .iter()
+        .filter(|target| {
+            quick.contains(target["name"].as_str().unwrap()) && target["heavy"] == true
+        })
+        .map(|target| target["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        heavy,
+        ["rust-clippy", "repository-update-noop", "contract-scans"]
+            .into_iter()
+            .collect()
     );
     for target in targets
         .iter()

@@ -525,6 +525,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes,
             report: Some(ReportConfig {
@@ -953,6 +955,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes,
             report: None,

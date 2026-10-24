@@ -24,7 +24,7 @@ const targetRoot = resolve(repoRoot, "target", `binary-delta-${lockfileHash}`);
 const withRepeat = process.argv.includes("--with-repeat");
 const savedAssets = join(sandbox, "production-assets");
 const childEnvironment = allowedEnvironment([
-  "CARGO_HOME", "HOME", "LANG", "LC_ALL", "PATH", "RUSTUP_HOME", "SYSTEMROOT",
+  "CARGO_BUILD_JOBS", "CARGO_HOME", "HOME", "LANG", "LC_ALL", "PATH", "RUSTUP_HOME", "SYSTEMROOT",
   "TEMP", "TMP", "TMPDIR", "USERPROFILE", "WINDIR",
 ]);
 childEnvironment.CARGO_INCREMENTAL = "0";
@@ -71,6 +71,7 @@ try {
     target_directory: targetRoot,
     platform: `${process.platform}-${process.arch}`,
     release_profile: "cargo build --release --locked -p codeflow-cli",
+    cargo_build_jobs: childEnvironment.CARGO_BUILD_JOBS ?? "Cargo default",
     baseline: "same exact source and manifest with generated service/export payloads absent",
     production_bytes: production.bytes,
     production_sha256: production.sha256,
