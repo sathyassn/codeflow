@@ -1725,3 +1725,5 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 @media (max-width: 879.98px) and (pointer: coarse) {
   .cf-capture-options > .cf-tools { display: none; }
 }
+.cf-count-open { font: inherit; font-size: var(--cf-fs-caption); background: none; border: 0; padding: 4px 6px; border-radius: var(--cf-radius-ctl); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.cf-undo { margin: 6px 12px 0; }

@@ -29,7 +29,7 @@ function snapshot(value: unknown, config: ChromeConfig): value is Snapshot {
 }
 
 /** Stored conversation lives separately from the unsent comment draft. */
-export function ThreadRail({config, documentRoot, expanded = false, onToggle}: {config: ChromeConfig; documentRoot: HTMLElement; expanded?: boolean; onToggle?: (open: boolean) => void}) {
+export function ThreadRail({config, documentRoot, expanded = false, onToggle, onWithdrawn}: {config: ChromeConfig; documentRoot: HTMLElement; expanded?: boolean; onToggle?: (open: boolean) => void; onWithdrawn?: () => void}) {
   const [data, setData] = useState<Snapshot>({feedback:config.feedback ?? {items:[],omitted_older:0},answers:[],replies:[],reopens:[],tombstones:[],acknowledged:[],omitted_older:0});
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);
@@ -64,6 +64,7 @@ export function ThreadRail({config, documentRoot, expanded = false, onToggle}: {
         session_id:config.session_id,revision:config.revision,target,...(note ? {note_id:note} : {}),
       });
       await refresh();
+      if (remove) onWithdrawn?.();
     } catch(e) { setError(e instanceof Error ? e.message : "The thread was not changed"); }
     finally { setBusy(false); }
   }
@@ -99,7 +100,7 @@ export function ThreadRail({config, documentRoot, expanded = false, onToggle}: {
         {controls(item.event_id,undefined,!!item.acknowledged || ["addressed","dismissed"].includes(item.lifecycle))}
         <ul>{item.notes.map(note => <li key={note.id} data-note={note.id} data-anchor-state={note.anchor.state}>
           {deleted(item.event_id,note.id) || note.block_label === "Deleted note" && note.body === "Deleted by the reviewer" ?
-            <p data-testid="thread-tombstone">Deleted by the reviewer</p> : <>
+            <p data-testid="thread-tombstone">Withdrawn by the reviewer</p> : <>
               <div class="cf-note-heading"><strong>{note.block_label}</strong><span>{anchorWords(note.anchor)}</span></div>
               {note.quote ? <blockquote>{note.quote}</blockquote> : null}<p>{note.body}</p>{anchorNotice(note.anchor)}
               {replies(item.event_id,note.id)}
@@ -124,9 +125,9 @@ function anchorWords(anchor: FeedbackAnchor): string {
   switch (anchor.state) {
     case "orphaned": return "unpositioned";
     case "block_fallback": return "on the block";
-    case "reanchored": return anchor.changed ? "moved" : "same place";
-    case "entity_reanchored": return anchor.label_changed ? "moved" : "same place";
-    default: return "same place";
+    case "reanchored": return anchor.changed ? "moved" : "unchanged";
+    case "entity_reanchored": return anchor.label_changed ? "moved" : "unchanged";
+    default: return "unchanged";
   }
 }
 

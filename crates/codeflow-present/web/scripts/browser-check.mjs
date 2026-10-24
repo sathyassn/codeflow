@@ -475,7 +475,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
   // "moved" only when the anchor reports a change (round 3).
   // Sent reviews are listed newest first (TSK-443 AC-8); notes keep their order.
-  assert.deepEqual(headings.map((heading) => heading.parts), [["Whole document", "same place"], ["Implementation", "moved"], ["Flow", "same place"], ["Summary", "same place"], ["Removed detail", "unpositioned"]]);
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Whole document", "unchanged"], ["Implementation", "moved"], ["Flow", "unchanged"], ["Summary", "unchanged"], ["Removed detail", "unpositioned"]]);
   await page.getByText("The same element: its block is unchanged in this revision.").waitFor();
   await page.getByText("Still the whole document in this revision.").waitFor();
   assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);

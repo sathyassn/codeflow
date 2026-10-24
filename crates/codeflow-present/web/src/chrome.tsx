@@ -1454,9 +1454,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <div class="cf-title-line"><strong>{config.title}</strong><span class="cf-revision">Revision {config.revision}</span></div>
         </div>
         <div class="cf-appearance" aria-label="Appearance">
-          <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count" hidden={notes.length === 0}>
-            {notes.length} {notes.length === 1 ? "note" : "notes"}
-          </span>
+          {/* Outside Comment the pins are hidden, so the count says the notes
+              are drafts and opens Comment to show them again. */}
+          {notes.length > 0 && !commentMode ? (
+            <button type="button" class="cf-note-count-meta has cf-count-open" data-testid="note-count" title="Turn on Comment to show the draft notes and their pins"
+              onClick={() => armComment(true)}>
+              {notes.length} draft {notes.length === 1 ? "note" : "notes"} · Show
+            </button>
+          ) : (
+            <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count" hidden={notes.length === 0}>
+              {notes.length} draft {notes.length === 1 ? "note" : "notes"}
+            </span>
+          )}
           {notes.length === 0 && sentCount > 0 ? (
             <button type="button" class="cf-sent-meta" data-testid="sent-count" title="Show the sent review under Earlier feedback"
               onClick={() => { setHistoryOpen(true); if (!commentModeRef.current) armComment(true); setPanelOpen(true); setSheetExpanded(true); }}>
@@ -1761,12 +1770,6 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         </div>
       ) : null}
 
-      {removedNote ? <div class="cf-undo" role="status">Note removed.
-        <button type="button" data-testid="undo-remove" disabled={busy} onClick={() => {
-          setNotes(current => { const restored = [...current]; restored.splice(removedNote.index, 0, removedNote.note); return restored; });
-          setRemovedNote(null); setStatus("Note restored.");
-        }}>Undo</button>
-      </div> : null}
 
         <div id="cf-queued-notes" class="list" data-testid="notes-list">
           {!notes.length ? (
@@ -1827,8 +1830,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           )}
         </div>
 
-        <ThreadRail config={config} documentRoot={documentRoot} expanded={historyOpen} onToggle={setHistoryOpen} />
+        <ThreadRail config={config} documentRoot={documentRoot} expanded={historyOpen} onToggle={setHistoryOpen}
+          onWithdrawn={() => setStatus("Note withdrawn. The agent is told it was withdrawn.")} />
       </div>
+      {/* Undo sits outside the scroll area, so it is in view wherever the
+          removed note was in the list. */}
+      {removedNote ? <div class="cf-undo" role="status" data-testid="undo-bar">Note removed.
+        <button type="button" data-testid="undo-remove" disabled={busy} onClick={() => {
+          setNotes(current => { const restored = [...current]; restored.splice(removedNote.index, 0, removedNote.note); return restored; });
+          setRemovedNote(null); setStatus("Note restored.");
+        }}>Undo</button>
+      </div> : null}
       {moreBelow ? <div class="cf-more-below" data-testid="more-below" aria-hidden="true">More below ↓</div> : null}
 
         {/* Advanced tools — secondary path for a11y + qualification bridges */}

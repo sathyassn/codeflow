@@ -223,6 +223,17 @@ try {
         assert.equal(await page.getByTestId('note-row').filter({ hasText: 'prose note' }).locator('.a').innerText(), 'Review the handoff');
         assert.equal(await page.getByTestId('note-row').filter({ hasText: 'document note' }).locator('.a').innerText(), 'Whole document');
       });
+      if (width === 1600) await verify('outside Comment the header count says the drafts are kept and shows them again', async () => {
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelector('[data-testid=comment-btn]')?.getAttribute('aria-pressed') === 'false');
+        assert.equal(await page.getByTestId('note-marker').count(), 0);
+        assert.equal(await page.getByTestId('note-count').innerText(), '5 draft notes · Show');
+        await shot('count-outside-comment');
+        await page.getByTestId('note-count').click();
+        await page.getByTestId('note-marker').first().waitFor();
+        assert.equal(await page.getByTestId('note-marker').count(), 5);
+        assert.equal(await page.getByTestId('note-count').innerText(), '5 draft notes');
+      });
       await verify('one scroll area says more is below until its end, never over a note', async () => {
         const body = page.getByTestId('notes-body');
         const overflow = await body.evaluate(el => el.scrollHeight > el.clientHeight + 2);
@@ -288,6 +299,28 @@ try {
         await shot('undo-remove');
         await page.getByTestId('note-row').filter({ hasText: 'part note' }).getByTestId('note-remove').click();
       });
+      // Undo stays in view when the removed note was low in a scrolled list,
+      // here at 1280 x 800 on a desktop and at 375 px on a phone.
+      for (const size of width === 1600 ? [{ width: 1280, height: 800 }] : [{ width: 375, height: 812 }]) {
+        await page.setViewportSize(size);
+        await showNotes();
+        await verify(`Undo is in view after removing the last note of a scrolled list at ${size.width} px`, async () => {
+          const body = page.getByTestId('notes-body');
+          await body.evaluate(el => { el.scrollTop = el.scrollHeight; });
+          const last = page.getByTestId('note-row').last();
+          const lastBody = await last.locator('.b').innerText();
+          await last.getByTestId('note-remove').click();
+          const undo = await page.getByTestId('undo-remove').boundingBox();
+          assert.ok(undo && undo.y >= 0 && undo.y + undo.height <= size.height, `Undo at ${JSON.stringify(undo)}`);
+          const hit = await page.getByTestId('undo-remove').evaluate(el => { const b = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)); });
+          assert.ok(hit, 'Undo is covered');
+          await shot(`undo-in-view-${size.width}`);
+          await page.getByTestId('undo-remove').click();
+          assert.equal(await page.getByTestId('note-row').last().locator('.b').innerText(), lastBody);
+          await body.evaluate(el => { el.scrollTop = 0; });
+        });
+      }
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
       await page.getByTestId('submit-all').click();
       await verify('Submit without a verdict says so at the verdict', async () => {
         const error = page.getByTestId('verdict-error');
@@ -388,6 +421,21 @@ try {
         assert.ok(reviews[0].notes.some(n => n.body === 'region note' && n.region_selector));
         assert.ok(!reviews[0].notes.some(n => n.body === 'part note'));
       });
+      // Withdrawing runs after the stored review is checked: it rewrites that note.
+      await page.getByTestId('comment-btn').click();
+      await showNotes();
+      await verify('withdrawing a sent note says withdrawn, in the note and the status line', async () => {
+        const history = page.getByTestId('feedback-history');
+        if (!(await history.evaluate(el => el.open))) await history.locator('summary').click();
+        const note = history.locator('li[data-note]').first();
+        await note.getByRole('button', { name: 'Withdraw note', exact: true }).click();
+        await note.getByTestId('withdraw-confirm').getByRole('button', { name: 'Withdraw', exact: true }).click();
+        await note.getByTestId('thread-tombstone').waitFor();
+        assert.equal(await note.getByTestId('thread-tombstone').innerText(), 'Withdrawn by the reviewer');
+        assert.match(await page.locator('.cf-dock .cf-status').innerText(), /Note withdrawn/);
+        await shot('withdrawn');
+      });
+      await page.getByTestId('comment-leave').click();
     } catch (error) { failures.push(`${label} journey: ${error.message}`); await shot('failure'); }
     finally { await context.close(); run(['present', 'close', session]); }
   }

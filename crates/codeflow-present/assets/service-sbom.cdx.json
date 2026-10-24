@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-ANSUC6IA.css.br",
-      "name": "service/app-ANSUC6IA.css.br",
+      "bom-ref": "service/app-2MCLY4SL.js.br",
+      "name": "service/app-2MCLY4SL.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "36de111b116f9268f609752a91e9ba93ea47fec4938d120b738d476dd9f33088"
+          "content": "608d72f73e86ebea7445fc97b548316418933abb0063ab2e0691a9a146e5f139"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ANSUC6IA.css.gz",
-      "name": "service/app-ANSUC6IA.css.gz",
+      "bom-ref": "service/app-2MCLY4SL.js.gz",
+      "name": "service/app-2MCLY4SL.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "70971b30b6c76b393cb8d51082f0652f48e2120903f2aa52368ccd9a15f82730"
+          "content": "e5b7523216b9e6402371f444f6c6d6d8959d1e96520a437904857a9db246bc9d"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZG7I6D2Z.js.br",
-      "name": "service/app-ZG7I6D2Z.js.br",
+      "bom-ref": "service/app-X4CSGVLX.css.br",
+      "name": "service/app-X4CSGVLX.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "5ca8735fbdd18fdf9c7da29c69a1733bf55485044a074d5261fcdce865afeafe"
+          "content": "6a311b1714fd04fef043b89616d8e3031716bac258958f029c759ce3a8929da8"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-ZG7I6D2Z.js.gz",
-      "name": "service/app-ZG7I6D2Z.js.gz",
+      "bom-ref": "service/app-X4CSGVLX.css.gz",
+      "name": "service/app-X4CSGVLX.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "6b0d4e3dea2b7463a6d57fd0dcfaf794e409e44d979c8b046f554dda5fe985d9"
+          "content": "c2ae5b26fff16aaa9743fbbcf677a90792b64e102686bb0a4f74fba3b196fd16"
         }
       ]
     },
