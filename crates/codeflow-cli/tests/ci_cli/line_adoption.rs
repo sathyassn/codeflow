@@ -9,6 +9,7 @@ use fixture::{blocks, output, passes, Line, LINE};
 #[test]
 fn epic_line_adoption_ci_reports_landed_entry_and_preserves_controls() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     f.land_task();
     passes(&f.ci("main", LINE));
     let direct = f.direct();
@@ -42,6 +43,7 @@ fn epic_line_adoption_ci_reports_landed_entry_and_preserves_controls() {
 #[test]
 fn epic_line_adoption_outside_range_is_a_note() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     let outside = f.git(&["rev-parse", "main"]);
     f.land_adoption(&outside);
     let result = f.ci("main", LINE);
@@ -66,6 +68,7 @@ fn epic_line_adoption_outside_range_is_a_note() {
 #[test]
 fn epic_line_adoption_requires_first_arrival_by_merge_unless_target_has_it() {
     let f = Line::new();
+    f.git(&["push", "-q", "origin", "main"]);
     let direct = f.direct();
     f.adoption(&direct);
     let author = f.commit("docs: add adoption directly");
@@ -85,6 +88,7 @@ fn epic_line_adoption_requires_first_arrival_by_merge_unless_target_has_it() {
     passes(&f.ci("main", "plan/target-adoption"));
     f.git(&["switch", "-q", "main"]);
     f.merge("plan/target-adoption");
+    f.git(&["push", "-q", "origin", "main"]);
     f.git(&["switch", "-q", LINE]);
     f.merge("main");
     passes(&f.ci("main", LINE));

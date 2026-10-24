@@ -525,6 +525,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes,
             report: Some(ReportConfig {
@@ -564,6 +566,7 @@ mod tests {
 
     fn make_run_result(name: &str) -> TargetRunResult {
         TargetRunResult {
+            error: None,
             evidence: None,
             target_name: name.to_string(),
             exit_code: 0,
@@ -952,6 +955,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes,
             report: None,
@@ -974,6 +979,7 @@ mod tests {
             name: "rust-core".to_string(),
             mode: "full".to_string(),
             run_result: TargetRunResult {
+                error: None,
                 evidence: None,
                 target_name: "rust-core".to_string(),
                 exit_code: 0,
