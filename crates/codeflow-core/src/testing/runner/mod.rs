@@ -616,6 +616,7 @@ fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_owed_target(
     target: &TargetConfig,
     mode: &str,
@@ -851,6 +852,7 @@ pub fn run_reserved_command(
         } else {
             result.exit_code
         },
+        error: None,
         stdout: result.stdout,
         stderr: result.stderr,
         stdout_truncated: result.stdout_truncated,
@@ -862,6 +864,7 @@ pub fn run_reserved_command(
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn spawn_prepared(
     mut cmd: Command,
     target_name: &str,
