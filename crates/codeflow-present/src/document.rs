@@ -725,7 +725,18 @@ impl Block {
             }
             Self::Figure { declaration, .. } => {
                 let (title, caption) = figure_text(declaration);
-                join_parts([title, caption])
+                let labels = figure_drawn_text(&declaration["figure"]);
+                let legend = declaration["figure"]["states"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|state| state["means"].as_str());
+                join_parts(
+                    [title, caption]
+                        .into_iter()
+                        .chain(labels.iter().map(String::as_str))
+                        .chain(legend),
+                )
             }
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
@@ -1662,8 +1673,92 @@ pub const FIGURE_FAMILIES: [&str; 9] = [
     "graph",
 ];
 
+/// Text in the grammar's wide and narrow draw order. Layouts generate the
+/// same labels from their authored rows; no geometry or metadata is review text.
+fn figure_drawn_text(figure: &serde_json::Value) -> Vec<String> {
+    let layout = &figure["layout"];
+    match layout["kind"].as_str() {
+        Some("coverage") => {
+            let columns: Vec<String> = figure_items(&layout["columns"])
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            let rows: Vec<_> = figure_items(&layout["rows"]).collect();
+            let mut labels = columns.clone();
+            labels.extend(
+                rows.iter()
+                    .filter_map(|row| row["label"].as_str())
+                    .map(str::to_owned),
+            );
+            for row in &rows {
+                if let Some(label) = row["label"].as_str() {
+                    labels.push(label.to_owned());
+                }
+                labels.extend(columns.iter().cloned());
+            }
+            labels
+        }
+        Some("extent") => {
+            let mut labels = Vec::new();
+            let unit = layout["unit"].as_str().filter(|unit| !unit.is_empty());
+            for row in figure_items(&layout["rows"]) {
+                if let Some(label) = row["label"].as_str() {
+                    labels.push(label.to_owned());
+                }
+                if let Some(number) = row["value"].as_f64() {
+                    let number = figure_number_text(number);
+                    labels.push(
+                        unit.map_or_else(|| number.clone(), |unit| format!("{number} {unit}")),
+                    );
+                }
+            }
+            for limit in figure_items(&layout["limits"]) {
+                if let (Some(label), Some(number)) =
+                    (limit["label"].as_str(), limit["value"].as_f64())
+                {
+                    labels.push(format!("{label} {}", figure_number_text(number)));
+                }
+            }
+            labels.extend(labels.clone());
+            labels
+        }
+        _ => ["wide", "narrow"]
+            .into_iter()
+            .flat_map(|variant| figure_items(&figure[variant]["draw"]))
+            .filter_map(|item| item["text"].as_str().map(str::to_owned))
+            .collect(),
+    }
+}
+
+fn figure_items(value: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    value.as_array().into_iter().flatten()
+}
+
+// Matches the grammar's formatNumber for authored layout values: round to
+// hundredths with ties toward positive infinity, and display no trailing zeros.
+fn figure_number_text(value: f64) -> String {
+    let rounded = if value.fract() == 0.0 {
+        value
+    } else {
+        let scaled = value * 100.0;
+        let floor = scaled.floor();
+        (if scaled - floor >= 0.5 {
+            floor + 1.0
+        } else {
+            floor
+        }) / 100.0
+    };
+    if rounded == 0.0 {
+        "0".to_owned()
+    } else if rounded.abs() >= 1e21 {
+        format!("{rounded:e}").replacen('e', "e+", 1)
+    } else {
+        rounded.to_string()
+    }
+}
+
 /// The title and caption a figure placeholder shows before the grammar module
-/// draws it; they are also the block's canonical review text.
+/// draws it; they prefix the block's canonical review text.
 fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
     let field = |name: &str| {
         declaration
@@ -2194,6 +2289,52 @@ mod tests {
                 "caption": "A change passes review before it lands."
             }
         })
+    }
+
+    #[test]
+    fn figure_review_text_keeps_each_drawn_occurrence_and_legend() {
+        let declaration = serde_json::json!({"figure": {
+            "title": "Title", "caption": "Caption",
+            "wide": {"draw": [{"text": "Box 🧭"}, {"text": "Axis"}]},
+            "narrow": {"draw": [{"text": "Box 🧭"}]},
+            "states": [{"means": "Legend"}]
+        }});
+        let block = figure("words", declaration);
+        assert_eq!(
+            block.canonical_review_text(&Framing::default()),
+            "Title\nCaption\nBox 🧭\nAxis\nBox 🧭\nLegend"
+        );
+    }
+
+    #[test]
+    fn figure_layout_review_text_matches_generated_labels() {
+        let coverage = serde_json::json!({"layout": {"kind": "coverage",
+            "columns": ["Local", "Remote"], "rows": [{"label": "Review"}, {"label": "Test"}]}});
+        assert_eq!(
+            figure_drawn_text(&coverage),
+            [
+                "Local", "Remote", "Review", "Test", "Review", "Local", "Remote", "Test", "Local",
+                "Remote"
+            ]
+        );
+        let extent = serde_json::json!({"layout": {"kind": "extent", "unit": "ms",
+            "rows": [{"label": "Fast", "value": 12.345}, {"label": "Slow", "value": 50}],
+            "limits": [{"label": "Budget", "value": 72}]}});
+        assert_eq!(
+            figure_drawn_text(&extent),
+            [
+                "Fast",
+                "12.35 ms",
+                "Slow",
+                "50 ms",
+                "Budget 72",
+                "Fast",
+                "12.35 ms",
+                "Slow",
+                "50 ms",
+                "Budget 72"
+            ]
+        );
     }
 
     #[test]

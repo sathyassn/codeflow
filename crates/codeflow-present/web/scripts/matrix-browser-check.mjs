@@ -45,7 +45,7 @@ const RECIPES = {
   code: { block: "snippet", text: { in: "code", words: "256 * 1024" }, element: { click: ".cf-line:nth-of-type(2)", label: "let limit = 256 * 1024;" } },
   diff: { block: "change", text: { in: "del", words: "128 * 1024" }, element: { click: "ins", label: "let limit = 256 * 1024;" } },
   tree: { block: "files", text: { in: "li", words: "state.rs" }, element: { click: "li li li:nth-of-type(2) > span", label: "limits.rs" } },
-  figure: { block: "flow", element: { entities: true } },
+  figure: { block: "flow", text: { in: "svg text", words: "Task branch" }, element: { entities: true } },
   media: { block: "screenshot", text: { in: "figcaption", words: "stands in" }, element: { click: "img", label: "Four coloured quadrants" }, area: { box: "img", plain: true } },
   disclosure: { block: "more", text: { in: "summary", words: "More detail", context: false }, element: { click: "summary", label: "More detail" }, area: { closed: "details" } },
   tabs: { block: "views", text: { in: ".tabs__labels", words: "Risks" }, element: { click: "[role=tab]:nth-of-type(2)", label: "Risks" }, area: {} },
@@ -760,6 +760,7 @@ async function gesture(page, cell) {
     const span = await page.evaluate(({ scope, within, words }) => {
       // The words may cross text nodes, as highlighted code does.
       for (const element of document.querySelectorAll(`${scope} ${within}`)) {
+        if (!element.checkVisibility()) continue;
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
         const nodes = [];
         let text = "";

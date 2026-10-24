@@ -360,13 +360,24 @@ surface that takes no note.
 | `code` | yes: its code | yes: one line | yes |
 | `diff` | yes: its lines | yes: one line | yes |
 | `tree` | yes: a node's label | yes: a node | yes |
-| `figure` | no: its words are part labels, so selecting one names the part it labels | yes: a part (its mark id) | yes |
+| `figure` | yes: a drawn label, axis name or legend entry's words | yes: a part (its mark id) | yes |
 | `media` | yes: the caption's words, when there is a caption | yes: the image, video or audio | yes |
 | `disclosure` | yes: the summary, and the words of an opened block | yes: the summary, and the parts of an opened block | yes, on what shows |
 | `tabs` | yes: the tab labels, and the words of an opened tab | yes: a tab label, and the parts of an opened tab | yes, on what shows |
 | `feedback_prompt` | yes: the prompt | yes: the prompt | yes |
 | `html` | yes: a stage's visible words | yes: a stage entity, else the shape or element clicked | yes |
 | `form` | yes: its title, prompt, field labels and option labels | yes: a field, the title or the prompt | yes |
+
+Figure text uses the same exact quote, context and UTF-16 selector as prose.
+A drag selects words within one label or legend entry; a click still pins its
+part. Hover highlights that part, and a drag starting on empty drawing space
+makes an area. Geometry-only revisions preserve the text anchor. Changed
+wording uses the existing exact/context and fuzzy matching rules; no match
+falls back to the figure block, and removing that block orphans the note.
+The canonical text order is title, caption, wide labels, narrow labels, then
+legend meanings. Repeated words retain their own positions. Offline exports
+allow native selection and include stored selectors with `--with-notes`, but
+accept no new comments.
 
 An area over a closed disclosure or an unopened tab belongs to that block,
 never to the blocks it hides.

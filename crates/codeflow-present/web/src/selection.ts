@@ -253,9 +253,8 @@ export function segmentDistance(point: Point, from: Point, to: Point): number {
   return Math.hypot(point.x - (from.x + t * dx), point.y - (from.y + t * dy));
 }
 
-// Figure and table framing (SPC-014 B5): the title line, legend, caption and
-// Details sit outside a block's review text; they take element notes
-// labelled by their text, never text selections.
+// Figure and table framing (SPC-014 B5) takes element notes. The AC-5
+// amendment gives drawn figure legend words their own text roots below.
 const FRAME = ".cf-frame-title, .cf-frame-caption, .cf-frame-details, .cf-legend, .cf-fig-title, .cf-fig-caption, .cf-fig-details";
 /** Text the page draws that is never review text: a diff line's label and marker. */
 export const REVIEW_SKIP = "[data-cf-review-skip]";
@@ -269,6 +268,7 @@ const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcapti
  * non-prose" rule made stage labels select with no Text chip.
  */
 export function isTextualTarget(target: Element): boolean {
+  if (target.closest("[data-cf-review-text-base]")) return true;
   if (target.closest(FRAME)) return false;
   if (target.closest("[role=tab]")) return true;
   const tag = target.tagName.toUpperCase();
@@ -307,7 +307,8 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   const startElement = closestElement(range.startContainer, "[data-cf-review-text-root]");
   const endElement = closestElement(range.endContainer, "[data-cf-review-text-root]");
   if (!startElement || startElement !== endElement || !documentRoot.contains(startElement)) return null;
-  if (closestElement(range.startContainer, FRAME) || closestElement(range.endContainer, FRAME)) return null;
+  if (!startElement.hasAttribute("data-cf-review-text-base")
+    && (closestElement(range.startContainer, FRAME) || closestElement(range.endContainer, FRAME))) return null;
   const block = startElement.closest<HTMLElement>("[data-cf-block-id]");
   const blockId = block?.dataset.cfBlockId;
   if (!block || !blockId) return null;
@@ -318,8 +319,9 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   // Rendered formatting and canonical text can differ in whitespace (and HTML
   // blocks may have a canonical title prefix), but never guess through a
   // substantive mismatch or an ambiguous mapping.
-  const canonical =
-    startElement.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
+  const canonicalRoot = startElement.hasAttribute("data-cf-review-text-base")
+    ? startElement.parentElement?.closest("[data-cf-review-text-root]") : startElement;
+  const canonical = canonicalRoot?.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
   const offsets = canonicalRangeOffsets(startElement, range, canonical);
   if (!offsets) return null;
 
@@ -337,8 +339,17 @@ function canonicalRangeOffsets(root: HTMLElement, range: Range, canonical: strin
   const rendered = compact(reviewText(root));
   const normalized = compact(canonical);
   if (!rendered) return null;
-  const base = normalized.indexOf(rendered);
-  if (base < 0 || normalized.indexOf(rendered, base + 1) >= 0) return null;
+  const declaredBase = root.getAttribute("data-cf-review-text-base");
+  let base: number;
+  if (declaredBase !== null) {
+    const offset = Number(declaredBase);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > canonical.length) return null;
+    base = compact(canonical.slice(0, offset)).length;
+    if (normalized.slice(base, base + rendered.length) !== rendered) return null;
+  } else {
+    base = normalized.indexOf(rendered);
+    if (base < 0 || normalized.indexOf(rendered, base + 1) >= 0) return null;
+  }
 
   const prefix = range.cloneRange();
   prefix.selectNodeContents(root);

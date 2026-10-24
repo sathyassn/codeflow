@@ -719,7 +719,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         documentRoot.dataset.cfCursor = textual ? "text" : "cross";
         // SVG words are selectable and still name the part they label, so
         // hover shows the part a click would pin.
-        const drawing = target instanceof SVGElement;
+        const drawing = target instanceof SVGElement || target.closest("[data-cf-review-text-base]") !== null;
         const point = { x: event.clientX, y: event.clientY };
         const candidate = textual && !drawing ? null : annotatableAncestor(documentRoot, target, point);
         setHot(candidate);
@@ -807,9 +807,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         return;
       }
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) {
-        // A selection the review text cannot hold, such as a figure's label,
-        // pins the part the label names; it is never a dead gesture (QA
-        // defect 5 in its figure form).
+        // A selection spanning separate text roots falls back to the part
+        // where it began, rather than silently losing the gesture.
         const node = sel.anchorNode;
         const anchor = node instanceof Element ? node : node?.parentElement ?? null;
         sel.removeAllRanges();
