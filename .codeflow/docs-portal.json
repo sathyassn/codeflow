@@ -162,7 +162,7 @@
     },
     "src/components/PortalTitle.astro": {
       "ownership": "managed",
-      "pristine_sha256": "20595993a916fcfbb33431410c56249bb3e51434c97002337cebc13083a48874"
+      "pristine_sha256": "08c612b7e59524fbac2183dd4fda8200d32d44b2fd978ba4aca9e5c4ccaef7de"
     },
     "src/content.config.ts": {
       "ownership": "managed",

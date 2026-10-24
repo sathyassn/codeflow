@@ -23,7 +23,13 @@ const parents = (ancestors(sidebar) ?? []).map(item => ({
   label: 'autogenerate' in item ? item.label.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : item.label,
   href: landing(item),
 })).map(item => ({ ...item, href: item.href && pathname(item.href) !== pathname(Astro.url.href) ? item.href : undefined }));
+// The page summary opens the column under the title (TSK-444, anatomy A1).
+// Only an authored description is a summary: the adapter writes
+// "Repository source: <path>" for a page without one, for the meta tags, and
+// the provenance line already names the source.
+const description = entry.data.description;
+const lede = description && !description.startsWith("Repository source: ") ? description : undefined;
 ---
 <nav class="cf-crumbs" aria-label="Breadcrumb"><ol><li><a href={siteTitleHref}>Guide</a></li>{parents.map((parent, index) => <li class={index === parents.length - 1 ? "cf-crumb-parent" : undefined}>{parent.href ? <a href={parent.href}>{parent.label}</a> : <span>{parent.label}</span>}</li>)}<li><span aria-current="page">{entry.data.title}</span></li></ol></nav>
 <h1 class="cf-title" id="_top">{entry.data.title}</h1>
-{entry.data.description && <p class="cf-lede">{entry.data.description}</p>}
+{lede && <p class="cf-lede">{lede}</p>}
