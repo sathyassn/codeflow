@@ -484,6 +484,9 @@ catalog! {
 
     // Secrets.
 
+    /// A name or path refused by the object-only path gate.
+    PATH_POLICY = Step::Edit(".codeflow/policy.json"),
+        "remove the refused path from the change, or land a narrow explained except_under/allow in the target's .codeflow/policy.json";
     /// A dotenv file staged.
     ENV_FILE_STAGED = Step::Edit(".gitignore"),
         "unstage it with `git restore --staged <file>` and keep env files out of git through `.gitignore`; commit a .env.example instead";
@@ -498,7 +501,7 @@ catalog! {
 
     /// A push-set target that failed.
     PUSH_SET_FAILED = Step::Codeflow("codeflow test"),
-        "fix the failing target(s), or run `codeflow test --mode quick` to reproduce";
+        "fix the target or gate condition named above, then run `codeflow test --mode quick` to reproduce";
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";

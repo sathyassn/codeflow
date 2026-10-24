@@ -1109,7 +1109,7 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 const HERDR_TRUST_POINTER: &str =
-    "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).";
+    "Trust this task's worktree or this run's sample; ask for others (`autonomy.md`).";
 
 #[test]
 fn finish_line_corrections_keep_their_rules() {
@@ -1361,7 +1361,7 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             (
                 "trust prompt rule",
-                "answer it yourself for a path inside your task's own authorized project or worktree",
+                "answer it yourself for a path inside your task's own worktree",
             ),
             ("trust prompt identity", "Decide by authorization and path identity"),
             (

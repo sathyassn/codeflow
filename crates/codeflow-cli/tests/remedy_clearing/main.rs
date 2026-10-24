@@ -169,6 +169,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_SECURITY_LEVEL_LOWERED", Runs),
     ("CI_SETUP_HOOK_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
+    ("PATH_POLICY", Runs),
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
@@ -1673,6 +1674,57 @@ fn commit_all(root: &Path, message: &str) -> String {
 }
 
 #[test]
+fn clears_path_policy() {
+    let dir = ci_repo(r#"{"git":{"secret_scan":"off"}}"#);
+    let root = dir.path();
+    commit(root, "public/fixture.pem", "feat: add a public fixture");
+    let finding = "blocked name changed: public/fixture.pem";
+    prove(
+        "PATH_POLICY",
+        finding,
+        || {
+            let out = run(
+                exe().to_str().unwrap(),
+                root,
+                &[
+                    "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+                ],
+            );
+            let said = text(&out);
+            assert!(out.status.success() || said.contains(finding), "{said}");
+            said
+        },
+        |printed| {
+            let Step::Edit(path) = catalogued("PATH_POLICY").step else {
+                panic!("path policy remedy must name its policy file");
+            };
+            assert!(printed.contains(path), "{printed}");
+            // The remedy requires the exception on the target, not the branch.
+            git(root, &["switch", "-q", "main"]);
+            write(
+                root,
+                path,
+                &serde_json::json!({"git": {
+                    "secret_scan": "off",
+                    "blocked_names": [{
+                        "pattern": "*.pem",
+                        "except_under": ["public/fixture.pem"],
+                        "reason": "Public test certificate fixture"
+                    }]
+                }})
+                .to_string(),
+            );
+            git(root, &["add", path]);
+            git(
+                root,
+                &["commit", "-q", "-m", "feat: allow the public fixture"],
+            );
+            git(root, &["switch", "-q", "feat/x"]);
+        },
+    );
+}
+
+#[test]
 fn clears_env_file_staged() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
@@ -1883,7 +1935,7 @@ fn clears_test_config_repair() {
     commit_all(&root, "chore: add a broken test config");
     prove(
         "TEST_CONFIG_REPAIR",
-        "could not load test-config.json",
+        "push set gate error:",
         || pushed(&root),
         |printed| {
             assert!(

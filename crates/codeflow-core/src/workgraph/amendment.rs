@@ -577,7 +577,7 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 /// The project's product and watched paths from the policy at `commit`: its
 /// `git.product_paths`, else the default for the stack its project file
 /// records, its `git.breaking_watch_paths` and its `git.document_indexes`.
-fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
+pub(super) fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let list =
         |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
             let Some(value) = value else { return Ok(None) };

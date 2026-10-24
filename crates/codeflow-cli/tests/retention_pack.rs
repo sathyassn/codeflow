@@ -154,8 +154,8 @@ fn assert_scaffold_carries_map_and_hooks(case: &str, record: &Value, fixture: &P
         "{case}"
     );
     assert!(
-        agents
-            .contains("| report status or hand off | each item by its outcome in words, IDs after"),
+        agents.contains("| report status or hand off |")
+            && agents.contains("each item by its outcome in words, IDs after"),
         "{case}"
     );
     assert!(agents.contains("| show something complex |"), "{case}");

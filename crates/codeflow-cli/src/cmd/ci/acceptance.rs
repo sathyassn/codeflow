@@ -14,7 +14,7 @@ use std::path::Path;
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
-    SCOPE_NOTE,
+    IMPORT_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -360,6 +360,12 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
             found.rule,
             found.message,
             "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria; a completed standalone task's criteria text is corrected by a pull request of planning records only whose `Task:` line names it or its follow-up, keeping every criterion and tag (ADR-0080)",
+        )
+    } else if found.rule == IMPORT_RULE {
+        Violation::always_blocking(
+            found.rule,
+            found.message,
+            "fetch the named source history; repair its proof through the source task's pull request, then merge the reviewed result",
         )
     } else if found.rule == AMENDMENT_RULE {
         Violation::always_blocking(
