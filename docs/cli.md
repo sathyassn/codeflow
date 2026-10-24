@@ -468,8 +468,10 @@ One full gate runs at a time on a machine.
   lock is held until the target's process group exits. On Windows the
   target's job object ends its process tree with the gate.
 
-The `pre-push` hook runs the push set (the targets with a `quick` mode), then
-`codeflow validate --docs` and `codeflow ci` over the pushed range. It blocks
+The `pre-push` hook runs the push set: `codeflow ci` over the pushed range,
+and the release preflight where the project adopted it. It runs no test-config
+target and no `codeflow validate --docs`, so a push is a backup; cite
+`codeflow test --mode quick` when the pull request is made ready. It blocks
 under the `git.test_gate_on_push` policy key, which this repository sets to
 `block`.
 
@@ -477,8 +479,7 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 - An existing protected or `integration/` branch starts at its advertised tip.
 - A branch with a declared target starts at the merge base with that target's
   advertised tip, read from the task record.
-- The hook names what it left to CI, such as an unresolved range or a dirty
-  checkout.
+- The hook names what it left to CI, such as an unresolved range.
 
 `codeflow integrate` is the local landing path for protected branches. It
 rebases the branch onto the target by default, runs every full-gate target, then

@@ -936,6 +936,10 @@ fn without_a_pinned_digest_the_install_warns_and_checks_sha256_sum() {
 /// Run the gates job's `codeflow test` step in `repo` with a logging
 /// `codeflow` first on PATH. Returns the output and the log.
 fn run_test_step(repo: &Path) -> (Output, String) {
+    run_test_step_on(repo, None)
+}
+
+fn run_test_step_on(repo: &Path, event: Option<&str>) -> (Output, String) {
     let script = run_blocks(CI, "codeflow test").remove(0);
     let bin = repo.parent().unwrap().join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -962,6 +966,7 @@ fn run_test_step(repo: &Path) -> (Output, String) {
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
         )
         .env("LOG", &log)
+        .env("EVENT", event.unwrap_or_default())
         .output()
         .unwrap();
     (out, std::fs::read_to_string(&log).unwrap_or_default())
@@ -983,7 +988,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(
         log.trim(),
         format!(
-            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
             root.display()
         )
     );
@@ -1002,7 +1007,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
         vec![
             "hook".to_string(),
             format!(
-                "codeflow test --strict HOOK_VALUE=set PWD={}",
+                "codeflow test --strict --mode full HOOK_VALUE=set PWD={}",
                 root.display()
             )
         ]
@@ -1046,7 +1051,7 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     assert_eq!(
         log.trim(),
         format!(
-            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            "codeflow test --strict --mode full HOOK_VALUE=unset PWD={}",
             root.display()
         )
     );
@@ -1296,10 +1301,53 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
 }
 
-/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
-/// and on demand, and the gates job stays off the schedule.
+/// TSK-449 AC-7: the shipped gate runs essential on pull requests and full
+/// on pushes, the schedule and manual runs, and an adopter config with no
+/// essential target (or none at all) keeps running full on pull requests.
 #[test]
-fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
+fn the_shipped_gate_runs_essential_on_pull_requests_and_full_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    let root = work.canonicalize().unwrap();
+    let line = |mode: &str| {
+        format!(
+            "codeflow test --strict --mode {mode} HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    };
+    let config = work.join(".codeflow/test-config.json");
+    let full_only = r#"{"targets":[{"name":"t","modes":{"full":{"command":"true"}}}]}"#;
+    let both = r#"{"targets":[{"name":"t","modes":{"essential":{"command":"true"},"full":{"command":"true"}}}]}"#;
+    for (body, event, mode) in [
+        (None, Some("pull_request"), "full"),
+        (Some(full_only), Some("pull_request"), "full"),
+        (Some(both), Some("pull_request"), "essential"),
+        (Some(both), Some("push"), "full"),
+        (Some(both), Some("schedule"), "full"),
+        (Some(both), Some("workflow_dispatch"), "full"),
+        (Some("{ not json"), Some("pull_request"), "full"),
+    ] {
+        match body {
+            Some(body) => std::fs::write(&config, body).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&config);
+            }
+        }
+        let (out, log) = run_test_step_on(&work, event);
+        assert!(out.status.success(), "{event:?}: {out:?}");
+        assert_eq!(log.trim(), line(mode), "{body:?} on {event:?}");
+    }
+    assert!(
+        !job(CI, "gates").contains("    if:"),
+        "the gates job runs on every event"
+    );
+}
+
+/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
+/// and on demand; TSK-449 puts the full gate on the schedule too.
+#[test]
+fn the_ci_workflow_schedules_the_full_scan_and_the_full_gate() {
     let on = CI
         .split("\non:\n")
         .nth(1)
@@ -1308,7 +1356,7 @@ fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
     for event in ["pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
         assert!(on.contains(event), "{event}: {on}");
     }
-    assert!(job(CI, "gates").contains("    if: github.event_name != 'schedule'\n"));
+    assert!(!job(CI, "gates").contains("    if:"));
     assert!(!job(CI, "secret-scan").contains("    if:"));
 }
 

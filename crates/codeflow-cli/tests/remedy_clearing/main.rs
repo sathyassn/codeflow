@@ -173,25 +173,17 @@ const ROWS: &[(&str, Proof)] = &[
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
-    ("PUSH_SET_FAILED", Runs),
     ("PUSH_SET_CI", Runs),
-    ("PUSH_SET_VALIDATE", Runs),
     ("PUSH_SET_BY_HAND", Runs),
-    ("PUSH_TREE_UNCHECKED", Runs),
-    ("PUSH_TREE_REQUIRED", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
     ("PUSH_DESTINATION_SILENT", Runs),
     ("PUSH_REWRITE", Runs),
-    ("PUSH_OVER_BUDGET_TARGET", Runs),
     ("PUSH_OVER_BUDGET_BUILTIN", Runs),
-    ("PUSH_TARGETS_UNCONFIGURED", Runs),
-    ("PUSH_TARGETS_NONE", Runs),
     ("IDS_PENDING_LOCAL", Runs),
     ("IDS_SYNC_FAILED", Runs),
     ("RELEASE_PREFLIGHT_NOTE", Runs),
     ("RELEASE_PREFLIGHT_UNRUN", Runs),
     ("RELEASE_PREFLIGHT", Runs),
-    ("TEST_CONFIG_REPAIR", Runs),
     ("DOCTOR_HOOKS_PATH", Runs),
     ("DOCTOR_INIT", Runs),
     ("DOCTOR_TOOL_MISSING", Runs),
@@ -1858,99 +1850,6 @@ fn pushed(root: &Path) -> String {
 }
 
 #[test]
-fn clears_push_targets_unconfigured() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, "x.txt", "x\n");
-    commit_all(&root, "feat: add x");
-    prove(
-        "PUSH_TARGETS_UNCONFIGURED",
-        "no .codeflow/test-config.json",
-        || pushed(&root),
-        |printed| {
-            assert!(
-                printed.contains("create .codeflow/test-config.json"),
-                "{printed}"
-            );
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: add a quick target");
-        },
-    );
-}
-
-#[test]
-fn clears_push_targets_none() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &QUICK_CONFIG.replace("\"quick\"", "\"full\""),
-    );
-    commit_all(&root, "chore: add a full target");
-    prove(
-        "PUSH_TARGETS_NONE",
-        "quick targets skipped",
-        || pushed(&root),
-        |printed| {
-            assert!(printed.contains(".codeflow/test-config.json"), "{printed}");
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: give the target a quick mode");
-        },
-    );
-}
-
-#[test]
-fn clears_push_set_failed() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &QUICK_CONFIG.replace("\"true\"", "\"false\""),
-    );
-    commit_all(&root, "chore: add a failing target");
-    prove(
-        "PUSH_SET_FAILED",
-        "push set failed for: check",
-        || pushed(&root),
-        |printed| {
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: fix the target");
-            let step = printed_command(printed, "PUSH_SET_FAILED", None);
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
-fn clears_test_config_repair() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", "{ not json");
-    commit_all(&root, "chore: add a broken test config");
-    prove(
-        "TEST_CONFIG_REPAIR",
-        "push set gate error:",
-        || pushed(&root),
-        |printed| {
-            assert!(
-                printed.contains("repair .codeflow/test-config.json"),
-                "{printed}"
-            );
-            write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-            commit_all(&root, "chore: repair the test config");
-            let step = printed_command(printed, "TEST_CONFIG_REPAIR", Some("codeflow test"));
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
 fn clears_push_set_ci() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
@@ -1983,99 +1882,6 @@ fn clears_push_set_ci() {
             git(&root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
         },
     );
-}
-
-#[test]
-fn clears_push_set_validate() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-    let registry = read(&root, "docs/capabilities.md");
-    write(
-        &root,
-        "docs/capabilities.md",
-        &format!(
-            "{registry}{}",
-            CAPABILITY.replace("adrs: []", "adrs: [ADR-0777]")
-        ),
-    );
-    commit_all(&root, "docs: add a capability");
-    prove(
-        "PUSH_SET_VALIDATE",
-        "push set check failed: `codeflow validate",
-        || pushed(&root),
-        |printed| {
-            write(
-                &root,
-                "docs/capabilities.md",
-                &format!("{registry}{CAPABILITY}"),
-            );
-            commit_all(&root, "docs: drop the missing decision");
-            let step = printed_command(printed, "PUSH_SET_VALIDATE", None);
-            run_printed(&root, &step, &[], &[]);
-        },
-    );
-}
-
-#[test]
-fn clears_push_tree_unchecked() {
-    clear_push_tree("warn", "PUSH_TREE_UNCHECKED");
-}
-
-#[test]
-fn clears_push_tree_required() {
-    clear_push_tree("block", "PUSH_TREE_REQUIRED");
-}
-
-fn clear_push_tree(level: &str, row: &str) {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    git(&root, &["switch", "-q", "-c", "chore/tree-gate"]);
-    push::set_policy(&root, &[("test_gate_on_push", level.into())]);
-    git(&root, &["add", "-A"]);
-    git(
-        &root,
-        &[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "chore: configure the tree gate",
-        ],
-    );
-    with_destination(&root);
-    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-    commit_all(&root, "chore: add a quick target");
-    git(&root, &["branch", "feat/y"]);
-    write(&root, "x.txt", "x\n");
-    commit_all(&root, "feat: add x");
-    // Pushing feat/y from a checkout of feat/x.
-    let check = || push(&root, &["origin", "feat/y"]);
-    let before = check();
-    let printed = block(&before, "did not run for").to_string();
-    assert_prints_row(&printed, row);
-    assert_eq!(before.contains("BLOCKED"), level == "block", "{before}");
-    if level == "block" {
-        let switch = printed_command(&printed, row, None);
-        run_printed(&root, &switch, &[("<branch>", "feat/y")], &[]);
-    } else {
-        git(&root, &["switch", "-q", "feat/y"]);
-    }
-    write(&root, "y.txt", "y\n");
-    commit_all(&root, "feat: add y");
-    if level == "warn" {
-        let validate = printed_command(&printed, row, None);
-        run_printed(&root, &validate, &[], &[]);
-        let quick = printed
-            .split('`')
-            .find(|span| span.starts_with("codeflow test "))
-            .expect("the remedy names its quick check");
-        run_printed(&root, quick, &[], &[]);
-    }
-    let after = check();
-    assert!(!after.contains("did not run for"), "{after}");
-    assert!(after.contains("quick targets passed"), "{after}");
 }
 
 #[test]
