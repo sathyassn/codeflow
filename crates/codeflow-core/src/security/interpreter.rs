@@ -14,7 +14,8 @@ pub(crate) fn evaluate(
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     if levels.secret_reads.is_active() {
-        for (args, command_cwd) in outward::unwrapped_commands(command, cwd, home) {
+        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
+            let args = &unwrapped.args;
             let name = args
                 .first()
                 .map_or("", |s| s.rsplit('/').next().unwrap_or(s));
@@ -34,9 +35,21 @@ pub(crate) fn evaluate(
                     | "base64"
                     | "Get-Content"
             ) {
-                if let Some(path) = args.iter().skip(1).find(|word| {
-                    secret_path(word, command_cwd.as_deref().unwrap_or(cwd), home, true)
-                }) {
+                // Only a word the shell expands names files it never spells;
+                // a quoted search pattern such as `'^/etc/.*'` is text.
+                let expands = |at: usize| {
+                    unwrapped
+                        .expands
+                        .as_ref()
+                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
+                };
+                let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
+                if let Some((_, path)) = args
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find(|(at, word)| secret_path(word, reader_cwd, home, Some(expands(*at))))
+                {
                     violations.push(Violation::new(
                         "security.secret_reads",
                         levels.secret_reads,
@@ -57,7 +70,7 @@ pub(crate) fn evaluate(
             }
         }
         for word in outward::literal_words(&code) {
-            if levels.secret_reads.is_active() && secret_path(&word, cwd, home, false) {
+            if levels.secret_reads.is_active() && secret_path(&word, cwd, home, None) {
                 violations.push(Violation::new(
                     "security.secret_reads",
                     levels.secret_reads,
@@ -104,7 +117,9 @@ pub(crate) fn evaluate(
     violations
 }
 
-fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: bool) -> bool {
+/// `reader` is `Some` for a reader's argument, saying whether the shell
+/// expands it as a pattern, and `None` for a literal in interpreter code.
+fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
@@ -132,7 +147,7 @@ fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: bool) -> boo
         })
 }
 
-fn secret_path_spelling(word: &str, home: Option<&Path>, reader: bool) -> bool {
+fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
     let word = word.to_ascii_lowercase();
     let home_relative = home.and_then(|home| {
         let home = crate::portable_path::slashed(home).to_ascii_lowercase();
@@ -146,7 +161,7 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: bool) -> bool {
             || word
                 .strip_prefix(path)
                 .is_some_and(|tail| tail.starts_with('/'))
-            || (reader && secret_prefix(word, path))
+            || reader.is_some_and(|expands| secret_prefix(word, path, expands))
     }) || actions::table().claude_read_groups.iter().any(|group| {
         // This group has no carve-outs; source-name and env-file groups do.
         group.carveouts.is_empty()
@@ -155,16 +170,22 @@ fn secret_path_spelling(word: &str, home: Option<&Path>, reader: bool) -> bool {
                 else {
                     return false;
                 };
-                matches_extended_glob(word, pattern) || (reader && secret_prefix(word, pattern))
+                matches_extended_glob(word, pattern)
+                    || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
             })
     })
 }
 
 /// A reader can traverse a named directory or expand a pattern without naming
 /// the protected leaf. Only a nonempty literal prefix supplies that evidence.
-fn secret_prefix(word: &str, store: &str) -> bool {
+/// A word the shell does not expand is all literal: its wildcards are text.
+fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
     let wildcard = |c| matches!(c, '*' | '?' | '[' | '{');
-    let prefix = word.split(wildcard).next().unwrap_or("");
+    let prefix = if expands {
+        word.split(wildcard).next().unwrap_or("")
+    } else {
+        word
+    };
     if prefix.is_empty() {
         return false;
     }
@@ -427,6 +448,39 @@ mod tests {
                     .any(|v| v.rule == "security.secret_reads"),
                 "{command}"
             );
+        }
+    }
+
+    #[test]
+    fn a_quoted_wildcard_is_text_and_an_unquoted_one_expands() {
+        let reads = |command: &str| {
+            evaluate(
+                command,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                Path::new("/fixture"),
+                Path::new("/fixture"),
+                Some(Path::new("/fixture-home")),
+            )
+            .iter()
+            .any(|v| v.rule == "security.secret_reads")
+        };
+        for command in [
+            "rg '^/etc/.*' docs",
+            "grep -e '^/etc/.*' docs",
+            "rg --files | xargs rg '^/etc/.*'",
+            "cat 'id_rs?'",
+            "cat \"~/.codex/auth.*\"",
+        ] {
+            assert!(!reads(command), "{command}");
+        }
+        for command in [
+            "cat /etc/.*",
+            "cat id_rs?",
+            "cat ~/.codex/auth.*",
+            "rg x ~/.codex/*",
+        ] {
+            assert!(reads(command), "{command}");
         }
     }
 

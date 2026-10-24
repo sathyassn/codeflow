@@ -116,7 +116,7 @@ struct Parsed {
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
     stdin_interpreter: usize,
-    commands: Vec<(Vec<String>, Option<PathBuf>)>,
+    commands: Vec<Unwrapped>,
     home: Option<PathBuf>,
     created_tags: Vec<(PathBuf, String)>,
     calls: Vec<InterpreterCall>,
@@ -179,11 +179,16 @@ pub(crate) enum Supplier {
     },
 }
 
-pub(crate) fn unwrapped_commands(
-    command: &str,
-    cwd: &Path,
-    home: Option<&Path>,
-) -> Vec<(Vec<String>, Option<PathBuf>)> {
+/// A simple command the line runs, as [`unwrapped_commands`] reaches it.
+pub(crate) struct Unwrapped {
+    pub(crate) args: Vec<String>,
+    /// For each word, whether the shell may expand it as an unquoted glob
+    /// or brace pattern; `None` when the parse that reached it lost that.
+    pub(crate) expands: Option<Vec<bool>>,
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+pub(crate) fn unwrapped_commands(command: &str, cwd: &Path, home: Option<&Path>) -> Vec<Unwrapped> {
     let mut parsed = Parsed {
         home: home.map(Path::to_path_buf),
         ..Parsed::default()
@@ -357,8 +362,11 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
             // The shell reads these files even when the executable is not a
             // reader. Keep their cwd alongside the unwrapped command's cwd.
             for source in crate::hooks::git_guard::redirect_reads(&segment) {
-                out.commands
-                    .push((vec!["cat".to_string(), source], dir.clone()));
+                out.commands.push(Unwrapped {
+                    args: vec!["cat".to_string(), source],
+                    expands: None,
+                    cwd: dir.clone(),
+                });
             }
             argv(
                 args,
@@ -908,8 +916,11 @@ fn argv(
         return;
     };
     let name = crate::hooks::git_guard::launcher_name(program);
-    out.commands
-        .push((args.to_vec(), cwd.map(Path::to_path_buf)));
+    out.commands.push(Unwrapped {
+        args: args.to_vec(),
+        expands: patterns.map(<[bool]>::to_vec),
+        cwd: cwd.map(Path::to_path_buf),
+    });
     let rest = &args[1..];
     if name == "git" {
         let sub = global_args("git", rest);
