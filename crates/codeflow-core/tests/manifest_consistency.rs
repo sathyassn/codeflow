@@ -727,7 +727,7 @@ fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
         .expect("shipped policy workflow is readable");
     assert!(
         workflow.contains(
-            "  pull_request_target:\n    types: [opened, synchronize, reopened, edited]\n"
+            "  pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n"
         ),
         "the enforcing workflow must subscribe pull_request_target to edited"
     );
