@@ -1,0 +1,11 @@
+id = "TSK-452"
+uid = "fe85146a-1414-4eff-9f15-9923c6f62cc5"
+kind = "TSK"
+title = "Review cadence and guidance state each rule once"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-24T01:24:49Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
