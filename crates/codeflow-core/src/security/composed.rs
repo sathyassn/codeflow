@@ -75,6 +75,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod paths;
+
 /// The shell grammar a line is read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialect {
@@ -496,7 +498,7 @@ impl Lexer {
                         self.toks.push(Tok::Op("("));
                     }
                 }
-                '<' | '>' if self.peek_at(1) == Some('(') => {
+                '<' | '>' | '=' if self.peek_at(1) == Some('(') => {
                     self.at += 2;
                     let body = self.balanced(1)?;
                     let mut word = Word::default();
@@ -587,6 +589,18 @@ impl Lexer {
                 op,
                 target: None,
                 heredoc: Some(index),
+            });
+            return Ok(());
+        }
+        if self.starts("<(") || self.starts(">(") {
+            self.at += 2;
+            let body = self.balanced(1)?;
+            let mut word = Word::default();
+            word.parts.push(Part::ProcSubst(body));
+            self.toks.push(Tok::Redir {
+                op,
+                target: Some(word),
+                heredoc: None,
             });
             return Ok(());
         }
@@ -1248,7 +1262,7 @@ fn decode_value(value: &Value, escapes: Escapes) -> Result<Value, &'static str> 
 // Evaluation
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Var {
     Scalar(Value),
     Array(Vec<Value>),
@@ -1258,7 +1272,7 @@ enum Var {
 }
 
 /// The positional parameters: `$0`, `$1` and on.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum Positional {
     /// Given from outside the line: unknown text.
     #[default]
@@ -1272,8 +1286,10 @@ enum Positional {
     Unknown(&'static str),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct State {
+    /// Known working directory for filesystem consumers, independent of PWD.
+    directory: Option<std::path::PathBuf>,
     vars: BTreeMap<String, Var>,
     /// Names an assignment cannot change: `readonly`, or set by a trap
     /// that may run again.
@@ -1846,7 +1862,7 @@ impl Run<'_> {
     fn store(&mut self, name: &str, var: Var, certain: bool) {
         let var = if !certain {
             Var::Unknown(MAY_ASSIGN)
-        } else if SPECIAL.contains(&name) {
+        } else if SPECIAL.contains(&name) && !(name == "PWD" && self.state.directory.is_some()) {
             Var::Unknown("an assignment to a special shell variable")
         } else if self.state.readonly.contains(name) {
             Var::Unknown("an assignment to a read-only variable")
@@ -3399,7 +3415,7 @@ impl Run<'_> {
                         at += 1;
                     }
                 }
-                "noglob" | "nocorrect" | "-" | "!" => at += 1,
+                name if name == "!" || crate::hooks::git_guard::is_shell_modifier(name) => at += 1,
                 "time" => {
                     at += 1;
                     if args.get(at).and_then(Arg::literal).as_deref() == Some("-p") {
@@ -3441,6 +3457,15 @@ impl Run<'_> {
                 && (DECLARERS.contains(&program.as_str())
                     || matches!(program.as_str(), "set" | "shopt" | "trap" | "alias")));
         match program.as_str() {
+            "pwd" if rest.is_empty() && self.state.directory.is_some() => {
+                let directory = crate::git::GitName::from_os_str(
+                    self.state.directory.as_ref().unwrap().as_os_str(),
+                );
+                self.output(match directory.rule_text() {
+                    Ok(text) => Ok(Value::text(&format!("{text}\n"))),
+                    Err(_) => Err("working directory is not UTF-8"),
+                });
+            }
             "printf" => self.printf(rest, certain),
             "echo" => {
                 let value = match self.state.opt_echo {
@@ -3808,7 +3833,7 @@ impl Run<'_> {
             }
         };
         match fields.iter().map(Value::exact).collect::<Option<Vec<_>>>() {
-            Some(words) => self.eval_text(&words.join(" ")),
+            Some(words) => self.eval_text(&paths::eval_body(&words)),
             // Code from outside the line, as `source` runs.
             None => self.changed_all(),
         }
