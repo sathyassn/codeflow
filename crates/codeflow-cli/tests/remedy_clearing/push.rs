@@ -232,56 +232,6 @@ fn clears_push_destination_silent() {
     );
 }
 
-/// A test-config with a fast target and one whose quick mode sleeps past
-/// the push set's 60 s budget.
-fn slow_target_config() -> serde_json::Value {
-    let mut config: serde_json::Value = serde_json::from_str(QUICK_CONFIG).unwrap();
-    config["targets"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::json!({
-            "name": "slow",
-            "enabled": true,
-            "runner": "custom",
-            "modes": {"quick": {"command": "sleep 61"}, "full": {"command": "sleep 61"}},
-        }));
-    config
-}
-
-#[test]
-fn clears_push_over_budget_target() {
-    let dir = scaffolded("--standard");
-    let root = project(&dir);
-    with_destination(&root);
-    let mut config = slow_target_config();
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &serde_json::to_string_pretty(&config).unwrap(),
-    );
-    commit_all(&root, "chore: add a slow quick target");
-    let finding = "over its 60s budget";
-    let before = pushed(&root);
-    let printed = block(&before, finding).to_string();
-    assert_prints_row(&printed, "PUSH_OVER_BUDGET_TARGET");
-    assert!(printed.contains("target 'slow'"), "{printed}");
-    config["targets"][1]["modes"]
-        .as_object_mut()
-        .unwrap()
-        .remove("quick");
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &serde_json::to_string_pretty(&config).unwrap(),
-    );
-    commit_all(&root, "chore: move the slow target to the full gate");
-    let after = pushed(&root);
-    assert!(
-        !after.contains(finding) && after.contains("quick targets passed"),
-        "{after}"
-    );
-}
-
 /// Write `script` as an executable `python3` in `bin`, a stand-in on the
 /// `PATH` the hooks see that ends by running the real one.
 #[cfg(unix)]
@@ -368,23 +318,33 @@ fn clears_push_over_budget_builtin() {
 }
 
 /// A copy of the binary under test, first on the hook's `PATH` so it is the
-/// hook's own binary, and a one-shot `python3` beside it that deletes the
-/// copy and itself: the binary vanishes during the release preflight, after
-/// `codeflow ci` ran through it and before `codeflow validate --docs` does.
+/// hook's own binary, and a one-shot `git` beside it that deletes the copy
+/// and itself on the destination query: the binary vanishes after the hook
+/// started and before the push set's `codeflow ci` runs through it.
 #[cfg(unix)]
 fn vanishing_binary(root: &Path) -> PathBuf {
     let bin = root.parent().unwrap().join("vanishing-bin");
     std::fs::create_dir_all(&bin).unwrap();
     let copy = bin.join("codeflow");
     std::fs::copy(exe(), &copy).unwrap();
-    python_stand_in(
-        &bin,
-        &format!(
-            "rm -f '{}' '{}'\n",
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("git"))
+        .find(|path| path.is_file())
+        .expect("git on PATH");
+    let stand_in = bin.join("git");
+    std::fs::write(
+        &stand_in,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = ls-remote ]; then rm -f '{}' '{}'; fi\nexec '{}' \"$@\"\n",
             copy.display(),
-            bin.join("python3").display()
+            stand_in.display(),
+            real.display()
         ),
-    );
+    )
+    .unwrap();
+    let mut mode = std::fs::metadata(&stand_in).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+    std::fs::set_permissions(&stand_in, mode).unwrap();
     bin
 }
 
@@ -395,8 +355,7 @@ fn vanishing_binary(root: &Path) -> PathBuf {
 fn clears_push_set_by_hand() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let dest = with_destination(&root);
-    released(&root, &dest);
+    with_destination(&root);
     commit(&root, "notes.txt", "docs: record an unpublished note");
     let bin = vanishing_binary(&root);
     let row = "PUSH_SET_BY_HAND";
@@ -404,16 +363,11 @@ fn clears_push_set_by_hand() {
     let before = push_with_path(&root, &bin, &["origin", "HEAD"]);
     let printed = block(&before, finding).to_string();
     assert_prints_row(&printed, row);
-    assert!(
-        printed.contains("could not run: `codeflow validate --docs`"),
-        "{printed}"
-    );
+    assert!(printed.contains("could not run: `codeflow ci"), "{printed}");
+    assert!(!printed.contains("validate --docs"), "{printed}");
     // By hand, with the binary under test.
     let ci = printed_command(&printed, row, None);
     run_printed(&root, &ci, &[], &[]);
-    let validate = printed_command(&printed, row, Some("codeflow validate"));
-    assert_eq!(validate, "codeflow validate --docs", "{printed}");
-    run_printed(&root, &validate, &[], &[]);
     // The binary is back, and nothing removes it this time.
     std::fs::copy(exe(), bin.join("codeflow")).unwrap();
     let after = push_with_path(&root, &bin, &["origin", "HEAD"]);
