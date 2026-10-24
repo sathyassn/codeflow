@@ -63,6 +63,9 @@ use super::version::check_write_version;
 use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
+mod pending;
+use pending::PendingResolution;
+
 /// Options for [`update`].
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
@@ -184,8 +187,15 @@ pub fn decide(
     };
     let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
-        let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
-        let base = Baseline::read(root, dest)?;
+        let pending = PendingResolution::read(root, dest, &installed)?;
+        let recorded = pending
+            .as_ref()
+            .map(|pending| pending.new_sha256.as_str())
+            .or_else(|| installed.files.get(dest).map(|f| f.sha256.as_str()));
+        let base = pending
+            .as_ref()
+            .map(|pending| pending.shipped.clone())
+            .or(Baseline::read(root, dest)?);
         let step = managed_step(
             current.as_deref(),
             &rendered,
@@ -193,16 +203,7 @@ pub fn decide(
             base.as_deref(),
             false,
         );
-        return Ok(Some(match step {
-            ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
-                Decision::Rewrite(rendered)
-            }
-            ManagedStep::Merge(merged) => Decision::Rewrite(merged),
-            ManagedStep::Adopt => Decision::Current,
-            ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
-            ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
-            ManagedStep::Kept => Decision::KeptUserModification,
-        }));
+        return Ok(Some(step.decision(rendered)));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
@@ -316,6 +317,47 @@ fn update_writes(
         "codeflow update (scaffold {} -> {}, {} tier)",
         state.scaffold_version, opts.binary_version, state.tier
     ));
+    // Validate every outstanding resolution before writing anything, including
+    // state, reports and files that precede the conflicted entry in the manifest.
+    // Include old entries so pruning cannot discard an unresolved proposal.
+    let managed: std::collections::BTreeSet<_> = installed
+        .files
+        .iter()
+        .filter(|(_, file)| file.ownership == Ownership::Managed)
+        .map(|(dest, _)| dest.as_str())
+        .chain(
+            manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.ownership == Ownership::Managed
+                        && entry.applies(state.tier, &state.permission_preset)
+                })
+                .map(|entry| entry.dest.as_str()),
+        )
+        .filter(|dest| !ignore.is_ignored(dest))
+        .collect();
+    let mut resolved = Vec::new();
+    for dest in managed {
+        if let Some(pending) = PendingResolution::read(root, dest, &installed)? {
+            resolved.push((dest.to_string(), pending));
+        }
+    }
+    for (dest, pending) in &resolved {
+        Baseline::write(root, dest, &pending.shipped)?;
+        // `read` requires a manifest entry with a known shipped hash.
+        if let Some(file) = installed.files.get_mut(dest) {
+            file.sha256 = hash::sha256_hex(pending.shipped.as_bytes());
+        }
+    }
+    if !resolved.is_empty() {
+        // Persist the accepted base before dropping its pending record. A retry
+        // accepts either old or new metadata after an interrupted write.
+        installed.store(root)?;
+        for (dest, _) in &resolved {
+            remove_beneath_root(root, &pending::path(dest))?;
+        }
+    }
     let mut diffs = String::new();
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
         .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
@@ -649,6 +691,19 @@ enum ManagedStep {
     Conflict(String),
 }
 
+impl ManagedStep {
+    fn decision(self, rendered: String) -> Decision {
+        match self {
+            Self::Add | Self::Replace | Self::Force => Decision::Rewrite(rendered),
+            Self::Merge(merged) => Decision::Rewrite(merged),
+            Self::Adopt => Decision::Current,
+            Self::NoBaseline => Decision::ConflictProposal(rendered),
+            Self::Conflict(proposal) => Decision::ConflictProposal(proposal),
+            Self::Kept => Decision::KeptUserModification,
+        }
+    }
+}
+
 fn managed_step(
     current: Option<&str>,
     rendered: &str,
@@ -823,10 +878,17 @@ fn update_entry(
                     // overlapping hunks wait for you.
                     let new_path = format!("{}.new", entry.dest);
                     write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                    PendingResolution::write(
+                        root,
+                        &entry.dest,
+                        base.as_deref().expect("conflict requires a baseline"),
+                        &rendered,
+                    )?;
                     let mut notes = vec![format!(
                         "your modifications conflict with the new shipped version; file untouched. \
                          {new_path} holds the 3-way merge: your changes are kept and each \
-                         overlapping hunk carries conflict markers to resolve before you replace the file"
+                         overlapping hunk carries conflict markers. Resolve them, move {new_path} \
+                         over the file, then rerun codeflow update to record the shipped baseline"
                     )];
                     if entry.src == "ci/codeflow-ci.yml" {
                         notes.push(

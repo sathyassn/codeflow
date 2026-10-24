@@ -3646,6 +3646,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // LF/CRLF framing only rejects unresolved conflict markers; accepted file bytes are never normalized or used as names.
+    (
+        "crates/codeflow-core/src/scaffold/update/pending.rs",
+        "PendingResolution::read",
+        "split_terminator",
+        1,
+        "schema-reject-only",
+    ),
     // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
     (
         "crates/codeflow-core/src/scaffold/update.rs",
