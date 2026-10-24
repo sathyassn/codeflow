@@ -109,11 +109,14 @@ all commits the range introduces. A branch-only exception grants no access.
 Denials from applicable sources are combined; exceptions keep only their
 shared area. A removed entry still applies when another source holds it.
 
-| Declaration | Matching and effect |
-|---|---|
-| `git.blocked_names` string | A glob without `/` matches the final component; a sequence with `/` matches consecutive components at any depth |
-| `{pattern, except_under, reason}` | The same denial, with explained root-relative prefix exceptions; an explicit entry can narrow a shipped default |
-| `git.protected_paths` `{prefix, allow: [{path, reason}]}` | A root-relative prefix, matched on component boundaries, with explained root-relative prefix allowances |
+- A `git.blocked_names` string without `/` is a glob on the final component.
+  A sequence with `/` matches consecutive components at any depth.
+- A `{pattern, except_under, reason}` entry applies the same denial with
+  explained root-relative prefix exceptions. An explicit entry can narrow a
+  shipped default.
+- A `git.protected_paths` entry, `{prefix, allow: [{path, reason}]}`, matches
+  a root-relative prefix on component boundaries and supplies explained
+  root-relative prefix allowances.
 
 Patterns and paths use Unicode NFC normalization and ASCII case folding.
 Empty components, `.`, `..`, trailing dots or spaces, backslashes and
