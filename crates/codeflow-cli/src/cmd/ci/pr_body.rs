@@ -948,7 +948,7 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
 /// (TSK-451): a line naming it as a whole word and a form of "remove", with
 /// at least two more words of reason.
 pub(super) fn gives_removal_reason(body: &str, criterion: &str) -> bool {
-    visible_text(body, false).lines().any(|line| {
+    visible_text(body, false).split('\n').any(|line| {
         let words: Vec<String> = line
             .split(|c: char| !(c.is_alphanumeric() || c == '-'))
             .map(|word| word.trim_matches('-').to_ascii_lowercase())

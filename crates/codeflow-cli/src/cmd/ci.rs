@@ -182,14 +182,20 @@ const PR_DRAFT_ENV: &str = "CODEFLOW_PR_DRAFT";
 /// file. Unknown reads as ready, so a missing citation is reported.
 fn pr_is_draft(environment: &BTreeMap<String, String>) -> bool {
     if let Some(value) = environment.get(PR_DRAFT_ENV) {
-        return value.trim().eq_ignore_ascii_case("true");
+        return value == "true";
     }
-    environment
-        .get("GITHUB_EVENT_PATH")
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|event| event["pull_request"]["draft"].as_bool())
-        .unwrap_or(false)
+    let Some(path) = environment.get("GITHUB_EVENT_PATH") else {
+        return false;
+    };
+    // An event file that cannot be read or parsed proves no draft, so the
+    // pull request is judged as ready, the side that reports.
+    match std::fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(event) => event["pull_request"]["draft"] == serde_json::Value::Bool(true),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    }
 }
 
 /// A violation tagged with the commit it came from (`None` for branch-name and
@@ -766,8 +772,13 @@ pub fn run(args: &CiArgs) -> i32 {
             protected,
         ));
         // The quick run is owed only where `codeflow test` is configured.
-        let owes_quick =
-            root.join(".codeflow/test-config.json").is_file() && !pr_is_draft(&environment);
+        // A test config that cannot be stat'ed for a reason other than its
+        // absence counts as configured, the side that reports.
+        let configured = !matches!(
+            std::fs::symlink_metadata(root.join(".codeflow/test-config.json")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        let owes_quick = configured && !pr_is_draft(&environment);
         tagged.extend(
             pr_body::quick_citation(git, &body, class, !owes_quick)
                 .into_iter()
@@ -1093,7 +1104,7 @@ fn review_row_check(
         .split([',', ';'])
         .next()
         .unwrap_or_default()
-        .trim();
+        .trim_matches([' ', '\t']);
     println!(
         "codeflow ci: {heading} row derived from {task_id}'s acceptance block: | {} | whole unit at {reviewed} | {} |",
         codeflow_core::git::display_text(seat),
