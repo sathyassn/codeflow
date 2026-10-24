@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use crate::testing::config::{CommandShell, Tag, TargetConfig};
 use crate::testing::error::TestingError;
 
+#[cfg(unix)]
+mod group_watch;
 #[cfg(windows)]
 mod target_job;
 
@@ -64,6 +66,8 @@ const OUTPUT_CAPTURE_LIMIT: usize = 1024 * 1024;
 pub struct TargetRunResult {
     pub target_name: String,
     pub exit_code: i32,
+    /// Failure detail when no ordinary process exit code explains the result.
+    pub error: Option<String>,
     pub stdout: String,
     pub stderr: String,
     pub stdout_truncated: bool,
@@ -100,15 +104,7 @@ pub fn run_target(
     let timeout = Duration::from_secs(timeout_secs);
 
     let start = Instant::now();
-    let outcome = spawn_command(
-        &mode_cmd.command,
-        &cwd,
-        &target.env,
-        &target.name,
-        target.shell,
-        timeout,
-        super::evidence::redacted_values(target).is_empty(),
-    )?;
+    let outcome = spawn_command(target, &mode_cmd.command, &cwd, timeout)?;
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let report_path = target.report.as_ref().map(|r| cwd.join(&r.path));
@@ -132,7 +128,16 @@ pub fn run_target(
         (outcome.exit_code, outcome.stderr)
     };
 
+    let error = if outcome.timed_out {
+        Some(format!("timeout after {timeout_secs}s"))
+    } else {
+        outcome
+            .signal
+            .map(|signal| format!("killed by signal {signal}"))
+    };
+
     Ok(TargetRunResult {
+        error,
         evidence: None,
         target_name: target.name.clone(),
         exit_code,
@@ -353,9 +358,35 @@ pub fn run_dependency_targets(
     run_dir: &Path,
     declarations: &[TargetConfig],
 ) -> Vec<Result<TargetRunResult, TestingError>> {
+    run_dependency_targets_with_admission(
+        targets,
+        mode,
+        project_dir,
+        execution,
+        run_dir,
+        declarations,
+        false,
+    )
+}
+
+/// Run a gate's dependency graph, admitting heavy quick work through the shared lock.
+#[must_use]
+#[allow(clippy::too_many_lines)] // The dependency scheduler keeps admission and completion in one state machine.
+pub fn run_dependency_targets_with_admission(
+    targets: &[TargetConfig],
+    mode: &str,
+    project_dir: &Path,
+    execution: &super::config::ExecutionConfig,
+    run_dir: &Path,
+    declarations: &[TargetConfig],
+    quick: bool,
+) -> Vec<Result<TargetRunResult, TestingError>> {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc::channel;
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
+    let mut admission = None;
+    let mut wait_started = None;
+    let mut allocations = BTreeMap::<usize, usize>::new();
     let baseline = match super::delivery::tracked(project_dir) {
         Ok(snapshot) => snapshot,
         Err(error) => return vec![Err(error)],
@@ -367,7 +398,13 @@ pub fn run_dependency_targets(
     let mut results = BTreeMap::new();
     let mut exclusive_running = false;
     while !pending.is_empty() || !running.is_empty() {
-        for index in pending.clone() {
+        let mut waiting = false;
+        let mut candidates: Vec<_> = pending.iter().copied().collect();
+        // Admit independent light work first, including when a heavy refusal triggers fail_fast.
+        if quick {
+            candidates.sort_by_key(|&i| targets[i].heavy == Some(true));
+        }
+        for index in candidates {
             let target = &targets[index];
             let prerequisite_failed = target
                 .requires
@@ -398,10 +435,86 @@ pub fn run_dependency_targets(
             if target.exclusive && !running.is_empty() {
                 break;
             }
+            let heavy = target.heavy == Some(true);
+            let free_workers = execution
+                .worker_budget
+                .map(|budget| budget.saturating_sub(allocations.values().sum()));
+            if heavy && free_workers.is_some_and(|free| free < target.workers.unwrap_or(1)) {
+                continue;
+            }
+            if quick && heavy && admission.is_none() {
+                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
+                    Ok(lock) => {
+                        for note in &lock.notes {
+                            progress!("[codeflow test] {note}");
+                        }
+                        admission = Some(lock);
+                        wait_started = None;
+                    }
+                    Err(message) => {
+                        let first_wait = wait_started.is_none();
+                        let since = wait_started.get_or_insert_with(Instant::now);
+                        if !message.contains("gate lock unavailable")
+                            && since.elapsed() < Duration::from_secs(execution.heavy_wait_seconds)
+                        {
+                            if first_wait {
+                                progress!(
+                                    "[codeflow test] waiting up to {}s for heavy work: {message}",
+                                    execution.heavy_wait_seconds
+                                );
+                            }
+                            waiting = true;
+                            continue;
+                        }
+                        let reason = format!("not run: heavy target refused: {message}");
+                        progress!("[codeflow test] {}: {reason}", target.name);
+                        results.insert(index, Ok(not_run(target, &reason)));
+                        completed.insert(target.name.clone(), false);
+                        pending.remove(&index);
+                        continue;
+                    }
+                }
+            }
+            let mut target = target.clone();
+            if heavy {
+                if let Some(free) = free_workers {
+                    let ready = pending
+                        .iter()
+                        .filter(|&&i| {
+                            targets[i].heavy == Some(true)
+                                && targets[i]
+                                    .requires
+                                    .iter()
+                                    .all(|r| completed.get(r) == Some(&true))
+                        })
+                        .count();
+                    let shares = if target.exclusive {
+                        1
+                    } else {
+                        ready.min(bound - running.len()).max(1)
+                    };
+                    let workers = target.workers.unwrap_or_else(|| (free / shares).max(1));
+                    allocations.insert(index, workers);
+                    for key in ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"] {
+                        target.env.insert(key.into(), workers.to_string());
+                    }
+                    // A nextest slot can itself run a Rust test process or the shell oracle.
+                    // Give those nested workers one thread so they do not multiply the budget.
+                    target.env.insert("RUST_TEST_THREADS".into(), "1".into());
+                    let oracle = if target.modes[mode].command.contains("nextest") {
+                        1
+                    } else {
+                        workers
+                    };
+                    target
+                        .env
+                        .insert("CODEFLOW_ORACLE_WORKERS".into(), oracle.to_string());
+                    progress!("[codeflow test] workers for '{}': jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}", target.name);
+                }
+            }
             pending.remove(&index);
             running.insert(index);
             exclusive_running = target.exclusive;
-            let target = target.clone();
             let declarations = declarations.to_vec();
             let mode = mode.to_string();
             let root = project_dir.to_path_buf();
@@ -426,6 +539,10 @@ pub fn run_dependency_targets(
             }
         }
         if running.is_empty() {
+            if waiting {
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            }
             if !pending.is_empty() {
                 return vec![Err(super::delivery::invalid(
                     project_dir,
@@ -434,10 +551,22 @@ pub fn run_dependency_targets(
             }
             break;
         }
-        let Ok((index, result)) = rx.recv() else {
+        let received = if waiting {
+            rx.recv_timeout(POLL_INTERVAL).ok()
+        } else {
+            rx.recv().ok()
+        };
+        let Some((index, result)) = received else {
+            if waiting {
+                continue;
+            }
             break;
         };
         running.remove(&index);
+        allocations.remove(&index);
+        if !running.iter().any(|&i| targets[i].heavy == Some(true)) {
+            admission = None;
+        }
         if targets[index].exclusive {
             exclusive_running = false;
         }
@@ -448,7 +577,8 @@ pub fn run_dependency_targets(
             if passed { "passed" } else { "FAILED" }
         );
         completed.insert(targets[index].name.clone(), passed);
-        results.insert(index, result);
+        let result = result.unwrap_or_else(|error| runner_failure(&targets[index], &error));
+        results.insert(index, Ok(result));
     }
     results.into_values().collect()
 }
@@ -463,11 +593,19 @@ fn parallel_bound(parallel: bool, configured: Option<usize>) -> usize {
     }
 }
 
+// Keep the target identity when setup, artifact recording or the worker fails
+// before it can return a command result.
+fn runner_failure(target: &TargetConfig, error: &TestingError) -> TargetRunResult {
+    let detail = super::evidence::redact(target, &error.to_string());
+    not_run(target, &format!("runner error: {detail}"))
+}
+
 fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     TargetRunResult {
         evidence: None,
         target_name: target.name.clone(),
         exit_code: -1,
+        error: Some(reason.into()),
         stdout: String::new(),
         stderr: reason.into(),
         stdout_truncated: false,
@@ -478,6 +616,9 @@ fn not_run(target: &TargetConfig, reason: &str) -> TargetRunResult {
     }
 }
 
+// The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
+// meet here; one flow keeps each outcome next to the step that causes it.
+#[allow(clippy::too_many_lines)]
 fn run_owed_target(
     target: &TargetConfig,
     mode: &str,
@@ -515,6 +656,7 @@ fn run_owed_target(
     })?);
 
     if !target.outputs.is_empty() && result.exit_code == 0 {
+        let mut failures = Vec::new();
         let after = super::delivery::tracked(root)?;
         let changed: Vec<_> = after
             .iter()
@@ -522,6 +664,10 @@ fn run_owed_target(
             .map(|(p, _)| p.as_str())
             .collect();
         if !changed.is_empty() {
+            failures.push(format!(
+                "generation changed the candidate: {}",
+                changed.join(", ")
+            ));
             result.exit_code = 1;
             let _ = write!(
                 result.stderr,
@@ -531,9 +677,13 @@ fn run_owed_target(
         }
         for output in &target.outputs {
             if !root.join(output).exists() {
+                failures.push(format!("producer output missing: {output}"));
                 result.exit_code = 1;
                 let _ = write!(result.stderr, "\nproducer output missing: {output}");
             }
+        }
+        if !failures.is_empty() {
+            result.error = Some(super::evidence::redact(declared, &failures.join("; ")));
         }
     }
     let directory = if !target.name.is_empty()
@@ -565,6 +715,15 @@ fn run_owed_target(
             let saved = destination.join("coverage");
             save_redacted_report(path, &saved, declared)?;
             result.coverage_path = Some(saved);
+        }
+    }
+    if target.heavy == Some(true) {
+        if let Some(workers) = target.env.get("CARGO_BUILD_JOBS") {
+            let oracle = target
+                .env
+                .get("CODEFLOW_ORACLE_WORKERS")
+                .map_or("unset", String::as_str);
+            let _ = writeln!(result.stderr, "[codeflow test] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
         }
     }
     result.stdout = super::evidence::redact(declared, &result.stdout);
@@ -632,6 +791,7 @@ fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, 
 /// produced and whether the wall-clock timeout fired.
 struct CommandOutcome {
     exit_code: i32,
+    signal: Option<i32>,
     stdout: String,
     stderr: String,
     timed_out: bool,
@@ -640,16 +800,82 @@ struct CommandOutcome {
 }
 
 fn spawn_command(
+    target: &TargetConfig,
     command: &str,
     cwd: &Path,
-    env: &std::collections::BTreeMap<String, String>,
+    timeout: Duration,
+) -> Result<CommandOutcome, TestingError> {
+    let cmd = build_command(command, cwd, &target.env, &target.name, target.shell)?;
+    spawn_prepared(
+        cmd,
+        &target.name,
+        timeout,
+        super::evidence::redacted_values(target).is_empty(),
+        target.heavy == Some(true),
+    )
+}
+
+/// Run exact command arguments under the caller's gate reservation.
+/// # Errors
+/// Returns an error if the command or its process-tree supervisor cannot start.
+pub fn run_reserved_command(
+    args: &[std::ffi::OsString],
+    cwd: &Path,
+    timeout: Duration,
+    workers: Option<usize>,
+) -> Result<TargetRunResult, TestingError> {
+    let Some(program) = args.first() else {
+        return Err(TestingError::CommandSpawnError {
+            target: "reserve".into(),
+            message: "a command is required".into(),
+        });
+    };
+    let mut command = crate::git::process(program);
+    command.args(&args[1..]).current_dir(cwd);
+    if let Some(workers) = workers {
+        let oracle = if args.iter().any(|arg| arg == "nextest") {
+            1
+        } else {
+            workers
+        };
+        command
+            .env("CARGO_BUILD_JOBS", workers.to_string())
+            .env("NEXTEST_TEST_THREADS", workers.to_string())
+            .env("RUST_TEST_THREADS", "1")
+            .env("CODEFLOW_ORACLE_WORKERS", oracle.to_string());
+        progress!("[codeflow reserve] workers: jobs={workers}, nextest={workers}, rust-tests=1, oracle={oracle}");
+    }
+    let start = Instant::now();
+    let result = spawn_prepared(command, "reserve", timeout, true, true)?;
+    Ok(TargetRunResult {
+        target_name: "reserve".into(),
+        error: None,
+        exit_code: if result.timed_out {
+            TIMEOUT_EXIT_CODE
+        } else {
+            result.exit_code
+        },
+        stdout: result.stdout,
+        stderr: result.stderr,
+        stdout_truncated: result.stdout_truncated,
+        stderr_truncated: result.stderr_truncated,
+        duration_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+        report_path: None,
+        coverage_path: None,
+        evidence: None,
+    })
+}
+
+// The two merged gate changes (TSK-331 admission, TSK-411 failure detail)
+// meet here; one flow keeps each outcome next to the step that causes it.
+#[allow(clippy::too_many_lines)]
+fn spawn_prepared(
+    mut cmd: Command,
     target_name: &str,
-    shell: CommandShell,
     timeout: Duration,
     emit_progress: bool,
+    supervised: bool,
 ) -> Result<CommandOutcome, TestingError> {
-    let mut cmd = build_command(command, cwd, env, target_name, shell)?;
-
     // Pipe output so it can be captured while we poll for the timeout. Reader
     // threads drain the pipes concurrently — without them a chatty command
     // could fill the pipe buffer and deadlock while we sit in try_wait().
@@ -680,7 +906,17 @@ fn spawn_command(
         cmd.creation_flags(target_job::CREATE_SUSPENDED);
     }
 
+    #[cfg(unix)]
+    let mut watcher = if supervised {
+        Some(group_watch::GroupWatch::prepare(&mut cmd).map_err(spawn_err)?)
+    } else {
+        None
+    };
     let mut child = cmd.spawn().map_err(spawn_err)?;
+    #[cfg(unix)]
+    if let Some(watcher) = &mut watcher {
+        watcher.spawned();
+    }
     // The target's process group (its pid, set above) outlives this process
     // if the gate is killed; the full-gate lock stays held while it runs.
     #[cfg(unix)]
@@ -694,6 +930,16 @@ fn spawn_command(
         let _ = child.wait();
     })?;
 
+    if supervised {
+        if target_name == "reserve" {
+            progress!("[codeflow reserve] started process {}", child.id());
+        } else {
+            progress!(
+                "[codeflow test] supervising heavy target '{target_name}' in process group {}",
+                child.id()
+            );
+        }
+    }
     let stdout_reader = child.stdout.take().map(|pipe| {
         spawn_reader_with_progress(pipe, emit_progress.then(|| target_name.to_string()))
     });
@@ -736,12 +982,28 @@ fn spawn_command(
         std::thread::sleep(POLL_INTERVAL);
     };
 
+    // Reap any background descendants before draining pipes they may still hold.
+    #[cfg(unix)]
+    drop(watcher);
+    #[cfg(windows)]
+    if supervised {
+        target_job.terminate();
+    }
     let stdout = join_reader(stdout_reader);
     let stderr = join_reader(stderr_reader);
     #[cfg(unix)]
     crate::testing::gate_guard::target_group_finished(child.id());
 
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal = None;
+
     Ok(CommandOutcome {
+        signal,
         exit_code: status.code().unwrap_or(-1),
         stdout: render_capture(&stdout),
         stderr: render_capture(&stderr),
@@ -997,6 +1259,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Custom,
             modes: BTreeMap::from([(
                 "full".to_string(),
