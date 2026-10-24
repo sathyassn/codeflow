@@ -225,16 +225,18 @@ pub(super) fn home_tip(repo: &Repository, home: &str) -> Result<Option<Oid>, Str
         .iter()
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    let remote = super::super::readiness::target_fetch_remote(repo, home)?;
-    let remote = match remote {
-        Some(remote) if configured.contains(&Some(remote.as_str())) => remote,
-        _ => {
-            // A deleted local line has no upstream setting. Use the default
-            // target's fetch remote, as an ordinary clone uses origin.
-            let default = default_target_name(repo)?;
-            super::super::readiness::target_fetch_remote(repo, &default.name)?
-                .unwrap_or_else(|| "origin".to_string())
-        }
+    let known = |remote: &String| configured.contains(&Some(remote.as_str()));
+    let mut remote = super::super::readiness::target_fetch_remote(repo, home)?.filter(known);
+    if remote.is_none() {
+        // A retired line may use the default target's fetch remote, but
+        // branch config cannot turn a pushed branch path into a remote.
+        let default = default_target_name(repo)?;
+        remote = super::super::readiness::target_fetch_remote(repo, &default.name)?.filter(known);
+    }
+    let Some(remote) =
+        remote.or_else(|| known(&"origin".to_string()).then(|| "origin".to_string()))
+    else {
+        return Ok(None);
     };
     reference_tip(repo, &format!("refs/remotes/{remote}/{home}"))
 }
@@ -393,12 +395,21 @@ fn prove_retired_record(
     else {
         return Ok(None);
     };
-    let [_, source] = parents else {
+    let [before_landing, source] = parents else {
         return Err("the retired home's record has no default-target merge landing".into());
     };
     if record_at(repo, *source, record)?.is_none_or(|old| old.content != record.content) {
         return Err("the default-target merge does not carry the exact retired-home record".into());
     }
+    // Judge the line before main accepted it. The current default tip
+    // already contains source and would leave an empty history to check.
+    super::super::work_start::check_epic_line(
+        repo.workdir().unwrap_or_else(|| repo.path()),
+        declared,
+        home,
+        &before_landing.to_string(),
+        &source.to_string(),
+    )?;
     // The published default landing supplies authority for this historical
     // source chain. Bind the task at its own landing on that chain, so
     // later line work and closure do not become this task's completion.

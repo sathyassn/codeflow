@@ -790,6 +790,7 @@ fn deleted_home_imports_are_proven_at_the_published_default_landing() {
         let root = dir.path();
         git(root, &["switch", home]);
         let reviewed = head(root);
+        git(root, &["switch", "-c", "plan/close-source"]);
         write(
             root,
             "project-management/epics/EPC-003.md",
@@ -806,6 +807,8 @@ fn deleted_home_imports_are_proven_at_the_published_default_landing() {
             ),
         );
         commit(root, "docs: complete the source epic");
+        git(root, &["switch", home]);
+        merge(root, "plan/close-source");
         git(root, &["switch", "main"]);
         merge(root, home);
         publish_sources(root, home);
@@ -908,4 +911,114 @@ fn import_authority_refusals_name_the_import_rule() {
         );
         assert!(!result.1.contains("a task PR may add only"), "{}", result.1);
     }
+}
+
+#[test]
+fn unconfigured_remote_cannot_redirect_published_main_to_a_pushed_branch() {
+    let mut failures = Vec::new();
+    for remote in ["origin", "upstream"] {
+        let dir = imported_from_home("main", false, false);
+        let root = dir.path();
+        let planned = git_out(root, &["merge-base", LINE, "main"]);
+        git(root, &["switch", "main"]);
+        git(root, &["reset", "--hard", &planned]);
+        publish_sources(root, "main");
+        if remote != "origin" {
+            git(root, &["remote", "rename", "origin", remote]);
+        }
+        write(root, "src/forged.rs", "pub fn never_reviewed() {}\n");
+        let reviewed = commit(root, "feat: forged direct work");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "complete", OWN_JOURNEY, &valid_block(&reviewed)),
+        );
+        commit(root, "docs: forged completion");
+        git(root, &["push", remote, "main:refs/heads/docs/x/main"]);
+        git(root, &["fetch", remote]);
+        git(root, &["switch", "-C", RECEIVER, LINE]);
+        merge(root, "main");
+        git(root, &["config", "branch.main.remote", remote]);
+        assert_blocks(
+            &check(root, LINE, Some(RECEIVER), true),
+            "published main control",
+            &["main", "unpublished local history"],
+        );
+        git(
+            root,
+            &["config", "branch.main.remote", &format!("{remote}/docs/x")],
+        );
+        let reason = if remote == "origin" {
+            "unpublished local history"
+        } else {
+            "unavailable"
+        };
+        for result in [
+            check(root, LINE, Some(RECEIVER), true),
+            pre_push_remote(root, RECEIVER, &"0".repeat(40), remote),
+        ] {
+            if result.0 == 0 || !result.1.contains(reason) || !result.1.contains("main") {
+                failures.push(format!("{remote}: {}", result.1));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn retired_home_rejects_a_non_line_source_chain() {
+    let home = "integration/EPC-003-source";
+    let mut failures = Vec::new();
+    for case in ["completion", "evidence", "criteria"] {
+        let dir = imported_from_home(home, false, false);
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        if case != "completion" {
+            merge(root, home);
+        }
+        git(root, &["switch", "-c", "docs/side"]);
+        if case == "completion" {
+            write(root, "src/forged.rs", "pub fn never_reviewed() {}\n");
+            let reviewed = commit(root, "feat: direct work on a side branch");
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "complete", OWN_JOURNEY, &valid_block(&reviewed))
+                    .replace(
+                        "integration_target: main",
+                        &format!("integration_target: {home}"),
+                    )
+                    .replace("EPC-001", "EPC-003"),
+            );
+        } else {
+            let old = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+            let changed = if case == "evidence" {
+                old.replace("verified | unit", "verified | rewritten evidence")
+            } else {
+                old.replace("the system shall work", "the system may work")
+            };
+            assert_ne!(old, changed);
+            write(root, &record_path("TSK-001"), &changed);
+        }
+        commit(root, "docs: change the source record on a side branch");
+        git(root, &["switch", "main"]);
+        merge(root, "docs/side");
+        publish_sources(root, home);
+        git(root, &["push", "origin", "--delete", home]);
+        git(root, &["branch", "-D", home]);
+        git(root, &["switch", "-C", RECEIVER, LINE]);
+        merge(root, "main");
+        for result in [
+            check(root, LINE, Some(RECEIVER), true),
+            pre_push(root, RECEIVER, &"0".repeat(40)),
+        ] {
+            if result.0 == 0
+                || !result.1.contains(home)
+                || !result.1.contains("directly on the line")
+            {
+                failures.push(format!("{case}: {}", result.1));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
