@@ -601,7 +601,7 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 #cf-present-document .cf-doc-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0; font-family: var(--cf-font-mono); font-size: var(--cf-fs-micro); letter-spacing: 0.02em; color: var(--cf-text-muted); }
 #cf-present-document h2 { margin-block: 3rem 0.5rem; font-size: var(--cf-fs-h2); font-weight: 600; line-height: 1.25; letter-spacing: -0.014em; text-wrap: balance; }
 #cf-present-document h3 { margin-block: 2rem 0.4rem; font-size: var(--cf-fs-h3); font-weight: 600; line-height: 1.35; letter-spacing: -0.006em; text-wrap: balance; }
-#cf-present-document .callout > h2, #cf-present-document .block--tree > h2 { margin: 0 0 var(--cf-space-2); font-size: var(--cf-fs-title); line-height: 1.35; letter-spacing: normal; }
+#cf-present-document .callout > h2, #cf-present-document .block--tree h2 { margin: 0 0 var(--cf-space-2); font-size: var(--cf-fs-title); line-height: 1.35; letter-spacing: normal; }
 #cf-present-document .block--narrative h2 + p { margin-block-start: 0; font-size: var(--cf-fs-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; text-wrap: pretty; color: var(--cf-text); }
 #cf-present-document p, #cf-present-document li { max-inline-size: var(--cf-reading-measure); }
 #cf-present-document figure,

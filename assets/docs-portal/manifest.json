@@ -61,6 +61,7 @@
     { "path": "tests/figure-gate.test.mjs", "ownership": "managed" },
     { "path": "tests/figure-grammar.test.mjs", "ownership": "managed" },
     { "path": "tests/figure-rules-browser.test.mjs", "ownership": "managed" },
+    { "path": "tests/page-anatomy-browser.test.mjs", "ownership": "managed" },
     { "path": "tests/site-server.test.mjs", "ownership": "managed" },
     { "path": "tests/fixtures/altitude-words.json", "ownership": "managed" },
     { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },

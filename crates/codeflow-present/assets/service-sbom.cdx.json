@@ -5,23 +5,23 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-INIKLP56.css.br",
-      "name": "service/app-INIKLP56.css.br",
+      "bom-ref": "service/app-AKLGJKAT.css.br",
+      "name": "service/app-AKLGJKAT.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "4cbd991b9a0879684e23718c0eacac94dacc7b658b3e0d5d9a2d86401e3cbc03"
+          "content": "40eed1958c66ebed7f01455ad463fb5f1c8ba013a8964fc4a232e7abcb13b3e4"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-INIKLP56.css.gz",
-      "name": "service/app-INIKLP56.css.gz",
+      "bom-ref": "service/app-AKLGJKAT.css.gz",
+      "name": "service/app-AKLGJKAT.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "352be6d2f4db886014be8862f915954d9e9e349c611e88c76547b8445b8459ef"
+          "content": "a66fb3021ef4d7335d65efcbe62325a3e0aca8e9ccbd29fd73d1ad0040b40d70"
         }
       ]
     },

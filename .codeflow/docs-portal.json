@@ -380,6 +380,10 @@
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
     },
+    "tests/page-anatomy-browser.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "cba4340436a7694c21dc2c9b232ffc8996407b335399c1d7b173ab8990f86b16"
+    },
     "tests/page-shapes.mjs": {
       "ownership": "managed",
       "pristine_sha256": "4bcb0f07b3a8cea576a0ea11e263e7a4beacf0958727c5bbd80765e3f34f8380"

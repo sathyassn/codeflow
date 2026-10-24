@@ -1048,7 +1048,7 @@ fn present_and_portal_headings_take_the_scale_roles() {
         ),
         ("#cf-present-document .cf-form__title", "title"),
         (
-            "#cf-present-document .callout > h2, #cf-present-document .block--tree > h2",
+            "#cf-present-document .callout > h2, #cf-present-document .block--tree h2",
             "title",
         ),
         (".cf-frame-title", "title"),

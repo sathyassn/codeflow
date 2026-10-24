@@ -15,7 +15,7 @@
   "service": {
     "entrypoints": {
       "present.app": "/app/assets/app-VSQNMC4W.js",
-      "present.style": "/app/assets/app-INIKLP56.css"
+      "present.style": "/app/assets/app-AKLGJKAT.css"
     },
     "inline": {
       "present.prepaint": {
@@ -26,14 +26,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-INIKLP56.css",
-        "stored_path": "service/app-INIKLP56.css.br",
+        "request_path": "/app/assets/app-AKLGJKAT.css",
+        "stored_path": "service/app-AKLGJKAT.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
         "raw_bytes": 60304,
-        "encoded_bytes": 10387,
-        "sha256": "4cbd991b9a0879684e23718c0eacac94dacc7b658b3e0d5d9a2d86401e3cbc03",
-        "etag": "\"sha256-TL2ZG5oIeWhOI3GMDqyslNrMe2WLPg1dmi2GQB48vAM=\"",
+        "encoded_bytes": 10371,
+        "sha256": "40eed1958c66ebed7f01455ad463fb5f1c8ba013a8964fc4a232e7abcb13b3e4",
+        "etag": "\"sha256-QO7RlYxm6+1/AUVa1GP7XxyLoBOolk/EojLnq8sTs+Q=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -42,14 +42,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-INIKLP56.css",
-        "stored_path": "service/app-INIKLP56.css.gz",
+        "request_path": "/app/assets/app-AKLGJKAT.css",
+        "stored_path": "service/app-AKLGJKAT.css.gz",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "gzip",
         "raw_bytes": 60304,
         "encoded_bytes": 11938,
-        "sha256": "352be6d2f4db886014be8862f915954d9e9e349c611e88c76547b8445b8459ef",
-        "etag": "\"sha256-NSvm0vTbiGAUvohi+RWVTZ6eNJxhHojHZUe4RFuEWe8=\"",
+        "sha256": "a66fb3021ef4d7335d65efcbe62325a3e0aca8e9ccbd29fd73d1ad0040b40d70",
+        "etag": "\"sha256-pm+zAh701zNdZe/L5iMlo+CsqOnMvSn9c9GtAEC0DXA=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -604,7 +604,7 @@
       "asset_count": 15,
       "representation_count": 30,
       "raw_corpus_bytes": 1071321,
-      "brotli_corpus_bytes": 280441,
+      "brotli_corpus_bytes": 280425,
       "gzip_corpus_bytes": 306495,
       "largest_gzip_chunk_bytes": 132502,
       "largest_raw_chunk_bytes": 186275,
@@ -613,12 +613,12 @@
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-64d192818ae8c3fe.js.gz",
+      "stored_path": "export/renderer-ce05c6126a7b6a90.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 972057,
-      "encoded_bytes": 271048,
-      "sha256": "64d192818ae8c3feee432d8d53d3fecb7c7ca1c760d794e5611e16b246ce446b"
+      "raw_bytes": 972055,
+      "encoded_bytes": 271050,
+      "sha256": "ce05c6126a7b6a9066d98a40a4afba1aeb41a1e9fe45c3691b9cb367c7f39cf4"
     }
   },
   "budgets": {
@@ -630,5 +630,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "e34581fa93270c3307e77bb3e42735197bb0eeb41d5016540009fa81a736a64e"
+  "corpus_sha256": "929654cde5abbf4620df07b59a266b9f904c42c1bfb4a720d0e0b3bc909f9d2d"
 }
