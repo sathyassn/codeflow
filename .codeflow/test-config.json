@@ -534,7 +534,7 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:figures --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
+          "command": "python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version \"npm run check:browser --prefix crates/codeflow-present/web && npm run check:figures --prefix crates/codeflow-present/web && npm run check:type-scale --prefix crates/codeflow-present/web && npm run check:real-browser --prefix crates/codeflow-present/web && npm run check:real-browser-cleanup --prefix crates/codeflow-present/web\""
         }
       },
       "requires": [

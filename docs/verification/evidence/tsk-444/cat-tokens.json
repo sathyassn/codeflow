@@ -1,0 +1,38 @@
+{
+ "graphite-light": {
+  "fig-cat1": "#4665a0",
+  "fig-cat1-soft": "#e1ebfc",
+  "fig-cat2": "#7c548e",
+  "fig-cat2-soft": "#f1e6f6"
+ },
+ "graphite-dark": {
+  "fig-cat1": "#93b7f7",
+  "fig-cat1-soft": "#2c3649",
+  "fig-cat2": "#cfa3e3",
+  "fig-cat2-soft": "#3d3043"
+ },
+ "slate-light": {
+  "fig-cat1": "#00709c",
+  "fig-cat1-soft": "#d6ebf4",
+  "fig-cat2": "#7259b0",
+  "fig-cat2-soft": "#e8e4f7"
+ },
+ "slate-dark": {
+  "fig-cat1": "#69c5e7",
+  "fig-cat1-soft": "#1c343d",
+  "fig-cat2": "#bbaaf1",
+  "fig-cat2-soft": "#312d3f"
+ },
+ "sage-light": {
+  "fig-cat1": "#2e6396",
+  "fig-cat1-soft": "#dce9f8",
+  "fig-cat2": "#794c83",
+  "fig-cat2-soft": "#efe3f2"
+ },
+ "sage-dark": {
+  "fig-cat1": "#88bff8",
+  "fig-cat1-soft": "#273647",
+  "fig-cat2": "#d7a5e2",
+  "fig-cat2-soft": "#3d2f41"
+ }
+}

@@ -317,11 +317,27 @@ pub(super) fn render_figure(
             .and_then(|state| state.get("means").and_then(Value::as_str))
             .unwrap_or_default();
         let wide_only = wide_drawn.contains(*name) && !narrow_drawn.contains(*name);
-        let sample = wide
+        let drawn_items: Vec<&Value> = wide
             .draw
             .iter()
             .chain(&narrow.draw)
-            .find(|item| item.get("state").and_then(Value::as_str) == Some(*name));
+            .filter(|item| item.get("state").and_then(Value::as_str) == Some(*name))
+            .collect();
+        let sample = drawn_items.first().copied();
+        // The key takes a tone only when every drawn mark of the state shares it.
+        let tones: BTreeSet<Option<&str>> = drawn_items
+            .iter()
+            .map(|item| item.get("tone").and_then(Value::as_str))
+            .collect();
+        let key_tone = match (
+            tones.len(),
+            sample
+                .and_then(|item| item.get("tone"))
+                .and_then(Value::as_str),
+        ) {
+            (1, Some(tone)) => format!(" data-cf-tone=\"{}\"", escape_attribute(tone)),
+            _ => String::new(),
+        };
         let key_id = format!("{prefix}-key-{name}");
         let key = legend_key(&mark_name, sample, &key_id)?;
         let drawing = key.replace(&key_id, "");
@@ -342,7 +358,7 @@ pub(super) fn render_figure(
         };
         let _ = write!(
             legend,
-            "<li data-state=\"{}\"{}{target}>{}{}</li>",
+            "<li data-state=\"{}\"{}{target}{key_tone}>{}{}</li>",
             escape_attribute(name),
             if wide_only { " data-cf-wide" } else { "" },
             key,
@@ -872,8 +888,14 @@ fn draw_item(
     });
     let primary = shape_element(item, mark.class, &extra)?;
     let parts = mark_parts(item, &mark_name, &mark)?;
+    let tone = item
+        .get("tone")
+        .and_then(Value::as_str)
+        .map_or(String::new(), |tone| {
+            format!(" data-cf-tone=\"{}\"", escape_attribute(tone))
+        });
     Ok(format!(
-        "<g data-state=\"{}\"{id}{value}>{primary}{parts}</g>",
+        "<g data-state=\"{}\"{id}{value}{tone}>{primary}{parts}</g>",
         escape_attribute(state)
     ))
 }
@@ -1999,12 +2021,14 @@ mod tests {
         // The coverage controls pin the narrow coverage layout on one line and
         // wrapped onto a second.
         // The short extent control pins a narrow row whose value sits under
-        // its label.
+        // its label. The toned layering control pins the tone attributes on
+        // the mark groups and the uniform-tone legend key (TSK-444).
         names.extend(
             [
                 "controls/coverage-derived",
                 "controls/coverage-wrapped",
                 "controls/extent-short",
+                "controls/layering-toned",
             ]
             .map(str::to_owned),
         );

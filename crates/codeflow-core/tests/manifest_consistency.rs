@@ -2629,7 +2629,7 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
     );
 }
 
-/// Both products use the design kit's 27 colour roles in all six skin/mode
+/// Both products use the design kit's 31 colour roles in all six skin/mode
 /// pairs, with independent font preferences. The starter and live portal
 /// remain byte-identical; the kit JSON is the shared value authority.
 #[test]
@@ -2676,7 +2676,7 @@ fn portal_utility_tokens_match_present_skins() {
         for mode in ["light", "dark"] {
             let pair = format!("{skin}-{mode}");
             let roles = kit[&pair].as_object().expect("kit pair");
-            assert_eq!(roles.len(), 27, "complete kit role set");
+            assert_eq!(roles.len(), 31, "complete kit role set");
             for (sheet, css, marker) in [
                 (
                     "portal",
