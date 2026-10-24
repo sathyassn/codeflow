@@ -34,6 +34,8 @@ pub const BINDING_RULE: &str = "work.acceptance_binding";
 /// Criteria changes outside the own-task or planning allowance, including
 /// changes to reopened criteria (R-52). Always blocks.
 pub const FROZEN_RULE: &str = "work.criteria_frozen";
+/// An imported record lacks a verified source authority. Always blocks.
+pub const IMPORT_RULE: &str = "work.import_authority";
 /// The selected criteria version, distinct from the run's policy authority.
 pub const AUTHORITY_NOTE: &str = "work.criteria_authority";
 /// An adopter-facing range belongs to a task with a journey criterion, and a
@@ -275,7 +277,9 @@ mod authority {
     /// pre-push hook's candidate authority, or, in the status verb, the task's
     /// target as `work start` anchors it. They come from the run, never from
     /// the range under judgement, and they are the only source of both sets
-    /// below, so neither can be built from anything else.
+    /// below. An imported record gets a separate source judgment only after
+    /// `imported_records` proves its home landing; the receiving head never
+    /// supplies that authority.
     #[derive(Clone, Debug, Default)]
     pub struct RunBases(Vec<Oid>);
 
@@ -303,13 +307,17 @@ mod authority {
         /// The bases that alone may supply a reopened task's criteria.
         #[must_use]
         pub fn criteria(&self) -> CriteriaBases {
-            CriteriaBases(self.0.clone())
+            CriteriaBases {
+                bases: self.0.clone(),
+                imported_home: None,
+            }
         }
     }
 
     /// Stacking authority: target tips whose first-parent lines may carry a
-    /// clean merge after a review. Only [`RunBases::stacking`] builds it and
-    /// only `with_own_line` extends it; it never supplies criteria.
+    /// clean merge after a review. [`RunBases::stacking`] builds it;
+    /// `with_own_line` or a verified import's home extends it. It never
+    /// supplies criteria.
     #[derive(Clone, Debug, Default)]
     pub struct StackingTips(Vec<Oid>);
 
@@ -333,15 +341,38 @@ mod authority {
     /// [`RunBases::criteria`] builds it, so a range's own line head, which
     /// stacks merges, can never join it.
     #[derive(Clone, Debug, Default)]
-    pub struct CriteriaBases(Vec<Oid>);
+    pub struct CriteriaBases {
+        bases: Vec<Oid>,
+        imported_home: Option<(String, Oid)>,
+    }
 
     impl CriteriaBases {
         pub(super) fn bases(&self) -> &[Oid] {
-            &self.0
+            &self.bases
+        }
+
+        /// The historical home tip already proved by an import landing.
+        /// It substitutes only for that missing ref, never another target
+        /// named by a retargeted record, and adds no criteria base.
+        pub(super) fn with_imported_home(mut self, home: &str, tip: Oid) -> Self {
+            self.imported_home = Some((home.to_string(), tip));
+            self
+        }
+
+        pub(super) fn imported_home(&self, name: &str) -> Option<Oid> {
+            self.imported_home
+                .as_ref()
+                .filter(|(home, _)| home == super::super::work_start::logical_target(name))
+                .map(|(_, tip)| *tip)
         }
     }
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
+
+mod imports;
+mod receiving_merges;
+pub(crate) use imports::clear_cache as clear_import_cache;
+pub use imports::{imported_record_paths, imported_records, ImportedRecord};
 
 /// The source and completion endpoints established by the binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1692,7 +1723,9 @@ enum Presence {
 /// this clone can move: one that shows a completion the judged points do
 /// not makes the landing unknown, which keeps the criteria and never
 /// supplies new ones. A required target with no tip here makes the whole
-/// judgement unreadable, never planned.
+/// judgement unreadable, never planned. An import already proved at a
+/// published landing can supply its historical home tip when that ref was
+/// deleted; that tip is still outside evidence, never a new criteria base.
 fn judge_reopened(
     repo: &Repository,
     task: &RecordView,
@@ -1721,10 +1754,15 @@ fn judge_reopened(
     }
     let mut tips: Vec<(String, Oid)> = Vec::new();
     for name in &targets {
-        let found = match target_tips(repo, name) {
+        let mut found = match target_tips(repo, name) {
             Ok(found) => found,
             Err(reason) => return TaskJudgement::unreadable(reason),
         };
+        if found.is_empty() {
+            if let Some(tip) = criteria.imported_home(name) {
+                found.push((name.clone(), tip));
+            }
+        }
         if found.is_empty() {
             return TaskJudgement::unreadable(format!(
                 "the target `{0}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {0}`)",
@@ -3119,6 +3157,7 @@ fn reopened_judged(
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
 #[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn completions_in_range(
     repo: &Repository,
     base: &str,
@@ -3149,6 +3188,14 @@ pub fn completions_in_range(
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
+    let imported = match imported_records(repo, base_oid, head_oid, &after) {
+        Ok(imported) => imported,
+        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+    };
+    let mut local = after.clone();
+    for id in imported.keys() {
+        local.records.remove(id);
+    }
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after)?;
 
@@ -3157,15 +3204,16 @@ pub fn completions_in_range(
         anchor,
         head_oid,
         &before,
-        &after,
+        &local,
         *criteria == Criteria::Amendable,
     );
+    let mut reviewed = Vec::new();
     for task in after
         .records
         .values()
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
     {
-        if redacted.contains(&task.id) {
+        if redacted.contains(&task.id) || imported.contains_key(&task.id) {
             continue;
         }
         let block = active_block(task);
@@ -3233,11 +3281,17 @@ pub fn completions_in_range(
                 &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
                 &run.criteria(),
             );
+            if let Some(proof) = bound.proof {
+                reviewed.push(proof.reviewed);
+            }
             findings.extend(bound.findings);
         }
     }
     findings.extend(epic_completions_in_range(
-        repo, &before, &after, head_oid, amendable,
+        repo, &before, &local, head_oid, amendable,
+    )?);
+    findings.extend(receiving_merges::findings(
+        repo, base_oid, head_oid, line, &after, &reviewed,
     )?);
     Ok(findings)
 }
@@ -3458,6 +3512,7 @@ pub fn pull_request_findings(
 ///
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
+#[allow(clippy::too_many_lines)] // Keep import, reopening and local completion judgments in order.
 pub fn pull_request_findings_judged(
     repo_root: &std::path::Path,
     base: &str,
@@ -3467,6 +3522,7 @@ pub fn pull_request_findings_judged(
     branch: Option<&str>,
     pins: &[super::work_start::ReviewedPin],
 ) -> Result<Vec<Finding>, String> {
+    let _judgment = history::judgment();
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let stacked = stacked_heads(&repo, pins)?;
     let oid = |revision: &str| {
@@ -3480,6 +3536,10 @@ pub fn pull_request_findings_judged(
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
+    let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
+        Ok(imported) => imported,
+        Err(reason) => return Ok(vec![finding(IMPORT_RULE, reason)]),
+    };
     let anchor = history::merge_base(&repo, target_tip, head_tip).map_err(|e| e.to_string())?;
     let before = Graph::from_revision(&repo, &anchor.to_string())?;
     let (redacted, _) = super::redaction::judge_range(
@@ -3493,11 +3553,16 @@ pub fn pull_request_findings_judged(
     for id in redacted {
         at_head.records.remove(&id);
     }
+    let mut local_head = at_head.clone();
+    for id in imported.keys() {
+        local_head.records.remove(id);
+    }
     // Resolution 43: a reopened task keeps its criteria, whatever the
     // range's class allows.
-    let mut found = reopened_criteria(&repo, base, head, &at_head)?;
+    let mut found = reopened_criteria(&repo, base, head, &local_head)?;
     if *criteria != Criteria::Amendable {
-        let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        let mut paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
+        paths.retain(|path| !imported.values().any(|source| source.path == *path));
         let at_target = Graph::from_revision(&repo, base)?;
         let range = Range {
             anchor,
@@ -3506,7 +3571,7 @@ pub fn pull_request_findings_judged(
         let mut judging = Judging::new(&repo, range, run.criteria());
         // ADR-0080: the named task, or the task it follows up, may have the
         // text of its completed standalone criteria corrected.
-        let reopened = reopened_ids(&repo, base, head, &at_head)?;
+        let reopened = reopened_ids(&repo, base, head, &local_head)?;
         let correcting = |named: &str| {
             correctable(
                 &repo,
