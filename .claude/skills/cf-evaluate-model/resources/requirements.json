@@ -2891,7 +2891,7 @@
     {
       "id": "CF-AUTO-001",
       "level": "hard",
-      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own project or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
+      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own worktree or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/autonomy.md",
@@ -2960,7 +2960,7 @@
         {
           "path": ".agents/skills/cf-herdr/SKILL.md",
           "markers": [
-            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
+            "Trust this task's worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]
