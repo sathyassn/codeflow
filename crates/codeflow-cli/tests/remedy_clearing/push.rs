@@ -283,25 +283,20 @@ fn clears_push_over_budget_target() {
     );
 }
 
-/// Full-gate control for the real hook clock and process boundary. The two
-/// remedy tests use measured durations; this one still crosses the real budget.
+/// Full-gate control for the real hook clock and process boundary. The remedy
+/// tests use measured durations; this one runs the built-in release preflight
+/// through a `python3` that takes 61 s, so the real step timing crosses the budget.
 #[test]
 fn push_budget_is_reported_after_a_real_slow_target() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
-    let mut config = slow_target_config();
-    config["targets"][1]["modes"]["quick"]["command"] = "sleep 61".into();
-    write(
-        &root,
-        ".codeflow/test-config.json",
-        &serde_json::to_string_pretty(&config).unwrap(),
-    );
-    commit_all(&root, "chore: add a slow quick target");
-    let out = pushed(&root);
+    released(&root, &dest);
+    let slow = slow_python(&root);
+    let out = push_with_path(&root, &slow, &["origin", "HEAD"]);
     let printed = block(&out, "over its 60s budget");
-    assert_prints_row(printed, "PUSH_OVER_BUDGET_TARGET");
-    assert!(printed.contains("target 'slow'"), "{printed}");
+    assert_prints_row(printed, "PUSH_OVER_BUDGET_BUILTIN");
+    assert!(printed.contains("built-in `release preflight"), "{printed}");
     assert!(out.contains("push set finished"), "{out}");
     assert_eq!(
         text(&run("git", &dest, &["rev-parse", "feat/x"])).trim(),
@@ -325,6 +320,48 @@ fn python_stand_in(bin: &Path, script: &str) {
     );
     let made = run("chmod", bin, &["+x", "python3"]);
     assert!(made.status.success(), "{}", text(&made));
+}
+
+/// A `python3` that takes 61 s to start: a release preflight slower than
+/// the push set's budget.
+#[cfg(unix)]
+fn slow_python(root: &Path) -> PathBuf {
+    let bin = root.parent().unwrap().join("slow-bin");
+    python_stand_in(&bin, "sleep 61\n");
+    bin
+}
+
+/// The same stand-in on Windows, which starts only a `python3.exe` by that
+/// name: a small program, compiled here, that waits and runs the real one.
+#[cfg(windows)]
+fn slow_python(root: &Path) -> PathBuf {
+    let bin = root.parent().unwrap().join("slow-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3.exe"))
+        .find(|path| path.is_file())
+        .expect("python3 on PATH");
+    let source = bin.join("slow_python.rs");
+    std::fs::write(
+        &source,
+        format!(
+            "fn main() {{\n    std::thread::sleep(std::time::Duration::from_secs(61));\n    \
+             let status = std::process::Command::new(r\"{}\")\n        \
+             .args(std::env::args_os().skip(1))\n        .status()\n        \
+             .expect(\"python3 runs\");\n    std::process::exit(status.code().unwrap_or(1));\n}}\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let built = Command::new(rustc)
+        .arg(&source)
+        .arg("-o")
+        .arg(bin.join("python3.exe"))
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", text(&built));
+    bin
 }
 
 /// Run the real quick-target selector, replacing only the stand-in's measured

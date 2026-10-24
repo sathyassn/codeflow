@@ -13,16 +13,34 @@ fn seeds() -> &'static Path {
             let run = uuid::Uuid::parse_str(&run).expect("nextest run UUID");
             // The executable is in target/[llvm-cov-target/]debug/deps.
             let exe = std::env::current_exe().unwrap();
-            exe.parent()
+            let parent = exe
+                .parent()
                 .unwrap()
                 .parent()
                 .unwrap()
-                .join("fixture-seeds")
-                .join(run.to_string())
+                .join("fixture-seeds");
+            prepare_run_directory(&parent, run)
         } else {
             super::process_folders::until_exit(tempfile::tempdir().unwrap())
         }
     })
+}
+
+/// Prepare the shared seed directory for one nextest invocation.
+pub fn prepare_run_directory(parent: &Path, run: uuid::Uuid) -> PathBuf {
+    let current = parent.join(run.to_string());
+    // A target directory serves one nextest run at a time, so every other
+    // run's seeds are finished and only take space. Races with a sibling
+    // process doing the same removal are harmless.
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            if entry.path() != current && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    std::fs::create_dir_all(&current).unwrap();
+    current
 }
 
 /// Build `key` once, then return an independent copy of the complete fixture.

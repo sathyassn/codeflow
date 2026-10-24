@@ -874,6 +874,33 @@ fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
 }
 
 #[test]
+fn fixture_seed_runs_remove_the_previous_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    let old = fixture_seed::prepare_run_directory(dir.path(), first);
+    std::fs::write(old.join("unfinished-seed"), "old").unwrap();
+    let current = fixture_seed::prepare_run_directory(dir.path(), second);
+    std::fs::write(current.join("ready-seed"), "current").unwrap();
+    assert!(!old.exists(), "the previous run's seed directory remains");
+    assert_eq!(
+        fixture_seed::prepare_run_directory(dir.path(), second),
+        current
+    );
+    assert_eq!(
+        std::fs::read_to_string(current.join("ready-seed")).unwrap(),
+        "current"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_dir())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn fixture_seeds_build_once_and_isolate_files_and_remotes() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let builds = AtomicUsize::new(0);
