@@ -48,6 +48,18 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "the directory-prefix differential test runs `<prefix>; pwd` under the installed bash and zsh in a disposable fixture, never git (TSK-302)",
     ),
     (
+        "codeflow-core/src/security/interpreter.rs",
+        "shell",
+        2,
+        "the cd narrowing tests run `cd <dir> && /bin/pwd -P` under the installed bash and zsh in a disposable fixture, never git (TSK-397)",
+    ),
+    (
+        "codeflow-core/src/security/interpreter.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary with an inherited CDPATH (TSK-397)",
+    ),
+    (
         "codeflow-core/src/doctor/mod.rs",
         "std::env::current_exe().unwrap()",
         1,

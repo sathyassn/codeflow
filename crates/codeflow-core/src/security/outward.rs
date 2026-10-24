@@ -450,14 +450,18 @@ fn cdpath_searches(target: &Path) -> bool {
 fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, PathBuf)> {
     let (prefix, rest) = command.split_once("&&")?;
     if command.split("&&").any(|segment| {
-        segment.trim().is_empty()
+        segment.chars().all(|c| matches!(c, ' ' | '\t'))
             || !segment.chars().all(|c| {
                 c.is_alphanumeric() || matches!(c, ' ' | '\t' | '/' | '.' | '_' | '-' | '=' | ':')
             })
     }) {
         return None;
     }
-    let words: Vec<_> = prefix.split_whitespace().collect();
+    // The character check above admits only space and tab as separators.
+    let words: Vec<_> = prefix
+        .split([' ', '\t'])
+        .filter(|w| !w.is_empty())
+        .collect();
     let (target, physical) = match words.as_slice() {
         ["cd", target] | ["cd", "--" | "-L", target] => (*target, false),
         ["cd", "-P", target] => (*target, true),
@@ -487,6 +491,8 @@ fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, Pa
         lexical_join(cwd, target)
     };
     let dir = std::fs::canonicalize(target).ok()?;
+    // A metadata error or a non-directory returns None, which keeps the
+    // wider directory set; absence is never read as an answer here.
     dir.is_dir().then_some((rest, dir))
 }
 
