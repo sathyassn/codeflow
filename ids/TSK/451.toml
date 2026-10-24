@@ -1,0 +1,11 @@
+id = "TSK-451"
+uid = "1aa78b1e-89c9-4c31-b3fe-a91b67c5eba9"
+kind = "TSK"
+title = "One record per completed fact"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-24T01:24:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
