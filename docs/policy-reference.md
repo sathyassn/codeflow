@@ -98,6 +98,43 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Secret-path matching
+
+`security.secret_reads` checks named reader operands and literals in inline
+interpreter code against hard-secret patterns. A recursive directory glob
+(`**/`) includes zero directories, so `id_rsa`, `./id_rsa`, nested and
+absolute forms receive the same refusal. The same applies to `id_ed25519`,
+`.pem`, `.key`, `.p12`, `.pfx` and `.netrc` patterns. `~`, `$HOME` and
+`${HOME}` spellings, repeated separators and named-user tildes reach the
+configured home-store rules. Comparisons fold ASCII case, including on
+case-sensitive volumes. Relative reader paths use the working directories
+followed by the command parser, including literal `cd` changes. Directory
+boundaries matter: `~/.ssh-notes/file` is not inside `~/.ssh`.
+
+The shell check skips entire read-rule groups that have carve-outs. It does
+not enforce the `.env` or `secret`/`credentials` source-name groups, including
+`.env.production` and `credentials.json`. Claude's file-tool rules still
+apply those groups and preserve their example and source exceptions, such as
+`.env.example` and `secret_scan.rs`. Fixing recursive glob matching does not
+extend those groups to shell reads.
+
+Reader patterns and brace operands are checked by their literal prefix;
+store directories and input-redirection sources are checked too. Ordinary
+patterns such as `src/*.rs` and `*.md` remain readable. The check does not
+resolve symlinks, paths computed by program code, operands supplied by
+`xargs`, command substitutions or process substitutions. Directory changes
+that the parser cannot resolve and directory changes inside interpreter
+code remain limits. Native
+filesystem denies are a separate backstop for the stores they cover. The
+macOS fixture exercises Seatbelt with the installed Claude `denyRead` paths:
+store reads fail, while a workspace `id_rsa` or `.env` remains readable under
+that store-only profile. This fixture does not establish live harness hook
+dispatch or profile adoption. Linux/WSL sandbox enforcement and native Windows
+sandbox behavior require separate platform evidence; the macOS fixture does
+not run there. A seat without an active filesystem sandbox has no such
+backstop.
+
+
 ## Planning amendment paths
 
 A planning amendment may change records under `project-management/` except
