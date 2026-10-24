@@ -140,5 +140,28 @@ DESIGN_INTENT:
 
 ## Operator sign-off
 
-Pending. The answers to the four decision blocks and any notes are recorded
-here when the review returns.
+**Direction (AC-1): settled by the operator on 2026-10-23**, over two review
+rounds of the rendered document (revision 1, then revision 2 for the
+palette):
+
+- Page anatomy A1, head and headings, with the note that body text is short
+  prose paragraphs plus points where they fit; no schema change.
+- Type scale S2: title 34, summary 19, section 24, subsection 18, block
+  title 15, body 15, caption 13 px at the default size; compact x0.94, large
+  x1.12; floors body 15, caption 13, micro 12.5.
+- Figure colour C2 with palette A "Cobalt and plum": light `fig-cat1`
+  `#3860ac`, `fig-cat1-soft` `#e4edfe`, `fig-cat2` `#722756`, `fig-cat2-soft`
+  `#f0d5e3`; dark `#9bbeff`, `#2a3852`, `#cf82ae`, `#3d2131`; the same four
+  values in Graphite, Slate and Sage of a mode; accents and greys unchanged;
+  the governing path stays in accent and companions take secondary roles.
+- No dedicated section block.
+- The result must look elegant and refined.
+
+Decided at build (phase 2), from the system-scope note above: the
+participant tint in sequence figures is not built, since a lifeline is a
+decoration whose name already identifies it and one family would be its only
+user; a tone changes hue only, so a toned mark keeps the fill kind, edge,
+width and dash of its state (recorded on ADR-0068).
+
+**Result (AC-6): pending** the operator's visual sign-off on the build in
+each skin and mode.
