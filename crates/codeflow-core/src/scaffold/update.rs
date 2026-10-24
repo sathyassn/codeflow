@@ -187,7 +187,16 @@ pub fn decide(
     };
     let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
-        let pending = PendingResolution::read(root, dest, &installed)?;
+        // While the `.new` proposal is still beside the file, the conflict
+        // stays open: preview it against the recorded base, as before the
+        // pending record existed. The update itself still refuses.
+        let proposal_open =
+            super::state::read_beneath_root(root, &format!("{dest}.new"))?.is_some();
+        let pending = if proposal_open {
+            None
+        } else {
+            PendingResolution::read(root, dest, &installed)?
+        };
         let recorded = pending
             .as_ref()
             .map(|pending| pending.new_sha256.as_str())

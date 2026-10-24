@@ -1283,6 +1283,41 @@ fn update_resolved_conflict_stays_resolved() {
     assert_shipped_baseline(&root, dest, DEVELOP_V2);
 }
 
+// Doctor previews through `decide`: an open proposal stays a conflict there,
+// while the update itself refuses until the proposal is resolved.
+#[test]
+fn update_preview_reports_an_open_proposal_as_a_conflict() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V1.replace("step one", "step one (project)"),
+    )
+    .unwrap();
+    let (_a2, source) = fixture_assets(true);
+    let first = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&first, dest), Action::Conflicted);
+    assert!(root
+        .join(format!(".codeflow/.pending-update/{dest}.json"))
+        .exists());
+
+    let decision = scaffold::update::decide(&source, &root, dest, "2.1.0").unwrap();
+    assert!(
+        matches!(
+            decision,
+            Some(scaffold::update::Decision::ConflictProposal(_))
+        ),
+        "{decision:?}"
+    );
+    let error = scaffold::update(&source, &root, &update_opts("2.1.0"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("update changed nothing"), "{error}");
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+}
+
 fn assert_shipped_baseline(root: &Path, dest: &str, shipped: &str) {
     assert_eq!(read(root, &format!(".codeflow/.baseline/{dest}")), shipped);
     let manifest: serde_json::Value =
