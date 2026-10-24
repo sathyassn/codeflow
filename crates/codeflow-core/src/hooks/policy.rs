@@ -423,6 +423,9 @@ pub struct GitPolicy {
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
+    pub path_policy: PolicyLevel,
+    pub blocked_names: Vec<super::path_policy::BlockedName>,
+    pub protected_paths: Vec<super::path_policy::ProtectedPath>,
     /// Managed CI only: read from the trusted commit, default `trusted`.
     pub secret_scan_inline_allow: SecretScanInlineAllow,
     /// Unresolved conflict markers on the lines a change adds to a text
@@ -489,6 +492,22 @@ pub fn non_ascii_aliasing() -> bool {
         .with(std::cell::Cell::get)
         .unwrap_or(true)
 }
+
+const DEFAULT_BRANCH_PREFIXES: &[&str] = &[
+    "feat/",
+    "fix/",
+    "docs/",
+    "refactor/",
+    "test/",
+    "chore/",
+    "ci/",
+    "hotfix/",
+    "plan/",
+    "task/",
+    "spike/",
+    "experiment/",
+    INTEGRATION_BRANCH_PREFIX,
+];
 
 impl Default for GitPolicy {
     fn default() -> Self {
@@ -558,25 +577,14 @@ impl Default for GitPolicy {
             pr_section_mapping: None,
             release_branch_pattern: None,
             branch_naming: PolicyLevel::Block,
-            branch_prefixes: [
-                "feat/",
-                "fix/",
-                "docs/",
-                "refactor/",
-                "test/",
-                "chore/",
-                "ci/",
-                "hotfix/",
-                "plan/",
-                "task/",
-                "spike/",
-                "experiment/",
-                INTEGRATION_BRANCH_PREFIX,
-            ]
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            branch_prefixes: DEFAULT_BRANCH_PREFIXES
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             secret_scan: PolicyLevel::Block,
+            path_policy: PolicyLevel::Block,
+            blocked_names: super::path_policy::default_names(),
+            protected_paths: Vec::new(),
             secret_scan_inline_allow: SecretScanInlineAllow::Trusted,
             conflict_markers: PolicyLevel::Block,
             test_gate_on_push: PolicyLevel::Block,
