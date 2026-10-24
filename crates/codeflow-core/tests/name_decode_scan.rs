@@ -1486,6 +1486,23 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // An unreadable or unparsable GitHub event proves no draft, so the
+    // pull request is judged ready and the quick-run citation is reported
+    // (TSK-451); the read never grants a pass.
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "pr_is_draft",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "pr_is_draft",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
+    ),
     // Rejects blank human explanations only; patterns and paths retain their
     // exact components and use the fixed NFC/ASCII comparison in normalize.
     (
@@ -2099,15 +2116,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Reads NUL-separated index entries and LF-separated submodule status records;
-    // the unchanged leading status byte decides incompleteness in both formats.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-        "split_terminator",
-        2,
-        "framing:index-and-submodule-status-records",
-    ),
     // Formats already-emitted finding text only, without establishing guard verdicts or rewriting operands.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
@@ -2499,6 +2507,24 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "grammar:posix-shell",
+    ),
+    // Removes only ASCII digits, dots and hyphens from a shell version suffix;
+    // whitespace and all other executable-name characters remain significant.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "is_shell",
+        "trim_end_matches",
+        1,
+        "grammar:shell-program-version",
+    ),
+    // Uses the same ASCII-only version suffix grammar to select fish's inline
+    // options; it never trims whitespace or a filesystem operand.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "shell_inline_code",
+        "trim_end_matches",
+        1,
+        "grammar:shell-program-version",
     ),
     // shell_blank explicitly accepts only space, tab and newline, matching the shell reader.
     (
@@ -3646,6 +3672,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "prose",
+    ),
+    // LF/CRLF framing only rejects unresolved conflict markers; accepted file bytes are never normalized or used as names.
+    (
+        "crates/codeflow-core/src/scaffold/update/pending.rs",
+        "PendingResolution::read",
+        "split_terminator",
+        1,
+        "schema-reject-only",
     ),
     // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
     (
@@ -4959,6 +4993,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
+    ),
+    // Debug builds only: an unset or unreadable lifecycle-check port means no test seam, so the release launch path runs.
+    (
+        "crates/codeflow-present/src/browser.rs",
+        "test_debugging_port",
+        "obtain-absent:var_os",
+        1,
+        "unproven",
+    ),
     // Rejects whitespace-only alternative text. Accepted image identity configuration stays unchanged.
     (
         "crates/codeflow-present/src/config.rs",
@@ -5840,11 +5890,6 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "shell_words",
     ),
     (
-        "index-and-submodule-status-records",
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "incomplete_checkout",
-    ),
-    (
         "template-placeholder-lines",
         "crates/codeflow-cli/src/cmd/ci.rs",
         "find_placeholders",
@@ -6153,6 +6198,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
     ("crates/codeflow-core/src/security/git_config.rs", "parse", "is_file", 1, "Type check on successfully obtained metadata; an existing non-file returns cannot verify. Missing includes are separately inventoried to match Git's empty contribution."),

@@ -63,7 +63,7 @@ repository's sessions.
 |---|---|
 | `codeflow present open <DOCUMENT>` | Validates the JSON document, starts the session's service, opens the isolated browser window and prints `opened <session-id>`. `--no-launch` starts the service and prints the bootstrap file to open instead |
 | `codeflow present list` | Prints this repository's sessions as JSON |
-| `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped. For a closed session it prints the session record. `--no-launch` prints where to open it |
+| `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped, and opens a window in its running browser or launches a new one. For a closed session it prints the session record. `--no-launch` prints where to open it |
 | `codeflow present update <SESSION_ID> <DOCUMENT>` | Adds a validated, immutable revision to an active session |
 | `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines to whoever runs it, usually the agent. `--follow` keeps delivering until the session closes |
 | `codeflow present responses list <SESSION_ID>` | Lists stored events with their status without delivering them. `--revision`, `--form`, `--status` (`pending`, `delivered`, `acknowledged`) and `--kind` (`review`, `answer`, `amendment`, `reopen`, `tombstone`) combine with AND |
@@ -84,12 +84,14 @@ when you submit them.
 
 1. Wait for the agent to run `codeflow present open <document.json>`, or run it
    yourself.
-   - If you closed the window, reopen it with
-     `codeflow present show <session-id>`.
-   - If `show` says the session's browser is already open, that browser is
-     still running. On macOS it can keep running after its last window closes.
-     Switch to its window, or quit it and run `show` again.
+   - Closing the window keeps the session. Reopen it with
+     `codeflow present show <session-id>`: it opens a new window in the
+     browser that is still running, or launches a new one. The isolated
+     browser quits 15 seconds after its last window closes.
    - `show --no-launch` prints the session's address.
+   - When you are done, click **End review** in the header. It sends any
+     queued notes first, then ends the session and quits the browser, as
+     `codeflow present close` does.
 2. Read the page from the top. On a wide screen, the left rail lists the
    sections.
 3. Press `C` or click **Comment** to turn on Comment mode. The notes rail

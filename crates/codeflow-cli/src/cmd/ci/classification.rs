@@ -322,12 +322,13 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, 
 /// Whether durable work tracking is on at the head or at the target, so a
 /// pull request cannot switch it off for itself.
 pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
-    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
-    match (durable_work_tracking_enabled(root), at_target) {
-        (Err(error), _) => Err(error.to_string()),
-        (_, Some(Err(error))) => Err(error),
-        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    let mut enabled = durable_work_tracking_enabled(root).map_err(|error| error.to_string())?;
+    if let Some(range) = range {
+        for revision in [range.base, range.head] {
+            enabled |= durable_work_tracking_enabled_at(root, revision)?;
+        }
     }
+    Ok(enabled)
 }
 
 /// With durable tracking on, an `integration/*` head that is not a release
@@ -649,6 +650,7 @@ pub(super) fn dispatch(
         epic_problem: &epic_problem,
     };
     let class = match classify(&input)
+        .and_then(|class| cancellation_entry(root, branch, range, &files, class))
         .and_then(|class| exemption_entry(root, range, &changes, class))
         .map(|class| release_class(release, class))
     {
@@ -696,6 +698,63 @@ fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
         .map_err(Clone::clone)
 }
 
+/// The task-named cancellation is an amendment and starts no work. Both
+/// entry points use the same merge-base and range validation.
+fn cancellation_entry(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    files: &[GitName],
+    class: Class,
+) -> Result<Class, String> {
+    if branch.starts_with("plan/") {
+        if let Class::Tracked { task_id } = &class {
+            if let Some(cancelled) = amendment::cancelled_standalone(
+                root,
+                range.base,
+                range.head,
+                files,
+                amendment::CancellationJudge::PullRequest(task_id),
+            )? {
+                if cancelled != *task_id {
+                    return Err(format!(
+                        "`Task: {task_id}` does not name the cancelled task {cancelled}"
+                    ));
+                }
+                return Ok(Class::PlanningOnly { epics: Vec::new() });
+            }
+        }
+    }
+    Ok(class)
+}
+
+/// A push has no Task line yet, and the same `plan/` range may be an
+/// epic's planning amendment. Refuse only a new cancelled standalone record
+/// that no `Task:` line could make valid; the PR binds the rest.
+pub(super) fn cancellation_push_check(
+    root: &Path,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let Some(range) = range.filter(|_| branch.starts_with("plan/")) else {
+        return;
+    };
+    let result = range_changes(root, range.base, range.head).and_then(|changes| {
+        let paths: Vec<_> = changes.into_iter().map(|(_, path)| path).collect();
+        amendment::cancelled_standalone(
+            root,
+            range.base,
+            range.head,
+            &paths,
+            amendment::CancellationJudge::Push,
+        )
+    });
+    if let Err(problem) = result {
+        push(tagged, RULE, problem, HINT);
+    }
+}
+
 /// An exemption adds or edits the regular file; it cannot remove or replace it.
 /// A task-named range of another shape stays ordinary tracked work, as it was
 /// before the class existed; an epic-named one is refused.
@@ -731,7 +790,7 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
         ),
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
-            epics.join(", ")
+            if epics.is_empty() { "no epic".to_string() } else { epics.join(", ") }
         ),
         Class::EpicLine(epic) => {
             print!("codeflow ci: pull request class: epic integration line of {epic}");

@@ -604,6 +604,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
     let authority = format!("127.0.0.1:{port}");
     let profile = store.runtime_dir(id)?.join("browser-profile");
     browser::recover_incomplete_launch(store, id, &profile)?;
+    let ready_path = store.runtime_dir(id)?.join("control").join("ready.json");
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, &profile)? {
             if no_launch {
@@ -613,11 +614,21 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
                 );
                 return Ok(());
             }
-            return Err(PresentError::BrowserAlreadyOpen(id.to_string()));
+            // The browser runs, with or without a window (a closed window
+            // leaves it running through its grace): open a window in it.
+            let ready = read_ready_record(&ready_path, id)?;
+            request_rebootstrap(&ready)?;
+            if browser::open_window(store, id, &ready.bootstrap_path, &profile)? {
+                println!("opened a window for {id}");
+                return Ok(());
+            }
+            // It quit meanwhile; the fresh bootstrap serves a new launch.
+            browser::launch_isolated(store, id, &ready.bootstrap_path, &profile)?;
+            println!("opened {id}");
+            return Ok(());
         }
         let _ = store.clear_browser(id, instance_id)?;
     }
-    let ready_path = store.runtime_dir(id)?.join("control").join("ready.json");
     let ready = read_ready_record(&ready_path, id)?;
     request_rebootstrap(&ready)?;
     if no_launch {

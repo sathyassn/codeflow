@@ -107,53 +107,63 @@ fn completed(light: bool, row: Option<bool>) -> (tempfile::TempDir, String, Stri
     (dir, reviewed, section)
 }
 
+/// TSK-451 AC-1: the acceptance block is the completion record. `codeflow
+/// ci` derives and prints the Reviews row from it, passes a body that leaves
+/// the row out or points at the record, and warns, never blocks, when a row
+/// names another commit (the PR 114 shape: the round-1 head) or verdict.
 #[test]
-fn a_completion_needs_a_review_row_for_its_reviewed_commit() {
-    // The PR 114 shape: the row names the round-1 head, the block a later one.
-    let (dir, reviewed, stale) = completed(false, Some(false));
-    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &stale);
-    let text = combined(&out);
-    assert!(!out.status.success(), "{text}");
-    assert!(text.contains("work.acceptance_binding"), "{text}");
-    assert!(
-        text.contains(&format!(
+fn a_completion_derives_its_review_row_and_warns_on_a_different_one() {
+    let derived = |reviewed: &str| {
+        format!("Reviews row derived from TSK-001's acceptance block: | https://example.test/review/1 | whole unit at {reviewed} | approved |")
+    };
+    let mismatch = |reviewed: &str| {
+        format!(
             "binds the reviewed commit {reviewed}, and the Reviews section has no row approving it"
-        )),
-        "{text}"
-    );
-    assert!(
-        text.contains(&format!("`whole unit at {reviewed}`")),
-        "{text}"
-    );
+        )
+    };
+    for light in [false, true] {
+        // A row naming an earlier head: a warning, and the run passes.
+        let (dir, reviewed, stale) = completed(light, Some(false));
+        let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &stale);
+        let text = combined(&out);
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains(&derived(&reviewed)), "{text}");
+        assert!(text.contains(&mismatch(&reviewed)), "{text}");
+        assert!(text.contains("warning"), "{text}");
+        assert!(
+            text.contains(&format!("`whole unit at {reviewed}`")),
+            "{text}"
+        );
 
-    let (dir, _, bound) = completed(false, Some(true));
-    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &bound);
-    assert!(out.status.success(), "{}", combined(&out));
-}
+        // A row approving another verdict at the reviewed commit warns too.
+        let (dir, reviewed, agreeing) = completed(light, Some(true));
+        let other = agreeing.replace("| approved |", "| changes_requested |");
+        let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &other);
+        assert!(out.status.success(), "{}", combined(&out));
+        assert!(
+            combined(&out).contains(&mismatch(&reviewed)),
+            "{}",
+            combined(&out)
+        );
 
-#[test]
-fn a_light_completion_may_leave_reviews_out_but_never_name_an_earlier_head() {
-    let (dir, _, none) = completed(true, None);
-    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &none);
-    assert!(out.status.success(), "{}", combined(&out));
-    // A light range that records no review is not asked to invent one.
-    let (dir, _, _) = completed(true, None);
-    let out = ci_reviewed(
-        dir.path(),
-        "task/TSK-001-work",
-        true,
-        "\n## Reviews\n\nNone: documentation only\n",
-    );
-    assert!(out.status.success(), "{}", combined(&out));
-
-    let (dir, reviewed, stale) = completed(true, Some(false));
-    let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &stale);
-    let text = combined(&out);
-    assert!(!out.status.success(), "{text}");
-    assert!(
-        text.contains(&format!("`whole unit at {reviewed}`")),
-        "{text}"
-    );
+        // The agreeing row, no section and a pointer each pass silently.
+        for kind in ["row", "none", "pointer"] {
+            let (dir, reviewed, bound) = completed(light, Some(true));
+            let section = match kind {
+                "row" => bound,
+                "none" => String::new(),
+                _ => "\n## Reviews\n\nSee TSK-001's acceptance block.\n".to_string(),
+            };
+            let out = ci_reviewed(dir.path(), "task/TSK-001-work", true, &section);
+            let text = combined(&out);
+            assert!(out.status.success(), "{text}");
+            assert!(text.contains(&derived(&reviewed)), "{text}");
+            assert!(
+                !text.contains("has no row approving it"),
+                "{section}: {text}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -136,7 +136,7 @@ const ALLOWED: &[&str] = &[
     "diff ~/.zshrc ~/.bashrc",
     "cp ~/.bashrc backup.txt",
     "echo x > notes.txt",
-    "echo x > build/$NAME",
+    "N=out.txt; echo x > build/$N",
     "sh -c 'echo hi'",
     "cargo build",
     "rg --no-config alias ~/.zshrc",
@@ -208,6 +208,12 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             if !refused_with(&outputs, "git.hook_integrity") {
                 wrong.push(format!("{harness}: allowed {command}"));
             }
+        }
+        // An unread writer word inside the checkout is not a startup write,
+        // but git-guard cannot verify it (TSK-406).
+        let outputs = project.replay(harness, "Bash", json!({"command": "echo x > build/$NAME"}));
+        if !refused_with(&outputs, "git.hook_integrity") || refused_with(&outputs, RULE) {
+            wrong.push(format!("{harness}: wrong rule for echo x > build/$NAME"));
         }
         let outputs = project.replay(
             harness,
@@ -494,7 +500,6 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "FOO=1 env -S 'git config --global user.name Probe'",
     "bash -c 'git status'",
     "CMD='git status'; sh -c \"$CMD\"",
-    "sh -c \"$UNSET\"",
     "printf '%s\\n' README | xargs ls",
     "xargs -I{} echo {}",
     "xargs git status",
@@ -952,6 +957,12 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused control {command}"));
             }
+        }
+        // Unread shell code names no startup file, but both guards refuse it
+        // as cannot-verify under hook integrity (TSK-406).
+        let outputs = project.replay(harness, "Bash", json!({"command": "sh -c \"$UNSET\""}));
+        if !refused_with(&outputs, "git.hook_integrity") || refused_with(&outputs, RULE) {
+            wrong.push(format!("{harness}: wrong rule for sh -c \"$UNSET\""));
         }
     }
     wrong.extend(grok_shell_allows(&project));

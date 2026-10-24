@@ -14,8 +14,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-XSOKGUIO.js",
-      "present.style": "/app/assets/app-MDM2S4P6.css"
+      "present.app": "/app/assets/app-WYSTRGIU.js",
+      "present.style": "/app/assets/app-76F74YT6.css"
     },
     "inline": {
       "present.prepaint": {
@@ -26,14 +26,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-MDM2S4P6.css",
-        "stored_path": "service/app-MDM2S4P6.css.br",
+        "request_path": "/app/assets/app-76F74YT6.css",
+        "stored_path": "service/app-76F74YT6.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 58079,
-        "encoded_bytes": 10132,
-        "sha256": "30731be4d8c1bc0a33475e90726736687ca1a441ca3e8a0b50d9f9ccb646a1cb",
-        "etag": "\"sha256-MHMb5NjBvAozR16Qcmc2aHyhpEHKPooLUNn5zLZGocs=\"",
+        "raw_bytes": 58632,
+        "encoded_bytes": 10211,
+        "sha256": "f718dc852af95074168559f47ae4e1dad22297e964b9127a5b7ca3d4493ce90c",
+        "etag": "\"sha256-9xjchSr5UHQWhVn0euTh2tIil+lkuRJ6W3yj1Ek86Qw=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -42,14 +42,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-MDM2S4P6.css",
-        "stored_path": "service/app-MDM2S4P6.css.gz",
+        "request_path": "/app/assets/app-76F74YT6.css",
+        "stored_path": "service/app-76F74YT6.css.gz",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 58079,
-        "encoded_bytes": 11654,
-        "sha256": "df6875182e49ffe727c2f36ee27089b89fb878748154085e00ce96eb24a927b7",
-        "etag": "\"sha256-32h1GC5J/+cnwvNu4nCJuJ+4eHSBVAheAM6W6ySpJ7c=\"",
+        "raw_bytes": 58632,
+        "encoded_bytes": 11729,
+        "sha256": "23c761a3c2dad0b6f480d3942459847c1d47fc8aba0a2bec72b4d301e82b043a",
+        "etag": "\"sha256-I8dho8La0Lb0gNOUJFmEfB1H/Iq6CivscrTTAegrBDo=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -58,14 +58,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-XSOKGUIO.js",
-        "stored_path": "service/app-XSOKGUIO.js.br",
+        "request_path": "/app/assets/app-WYSTRGIU.js",
+        "stored_path": "service/app-WYSTRGIU.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 117294,
-        "encoded_bytes": 34579,
-        "sha256": "9efc6adba3255e166f99b749bd153edfc1b45423095b6f4620559884ef72b28d",
-        "etag": "\"sha256-nvxq26MlXhZvmbdJvRU+38G0VCMJW29GIFWYhO9yso0=\"",
+        "raw_bytes": 118234,
+        "encoded_bytes": 34880,
+        "sha256": "205469fe13188268b8f9eaf20116fd742a61ab73cea629f07b68382dcab382b9",
+        "etag": "\"sha256-IFRp/hMYgmi4+eryARb9dCphq3POpinwe2g4Lcqzgrk=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -90,14 +90,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-XSOKGUIO.js",
-        "stored_path": "service/app-XSOKGUIO.js.gz",
+        "request_path": "/app/assets/app-WYSTRGIU.js",
+        "stored_path": "service/app-WYSTRGIU.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 117294,
-        "encoded_bytes": 38817,
-        "sha256": "9425455d79d17548eb4dca3e883beafa7c2ed736070ae66f382b6a5605170611",
-        "etag": "\"sha256-lCVFXXnRdUjrTco+iDvq+nwu1zYHCuZvOCtqVgUXBhE=\"",
+        "raw_bytes": 118234,
+        "encoded_bytes": 39135,
+        "sha256": "2c18d4a7a9dce5b3b2b54612d5d707373ed4a6ddd5cdfc5f4c1e9d75f96b8ae4",
+        "etag": "\"sha256-LBjUp6nc5bOytUYS1dcHNz7Upt3VzfxfTB6ddflriuQ=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -603,9 +603,9 @@
     "metrics": {
       "asset_count": 15,
       "representation_count": 30,
-      "raw_corpus_bytes": 1068163,
-      "brotli_corpus_bytes": 279859,
-      "gzip_corpus_bytes": 305928,
+      "raw_corpus_bytes": 1069656,
+      "brotli_corpus_bytes": 280239,
+      "gzip_corpus_bytes": 306321,
       "largest_gzip_chunk_bytes": 132502,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
@@ -613,12 +613,12 @@
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-717ee4f6881606a9.js.gz",
+      "stored_path": "export/renderer-cad875dc1a16b88c.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 968117,
-      "encoded_bytes": 270279,
-      "sha256": "717ee4f6881606a97475ca63c38ed57cc5ab118ceb7ad12cbdf9d77f8670339e"
+      "raw_bytes": 968805,
+      "encoded_bytes": 270396,
+      "sha256": "cad875dc1a16b88caf070826c4470caaa882b593dc1ef1daf1512cc881177f5d"
     }
   },
   "budgets": {
@@ -630,5 +630,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "d5317522962f6439a15e6554d7badfd7dffc790aa828ec96a5cc23bc3fa7b832"
+  "corpus_sha256": "d7264c7c1417baf0b3e8bdedb1d457f93b4c28ff3ab6a43d30d6c662ef0426d0"
 }

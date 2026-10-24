@@ -302,8 +302,10 @@ pub const SCHEMA: [KeySpec; 73] = [
                 (after a `--` too), and a script string an unknown program \
                 is given, a `-c` or `-e` value or any quoted word (`expect \
                 -c`, `osascript -e`, `ssh host '...'`), which is read as a \
-                command line; `echo` and `printf` operands stay data. When \
-                a shell or interpreter takes its code from anything other \
+                command line; `echo` and `printf` operands stay data. Resolved \
+                builtin output, shell here-strings and sourced process substitutions \
+                are also read as code. When an interpreter takes code from an external \
+                producer the guard cannot read, or a shell or interpreter takes its code from anything other \
                 than a literal argument or a heredoc body the guard reads (a \
                 pipe, a here-string, a descriptor such as `/dev/stdin` or \
                 `/dev/fd/N`, a process substitution, or a `-c`/`-e` value \
@@ -773,25 +775,16 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "git.test_gate_on_push",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Run the test gate before a push (pre-push hook).",
-        notes: "Tree checks use the strictest level from the working copy, HEAD \
-                and the destination authority. At active levels, a clean, complete \
-                checkout at a pushed commit always runs tree checks first. Other \
-                checkouts need no tree checks only when an advertised destination \
-                branch already holds that commit; tags and other \
-                refs never qualify. This preserves epic new --integration from a \
-                planning branch. Ancestry reads commit objects with commit-graph, \
-                replace refs and grafts disabled. At block, \
-                an unchecked commit outside that branch history refuses the push. \
-                Dirty tracked files, assume-unchanged or skip-worktree index flags, \
-                sparse checkouts and missing or mismatched submodules prevent \
-                checking that tree. Initialized submodules are included in quick-target \
-                snapshots. Warn notes unchecked trees and the checks to run; off and \
-                allow name the inactive gate, including when checkout inspection \
-                would fail. Untracked files can influence quick targets; a pass \
-                describes the working checkout. Tag and other non-branch pushes \
-                are outside the push set. Local-config tampering is outside the \
-                hook threat model; hosted CI checks the pushed commit.",
+        purpose: "Run the push set before a push (pre-push hook).",
+        notes: "The push set runs `codeflow ci` over each pushed range, which \
+                includes the conflict-marker check, and the release preflight \
+                where the project adopted it. It runs no `codeflow validate \
+                --docs` (`codeflow ci` checks the work graph) and no \
+                test-config target, so a push never waits for the heavy-work \
+                lock; cite `codeflow test --mode quick` when the pull request \
+                is made ready. Tag and other non-branch pushes are outside the \
+                push set. Local-config tampering is outside the hook threat \
+                model; hosted CI checks the pushed commit.",
     },
     KeySpec {
         path: "git.security_review",
