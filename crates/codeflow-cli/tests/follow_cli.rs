@@ -719,9 +719,15 @@ fn suggestions_snapshot_and_purge_work_from_the_command_line() {
         &[],
         &["follow", "snapshot", "--output", output.to_str().unwrap()],
     ));
-    assert!(std::fs::read_to_string(&output)
-        .unwrap()
-        .contains("## FU-001"));
+    let exported = std::fs::read_to_string(&output).unwrap();
+    assert!(exported.contains("## FU-001"));
+    // The header states the redaction in its own words.
+    assert!(
+        exported.contains(
+            "Redacted: secret-shaped lines are replaced and session details are left out. Ids are local to this ledger;"
+        ),
+        "{exported}"
+    );
     assert!(git(&f.root, &["status", "--porcelain"]).contains("?? ledger-snapshot.md"));
     refused_or(
         &cli(

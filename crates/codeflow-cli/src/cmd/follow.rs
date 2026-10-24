@@ -1238,7 +1238,7 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
     let _ = writeln!(block);
     let _ = writeln!(
         block,
-        "Ledger `{instance}`, through sequence {}, exported {}. Redacted: secret-shaped lines are replaced and session details are left block. Ids are local to this ledger; cite them as `{instance}/FU-NNN`.",
+        "Ledger `{instance}`, through sequence {}, exported {}. Redacted: secret-shaped lines are replaced and session details are left out. Ids are local to this ledger; cite them as `{instance}/FU-NNN`.",
         read.folded.ledger.last_sequence,
         coord::format_time(coord::now_secs())
     );
