@@ -407,17 +407,13 @@ epics: [EPC-001, EPC-004, EPC-023, EPC-025]
 adrs: [ADR-0013, ADR-0044]
 ```
 
-`codeflow orient` builds the session-start digest live. Its base has a
-30-line guideline of pointers: the product line, branch and worktree state, work and capability
-counts, recent ADR titles and gate status. It also lists every fetched
-integration line with behind count, evidenced sync or creation state and
-oldest unlanded task age, falling back to labelled local lines offline.
-The optional `git.line_sync_interval` enables overdue reminders. Every open
-epic has a started-task count from visible unlanded claims. These inventories
-are not truncated to the base guideline. The `session-summary` SessionEnd
-hook appends a session record to the ledger that recall searches. Claude wires
-both through `.claude/settings.json`, and an interactive Codex session gets
-the same digest through `.codex/hooks.json` (ADR-0013).
+`codeflow orient` builds the session-start digest live: product, branch,
+worktree, work counts, ADRs and gates. Its 30-line base guideline excludes
+the complete [integration-line and open-epic inventories](session-orientation.md).
+`git.line_sync_interval` optionally enables overdue reminders. The
+`session-summary` SessionEnd hook records sessions for recall. Claude wires
+both through `.claude/settings.json`; interactive Codex gets the digest
+through `.codex/hooks.json` (ADR-0013).
 
 Rules return after context loss and where a prompt needs them (TSK-128). One
 advisory command, `session-orient`, is wired on `SessionStart` and
