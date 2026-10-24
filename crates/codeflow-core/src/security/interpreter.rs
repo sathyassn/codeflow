@@ -1252,21 +1252,20 @@ mod tests {
 
     /// TSK-302 review F4: a line with several suppliers reads what the line
     /// names once, so five `xargs` interpreters stay within the hook's
-    /// 10-second budget with a wide margin.
+    /// 10-second budget. TSK-453 counts the reads instead of timing them,
+    /// so host load cannot fail the test.
     #[test]
     fn several_suppliers_read_the_line_once() {
+        use super::super::arguments::LINE_READS;
         let repo = repo();
         let line = (0..5)
             .map(|n| format!("ls | xargs python3 check{n}.py"))
             .collect::<Vec<_>>()
             .join("; ");
-        let started = std::time::Instant::now();
+        LINE_READS.with(|reads| reads.set((0, 0)));
         assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "{:?}",
-            started.elapsed()
-        );
+        // One enforcement reading and one authority reading for all five calls.
+        assert_eq!(LINE_READS.with(std::cell::Cell::get), (1, 1));
     }
 
     /// The findings the public exec-guard boundary gives `command` from
