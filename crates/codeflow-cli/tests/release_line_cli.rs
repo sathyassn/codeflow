@@ -3266,13 +3266,22 @@ fn the_release_pull_request_names_its_release_integration_task() {
             owner.1
         );
         for other in ["TSK-001", "TSK-007", "TSK-008"] {
+            let result = pr(other);
             blocks(
-                &pr(other),
+                &result,
                 &format!("{other} named on {release}"),
                 &[
                     &format!("pull request class: tracked {other}"),
-                    "a task PR may add only its own standalone task record",
+                    "work.stable_planning_anchor",
+                    &format!("task {other} cannot start from status"),
                 ],
+            );
+            assert!(
+                !result
+                    .1
+                    .contains("a task PR may add only its own standalone task record"),
+                "imported planning records are not this task's additions: {}",
+                result.1
             );
         }
     }

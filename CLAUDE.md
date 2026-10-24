@@ -13,6 +13,7 @@ check; when unsure, route.
 
 ## Claude-specific notes
 
+- Before relying on a merge or approval as another person's, compare each approving or merging account with every account `gh auth status` lists. If an account matches, it is not independent approval: stop and ask the operator. A non-match alone never proves independence. An App, automation account or account any agent session uses cannot supply independent human approval or merge evidence. Read "Recorded rules and delegations" before using the record or running its route. See `.claude/skills/cf-method/references/autonomy.md`.
 - Session hooks are wired in `.claude/settings.json`: the orient digest at
   SessionStart, the session summary at SessionEnd, and `git-guard` and
   `exec-guard` before every Bash call. A blocked command's message names the

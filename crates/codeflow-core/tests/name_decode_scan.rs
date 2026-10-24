@@ -1524,6 +1524,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Rejects blank human explanations only; patterns and paths retain their
+    // exact components and use the fixed NFC/ASCII comparison in normalize.
+    (
+        "crates/codeflow-core/src/hooks/path_policy.rs",
+        "PathPolicy::from_git",
+        "trim",
+        2,
+        "schema-reject-only",
+    ),
     // A reader error blocks active integrity unless authority or integrity
     // already denies it. Inactive integrity retains independent branch checks.
     (
