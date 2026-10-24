@@ -145,30 +145,6 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
         })
 }
 
-/// Refresh a configured remote's tracking refs for a session digest. Use the
-/// configured mapping and a short deadline; never prompt during session start.
-pub(crate) fn fetch_tracking(root: &Path, remote: &str) -> Result<(), String> {
-    run(
-        root,
-        &[
-            "fetch",
-            "--quiet",
-            "--prune",
-            "--no-recurse-submodules",
-            "--",
-            remote,
-        ],
-        LS_REMOTE_DEADLINE,
-    )
-    .map(|_| ())
-    .map_err(|_| {
-        format!(
-            "fetch {} failed or timed out; showing local lines",
-            crate::git::display_text(remote)
-        )
-    })
-}
-
 enum Failure {
     /// Git ran and exited unsuccessfully.
     Exit(Option<i32>),

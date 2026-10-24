@@ -1,9 +1,10 @@
 # Integration lines in the session digest
 
-`codeflow orient` and the `session-orient` SessionStart hook fetch `origin`
-(or the sole configured remote) once, without prompting, with a 10-second
-deadline. They list the fetched `integration/*` refs. If no remote is
-available or the fetch fails, they list local lines labelled `local`.
+`codeflow orient` and the `session-orient` SessionStart hook are read
+commands and never fetch. They list the `integration/*` refs of `origin`
+(or the sole configured remote) as last fetched, labelled `remote`; run
+`git fetch` to refresh them. With no remote, or no fetched integration
+refs, they list local lines labelled `local`.
 The protected target is the remote's default branch, falling back to
 `main` or `master`; local rows use local `main` or `master`.
 
@@ -13,7 +14,7 @@ Each row shows commits behind the target, the latest own sync merge date
 or creation state, and the oldest nonterminal task's age in days. Task
 records are read from the line's committed tree. A task record with a
 missing or invalid `created` date is left out of the age, and a
-`line note:` row after the line names it. A sync is an own
+`line records:` row after the line names it. A sync is an own
 first-parent merge with another parent on the target; its date is the
 merge commit's date. Inherited target merges do not count.
 

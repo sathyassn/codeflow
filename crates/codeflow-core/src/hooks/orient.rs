@@ -28,11 +28,15 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
         return crate::git::TextBlock::new();
     }
 
-    let remote = refresh_lines(root);
-    // Load again on purpose: the fetch above may move the protected
-    // remote-tracking ref the landed policy is read from, so the interval
-    // and the policy lines below follow the refreshed authority.
-    let authority = super::landed_policy::load(root);
+    // Orient is a read command (SPC-013 R-103): it never fetches, so line
+    // rows show the remote-tracking refs as last fetched.
+    let remote = line_remote(root);
+    // One backlog read serves the tasks line and the open-epic counts.
+    let backlog = match crate::workgraph::durable_work_tracking_enabled(root) {
+        Ok(true) => crate::workgraph::readiness::backlog(root).map(Some),
+        Ok(false) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    };
 
     // Each `writeln!` is one line under the block rule (TSK-388).
     let mut out = crate::git::TextBlock::new();
@@ -53,7 +57,7 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
         let _ = writeln!(out, "{line}");
     }
 
-    if let Some(line) = tasks_line(root) {
+    if let Some(line) = tasks_line(&backlog) {
         let _ = writeln!(out, "{line}");
     }
 
@@ -108,13 +112,13 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
             .map(|a| a.policy.git.line_sync_interval),
         &mut out,
     );
-    append_open_epics(root, &mut out);
+    append_open_epics(root, &backlog, &mut out);
     out
 }
 
-/// One configured-remote fetch per digest. Fetch failure uses explicitly local
-/// facts; the read-only reader never refreshes behind its caller's back.
-fn refresh_lines(root: &Path) -> Result<Option<String>, String> {
+/// The remote whose tracking `integration/*` refs the line rows read, as last
+/// fetched; `None` reads local lines. Never contacts the remote.
+fn line_remote(root: &Path) -> Result<Option<String>, String> {
     let Some(repo) = super::repo::open(root)? else {
         return Ok(None);
     };
@@ -129,8 +133,12 @@ fn refresh_lines(root: &Path) -> Result<Option<String>, String> {
             _ => return Err("multiple remotes without origin; showing local lines".into()),
         }
     };
-    crate::git::remote_query::fetch_tracking(root, remote)?;
-    Ok(Some(remote.into()))
+    let tracked = repo
+        .references_glob(&format!("refs/remotes/{remote}/integration/*"))
+        .map_err(|e| e.to_string())?
+        .next()
+        .is_some();
+    Ok(tracked.then(|| remote.into()))
 }
 
 fn append_line_drift(
@@ -200,7 +208,7 @@ fn append_line_drift(
         if !row.undated_tasks.is_empty() {
             let _ = writeln!(
                 out,
-                "line note: {} skipped task records with a missing or invalid created date: {}",
+                "line records: {} skipped, missing or invalid created date: {}",
                 crate::git::display_text(&row.line),
                 crate::git::display_text(&row.undated_tasks.join(", "))
             );
@@ -208,10 +216,23 @@ fn append_line_drift(
     }
 }
 
-fn append_open_epics(root: &Path, out: &mut crate::git::TextBlock) {
+fn append_open_epics(
+    root: &Path,
+    backlog: &Result<Option<crate::workgraph::readiness::Backlog>, String>,
+    out: &mut crate::git::TextBlock,
+) {
     let pm = root.join("project-management");
     let result = (|| {
         if crate::absence::proven_absent(&pm).map_err(|e| e.to_string())? {
+            return Ok(());
+        }
+        // Opening the store creates its folders; a read never does (as in
+        // `work_line`).
+        if pm.is_dir()
+            && !crate::workgraph::layout::records_folder_is_linked(&pm)
+            && !pm.join("epics").is_dir()
+            && !pm.join("tasks").is_dir()
+        {
             return Ok(());
         }
         let store = MarkdownStore::new(&pm).map_err(|e| e.to_string())?;
@@ -221,12 +242,7 @@ fn append_open_epics(root: &Path, out: &mut crate::git::TextBlock) {
         let tasks = store
             .list_tasks(TaskFilter::default())
             .map_err(|e| e.to_string())?;
-        let backlog =
-            if crate::workgraph::durable_work_tracking_enabled(root).map_err(|e| e.to_string())? {
-                Some(crate::workgraph::readiness::backlog(root)?)
-            } else {
-                None
-            };
+        let backlog = backlog.as_ref().map_err(Clone::clone)?.as_ref();
         for epic in epics.into_iter().filter(|e| {
             !matches!(
                 e.status,
@@ -406,11 +422,10 @@ fn work_line(root: &Path) -> Option<String> {
 
 /// Derived task states from the readiness core (SPC-013 R-44), with the
 /// first ready task. Only where durable work tracking is on.
-fn tasks_line(root: &Path) -> Option<String> {
-    if !crate::workgraph::durable_work_tracking_enabled(root).ok()? {
-        return None;
-    }
-    let backlog = crate::workgraph::readiness::backlog(root).ok()?;
+fn tasks_line(
+    backlog: &Result<Option<crate::workgraph::readiness::Backlog>, String>,
+) -> Option<String> {
+    let backlog = backlog.as_ref().ok()?.as_ref()?;
     if backlog.entries.is_empty() {
         return None;
     }

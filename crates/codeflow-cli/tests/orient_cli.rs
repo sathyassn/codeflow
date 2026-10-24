@@ -182,6 +182,16 @@ fn remote_lines_distinguish_sync_creation_and_inherited_history() {
         &["branch", "integration/advertised-later", "main"],
         today,
     );
+    // Orient never fetches: a line created on the remote after the last
+    // fetch appears only once the operator fetches.
+    let before = run(clone.path(), false);
+    assert_eq!(
+        before.lines().filter(|l| l.starts_with("line:")).count(),
+        5,
+        "{before}"
+    );
+    assert!(!before.contains("integration/advertised-later"), "{before}");
+    git(clone.path(), &["fetch", "-q", "origin"], today);
     let out = run(clone.path(), false);
     assert_eq!(
         out.lines().filter(|l| l.starts_with("line:")).count(),
@@ -230,6 +240,7 @@ fn remote_lines_distinguish_sync_creation_and_inherited_history() {
     assert!(hook.contains("open epic: EPC-002"));
     write(root, ".codeflow/policy.json", "{}");
     commit(root, "disable interval", today);
+    git(clone.path(), &["fetch", "-q", "origin"], today);
     assert!(!run(clone.path(), false).contains("sync overdue"));
 }
 
@@ -265,8 +276,7 @@ fn unreachable_remote_falls_back_to_local_creation_evidence() {
     let out = run(root, false);
     let local = row(&out, "local");
     assert!(
-        out.contains("fetch origin failed")
-            && local.contains("(local)")
+        local.contains("(local)")
             && local.contains(&format!("creation {}", day(today - 3 * 86_400)))
             && local.contains("sync overdue"),
         "{out}"
@@ -338,7 +348,7 @@ fn non_directory_work_records_are_reported_without_failing_the_digest() {
 }
 
 #[test]
-fn orient_fetches_at_most_once() {
+fn orient_never_fetches_and_reads_lines_as_last_fetched() {
     let source = tempfile::tempdir().unwrap();
     let clone = tempfile::tempdir().unwrap();
     init(source.path(), now());
@@ -357,7 +367,13 @@ fn orient_fetches_at_most_once() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    let trace = std::fs::read_to_string(trace).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        row(&stdout, "one").contains("(remote)") && row(&stdout, "two").contains("(remote)"),
+        "{stdout}"
+    );
+    // No git process at all leaves no trace file, which is zero fetches too.
+    let trace = std::fs::read_to_string(trace).unwrap_or_default();
     let count = trace
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -368,7 +384,7 @@ fn orient_fetches_at_most_once() {
                     .is_some_and(|args| args.iter().any(|arg| arg == "fetch"))
         })
         .count();
-    assert_eq!(count, 1, "{trace}");
+    assert_eq!(count, 0, "{trace}");
 }
 
 #[test]
@@ -453,7 +469,7 @@ fn an_undated_task_record_is_named_and_hides_no_line_rows() {
     assert!(
         row(&out, "dated").contains("oldest unlanded task")
             && !row(&out, "dated").contains("oldest unlanded task none")
-            && out.contains("line note: integration/dated skipped task records with a missing or invalid created date: TSK-002, TSK-003")
+            && out.contains("line records: integration/dated skipped, missing or invalid created date: TSK-002, TSK-003")
             && row(&out, "other").contains("fresh, no own commits")
             && !out.contains("integration lines unavailable"),
         "{out}"
