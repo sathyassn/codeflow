@@ -994,7 +994,12 @@ fn sync_user_owned_json(
 
     // Keys the new shipped default dropped and the schema deprecates are
     // deleted (TSK-137): they are inert, and the loader warns while they stay.
-    let removed = remove_deprecated_keys(&mut user, &new_default);
+    let mut removed = remove_deprecated_keys(&mut user, &new_default);
+    removed.extend(remove_unsupported_defaults(
+        &mut user,
+        old_default.as_ref(),
+        &new_default,
+    ));
     added.extend(removed.iter().map(|k| format!("-{k}")));
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
@@ -1006,6 +1011,7 @@ fn sync_user_owned_json(
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
         notes.extend(recommended);
+        notes.extend(unsupported_policy_notes(&user));
         if !prior.is_empty() {
             notes.push(prior_release_note());
         } else if old_default.is_none() {
@@ -1020,13 +1026,7 @@ fn sync_user_owned_json(
 
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
-    let mut notes: Vec<String> = added
-        .iter()
-        .map(|k| match k.strip_prefix('-') {
-            Some(gone) => format!("removed deprecated key {gone}"),
-            None => format!("added key {k}"),
-        })
-        .collect();
+    let mut notes: Vec<String> = added.iter().map(|key| key_change_note(key)).collect();
     notes.extend(moved.iter().map(MovedDefault::note));
     if !prior.is_empty() {
         notes.insert(0, prior_release_note());
@@ -1034,6 +1034,7 @@ fn sync_user_owned_json(
     let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
+    notes.extend(unsupported_policy_notes(&user));
     let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
@@ -1218,6 +1219,59 @@ fn recommend_defaults(
         }
     }
     notes
+}
+
+fn unsupported_policy_notes(value: &serde_json::Value) -> impl Iterator<Item = String> {
+    crate::hooks::policy_schema::unsupported_control_warnings(value)
+        .into_iter()
+        .map(|finding| finding.text)
+}
+
+fn key_change_note(key: &str) -> String {
+    match key.strip_prefix('-') {
+        Some(gone) => {
+            let kind = if crate::hooks::policy_schema::spec_for(gone)
+                .is_some_and(|spec| spec.is_unsupported())
+            {
+                "unsupported"
+            } else {
+                "deprecated"
+            };
+            format!("removed {kind} key {gone}")
+        }
+        None => format!("added key {key}"),
+    }
+}
+
+/// Remove an unsupported policy key only when its value matches the
+/// recorded shipped baseline. Without that evidence, preserve the value.
+fn remove_unsupported_defaults(
+    user: &mut serde_json::Value,
+    old: Option<&serde_json::Value>,
+    new: &serde_json::Value,
+) -> Vec<String> {
+    use crate::hooks::policy_schema::{lookup, schema};
+    let mut removed = Vec::new();
+    for spec in schema()
+        .iter()
+        .filter(|spec| spec.path.contains('.') && spec.is_unsupported())
+    {
+        let previous = old.and_then(|value| lookup(value, spec.path));
+        if previous.is_some()
+            && lookup(user, spec.path) == previous
+            && lookup(new, spec.path).is_none()
+        {
+            let (section, key) = spec.path.split_once('.').expect("section key");
+            if let Some(object) = user
+                .get_mut(section)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                object.remove(key);
+                removed.push(spec.path.to_string());
+            }
+        }
+    }
+    removed
 }
 
 /// Delete each dotted-path [`DEPRECATED_KEYS`] entry the user file carries and

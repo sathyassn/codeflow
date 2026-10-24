@@ -238,7 +238,8 @@ fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<Stri
 
 fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>), String> {
     let read = |path: &str| read_at(repo, reference, path);
-    let policy = read(".codeflow/policy.json")?
+    let policy_text = read(".codeflow/policy.json")?;
+    let policy = policy_text
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
         .map_err(|e| {
             format!(
