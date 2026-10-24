@@ -981,7 +981,7 @@ fn holder_label(item: &Item) -> String {
 }
 
 fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextBlock {
-    let mut out = TextBlock::new();
+    let mut block = TextBlock::new();
     let selected: Vec<&View<'_>> = views
         .iter()
         .filter(|view| {
@@ -1005,20 +1005,20 @@ fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextB
         "urgent: due or awaiting the operator"
     };
     if md {
-        let _ = writeln!(out, "# Coordination ledger");
-        let _ = writeln!(out);
-        let _ = writeln!(out, "Ledger `{instance}`: {}.", counts(views));
-        let _ = writeln!(out);
-        let _ = writeln!(out, "## {heading}");
+        let _ = writeln!(block, "# Coordination ledger");
+        let _ = writeln!(block);
+        let _ = writeln!(block, "Ledger `{instance}`: {}.", counts(views));
+        let _ = writeln!(block);
+        let _ = writeln!(block, "## {heading}");
         for (group, items) in &groups {
-            let _ = writeln!(out);
-            let _ = writeln!(out, "### {}", text::markdown(group));
-            let _ = writeln!(out);
-            let _ = writeln!(out, "| Id | State | Title | Next check | Due |");
-            let _ = writeln!(out, "|---|---|---|---|---|");
+            let _ = writeln!(block);
+            let _ = writeln!(block, "### {}", text::markdown(group));
+            let _ = writeln!(block);
+            let _ = writeln!(block, "| Id | State | Title | Next check | Due |");
+            let _ = writeln!(block, "|---|---|---|---|---|");
             for view in items {
                 let _ = writeln!(
-                    out,
+                    block,
                     "| {} | {} | {} | {} | {} |",
                     view.item.id,
                     view.item.state.as_str(),
@@ -1029,13 +1029,13 @@ fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextB
             }
         }
     } else {
-        let _ = writeln!(out, "coordination ledger {instance}: {}", counts(views));
-        let _ = writeln!(out, "{heading}:");
+        let _ = writeln!(block, "coordination ledger {instance}: {}", counts(views));
+        let _ = writeln!(block, "{heading}:");
         for (group, items) in &groups {
-            let _ = writeln!(out, "  {}", text::terminal(group));
+            let _ = writeln!(block, "  {}", text::terminal(group));
             for view in items {
                 let _ = writeln!(
-                    out,
+                    block,
                     "    {:<8} {:<8} {}  (next check {})",
                     view.item.id,
                     view.item.state.as_str(),
@@ -1044,30 +1044,39 @@ fn render_list(views: &[View<'_>], instance: &str, md: bool, all: bool) -> TextB
                 );
                 let cell = due_cell(view);
                 if !cell.is_empty() {
-                    let _ = writeln!(out, "      {}", text::terminal(&cell));
+                    let _ = writeln!(block, "      {}", text::terminal(&cell));
                 }
             }
         }
     }
     if groups.is_empty() {
-        let _ = writeln!(out, "{}", if md { "\nNothing here." } else { "  nothing" });
+        if md {
+            let _ = writeln!(block);
+            let _ = writeln!(block, "Nothing here.");
+        } else {
+            let _ = writeln!(block, "  nothing");
+        }
     }
     if !all && selected.len() > URGENT_SHOWN {
+        if md {
+            let _ = writeln!(block);
+        }
         let _ = writeln!(
-            out,
-            "{}showing {URGENT_SHOWN} of {} urgent items",
-            if md { "\n" } else { "" },
+            block,
+            "showing {URGENT_SHOWN} of {} urgent items",
             selected.len()
         );
     }
     if !all {
+        if md {
+            let _ = writeln!(block);
+        }
         let _ = writeln!(
-            out,
-            "{}`codeflow follow list --all` lists every item; `codeflow follow list FU-NNN` shows one in full",
-            if md { "\n" } else { "" }
+            block,
+            "`codeflow follow list --all` lists every item; `codeflow follow list FU-NNN` shows one in full"
         );
     }
-    out
+    block
 }
 
 fn due_cell(view: &View<'_>) -> String {
@@ -1096,35 +1105,35 @@ fn render_text(value: &str, md: bool, redacted: bool) -> String {
 /// One follow-up in full, readable without its conversation.
 #[allow(clippy::too_many_lines)]
 fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlock {
-    let mut out = TextBlock::new();
+    let mut block = TextBlock::new();
     let record = &item.record;
     let t = |value: &str| render_text(value, md, redacted);
-    let field = |out: &mut TextBlock, name: &str, value: &str| {
+    let field = |block: &mut TextBlock, name: &str, value: &str| {
         if md {
-            let _ = writeln!(out, "- **{name}:** {value}");
+            let _ = writeln!(block, "- **{name}:** {value}");
         } else {
-            let _ = writeln!(out, "  {name}: {value}");
+            let _ = writeln!(block, "  {name}: {value}");
         }
     };
     if md {
-        let _ = writeln!(out, "## {}: {}", item.id, t(&record.title));
-        let _ = writeln!(out);
+        let _ = writeln!(block, "## {}: {}", item.id, t(&record.title));
+        let _ = writeln!(block);
     } else {
-        let _ = writeln!(out, "{}: {}", item.id, t(&record.title));
+        let _ = writeln!(block, "{}: {}", item.id, t(&record.title));
     }
-    field(&mut out, "state", item.state.as_str());
-    field(&mut out, "stream", &t(&record.stream));
-    field(&mut out, "holder", &t(&record.holder));
-    field(&mut out, "description", &t(&record.description));
-    field(&mut out, "done when", &t(&record.done_when));
+    field(&mut block, "state", item.state.as_str());
+    field(&mut block, "stream", &t(&record.stream));
+    field(&mut block, "holder", &t(&record.holder));
+    field(&mut block, "description", &t(&record.description));
+    field(&mut block, "done when", &t(&record.done_when));
     let source = match &record.source_reference {
         Some(reference) => format!("{} ({})", record.source.as_str(), t(reference)),
         None => record.source.as_str().to_string(),
     };
-    field(&mut out, "source", &source);
+    field(&mut block, "source", &source);
     if record.links.is_empty() {
         field(
-            &mut out,
+            &mut block,
             "links",
             &format!(
                 "none: {}",
@@ -1133,17 +1142,17 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
         );
     } else {
         let links: Vec<String> = record.links.iter().map(|link| t(&link.display())).collect();
-        field(&mut out, "links", &links.join(", "));
+        field(&mut block, "links", &links.join(", "));
     }
     if !record.waits_on.is_empty() {
-        field(&mut out, "waits on", &record.waits_on.join(", "));
+        field(&mut block, "waits on", &record.waits_on.join(", "));
     }
     if let Some(condition) = &record.awaiting_operator {
-        field(&mut out, "awaiting the operator", &t(condition));
+        field(&mut block, "awaiting the operator", &t(condition));
     }
-    field(&mut out, "next check", &record.next_check);
+    field(&mut block, "next check", &record.next_check);
     field(
-        &mut out,
+        &mut block,
         "added",
         &format!("{} by {}", item.added_at, item.added_by.role),
     );
@@ -1154,13 +1163,13 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
             .map(|source| format!(" (answer from {})", t(source)))
             .unwrap_or_default();
         field(
-            &mut out,
+            &mut block,
             "last check",
             &format!("{at}: {}{source}", t(&check.observed)),
         );
     }
     if !due.is_empty() {
-        field(&mut out, "due", &t(&due.join("; ")));
+        field(&mut block, "due", &t(&due.join("; ")));
     }
     for proof in &item.proofs {
         let kind = match proof.kind {
@@ -1168,7 +1177,7 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
             EvidenceKind::MachineVerified => "machine-verified",
         };
         field(
-            &mut out,
+            &mut block,
             "proof",
             &format!(
                 "{kind}: {} ({}, observed {})",
@@ -1179,10 +1188,10 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
         );
     }
     for (at, role) in &item.purged {
-        field(&mut out, "purged", &format!("{at} by {role}"));
+        field(&mut block, "purged", &format!("{at} by {role}"));
     }
     for reason in &item.reopened {
-        field(&mut out, "reopened", &t(reason));
+        field(&mut block, "reopened", &t(reason));
     }
     if let ItemState::Dropped {
         reason,
@@ -1190,19 +1199,19 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
     } = &item.state
     {
         field(
-            &mut out,
+            &mut block,
             "dropped",
             &format!("{}; left: {}", t(reason), t(disposition)),
         );
     }
     for rejected in &record.rejected_suggestions {
         field(
-            &mut out,
+            &mut block,
             "not a duplicate of",
             &format!("{} ({})", t(&rejected.reference), t(&rejected.reason)),
         );
     }
-    out
+    block
 }
 
 fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
@@ -1220,26 +1229,26 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
             text::scrub(damage)
         );
     }
-    let mut out = TextBlock::new();
+    let mut block = TextBlock::new();
     let instance = read
         .instance
         .as_ref()
         .map_or("unknown", |instance| instance.instance_id.as_str());
-    let _ = writeln!(out, "# Coordination ledger snapshot");
-    let _ = writeln!(out);
+    let _ = writeln!(block, "# Coordination ledger snapshot");
+    let _ = writeln!(block);
     let _ = writeln!(
-        out,
-        "Ledger `{instance}`, through sequence {}, exported {}. Redacted: secret-shaped lines are replaced and session details are left out. Ids are local to this ledger; cite them as `{instance}/FU-NNN`.",
+        block,
+        "Ledger `{instance}`, through sequence {}, exported {}. Redacted: secret-shaped lines are replaced and session details are left block. Ids are local to this ledger; cite them as `{instance}/FU-NNN`.",
         read.folded.ledger.last_sequence,
         coord::format_time(coord::now_secs())
     );
     for item in read.folded.ledger.items.values() {
-        let _ = writeln!(out);
-        out.push_str(full_record(item, &[], true, true).as_str());
+        let _ = writeln!(block);
+        block.push_str(full_record(item, &[], true, true).as_str());
     }
     match &snapshot.output {
         None => {
-            print_block!(out);
+            print_block!(block);
             0
         }
         Some(path) => {
@@ -1249,7 +1258,7 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
             std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
             let written = options.open(path).and_then(|mut file| {
                 use std::io::Write as _;
-                file.write_all(out.as_str().as_bytes())
+                file.write_all(block.as_str().as_bytes())
             });
             match written {
                 Ok(()) => {
