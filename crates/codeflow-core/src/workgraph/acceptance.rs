@@ -1384,7 +1384,7 @@ pub enum MergeReading {
 const STAGE: u16 = 0x3000;
 
 /// Read `merge` against the clean automatic remerge of its two parents.
-pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeReading {
+pub(crate) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeReading {
     let _judgment = history::judgment();
     let id = merge.id();
     let parents = match history::parents(repo, merge) {
