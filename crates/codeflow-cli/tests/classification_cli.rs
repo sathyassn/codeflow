@@ -1385,3 +1385,98 @@ fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
         format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
 }
+
+/// `codeflow ci` as a pull request check whose draft state is `draft`.
+fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, String) {
+    let out = codeflow()
+        .env("CODEFLOW_PR_DRAFT", draft)
+        .env_remove("GITHUB_EVENT_PATH")
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--pr-body",
+            &with_reviews(root, "HEAD", pr_body),
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// TSK-451 AC-8: once ready, a code pull request's Testing section cites
+/// `codeflow test --mode quick` for the head tree, reported at the Testing
+/// check's level (warn); a draft owes none, and nor does a project without
+/// `codeflow test`.
+#[test]
+fn a_ready_code_pull_request_cites_the_quick_run_and_a_draft_owes_none() {
+    const MISSING: &str = "PR Testing cites no `codeflow test --mode quick` run for the head tree";
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "feat/tracked",
+        &[("src/lib.rs", "pub fn tracked() {}\n")],
+    );
+    let plain = body("Task: TSK-001");
+    let unconfigured = ci_draft(root, "feat/tracked", &plain, "false");
+    assert_passes(&unconfigured, "no codeflow test configured");
+    assert!(!unconfigured.1.contains(MISSING), "{}", unconfigured.1);
+
+    branch_with(
+        root,
+        "feat/tracked",
+        &[
+            ("src/lib.rs", "pub fn tracked() {}\n"),
+            (".codeflow/test-config.json", "{}\n"),
+        ],
+    );
+    let ready = ci_draft(root, "feat/tracked", &plain, "false");
+    assert_passes(&ready, "a ready PR without the citation warns");
+    assert!(ready.1.contains(MISSING), "{}", ready.1);
+    assert!(ready.1.contains("warning"), "{}", ready.1);
+
+    let draft = ci_draft(root, "feat/tracked", &plain, "true");
+    assert_passes(&draft, "a draft");
+    assert!(!draft.1.contains(MISSING), "{}", draft.1);
+
+    let cited = plain.replace(
+        "- focused test\n",
+        "- focused test\n- At HEAD, `codeflow test --mode quick`: 12 passed\n",
+    );
+    let ready_cited = ci_draft(root, "feat/tracked", &cited, "false");
+    assert_passes(&ready_cited, "a ready PR with the citation");
+    assert!(!ready_cited.1.contains(MISSING), "{}", ready_cited.1);
+}
+
+/// TSK-451 AC-4: one `codeflow ci` run validates the docs once, as
+/// `work.valid_graph`.
+#[test]
+fn one_run_validates_the_docs_once() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(
+        root,
+        "task/TSK-001-work",
+        &[("src/lib.rs", "pub fn work() {}\n")],
+    );
+    let run = ci(root, "task/TSK-001-work", &body("Task: TSK-001"));
+    assert_passes(&run, "a tracked task pull request");
+    assert_eq!(
+        run.1.matches("codeflow ci: work.valid_graph:").count(),
+        1,
+        "{}",
+        run.1
+    );
+}

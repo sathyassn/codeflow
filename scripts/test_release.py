@@ -821,31 +821,31 @@ class ReleaseImpactFieldTests(unittest.TestCase):
                         )
                     )
 
-    def test_major_with_breaking_no_is_rejected(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
-            self.parse(self.body("major", breaking="no", migration="docs/migrate.md"))
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
-            self.parse(self.body("major", contract="compatible", migration="docs/migrate.md"))
+    def test_major_with_breaking_no_is_judged_against_the_entries(self) -> None:
+        """TSK-451: the block alone passes the one evaluator; a major entry
+        without Breaking: yes is refused by the tree rule in `pr_verdict`."""
+        self.parse(self.body("major", breaking="no", migration="docs/migrate.md"))
+        self.parse(self.body("major", contract="compatible", migration="docs/migrate.md"))
 
     def test_breaking_yes_below_major_is_rejected(self) -> None:
         for impact in ["none", "patch", "minor"]:
             with self.subTest(impact=impact):
-                with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+                with self.assertRaisesRegex(release.ReleaseError, "requires Impact of at least major"):
                     self.parse(self.body(impact, breaking="yes", migration="docs/migrate.md"))
 
     def test_migration_is_required_and_substantive_when_breaking(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "migration is required"):
+        with self.assertRaisesRegex(release.ReleaseError, "non-empty migration field"):
             self.parse(self.body("minor", breaking="no", migration=None))
         for placeholder in ["none", "", "N/A"]:
             with self.subTest(migration=placeholder):
                 with self.assertRaisesRegex(
-                    release.ReleaseError, "migration guidance|migration is required"
+                    release.ReleaseError, "substantive Migration|non-empty migration field"
                 ):
                     self.parse(self.body("major", breaking="yes", migration=placeholder))
         reference = self.body("major", breaking="yes", migration="see Breaking change")
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.parse(reference)
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.parse(reference + "\n## Breaking change\n\n<!-- steps -->\n")
         self.parse(reference + BREAKING_CHANGE)
 
@@ -853,21 +853,21 @@ class ReleaseImpactFieldTests(unittest.TestCase):
         for impact, breaking in [("minor", "no"), ("major", "yes")]:
             for value in [UNRESOLVED_MIGRATION, "none, steps, or see Breaking change", "steps"]:
                 with self.subTest(impact=impact, migration=value):
-                    with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+                    with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
                         self.parse(self.body(impact, breaking=breaking, migration=value))
 
     def test_breaking_rejects_empty_and_placeholder_migration(self) -> None:
         for value in ["``", " NONE ", "n/a", "na", "TODO", "TBD", "-", "`none`", "<steps>"]:
             with self.subTest(migration=value):
                 with self.assertRaisesRegex(
-                    release.ReleaseError, "migration guidance|migration is required"
+                    release.ReleaseError, "substantive Migration|non-empty migration field"
                 ):
                     self.parse(self.body("major", breaking="yes", migration=value))
 
     def test_quoted_migration_placeholders_are_rejected(self) -> None:
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
                     self.parse(self.body("major", breaking="yes", migration=value))
 
     def test_filled_template_parses_for_every_ordinary_level(self) -> None:
@@ -879,11 +879,11 @@ class ReleaseImpactFieldTests(unittest.TestCase):
             filled_template("major", "yes", "see Breaking change") + BREAKING_CHANGE
         )
         self.assertEqual("yes", fields["breaking"])
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             release.parse_release_impact(filled_template("major", "yes"))
 
     def test_missing_or_unresolved_breaking_is_rejected(self) -> None:
-        with self.assertRaisesRegex(release.ReleaseError, "breaking is required"):
+        with self.assertRaisesRegex(release.ReleaseError, "non-empty breaking field"):
             self.parse(self.body("minor", breaking="no").replace("- Breaking: no\n", ""))
         with self.assertRaisesRegex(release.ReleaseError, "yes or no"):
             self.parse(self.body("minor", breaking="`yes | no`"))
@@ -1042,7 +1042,7 @@ class PullRequestTests(unittest.TestCase):
                 head,
                 self.repo.body("patch", withdrawal="Existing break was narrowed."),
             )
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
             self.run_check(
                 base,
                 head,
@@ -1068,7 +1068,7 @@ class PullRequestTests(unittest.TestCase):
         self.repo.pending("3.0.0", [("major", "break")])
         self.repo.write("docs/releasing.md", "changed\n")
         head = self.repo.commit("feat!: break")
-        with self.assertRaisesRegex(release.ReleaseError, "migration"):
+        with self.assertRaisesRegex(release.ReleaseError, "(?i)migration"):
             self.run_check(base, head, self.repo.body("major", contract="breaking"))
         self.run_check(base, head, self.repo.body("major", contract="breaking", migration="docs/migrate.md"))
 
@@ -1085,12 +1085,16 @@ class PullRequestTests(unittest.TestCase):
         base = self.repo.target
         self.repo.pending("3.0.0", [("major", "replace old command")])
         head = self.repo.commit("feat!: replace old command")
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
         # The binary reads a lone "``" as that text, which is no guidance.
-        with self.assertRaisesRegex(release.ReleaseError, "requires migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|requires migration guidance"):
             self.run_check(base, head, filled_template("major", "yes", "``"))
         self.run_check(base, head, filled_template("major", "yes", "run the new command"))
+        # TSK-451: the block passes the evaluator; the major entry it adds
+        # still needs the break declared.
+        with self.assertRaisesRegex(release.ReleaseError, "major entry requires Breaking: yes"):
+            self.run_check(base, head, filled_template("major", "no", "run the new command"))
 
     def test_declared_breaking_normalizes_quoted_migration_guidance(self) -> None:
         base = self.repo.target
@@ -1098,7 +1102,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("feat!: replace old command")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(release.ReleaseError, "substantive Migration|migration guidance"):
                     self.run_check(base, head, filled_template("major", "yes", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
@@ -1113,7 +1117,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: clarify breaking note")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration"):
+                with self.assertRaisesRegex(release.ReleaseError, "(?i)migration"):
                     self.run_check(base, head, filled_template("major", "yes", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
@@ -1126,7 +1130,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: clarify breaking note")
         with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(major\)"):
             self.run_check(base, head, filled_template("none", "no", "docs/migrate.md"))
-        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+        with self.assertRaisesRegex(release.ReleaseError, "template's alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
         self.run_check(base, head, filled_template("major", "yes", "docs/migrate.md"))
 
@@ -1136,7 +1140,7 @@ class PullRequestTests(unittest.TestCase):
         self.repo.pending("3.0.0", [("major", "earlier break"), ("minor", "new command")])
         head = self.repo.commit("feat: new command")
         self.run_check(base, head, self.repo.body("minor", breaking="no"))
-        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+        with self.assertRaisesRegex(release.ReleaseError, "requires Impact of at least major"):
             self.run_check(base, head, self.repo.body("minor", breaking="yes"))
 
     def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
