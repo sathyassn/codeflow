@@ -330,6 +330,17 @@ table does not list is refused, whoever writes it:
 | todo or blocked to cancelled | `codeflow task status TSK-NNN cancelled --reason <why> --scope <where it went>` | the reason and scope disposition in the Closeout |
 | complete to todo (reopen) | `codeflow task status TSK-NNN todo --reason <why>` | the old acceptance block, kept and marked superseded |
 
+A standalone task cancelled before its record reached the target can leave
+its cancellation record through a `plan/` pull request. Run `codeflow task
+status TSK-NNN cancelled --reason <why> --scope <where it went>` on the task
+branch, then cut a fresh `plan/` branch from the target and copy only the
+cancelled record onto it. Keep the range inside `project-management/` and
+name that task with `Task: TSK-NNN`. The record must be absent from the
+merge-base and carry both Closeout lines. No `work start` claim is needed;
+the planning amendment reports the task under `no epic`. Product commits
+stay on the cancelled task's branch. A record already on the target uses
+the ordinary task status route above.
+
 `in_progress` stays readable on older records, but no verb writes it: a
 visible task branch shows the work in progress. The acceptance block is the
 completion record; each follow-up gets one real home, filed with
