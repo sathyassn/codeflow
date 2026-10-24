@@ -108,22 +108,22 @@ impl Adopter {
                 "GIT_CONFIG_SYSTEM",
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             );
-        for key in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "CODEFLOW_PR_BODY",
-            "GITHUB_EVENT_NAME",
-            "GITHUB_HEAD_REF",
-            "GITHUB_BASE_REF",
-            "CODEFLOW_HUMAN_OVERRIDE",
-            "CODEFLOW_INTEGRATE_TOKEN",
-        ] {
-            c.env_remove(key);
-        }
-        for key in codeflow_core::root_checkout::AGENT_MARKERS {
-            c.env_remove(key);
-        }
+        // Literal keys let the fixture contract verify that injected Git
+        // configuration remains inherited by every child process.
+        c.env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_EVENT_NAME")
+            .env_remove("GITHUB_HEAD_REF")
+            .env_remove("GITHUB_BASE_REF")
+            .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+            .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+            .env_remove("CLAUDECODE")
+            .env_remove("CODEX_SESSION_ID")
+            .env_remove("CODEX_THREAD_ID")
+            .env_remove("CODEX_CI")
+            .env_remove("GROK_SESSION_ID");
         c
     }
     fn ci(&self, head: Oid) -> Output {
