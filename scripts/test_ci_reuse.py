@@ -270,7 +270,7 @@ class AdmissionTests(unittest.TestCase):
     refuses, and only a pending or absent run is worth waiting for."""
 
     def admitted(self, api):
-        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api)
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95)
 
     def refused(self, api, pending=False):
         with self.assertRaises(reuse.Skip) as caught:
@@ -288,7 +288,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("mark the pull request ready", reason)
 
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
-        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run exists",
+        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
                       self.refused(FakeApi(runs=[]), pending=True))
 
     def test_a_pending_run_refuses_and_may_be_waited_for(self):
@@ -305,6 +305,11 @@ class AdmissionTests(unittest.TestCase):
     def test_a_green_run_on_another_head_refuses(self):
         api = FakeApi(runs=[run(head_sha=MAIN)])
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run", self.refused(api, pending=True))
+
+    def test_a_green_run_at_the_same_head_for_another_pull_request_refuses(self):
+        other = run(pull_requests=[{"number": 96, "base": {"ref": "main"}}])
+        self.assertIn("run of #95 exists", self.refused(FakeApi(runs=[other]), pending=True))
+        self.refused(FakeApi(runs=[run(pull_requests=[])]), pending=True)
 
     def test_another_workflow_or_event_never_admits(self):
         for changes in ({"path": ".github/workflows/other.yml"}, {"event": "push"}):
@@ -326,7 +331,7 @@ class AdmissionTests(unittest.TestCase):
                     mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
                 code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
                                          "--require", "codeflow gates", "--require", "windows",
-                                         "--wait", str(wait)])
+                                         "--pull", "95", "--wait", str(wait)])
             return code, out.getvalue(), sleep.call_count
         self.assertEqual(run_main(FakeApi(), 0)[0], 0)
         code, text, slept = run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]), 0)

@@ -166,7 +166,8 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
         step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
-        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA"', step)
+        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
         self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
@@ -222,6 +223,10 @@ class GateContracts(unittest.TestCase):
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
         self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))
+        # Marking a draft ready reruns the standards, so a check that reads
+        # the pull request at ready (its Testing citation) judges it then.
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
+                      read('assets/base/ci/codeflow-policy.yml'))
 
     def test_release_reuses_cache_and_only_cancels_pr_events(self):
         workflow = read('.github/workflows/codeflow-release.yml')

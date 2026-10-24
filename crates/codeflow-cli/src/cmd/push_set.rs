@@ -6,8 +6,9 @@
 //!   is `codeflow ci`'s own `work.valid_graph` check, and the test-config
 //!   targets belong to `codeflow test`, cited when the pull request is made
 //!   ready. A push is a backup; it neither runs nor waits for a test target.
-//!   The conflict-marker check and the secret scan of added lines run inside
-//!   each `codeflow ci`.
+//!   The conflict-marker check runs inside each `codeflow ci`; staged
+//!   secrets are refused by the pre-commit hook and by the hosted gitleaks
+//!   scan, not here.
 //! - The hook blocks on what it can see and never claims more: the range
 //!   leaves out only history known to be on the destination: the branch and
 //!   tag tips the push location advertises now (one `git ls-remote`, never

@@ -175,10 +175,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           wait=2100
           if [ "$DRAFT" = true ]; then wait=0; fi
-          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" \
+          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
             --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
             --wait "$wait"
