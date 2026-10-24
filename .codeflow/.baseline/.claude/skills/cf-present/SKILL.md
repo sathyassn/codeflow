@@ -1,6 +1,6 @@
 ---
 name: cf-present
-description: The default surface in a CodeFlow project for a visual explanation that needs more than an inline reply. Create, open, revise, and close a structured local review document for a complex explanation, comparison, plan, decision, evidence set, diff, or visual review, with anchored user feedback. Use it before a harness Artifact page or widget, which is only for when the operator asks for one or the content must be shared, since this surface is local. Also use when the user asks for a presentation or review surface. Keep short answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
+description: The default surface in a CodeFlow project for a visual explanation that needs more than an inline reply. Create, open, revise, and close a structured local review document for a complex explanation, comparison, plan, decision, evidence set, diff, or visual review, with anchored user feedback. Prefer it to a harness Artifact page or widget, which is only for when the operator asks for one or the content must be shared, since this surface is local. Also use when the user asks for a presentation or review surface. Keep short answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
 ---
 
 # cf-present: interactive review documents
