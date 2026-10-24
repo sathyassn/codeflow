@@ -1104,7 +1104,18 @@ fn a_task_pull_request_amends_its_own_record_with_a_reason_per_removal() {
         &["work.criteria_frozen", "TSK-002 changes its criteria"],
     );
     git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+}
 
+/// TSK-451 AC-3: any change to an epic's or another task's record in a
+/// task pull request needs a planning pull request, whatever field changes.
+#[test]
+fn a_task_pull_request_leaves_other_records_to_a_planning_amendment() {
+    let dir = repo();
+    let root = dir.path();
+    let branch = "task/TSK-001-work";
+    git(root, &["switch", "-C", branch, "main"]);
+    write(root, "src/lib.rs", "pub fn work() {}\n");
+    commit(root, "feat: work");
     // Any change to an epic's or another task's record needs a planning
     // pull request: its description and its dependencies, not only its
     // criteria (TSK-451 review F1; each passed at 1c46e7574).
