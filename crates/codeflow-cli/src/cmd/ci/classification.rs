@@ -709,9 +709,13 @@ fn cancellation_entry(
 ) -> Result<Class, String> {
     if branch.starts_with("plan/") {
         if let Class::Tracked { task_id } = &class {
-            if let Some(cancelled) =
-                amendment::cancelled_standalone(root, range.base, range.head, files)?
-            {
+            if let Some(cancelled) = amendment::cancelled_standalone(
+                root,
+                range.base,
+                range.head,
+                files,
+                amendment::CancellationJudge::PullRequest(task_id),
+            )? {
                 if cancelled != *task_id {
                     return Err(format!(
                         "`Task: {task_id}` does not name the cancelled task {cancelled}"
@@ -724,8 +728,9 @@ fn cancellation_entry(
     Ok(class)
 }
 
-/// A push has no Task line yet. Validate any new standalone record on its
-/// planning branch now; the PR will bind the Task line to that record.
+/// A push has no Task line yet, and the same `plan/` range may be an
+/// epic's planning amendment. Refuse only a new cancelled standalone record
+/// that no `Task:` line could make valid; the PR binds the rest.
 pub(super) fn cancellation_push_check(
     root: &Path,
     branch: &str,
@@ -737,7 +742,13 @@ pub(super) fn cancellation_push_check(
     };
     let result = range_changes(root, range.base, range.head).and_then(|changes| {
         let paths: Vec<_> = changes.into_iter().map(|(_, path)| path).collect();
-        amendment::cancelled_standalone(root, range.base, range.head, &paths)
+        amendment::cancelled_standalone(
+            root,
+            range.base,
+            range.head,
+            &paths,
+            amendment::CancellationJudge::Push,
+        )
     });
     if let Err(problem) = result {
         push(tagged, RULE, problem, HINT);

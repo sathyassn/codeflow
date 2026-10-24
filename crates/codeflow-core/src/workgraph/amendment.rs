@@ -306,10 +306,30 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     })
 }
 
-/// Identify a standalone cancellation carried by a planning branch. A new
-/// standalone record must be cancelled; a cancellation already anchored at
-/// the merge-base stays on the ordinary task route. Other amendments return
-/// `None`. Callers restrict this check to `plan/` branches.
+/// Who judges a standalone cancellation, and with what it binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationJudge<'a> {
+    /// A pull request whose `Task:` line names this task on a `plan/`
+    /// branch: the range must be exactly that one cancellation.
+    PullRequest(&'a str),
+    /// A push, which has no `Task:` line yet. The same range may be an
+    /// epic's planning amendment, so only what no `Task:` line could make
+    /// valid is refused.
+    Push,
+}
+
+/// Identify a standalone cancellation carried by a planning branch: a
+/// standalone task record absent from the merge-base and added at
+/// `cancelled`. Any other change to a standalone record is an ordinary
+/// planning amendment and returns `None`, so it keeps its existing route.
+/// Callers restrict this check to `plan/` branches.
+///
+/// For a pull request ([`CancellationJudge::PullRequest`]) the range must
+/// be that one record, inside `project-management/`, with its reason and
+/// scope; the named task's record already on the target is refused toward
+/// the task status route. A push ([`CancellationJudge::Push`]) refuses
+/// only a new cancelled record without its reason or scope, or a range a
+/// planning amendment cannot carry, and always returns `None`.
 ///
 /// # Errors
 /// Returns a diagnostic for unreadable history or an invalid cancellation
@@ -319,6 +339,7 @@ pub fn cancelled_standalone(
     base: &str,
     head: &str,
     paths: &[crate::git::GitName],
+    judge: CancellationJudge<'_>,
 ) -> Result<Option<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.to_string())?;
     let oid = |revision: &str| {
@@ -336,40 +357,54 @@ pub fn cancelled_standalone(
             .iter()
             .any(|path| path.bytes() == record.path.as_bytes())
     };
+    let standalone =
+        |record: &&RecordView| record.kind == RecordKind::Task && record.epic_id.is_none();
     let candidates: Vec<_> = after
         .records
         .values()
         .filter(changed)
-        .filter(|record| {
-            record.kind == RecordKind::Task
-                && record.epic_id.is_none()
-                && before
-                    .records
-                    .get(&record.id)
-                    .is_none_or(|old| old.status != record.status && record.status == "cancelled")
-        })
+        .filter(standalone)
+        .filter(|record| !before.records.contains_key(&record.id) && record.status == "cancelled")
         .collect();
+    let task = match judge {
+        CancellationJudge::Push => {
+            if candidates.is_empty() {
+                return Ok(None);
+            }
+            for record in &candidates {
+                cancellation_lines(record)?;
+            }
+            return match range_problem(&repo, base, head, &rule_texts(paths)?) {
+                Some(problem) => Err(problem),
+                None => Ok(None),
+            };
+        }
+        CancellationJudge::PullRequest(task) => task,
+    };
     if candidates.is_empty() {
+        let landed = after
+            .records
+            .values()
+            .filter(changed)
+            .filter(standalone)
+            .any(|record| {
+                record.id == task
+                    && record.status == "cancelled"
+                    && before.records.contains_key(&record.id)
+            });
+        if landed {
+            return Err(format!(
+                "{task} is already on the target, so this is not a new cancelled standalone record; cancel it with `codeflow task status {task} cancelled --reason <why> --scope <where it went>` in its own task pull request"
+            ));
+        }
         return Ok(None);
     }
     let [record] = candidates.as_slice() else {
         return Err("a standalone cancellation amendment names and adds one task record".into());
     };
     let id = &record.id;
-    if before.records.contains_key(id) || record.status != "cancelled" {
-        return Err(format!(
-            "{id} is not a new cancelled standalone record; use its own task branch and the ordinary task status route (run `codeflow work start {id}` before starting work)"
-        ));
-    }
-    let missing = super::record_text::parse_cancellation(&record.body).missing();
-    if !missing.is_empty() {
-        return Err(format!("{id} needs Closeout lines `- cancelled: <reason>` and `- scope: <where it went>` (missing {})", missing.join(", ")));
-    }
-    let texts = paths
-        .iter()
-        .map(|path| path.rule_text().map(str::to_string))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
+    cancellation_lines(record)?;
+    let texts = rule_texts(paths)?;
     if texts
         .iter()
         .any(|path| !path.starts_with("project-management/"))
@@ -391,6 +426,27 @@ pub fn cancelled_standalone(
         ));
     }
     Ok(Some(id.clone()))
+}
+
+/// A cancelled record carries its reason and scope in the Closeout.
+fn cancellation_lines(record: &RecordView) -> Result<(), String> {
+    let missing = super::record_text::parse_cancellation(&record.body).missing();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} needs Closeout lines `- cancelled: <reason>` and `- scope: <where it went>` (missing {})",
+        record.id,
+        missing.join(", ")
+    ))
+}
+
+fn rule_texts(paths: &[crate::git::GitName]) -> Result<Vec<String>, String> {
+    paths
+        .iter()
+        .map(|path| path.rule_text().map(str::to_string))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
 }
 
 /// Why a planning amendment judged at `head` on the target `base` cannot

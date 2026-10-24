@@ -177,7 +177,10 @@ onto it, retaining the Closeout's `- cancelled:` and `- scope:` lines. Set
 `codeflow work start` claim and report its task under `no epic`. This route
 requires the record to be absent from the merge-base. An active task still
 uses its own task branch and `work start`; a record already on the target
-uses the ordinary task status route.
+uses the ordinary task status route. A push has no `Task:` line yet, so
+pre-push refuses only a new cancelled record without its reason or scope,
+or a path a planning amendment cannot carry; the pull request check judges
+the rest.
 
 ## A push is blocked by a quick target
 
