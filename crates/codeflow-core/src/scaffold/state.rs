@@ -2633,14 +2633,22 @@ mod tests {
     fn an_update_after_a_crash_at_any_point_installs_the_new_version() {
         // T153-1: a record ahead of its file made the next update keep the
         // old shipped file as a user edit.
-        assert_update_recovers_from_any_crash(false);
+        assert_update_recovers_from_any_crash(false, true);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_crash_with_the_file_on_another_drive_still_installs_the_new_version() {
         // T153-R2-1: the payload's drive caches apart from its records'.
-        assert_update_recovers_from_any_crash(true);
+        assert_update_recovers_from_any_crash(true, true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn representative_update_crashes_recover_on_each_device_arrangement() {
+        for second_drive in [false, true] {
+            assert_update_recovers_from_any_crash(second_drive, false);
+        }
     }
 
     #[cfg(unix)]
@@ -2648,7 +2656,7 @@ mod tests {
     /// `zzz/payload.txt`, and each device flush, and checks that the next
     /// update installs the new version. With `second_drive`, `zzz/` is on a
     /// device of its own.
-    fn assert_update_recovers_from_any_crash(second_drive: bool) {
+    fn assert_update_recovers_from_any_crash(second_drive: bool, exhaustive: bool) {
         let dir = crate::fixture_tests::project_dir();
         let old = assets_with_payload(&dir.path().join("old"), "old shipped data\n");
         let new = assets_with_payload(&dir.path().join("new"), "new shipped data\n");
@@ -2707,7 +2715,13 @@ mod tests {
             }
         }
         assert!(points.len() >= 8, "{points:?}");
-        for point in points {
+        let points: Vec<_> = points.into_iter().collect();
+        let selected = if exhaustive {
+            points
+        } else {
+            vec![points[0], points[points.len() / 2], *points.last().unwrap()]
+        };
+        for point in selected {
             let root = dir.path().join(format!("crash-{point}"));
             copy_tree(&base, &root);
             for (rel, bytes) in crash_state(&base, &before, &events[..point], &device) {

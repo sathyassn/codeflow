@@ -252,7 +252,22 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(profiles['essential']['overrides'], profiles['codeflow']['overrides'])
         self.assertFalse(profiles['essential']['fail-fast'])
         self.assertEqual(profiles['essential']['junit']['path'], 'junit.xml')
-        self.assertNotIn('default-filter', profiles['essential'])
+        # Full retains every case; essential excludes exact matrix names only.
+        self.assertNotIn('default-filter', profiles['codeflow'])
+        full_only = [
+            'init_writes_the_compaction_default_at_every_tier_and_preset',
+            'split_references_install_and_update_replaces_whole_files_at_standard_and_full',
+            'init_and_update_bring_the_plain_writing_rule_at_every_tier',
+            'scaffold::state::tests::an_update_after_a_crash_at_any_point_installs_the_new_version',
+            'scaffold::state::tests::a_crash_with_the_file_on_another_drive_still_installs_the_new_version',
+            'hooks::git_guard::tests::test_random_shell_patterns_never_match_less_than_bash',
+            'hooks::git_guard::tests::test_random_words_are_refused_whenever_bash_reaches_an_enforcement_file',
+            'hooks::git_guard::tests::test_random_words_are_refused_whenever_zsh_reaches_an_enforcement_file',
+            'every_harness_wiring_judges_composed_deletions_and_help_at_every_tier',
+            'push::push_budget_is_reported_after_a_real_slow_target',
+        ]
+        expected = 'not(' + '|'.join(f'test(={name})' for name in full_only) + ')'
+        self.assertEqual(''.join(profiles['essential']['default-filter'].split()), expected)
         for name in ('read-benchmark', 'prose-exhaustive'):
             self.assertEqual(set(targets[name]['modes']), {'full'})
 
