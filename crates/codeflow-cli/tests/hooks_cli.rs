@@ -8443,7 +8443,7 @@ fn first_push_without_declared_target_survives_default_branch_advancing() {
         let head = commit_file(local.path(), "notes.md", "notes\n", "docs: add notes");
         let (code, err) = push_hook(local.path(), "dest", &[(branch, &head)]);
         assert_eq!(code, Some(0), "{branch}: {err}");
-        assert!(err.contains("push not stopped"), "{err}");
+        assert!(err.contains("push set finished"), "{err}");
     }
 }
 

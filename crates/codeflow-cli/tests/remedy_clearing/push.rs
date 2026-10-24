@@ -317,10 +317,12 @@ fn clears_push_over_budget_builtin() {
     );
 }
 
-/// A copy of the binary under test, first on the hook's `PATH` so it is the
-/// hook's own binary, and a one-shot `git` beside it that deletes the copy
-/// and itself on the destination query: the binary vanishes after the hook
-/// started and before the push set's `codeflow ci` runs through it.
+/// A copy of the binary under test, and a one-shot `git` beside it that
+/// deletes the copy and itself on the destination query: run as the
+/// pre-push hook with this folder first on `PATH`, the binary vanishes after
+/// the hook started and before the push set's `codeflow ci` runs through it.
+/// (`git push` puts its own exec path first on a hook's `PATH`, so the hook
+/// runs directly here.)
 #[cfg(unix)]
 fn vanishing_binary(root: &Path) -> PathBuf {
     let bin = root.parent().unwrap().join("vanishing-bin");
@@ -335,7 +337,7 @@ fn vanishing_binary(root: &Path) -> PathBuf {
     std::fs::write(
         &stand_in,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = ls-remote ]; then rm -f '{}' '{}'; fi\nexec '{}' \"$@\"\n",
+            "#!/bin/sh\ncase \" $* \" in *\" ls-remote \"*) rm -f '{}' '{}' ;; esac\nexec '{}' \"$@\"\n",
             copy.display(),
             stand_in.display(),
             real.display()
@@ -360,7 +362,7 @@ fn clears_push_set_by_hand() {
     let bin = vanishing_binary(&root);
     let row = "PUSH_SET_BY_HAND";
     let finding = "push set check could not run";
-    let before = push_with_path(&root, &bin, &["origin", "HEAD"]);
+    let before = pre_push_from(&root, &bin);
     let printed = block(&before, finding).to_string();
     assert_prints_row(&printed, row);
     assert!(printed.contains("could not run: `codeflow ci"), "{printed}");
@@ -370,11 +372,64 @@ fn clears_push_set_by_hand() {
     run_printed(&root, &ci, &[], &[]);
     // The binary is back, and nothing removes it this time.
     std::fs::copy(exe(), bin.join("codeflow")).unwrap();
-    let after = push_with_path(&root, &bin, &["origin", "HEAD"]);
+    let after = pre_push_from(&root, &bin);
     assert!(
         !after.contains(finding) && after.contains("push set finished"),
         "{after}"
     );
+}
+
+/// The pre-push hook for the current branch, run by `bin`'s codeflow with
+/// `bin` first on `PATH`, as `git push origin HEAD` would run it.
+#[cfg(unix)]
+fn pre_push_from(root: &Path, bin: &Path) -> String {
+    use std::io::Write as _;
+    let head = text(
+        &command("git", root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let branch = text(
+        &command("git", root)
+            .args(["branch", "--show-current"])
+            .output()
+            .unwrap(),
+    );
+    let url = text(
+        &command("git", root)
+            .args(["remote", "get-url", "--push", "origin"])
+            .output()
+            .unwrap(),
+    );
+    let mut cmd = command(bin.join("codeflow").to_str().unwrap(), root);
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value)
+        .unwrap()
+        .to_owned();
+    let path = std::env::join_paths(
+        std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let mut child = cmd
+        .env("PATH", path)
+        .env_remove("CODEFLOW_HOOK_BINARY")
+        .args(["git-hook", "pre-push", "origin", url.trim()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (head, branch) = (head.trim(), branch.trim());
+    writeln!(
+        child.stdin.take().unwrap(),
+        "refs/heads/{branch} {head} refs/heads/{branch} {}",
+        "0".repeat(40)
+    )
+    .unwrap();
+    text(&child.wait_with_output().unwrap())
 }
 
 // ---------------------------------------------------------------------------
