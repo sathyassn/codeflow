@@ -1,4 +1,4 @@
-//! Integration drift through the command and SessionStart entry.
+//! Integration drift through the command and `SessionStart` entry.
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
