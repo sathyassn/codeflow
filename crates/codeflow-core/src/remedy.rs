@@ -484,6 +484,9 @@ catalog! {
 
     // Secrets.
 
+    /// A name or path refused by the object-only path gate.
+    PATH_POLICY = Step::Edit(".codeflow/policy.json"),
+        "remove the refused path from the change, or land a narrow explained except_under/allow in the target's .codeflow/policy.json";
     /// A dotenv file staged.
     ENV_FILE_STAGED = Step::Edit(".gitignore"),
         "unstage it with `git restore --staged <file>` and keep env files out of git through `.gitignore`; commit a .env.example instead";

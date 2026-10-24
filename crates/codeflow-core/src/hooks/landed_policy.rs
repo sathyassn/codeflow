@@ -367,6 +367,11 @@ fn declared_target(
 }
 
 fn stricter(base: Policy, line: &Policy) -> Result<Policy, String> {
+    let paths = compose_paths(
+        super::path_policy::PathPolicy::from_git(&base.git)?,
+        &super::path_policy::PathPolicy::from_git(&line.git)?,
+        PathPolicySource::Landed,
+    );
     let mut base = serde_json::to_value(base).map_err(|e| e.to_string())?;
     let line = serde_json::to_value(line).map_err(|e| e.to_string())?;
     for key in policy_schema::schema().iter().filter(|key| match key.kind {
@@ -396,7 +401,21 @@ fn stricter(base: Policy, line: &Policy) -> Result<Policy, String> {
             }
         }
     }
-    serde_json::from_value(base).map_err(|e| e.to_string())
+    let mut policy: Policy = serde_json::from_value(base).map_err(|e| e.to_string())?;
+    policy.git.path_policy = paths.level;
+    policy.git.blocked_names = paths
+        .names
+        .into_iter()
+        .map(|rule| {
+            if rule.except_under.is_empty() {
+                super::path_policy::BlockedName::Pattern(rule.pattern)
+            } else {
+                super::path_policy::BlockedName::Rule(rule)
+            }
+        })
+        .collect();
+    policy.git.protected_paths = paths.protected;
+    Ok(policy)
 }
 
 /// Recovery command shared by diagnostics and installed hook contracts.
@@ -420,12 +439,135 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
     } else {
         ""
     };
+    let paths = compose_paths(
+        super::path_policy::PathPolicy::from_git(&authority.policy.git)?,
+        &super::path_policy::PathPolicy::from_git(&Policy::load(root)?.git)?,
+        PathPolicySource::WorkingCopy,
+    );
+    let waivers = paths.waivers();
+    let path_note = format!(
+        "; path policy: denials union, exceptions intersect; {} whole-rule waivers{}",
+        waivers.len(),
+        if waivers.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", crate::git::display_message(&waivers.join("; ")))
+        }
+    );
     let advice = authority
         .remote_head_advice
         .map_or_else(String::new, |advice| format!("; {advice}"));
     Ok(format!(
-        "policy source: {}{residual}{drift}; refresh with git fetch{advice}",
+        "policy source: {}{residual}{drift}{path_note}; refresh with git fetch{advice}",
         authority.source
+    ))
+}
+
+/// Whether the second policy is another landed authority or an untrusted
+/// working copy. Working copies may add denials but cannot grant exceptions.
+#[derive(Clone, Copy, Debug)]
+pub enum PathPolicySource {
+    Landed,
+    WorkingCopy,
+}
+
+/// Union denials and intersect the areas their exceptions cover. A missing
+/// declaration never removes an existing denial. Defaults are expanded before
+/// composition; only landed policy can supply exceptions to a new rule.
+#[must_use]
+pub fn compose_paths(
+    mut base: super::path_policy::PathPolicy,
+    other: &super::path_policy::PathPolicy,
+    source: PathPolicySource,
+) -> super::path_policy::PathPolicy {
+    use super::path_policy::{under, PathAllowance};
+    if base.level.lower(other.level) == base.level {
+        base.level = other.level;
+    }
+    for incoming in &other.names {
+        let mut found = false;
+        for rule in base
+            .names
+            .iter_mut()
+            .filter(|r| r.pattern == incoming.pattern)
+        {
+            found = true;
+            rule.except_under = rule
+                .except_under
+                .iter()
+                .flat_map(|a| {
+                    incoming.except_under.iter().filter_map(move |b| {
+                        if under(a, b) {
+                            Some(a.clone())
+                        } else if under(b, a) {
+                            Some(b.clone())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+        }
+        if !found {
+            let mut rule = incoming.clone();
+            if matches!(source, PathPolicySource::WorkingCopy) {
+                rule.except_under.clear();
+            }
+            base.names.push(rule);
+        }
+    }
+    for incoming in &other.protected {
+        let mut found = false;
+        for rule in base
+            .protected
+            .iter_mut()
+            .filter(|r| r.prefix == incoming.prefix)
+        {
+            found = true;
+            rule.allow = rule
+                .allow
+                .iter()
+                .flat_map(|a| {
+                    incoming.allow.iter().filter_map(move |b| {
+                        let path = if under(&a.path, &b.path) {
+                            &a.path
+                        } else if under(&b.path, &a.path) {
+                            &b.path
+                        } else {
+                            return None;
+                        };
+                        Some(PathAllowance {
+                            path: path.clone(),
+                            reason: format!("{}; {}", a.reason, b.reason),
+                        })
+                    })
+                })
+                .collect();
+        }
+        if !found {
+            let mut rule = incoming.clone();
+            if matches!(source, PathPolicySource::WorkingCopy) {
+                rule.allow.clear();
+            }
+            base.protected.push(rule);
+        }
+    }
+    base
+}
+
+/// Read path authority for pre-commit, then retain any stricter local rules.
+///
+/// # Errors
+/// Either policy source or a path declaration cannot be read.
+pub fn staged_paths(
+    root: &Path,
+    local: &super::policy::GitPolicy,
+) -> Result<super::path_policy::PathPolicy, String> {
+    let landed = load(root)?;
+    Ok(compose_paths(
+        super::path_policy::PathPolicy::from_git(&landed.policy.git)?,
+        &super::path_policy::PathPolicy::from_git(local)?,
+        PathPolicySource::WorkingCopy,
     ))
 }
 

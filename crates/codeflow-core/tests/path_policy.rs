@@ -1,0 +1,393 @@
+use codeflow_core::hooks::{git_hook, policy::GitPolicy};
+
+#[test]
+fn staged_private_key_name_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    repo.set_head("refs/heads/feat/path-policy").unwrap();
+    std::fs::create_dir(dir.path().join("deploy")).unwrap();
+    std::fs::write(dir.path().join("deploy/id_rsa"), "public fixture\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index
+        .add_path(std::path::Path::new("deploy/id_rsa"))
+        .unwrap();
+    index.write().unwrap();
+    let report = git_hook::pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.path_policy"),
+        "{report:?}"
+    );
+}
+
+use codeflow_core::hooks::{
+    path_policy::{self, PathPolicy},
+    PolicyLevel,
+};
+use git2::{Oid, Repository};
+use serde_json::json;
+
+struct Fixture {
+    dir: tempfile::TempDir,
+    repo: Repository,
+}
+impl Fixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.set_head("refs/heads/feat/paths").unwrap();
+        Self { dir, repo }
+    }
+    fn stage(&self, path: &str, mode: u32, contents: &[u8]) {
+        let mut index = self.repo.index().unwrap();
+        let id = if mode == 0o160_000 {
+            Oid::from_str(std::str::from_utf8(contents).unwrap()).unwrap()
+        } else {
+            self.repo.blob(contents).unwrap()
+        };
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode,
+                uid: 0,
+                gid: 0,
+                file_size: u32::try_from(contents.len()).unwrap(),
+                id,
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+    }
+    fn delete(&self, path: &str) {
+        let mut index = self.repo.index().unwrap();
+        index.remove_path(std::path::Path::new(path)).unwrap();
+        index.write().unwrap();
+    }
+    fn commit(&self, parents: &[Oid]) -> Oid {
+        let tree = self
+            .repo
+            .find_tree(self.repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Tester", "test@example.invalid").unwrap();
+        let parents: Vec<_> = parents
+            .iter()
+            .map(|p| self.repo.find_commit(*p).unwrap())
+            .collect();
+        self.repo
+            .commit(
+                None,
+                &sig,
+                &sig,
+                "feat: path fixture",
+                &tree,
+                &parents.iter().collect::<Vec<_>>(),
+            )
+            .unwrap()
+    }
+    fn head(&self, id: Oid) {
+        self.repo
+            .reference("refs/heads/feat/paths", id, true, "test")
+            .unwrap();
+    }
+    fn policy(git: serde_json::Value) -> PathPolicy {
+        PathPolicy::from_git(&serde_json::from_value(git).unwrap()).unwrap()
+    }
+    fn range(&self, base: Oid, head: Oid, p: &PathPolicy) -> path_policy::Report {
+        path_policy::range(
+            self.dir.path(),
+            Some(&base.to_string()),
+            &head.to_string(),
+            p,
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn every_change_kind_has_the_same_staged_and_range_verdict() {
+    for protected in [false, true] {
+        for kind in [
+            "add",
+            "modify",
+            "rename",
+            "rename-away",
+            "type",
+            "delete",
+            "gitlink",
+        ] {
+            let f = Fixture::new();
+            let name = if protected {
+                "private/file"
+            } else {
+                "deploy/id_rsa"
+            };
+            if ["modify", "type", "delete", "rename-away"].contains(&kind) {
+                f.stage(name, 0o100_644, b"before");
+            }
+            if kind == "rename" {
+                f.stage("ordinary", 0o100_644, b"data");
+            }
+            let base = f.commit(&[]);
+            f.head(base);
+            match kind {
+                "rename-away" => {
+                    f.delete(name);
+                    f.stage("ordinary", 0o100_644, b"existing");
+                }
+                "delete" => f.delete(name),
+                "rename" => {
+                    f.delete("ordinary");
+                    f.stage(name, 0o100_644, b"data");
+                }
+                "type" => f.stage(name, 0o120_000, b"ordinary"),
+                "gitlink" => f.stage(name, 0o160_000, base.to_string().as_bytes()),
+                _ => f.stage(name, 0o100_644, b"after"),
+            }
+            let p = Fixture::policy(json!({"protected_paths":[{"prefix":"private", "allow":[]}]}));
+            let staged = path_policy::staged(&f.repo, &p).unwrap();
+            let head = f.commit(&[base]);
+            let range = f.range(base, head, &p);
+            let blocked = protected || !["delete", "rename-away"].contains(&kind);
+            for report in [staged, range] {
+                assert_eq!(
+                    !report.violations.is_empty(),
+                    blocked,
+                    "{protected} {kind}: {report:?}"
+                );
+                if !blocked {
+                    assert!(report.notes.iter().any(|n| n.contains("history")));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn symlinks_are_judged_by_objects_without_following_them() {
+    for (name, target, blocked) in [
+        ("links/ordinary", "../private/data", true),
+        ("links/ordinary", "/private/data", true),
+        ("links/ordinary", "C:/data", true),
+        ("links/ordinary", "id_rsa", true),
+        ("ordinary", "private/data", true),
+        ("id_rsa", "ordinary", true),
+        ("ordinary", "missing-public-file", false),
+        ("ordinary", "x:public", false),
+        ("links/ordinary", "public", false),
+    ] {
+        let f = Fixture::new();
+        let base = f.commit(&[]);
+        f.head(base);
+        f.stage(name, 0o120_000, target.as_bytes());
+        let p = Fixture::policy(json!({"protected_paths":[{"prefix":"private", "allow":[]}]}));
+        let staged = path_policy::staged(&f.repo, &p).unwrap();
+        let head = f.commit(&[base]);
+        assert_eq!(!staged.violations.is_empty(), blocked, "{name} -> {target}");
+        assert_eq!(!f.range(base, head, &p).violations.is_empty(), blocked);
+    }
+}
+
+#[test]
+fn add_then_delete_is_still_introduced_and_off_skips_only_paths() {
+    let f = Fixture::new();
+    let base = f.commit(&[]);
+    f.head(base);
+    f.stage("deploy/id_rsa", 0o100_644, b"public");
+    let added = f.commit(&[base]);
+    f.delete("deploy/id_rsa");
+    let deleted = f.commit(&[added]);
+    let mut p = Fixture::policy(json!({}));
+    assert!(!f.range(base, deleted, &p).violations.is_empty());
+    p.level = PolicyLevel::Off;
+    assert!(f.range(base, deleted, &p).violations.is_empty());
+}
+
+#[test]
+fn remerge_excludes_inherited_paths_but_refuses_merge_introductions_and_octopus() {
+    let f = Fixture::new();
+    let root = f.commit(&[]);
+    f.stage("deploy/id_rsa", 0o100_644, b"existing target content");
+    let base = f.commit(&[root]);
+    f.delete("deploy/id_rsa");
+    f.stage("ordinary", 0o100_644, b"side");
+    let side = f.commit(&[root]);
+    f.stage("deploy/id_rsa", 0o100_644, b"existing target content");
+    let clean = f.commit(&[side, base]);
+    let p = Fixture::policy(json!({}));
+    assert!(f.range(base, clean, &p).violations.is_empty());
+    f.stage("config/prod/.env.local", 0o100_644, b"new");
+    let evil = f.commit(&[side, base]);
+    assert!(!f.range(base, evil, &p).violations.is_empty());
+    let octopus = f.commit(&[side, base, root]);
+    let error = path_policy::range(
+        f.dir.path(),
+        Some(&base.to_string()),
+        &octopus.to_string(),
+        &p,
+    )
+    .unwrap_err();
+    assert!(error.contains("3 parents"), "{error}");
+    // An object-backed commit whose second parent cannot be read.
+    let tree = f.repo.index().unwrap().write_tree().unwrap();
+    let raw = format!("tree {tree}\nparent {side}\nparent {}\nauthor Test <test@example.invalid> 1 +0000\ncommitter Test <test@example.invalid> 1 +0000\n\nmerge\n", "a".repeat(40));
+    let broken = f
+        .repo
+        .odb()
+        .unwrap()
+        .write(git2::ObjectType::Commit, raw.as_bytes())
+        .unwrap();
+    assert!(path_policy::range(
+        f.dir.path(),
+        Some(&base.to_string()),
+        &broken.to_string(),
+        &p
+    )
+    .is_err());
+}
+
+#[test]
+fn landed_authority_refuses_branch_waivers_and_unreadable_sources() {
+    let f = Fixture::new();
+    let target = json!({"git":{"protected_paths":[{"prefix":"private", "allow":[]}]}});
+    f.stage(
+        ".codeflow/policy.json",
+        0o100_644,
+        target.to_string().as_bytes(),
+    );
+    let base = f.commit(&[]);
+    f.head(base);
+    f.repo
+        .remote("origin", "https://example.invalid/project.git")
+        .unwrap();
+    f.repo
+        .reference("refs/remotes/origin/main", base, true, "fixture")
+        .unwrap();
+    let local: GitPolicy = serde_json::from_value(json!({"path_policy":"off", "blocked_names":[{"pattern":"*.pem","except_under":["/"],"reason":"branch only"}],
+        "protected_paths":[{"prefix":"private","allow":[{"path":"/","reason":"branch only"}]}]})).unwrap();
+    f.stage("private/cert.pem", 0o100_644, b"public");
+    let p = codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local).unwrap();
+    assert_eq!(p.level, PolicyLevel::Block);
+    assert!(!path_policy::staged(&f.repo, &p)
+        .unwrap()
+        .violations
+        .is_empty());
+    // Before first fetch / no remote, HEAD still supplies the policy.
+    f.repo.remote_delete("origin").unwrap();
+    assert_eq!(
+        codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local)
+            .unwrap()
+            .level,
+        PolicyLevel::Block
+    );
+    f.repo
+        .remote("origin", "https://example.invalid/project.git")
+        .unwrap();
+    f.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/missing",
+            true,
+            "fixture",
+        )
+        .unwrap();
+    assert!(codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local).is_err());
+}
+
+#[test]
+fn all_gate_inputs_remain_exempt_under_hostile_policy() {
+    let f = Fixture::new();
+    let base = f.commit(&[]);
+    f.head(base);
+    let p = Fixture::policy(
+        json!({"blocked_names":["*"],"protected_paths":[{"prefix":"/", "allow":[]}]}),
+    );
+    for name in [
+        ".codeflow/policy.json",
+        ".codeflow/project.toml",
+        ".codeflow/bootstrap.sh",
+        ".codeflow/bootstrap.ps1",
+        ".codeflow/ci-setup.sh",
+        ".codeflow/git-hooks/pre-commit",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".gitignore",
+        "deep/.gitignore",
+    ] {
+        f.stage(&name.to_uppercase(), 0o100_644, b"public");
+    }
+    assert!(path_policy::staged(&f.repo, &p)
+        .unwrap()
+        .violations
+        .is_empty());
+    let head = f.commit(&[base]);
+    assert!(f.range(base, head, &p).violations.is_empty());
+}
+
+#[test]
+fn declared_integration_target_contributes_denials_and_intersects_waivers() {
+    let f = Fixture::new();
+    f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}]}}"#);
+    f.stage(
+        "project-management/tasks/TSK-007.md",
+        0o100_644,
+        b"---\nid: TSK-007\nintegration_target: integration/paths\n---\n",
+    );
+    let main = f.commit(&[]);
+    f.stage(".codeflow/policy.json", 0o100_644, br#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures/narrow"],"reason":"narrow"},"target-only"],"protected_paths":[{"prefix":"private","allow":[]}]}}"#);
+    let line = f.commit(&[main]);
+    f.repo
+        .remote("origin", "https://example.invalid/repo.git")
+        .unwrap();
+    for (name, id) in [("main", main), ("integration/paths", line)] {
+        f.repo
+            .reference(&format!("refs/remotes/origin/{name}"), id, true, "fixture")
+            .unwrap();
+    }
+    f.repo
+        .reference("refs/heads/task/TSK-007-paths", line, true, "fixture")
+        .unwrap();
+    f.repo.set_head("refs/heads/task/TSK-007-paths").unwrap();
+    let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
+    assert!(landed.source.contains("integration/paths"));
+    let p = PathPolicy::from_git(&landed.policy.git).unwrap();
+    for (path, blocked) in [
+        ("target-only", true),
+        ("private/file", true),
+        ("fixtures/cert.pem", true),
+        ("fixtures/narrow/cert.pem", false),
+    ] {
+        f.stage(path, 0o100_644, b"public");
+        let report = path_policy::staged(&f.repo, &p).unwrap();
+        assert_eq!(!report.violations.is_empty(), blocked, "{path}: {report:?}");
+        f.delete(path);
+    }
+}
+
+#[test]
+fn schema_rejects_invalid_declarations_and_keeps_new_keys_out_of_shipped_policy() {
+    use codeflow_core::hooks::policy_schema::validate_policy_str;
+    for value in [
+        json!({"blocked_names":[{"pattern":"*.pem","except_under":["a/../b"],"reason":"invalid"}]}),
+        json!({"blocked_names":[{"pattern":"*.pem","except_under":["tests"],"reason":"", "extra":true}]}),
+        json!({"protected_paths":[{"prefix":"private", "allow":[{"path":"x", "reason":""}]}]}),
+    ] {
+        assert!(validate_policy_str(&json!({"git":value}).to_string()).is_err());
+    }
+    let shipped: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/base/policy.json")).unwrap();
+    for key in ["path_policy", "blocked_names", "protected_paths"] {
+        assert!(shipped["git"].get(key).is_none());
+    }
+    let note = include_str!("../../../changelog.d/TSK-322.md");
+    for name in path_policy::DEFAULT_NAMES {
+        assert!(note.contains(name), "{name}");
+    }
+    assert!(note.contains("except_under"));
+}

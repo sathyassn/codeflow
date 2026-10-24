@@ -39,6 +39,7 @@ mod git_target;
 pub mod guidance;
 pub mod landed_policy;
 pub mod orient;
+pub mod path_policy;
 pub mod policy;
 pub mod policy_schema;
 pub mod ref_authority;
