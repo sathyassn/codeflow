@@ -316,6 +316,10 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
+    if let Some((rest, dir)) = cwd.and_then(|cwd| successful_cd_prefix(command, cwd)) {
+        visit(rest, Some(&dir), depth + 1, out);
+        return;
+    }
     shell_inputs(command, out);
     let inherited = out.config_trigger.clone();
     let mut persistent = inherited
@@ -379,8 +383,9 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
 /// Every directory a line may run an interpreter in (TSK-302 review round
 /// 2): the session directory and each one a directory change anywhere on
 /// the line may reach, applied in order to every directory listed before
-/// it, whether or not it succeeds. `unknown` is set when a change cannot be
-/// resolved, so a command may run anywhere.
+/// it, whether or not it succeeds. A proven leading `cd` in a literal AND
+/// chain narrows this to its physical destination. `unknown` is set when a
+/// change cannot be resolved, so a command may run anywhere.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct DirSet {
     pub(crate) dirs: Vec<PathBuf>,
@@ -399,7 +404,22 @@ impl DirSet {
                 let next: Vec<PathBuf> = self
                     .dirs
                     .iter()
-                    .map(|dir| lexical_join(dir, target))
+                    .flat_map(|dir| {
+                        let mut next = vec![lexical_join(dir, target)];
+                        // Keep the logical reading for later shell changes,
+                        // and the physical one for an interpreter's operands.
+                        next.extend(std::fs::canonicalize(dir.join(target)));
+                        if cdpath_searches(target) {
+                            if let Some(cdpath) = std::env::var_os("CDPATH") {
+                                for base in std::env::split_paths(&cdpath) {
+                                    let candidate = lexical_join(&dir.join(base), target);
+                                    next.extend(std::fs::canonicalize(&candidate));
+                                    next.push(candidate);
+                                }
+                            }
+                        }
+                        next
+                    })
                     .collect();
                 for dir in next {
                     if !self.dirs.contains(&dir) {
@@ -413,6 +433,61 @@ impl DirSet {
             DirChange::Unknown => self.unknown = true,
         }
     }
+}
+
+fn cdpath_searches(target: &Path) -> bool {
+    !target.is_absolute()
+        && !matches!(
+            target.components().next(),
+            Some(std::path::Component::CurDir | std::path::Component::ParentDir)
+        )
+}
+
+/// Prove a leading `cd` succeeds before anything else runs. Only a flat,
+/// literal AND chain with no later directory changes qualifies. Other
+/// syntax keeps the conservative union, including subshells, substitutions,
+/// redirections, mixed joins and commands before the `cd`.
+fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, PathBuf)> {
+    let (prefix, rest) = command.split_once("&&")?;
+    if command.split("&&").any(|segment| {
+        segment.trim().is_empty()
+            || !segment.chars().all(|c| {
+                c.is_alphanumeric() || matches!(c, ' ' | '\t' | '/' | '.' | '_' | '-' | '=' | ':')
+            })
+    }) {
+        return None;
+    }
+    let words: Vec<_> = prefix.split_whitespace().collect();
+    let (target, physical) = match words.as_slice() {
+        ["cd", target] | ["cd", "--" | "-L", target] => (*target, false),
+        ["cd", "-P", target] => (*target, true),
+        _ => return None,
+    };
+    if target.starts_with('-') {
+        return None;
+    }
+    let target = Path::new(target);
+    // CDPATH can select a different destination. The union below includes
+    // its search paths and keeps the starting directory in that case.
+    if cdpath_searches(target) && std::env::var_os("CDPATH").is_some_and(|p| !p.is_empty()) {
+        return None;
+    }
+    if expand_commands(rest).iter().any(|segment| {
+        let words = command_argv(segment);
+        words
+            .iter()
+            .any(|word| matches!(word.as_str(), "popd" | "dirs" | "eval"))
+            || !dir_changes(&words, None).is_empty()
+    }) {
+        return None;
+    }
+    let target = if physical {
+        cwd.join(target)
+    } else {
+        lexical_join(cwd, target)
+    };
+    let dir = std::fs::canonicalize(target).ok()?;
+    dir.is_dir().then_some((rest, dir))
 }
 
 /// `dir` joined with `target`, `.` and `..` removed by spelling, as the
@@ -838,6 +913,12 @@ fn hides_a_directory_change(rest: &[String]) -> bool {
 /// The directory set of `command` from `cwd`: every simple command the
 /// line runs, nested bodies included, read in order.
 pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
+    if let Some((_, dir)) = successful_cd_prefix(command, cwd) {
+        return DirSet {
+            dirs: vec![dir],
+            unknown: false,
+        };
+    }
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
         unknown: false,
@@ -845,6 +926,11 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
+        // A line-local assignment can differ from the hook's environment,
+        // including an expansion whose search paths cannot be enumerated.
+        if words.iter().any(|word| word.starts_with("CDPATH=")) {
+            set.unknown = true;
+        }
         for change in dir_changes(&words, home) {
             set.change(&change);
         }

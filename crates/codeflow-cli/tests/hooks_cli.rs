@@ -9174,6 +9174,32 @@ fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
     )
 }
 
+#[test]
+fn exec_guard_narrows_successful_cd_before_interpreter() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    enforced_repo(&root);
+    std::fs::create_dir(root.join("src")).unwrap();
+    for (line, allowed) in [
+        ("cd src && python3 tool.py ..", true),
+        ("cd src && python3 tool.py ../.claude/settings.json", false),
+        ("cd src; python3 tool.py ..", false),
+        ("cd src || python3 tool.py ..", false),
+        ("(cd src) && python3 tool.py ..", false),
+    ] {
+        let output = exec_guard_contract_3(&root, line);
+        if allowed {
+            assert!(
+                output.status.success(),
+                "{line}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        } else {
+            assert!(interpreter_argument_refused(&output), "{line}: {output:?}");
+        }
+    }
+}
+
 fn interpreter_argument_refused(output: &Output) -> bool {
     let err = String::from_utf8_lossy(&output.stderr);
     output.status.code() == Some(2)

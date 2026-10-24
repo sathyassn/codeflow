@@ -1052,6 +1052,150 @@ mod tests {
         );
     }
 
+    #[test]
+    fn successful_cd_narrows_interpreter_arguments() {
+        let repo = repo();
+        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &["cd src && python3 tool.py ../.claude/settings.json"],
+        );
+    }
+
+    #[test]
+    fn other_cd_joins_keep_the_starting_directory() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src; python3 tool.py ..",
+                "cd src || python3 tool.py ..",
+                "(cd src) && python3 tool.py ..",
+                "cd src && true || python3 tool.py ..",
+                "cd src && true; python3 tool.py ..",
+                "cd src & python3 tool.py ..",
+                "cd src | python3 tool.py ..",
+                "! cd src && python3 tool.py ..",
+                "python3 tool.py .. && cd src",
+                "cd src && popd && python3 tool.py ..",
+                "cd src && eval popd && python3 tool.py ..",
+                "cd src && cd .. && python3 tool.py ..",
+            ],
+        );
+    }
+
+    #[test]
+    fn line_local_cdpath_keeps_directory_uncertainty() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "CDPATH=$SEARCH cd src && python3 tool.py ../settings.json",
+            ],
+        );
+    }
+
+    #[test]
+    fn inherited_cdpath_includes_search_destinations() {
+        const CHILD_ROOT: &str = "CODEFLOW_TEST_397_CDPATH_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let line = "cd src && python3 tool.py ../settings.json";
+            let findings = evaluate(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                &root,
+                &root,
+                None,
+            );
+            assert!(argument_refusal(&findings), "{findings:?}");
+            let dirs = outward::line_directories(line, &root, None);
+            assert!(dirs.dirs.contains(&root));
+            assert!(dirs.dirs.contains(&root.join("src")));
+            assert!(dirs.dirs.contains(&root.join(".claude/src")));
+            #[cfg(unix)]
+            for shell in ["bash", "zsh"] {
+                let Ok(output) = std::process::Command::new(shell)
+                    .args(["-c", "cd src && /bin/pwd -P"])
+                    .current_dir(&root)
+                    .output()
+                else {
+                    eprintln!("skipped: {shell} is not installed");
+                    continue;
+                };
+                assert!(output.status.success());
+                let printed = String::from_utf8(output.stdout).unwrap();
+                let actual = PathBuf::from(printed.lines().last().unwrap());
+                assert!(dirs.dirs.contains(&actual), "{shell}: {actual:?}");
+            }
+            return;
+        }
+        let repo = repo();
+        std::fs::create_dir(repo.root.join(".claude/src")).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "security::interpreter::tests::inherited_cdpath_includes_search_destinations",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &repo.root)
+            .env("CDPATH", repo.root.join(".claude"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_cd_resolves_symlink_parents_physically() {
+        let repo = repo();
+        std::os::unix::fs::symlink(repo.root.join("src"), repo.root.join("link")).unwrap();
+        assert_allowed(&repo, &["cd link && python3 tool.py .."]);
+        let dirs = outward::line_directories(
+            "cd link && python3 tool.py ..",
+            &repo.root,
+            Some(&repo.home),
+        );
+        assert_eq!(dirs.dirs, [repo.root.join("src")]);
+        for shell in ["bash", "zsh"] {
+            let Ok(output) = std::process::Command::new(shell)
+                .args(["-c", "cd link && /bin/pwd -P"])
+                .current_dir(&repo.root)
+                .env_remove("CDPATH")
+                .output()
+            else {
+                eprintln!("skipped: {shell} is not installed");
+                continue;
+            };
+            assert!(output.status.success());
+            let printed = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(Path::new(printed.trim()), dirs.dirs[0], "{shell}");
+        }
+        std::os::unix::fs::symlink(&repo.home, repo.root.join("outside")).unwrap();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd link && python3 tool.py ../.claude/settings.json",
+                "cd outside && python3 tool.py ../repo/.claude/settings.json",
+            ],
+        );
+    }
+
     /// The arguments the parser hands over: inline code is left out, and
     /// the directory follows `cd`, including one it cannot follow.
     #[test]
