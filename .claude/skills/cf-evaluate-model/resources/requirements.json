@@ -1355,7 +1355,7 @@
     {
       "id": "CF-OUT-003",
       "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use a diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow, structure, state, or comparison carries the figure itself, not only the recognition that one would help, in a form matched to its surface: an inline figure where the surface renders one, or a review or share page such as cf-present when people will open, comment on or share it; fenced ASCII in Markdown files, PR bodies and records, on a terminal or other plain-text surface, or when the surface is unknown; and never a Mermaid block; and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use a diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow, structure, state, or comparison carries the figure itself, not only the recognition that one would help, in a form matched to its surface: an inline figure where the surface renders one and the answer is short, cf-present by default beyond that, and the harness's page or widget only when the operator asks for it or the content must be shared; fenced ASCII in Markdown files, PR bodies and records, on a terminal or other plain-text surface, or when the surface is unknown; and never a Mermaid block; and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
       "sources": [
         {
           "path": ".codeflow/rules/writing.md",
@@ -1387,7 +1387,8 @@
           "markers": [
             "the reply or document carries a figure. Match the form to the surface",
             "an inline figure is the default, such as an inline HTML figure in a desktop harness",
-            "`cf-present` (standard and full tiers) when one coherent surface with anchored feedback materially helps",
+            "`cf-present` (standard and full tiers) by default",
+            "use it only when the operator asks for it or the content must",
             "say why you opened it",
             "Markdown files, PR bodies and records are ASCII surfaces",
             "or when unsure what the surface renders",
@@ -1869,7 +1870,7 @@
     {
       "id": "CF-PRES-001",
       "level": "hard",
-      "statement": "Interactive presentation is proportional and user-invokable: use cf-present when a complex explanation or review materially benefits from one coherent visual surface or anchored feedback, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
+      "statement": "Interactive presentation is proportional and user-invokable: use cf-present, the default surface in a CodeFlow project, when a complex explanation or review needs more than an inline reply, keep short linear answers in the native conversation, and never confuse the utility with consuming-product UI or a durable documentation portal.",
       "sources": [
         {
           "path": ".agents/skills/cf-present/SKILL.md",

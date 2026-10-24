@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "9021f7681572f9dc2e245fa6efbc3fde414223aaefed54057cfa99c57dabd576",
+      "sha256": "a77ccc46daa281e7682167536a24f7b5b8e210f9cff50bc2940dd62f9fa7dcb3",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -659,7 +659,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e0ae7af148409fe7f482b8db43f7349c8be0e77d8b6b2c2b91ced6b9dfda6c0a",
+      "sha256": "b578e82dc0533faa394e4e8d46ae27e9f2dcb88be554e45955c51d50acc81c3b",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "9021f7681572f9dc2e245fa6efbc3fde414223aaefed54057cfa99c57dabd576",
+      "sha256": "a77ccc46daa281e7682167536a24f7b5b8e210f9cff50bc2940dd62f9fa7dcb3",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1499,7 +1499,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e0ae7af148409fe7f482b8db43f7349c8be0e77d8b6b2c2b91ced6b9dfda6c0a",
+      "sha256": "b578e82dc0533faa394e4e8d46ae27e9f2dcb88be554e45955c51d50acc81c3b",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {
@@ -1733,7 +1733,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "9f776e6e171ed6e2be8c62c47985228ccc11559ee022df9b5031917097d65df7",
+      "sha256": "2d789cbb9253327b157e702f1fcb523487cc8d94e553a0dc375fa04185722269",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
@@ -1829,13 +1829,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "db2e90d7161c9cefe0fad87fc90b0700c263bbbc0b02b0176309f29225b7325f",
+      "sha256": "faf42d47b33cc2d4425d4a518e04d9bc5b6991ad7c729b56f4d2be6276950d99",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "74b0a3d447b0bfd0abf61d579d17050274b881a26600c075588486f48b718042",
+      "sha256": "abb8ada4599e260a14c3986c88b7ac675f2a0f739faf2b32ca86b44bcd6e0ab0",
       "exec": false
     },
     "docs/architecture.md": {

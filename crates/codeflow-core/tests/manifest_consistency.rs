@@ -2193,7 +2193,9 @@ fn presentation_chat_figures_defer_to_the_lifecycle_surface_rule() {
             .expect("writing reference is readable"),
     );
     for rule in [
-        "Where the current surface renders one, an inline figure is the default, such as an inline HTML figure in a desktop harness.",
+        "Where the current surface renders one and the answer is short, an inline figure is the default, such as an inline HTML figure in a desktop harness.",
+        "A figure or explanation that needs more than an inline reply goes to `cf-present` (standard and full tiers) by default;",
+        "use it only when the operator asks for it or the content must be shared, since `cf-present` is local and cannot be shared.",
         "Use fenced ASCII in other Markdown files (READMEs, docs, records, PR bodies), in terminal output and on any other plain-text surface, or when unsure what the surface renders.",
     ] {
         assert!(
