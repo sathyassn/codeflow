@@ -67,7 +67,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
 | `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
-| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union and exceptions intersect across authorities; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
@@ -106,8 +106,11 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 `git.path_policy` defaults to `block`. Pre-commit reads the landed policy
 and any stricter working-copy rules. CI reads the target policy and judges
 all commits the range introduces. A branch-only exception grants no access.
-Denials from applicable sources are combined; exceptions keep only their
-shared area. A removed entry still applies when another source holds it.
+Denials from applicable sources are combined. When a task declares an
+integration line, pre-commit takes exceptions from that line, as CI against
+the line does, and the default branch adds only denials. Otherwise
+exceptions keep only the area the sources share. A removed entry still
+applies when another source holds it.
 
 - A `git.blocked_names` string without `/` is a glob on the final component.
   A sequence with `/` matches consecutive components at any depth.
@@ -121,7 +124,8 @@ shared area. A removed entry still applies when another source holds it.
 Patterns and paths use Unicode NFC normalization and ASCII case folding.
 Empty components, `.`, `..`, trailing dots or spaces, backslashes and
 non-UTF-8 names refuse. Prefix declarations may end in `/`; an empty,
-`.` or `/` exception denotes the root and waives the whole rule.
+`.` or `/` exception denotes the root and waives the whole rule. An empty,
+`.` or `/` `protected_paths` prefix protects the whole tree.
 `codeflow doctor --check policy-source` names these waivers and reports
 policy sources and local differences.
 
