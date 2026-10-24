@@ -71,6 +71,15 @@ fn installed_hooks_refuse_secret_path_spellings_without_execution() {
                 );
             }
         }
+        for command in [
+            "cat ~//.codex/auth.json",
+            "cat ~/.Codex/AUTH.JSON",
+            "cat ~/.codex/auth.{json}",
+            "wc < ~/.codex/auth.json",
+            "cd ~/.codex && cat auth.json",
+        ] {
+            project.shell(harness, command, Some("security.secret_reads"));
+        }
         for path in [
             "README.md",
             "private.key.rs",
