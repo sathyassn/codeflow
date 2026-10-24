@@ -262,11 +262,13 @@ def parse_release_impact(
     tree and its history (marker floor, pending entries, withdrawal) stay in
     `pr_verdict`, since no PR-body reading can see them."""
     reading = reading or read_pr_bodies([body], binary)[0]
-    if reading["findings"]:
-        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
+    # A body without exactly one section is named as such before the
+    # evaluator's findings, which then say the same thing in other words.
     pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
+    if reading["findings"]:
+        fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     fields: dict[str, str] = {}
     for key, value in pairs:
         fields.setdefault(key, value)

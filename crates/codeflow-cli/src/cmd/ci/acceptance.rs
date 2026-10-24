@@ -368,9 +368,11 @@ fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, Stri
 fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation> {
     let (task, criterion) = found.message.split_once(' ')?;
     let Some(body) = body else {
-        println!(
-            "codeflow ci: note: {REMOVAL_RULE}: {task} removes {criterion}; its pull request body gives the reason"
+        let note = codeflow_core::remedy::Finding::new(
+            format!("{REMOVAL_RULE}: {task} removes {criterion}; its pull request body gives the reason"),
+            codeflow_core::remedy::CRITERIA_DELTA.remedy(),
         );
+        println!("{}", note.line("codeflow ci", "note"));
         return None;
     };
     if super::pr_body::gives_removal_reason(body, criterion) {
