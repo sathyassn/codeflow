@@ -65,6 +65,9 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.release_branch_pattern` | string | `absent` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
+| `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.blocked_names` | path rule list | `[".env",".env.*","*.env","*.pem","*.key","*.p12","*.pfx","*.jks","*.keystore","id_rsa*","id_dsa*","id_ecdsa*","id_ed25519*",".netrc",".pgpass","*.tfstate","*.tfstate.*","kubeconfig",".kube/config",".aws/credentials","application_default_credentials.json"]` | strings or {pattern, except_under: [root-relative prefix], reason} | Block final-component globs or component sequences at any depth. | Shipped names remain when omitted; use a narrow explained except_under on the target to allow a fixture. Patterns and paths use NFC and ASCII case folding. Root exceptions waive a whole rule and doctor names them. Deletions pass with a history note. The shipped policy file does not list it, so an older binary never meets the key. |
+| `git.protected_paths` | path rule list | `[]` | {prefix, allow: [{path, reason}]} entries | Refuse every change under root-anchored component prefixes. | Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.secret_scan` | Level | `block` | off \| warn \| allow \| block | Pre-commit scan for staged secrets and .env files. | Never suspended by bootstrap grace, but off/allow HERE does disable the scan (it is policy, not hardcoded); leave at block. |
 | `git.secret_scan_inline_allow` | enum | `trusted` | trusted \| never | Inline gitleaks:allow handling in the managed CI secret scan. | Read from the trusted commit (the pull request base, or the pushed commit). Missing means trusted: only allows on commits it already holds count. With never, every inline allow is ignored; other trusted exemptions still apply. A pull request's head-only policy change cannot change its own scan. This key does not affect the pre-commit scan. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.conflict_markers` | Level | `block` | off \| warn \| allow \| block | Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170). | Defaults to block. Only added lines are judged. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in .gitattributes to a length its markers do not have. Suspended by bootstrap grace. |
@@ -97,6 +100,76 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `guidance.prompt_reminders` | enum | `warn` | off \| allow \| warn | The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation. | Advisory only: warn adds the line, off and allow add nothing; block is refused because a reminder never stops a prompt. |
 
 <!-- codeflow-derived policy-reference end -->
+
+### Blocked names and protected paths
+
+`git.path_policy` defaults to `block`. Pre-commit reads the landed policy
+and any stricter working-copy rules. CI reads the target policy and judges
+all commits the range introduces. A branch-only exception grants no access.
+Denials from applicable sources are combined. When a task declares an
+integration line, pre-commit takes exceptions from that line, as CI against
+the line does, and the default branch adds only denials. Otherwise
+exceptions keep only the area the sources share. A removed entry still
+applies when another source holds it.
+
+- A `git.blocked_names` string without `/` is a glob on the final component.
+  A sequence with `/` matches consecutive components at any depth.
+- A `{pattern, except_under, reason}` entry applies the same denial with
+  explained root-relative prefix exceptions. An explicit entry can narrow a
+  shipped default.
+- A `git.protected_paths` entry, `{prefix, allow: [{path, reason}]}`, matches
+  a root-relative prefix on component boundaries and supplies explained
+  root-relative prefix allowances.
+
+Patterns and paths use Unicode NFC normalization and ASCII case folding.
+Empty components, `.`, `..`, trailing dots or spaces, backslashes and
+non-UTF-8 names refuse. Prefix declarations may end in `/`; an empty,
+`.` or `/` exception denotes the root and waives the whole rule. An empty,
+`.` or `/` `protected_paths` prefix protects the whole tree.
+`codeflow doctor --check policy-source` names these waivers and reports
+policy sources and local differences.
+
+The shipped names are `.env`, `.env.*`, `*.env`, `*.pem`, `*.key`, `*.p12`,
+`*.pfx`, `*.jks`, `*.keystore`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`,
+`id_ed25519*`, `.netrc`, `.pgpass`, `*.tfstate`, `*.tfstate.*`, `kubeconfig`,
+`.kube/config`, `.aws/credentials` and
+`application_default_credentials.json`. Omitting them keeps them active.
+A public certificate fixture can use this declaration in the target's
+`.codeflow/policy.json`:
+
+```json
+{
+  "git": {
+    "blocked_names": [
+      {
+        "pattern": "*.pem",
+        "except_under": ["tests/public-certificates"],
+        "reason": "Public certificate chains used by tests"
+      }
+    ]
+  }
+}
+```
+
+Blocked names refuse additions, content changes, type changes and renames
+into a matching path. Deletions pass with a history note. Protected prefixes
+refuse every change, deletions included. Gitlinks are judged at their path;
+symlinks are judged at their path and their normalized target. Absolute or
+parent-traversing targets refuse. Neither kind of link is followed.
+
+CI reads each ordinary commit against its parent and each two-parent merge
+against the automatic remerge of its parents. Unchanged inherited content
+is not a merge introduction. Octopus or unreadable merges refuse. An
+addition followed by deletion in the range remains an introduction.
+
+The gate exempts its own inputs, in the same normalized spelling:
+`.codeflow/policy.json`, `.codeflow/project.toml`, `.codeflow/bootstrap.sh`,
+`.codeflow/bootstrap.ps1`, `.codeflow/ci-setup.sh`, files directly under
+`.codeflow/git-hooks/`, `.github/workflows/codeflow-policy.yml`,
+`.github/workflows/codeflow-ci.yml`, and every `.gitignore`.
+Other rules still apply to those files. `git.secret_scan` continues to own
+both the existing environment-file check and the content secret scan;
+`git.path_policy: off` disables only the new path gate.
 
 ## Unsupported policy keys
 

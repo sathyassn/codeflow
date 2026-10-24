@@ -20,6 +20,7 @@ mod push_set;
 pub mod recall;
 pub mod remote;
 pub mod report;
+pub mod reserve;
 pub mod status;
 pub mod test;
 pub mod validate;
