@@ -1256,16 +1256,29 @@ mod tests {
     /// so host load cannot fail the test.
     #[test]
     fn several_suppliers_read_the_line_once() {
-        use super::super::arguments::LINE_READS;
+        use super::super::arguments::{LineReads, LINE_READS};
         let repo = repo();
         let line = (0..5)
             .map(|n| format!("ls | xargs python3 check{n}.py"))
             .collect::<Vec<_>>()
             .join("; ");
-        LINE_READS.with(|reads| reads.set((0, 0)));
+        let none = LineReads {
+            asked: 0,
+            enforcement: 0,
+            authority: 0,
+        };
+        LINE_READS.with(|reads| reads.set(none));
         assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
-        // One enforcement reading and one authority reading for all five calls.
-        assert_eq!(LINE_READS.with(std::cell::Cell::get), (1, 1));
+        // Each of the five calls asks for both readings, and one enforcement
+        // reading and one authority reading answer all of them.
+        assert_eq!(
+            LINE_READS.with(std::cell::Cell::get),
+            LineReads {
+                asked: 10,
+                enforcement: 1,
+                authority: 1,
+            }
+        );
     }
 
     /// The findings the public exec-guard boundary gives `command` from
