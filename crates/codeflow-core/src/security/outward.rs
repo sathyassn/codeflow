@@ -435,6 +435,12 @@ impl DirSet {
     }
 }
 
+/// Whether the line names the shell's `cd` search path, in bash or zsh
+/// spelling.
+fn mentions_cdpath(command: &str) -> bool {
+    command.contains("CDPATH") || command.contains("cdpath")
+}
+
 fn cdpath_searches(target: &Path) -> bool {
     !target.is_absolute()
         && !matches!(
@@ -443,12 +449,25 @@ fn cdpath_searches(target: &Path) -> bool {
         )
 }
 
-/// Prove a leading `cd` succeeds before anything else runs. Only a flat,
-/// literal AND chain with no later directory changes qualifies. Other
-/// syntax keeps the conservative union, including subshells, substitutions,
-/// redirections, mixed joins and commands before the `cd`.
+/// Prove a leading `cd` succeeds before the one command after it runs.
+/// Only `cd <dir> && <interpreter> ...`, literal, qualifies: the rest must
+/// be a single interpreter call, because any other word may be a user alias
+/// or function that changes directory (oh-my-zsh `-` and `1`, zoxide `z`;
+/// TSK-397 security review F1). Other syntax keeps the conservative union,
+/// including subshells, substitutions, redirections, mixed joins, commands
+/// before the `cd` and any mention of `CDPATH` or `cdpath`.
 fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, PathBuf)> {
+    if mentions_cdpath(command) {
+        return None;
+    }
     let (prefix, rest) = command.split_once("&&")?;
+    if rest.contains("&&") {
+        return None;
+    }
+    let program = rest.split([' ', '\t']).find(|w| !w.is_empty())?;
+    // The rest must start with an interpreter; any other word may be an
+    // alias or function that changes directory.
+    interpreter_family(program.rsplit('/').next().unwrap_or(program))?;
     if command.split("&&").any(|segment| {
         segment.chars().all(|c| matches!(c, ' ' | '\t'))
             || !segment.chars().all(|c| {
@@ -925,18 +944,17 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
             unknown: false,
         };
     }
+    // A line that names `CDPATH` or `cdpath` may set it in a form this
+    // parser does not read (`+=`, `export`, `declare`, arrays, `read`,
+    // `printf -v`), and its search paths may not be enumerable, so the
+    // directory a later `cd` reaches is unknown (TSK-397 review F2).
     let mut set = DirSet {
         dirs: vec![cwd.to_path_buf()],
-        unknown: false,
+        unknown: mentions_cdpath(command),
     };
     for segment in expand_commands(command) {
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
-        // A line-local assignment can differ from the hook's environment,
-        // including an expansion whose search paths cannot be enumerated.
-        if words.iter().any(|word| word.starts_with("CDPATH=")) {
-            set.unknown = true;
-        }
         for change in dir_changes(&words, home) {
             set.change(&change);
         }

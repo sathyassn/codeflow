@@ -1098,6 +1098,49 @@ mod tests {
             &[
                 "CDPATH=.claude; cd src && python3 tool.py ../settings.json",
                 "CDPATH=$SEARCH cd src && python3 tool.py ../settings.json",
+                // TSK-397 security review F2: every assignment form.
+                "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
+                "cdpath=.claude && cd src && python3 tool.py ../settings.json",
+                "cdpath=(.claude) && cd src && python3 tool.py ../settings.json",
+                "cdpath+=(.claude); cd src && python3 tool.py ../settings.json",
+                "export CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "declare -x CDPATH=.claude; cd src && python3 tool.py ../settings.json",
+                "typeset -a cdpath=(.claude); cd src && python3 tool.py ../settings.json",
+                "set -A cdpath .claude; cd src && python3 tool.py ../settings.json",
+                "printf -v CDPATH .claude; cd src && python3 tool.py ../settings.json",
+                "read CDPATH <<< .claude; cd src && python3 tool.py ../settings.json",
+            ],
+        );
+    }
+
+    /// TSK-397 security review F1: after the narrowed `cd`, a word the guard
+    /// does not model may be a user alias or function that returns to the
+    /// start directory, so only a single interpreter call is narrowed.
+    #[test]
+    fn unmodeled_commands_after_cd_keep_the_starting_directory() {
+        let repo = repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd src && - && python3 tool.py .claude/settings.json",
+                "cd src && 1 && python3 tool.py .claude/settings.json",
+                "cd src && .. && python3 tool.py .claude/settings.json",
+                "cd src && up && python3 tool.py .claude/settings.json",
+                "cd src && z repo && python3 tool.py .claude/settings.json",
+                "cd src && - && python3 tool.py .claude/settings.local.json",
+                "cd src && - && python3 tool.py .codex/config.toml",
+                "cd src && - && python3 tool.py .claude",
+                "cd src && true && python3 tool.py .claude/settings.json",
+                "cd src && python3 tool.py .. && python3 tool.py .claude/settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "cd src && python3.13 tool.py ..",
+                "cd src && node tool.js ..",
             ],
         );
     }

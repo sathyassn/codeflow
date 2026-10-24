@@ -9239,6 +9239,14 @@ fn exec_guard_narrows_successful_cd_before_interpreter() {
         ("cd src; python3 tool.py ..", false),
         ("cd src || python3 tool.py ..", false),
         ("(cd src) && python3 tool.py ..", false),
+        (
+            "cd src && - && python3 tool.py .claude/settings.json",
+            false,
+        ),
+        (
+            "CDPATH+=.claude && cd src && python3 tool.py ../settings.json",
+            false,
+        ),
     ] {
         let output = exec_guard_contract_3(&root, line);
         if allowed {
