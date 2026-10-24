@@ -1505,9 +1505,19 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
                 ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
                 "Every blocker or major finding carries the smallest evidenced remedy",
             ),
+            // TSK-452: the review cadence has one home, "Review verdicts" in
+            // the discipline rules; findings points there.
             (
                 ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Review is one holistic pass per revision",
+                "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
+            ),
+            (
+                ".codeflow/rules/workflow-discipline.md",
+                "Review runs at four stages, and only these:",
+            ),
+            (
+                ".codeflow/rules/workflow-discipline.md",
+                "Between stages the finder confirms each material fix on the delta plus the affected tests",
             ),
             (
                 ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
