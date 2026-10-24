@@ -1401,10 +1401,24 @@ mod tests {
         .collect()
     }
 
+    /// Directory values are native paths; compare them with `/` on Windows too.
+    fn slashes(text: &str) -> String {
+        if cfg!(windows) {
+            text.replace('\\', "/")
+        } else {
+            text.to_owned()
+        }
+    }
+
     fn values(line: &str) -> Vec<Vec<String>> {
         probes(line)
             .iter()
-            .map(|step| crate::hooks::git_guard::command_argv(&step.text)[1..].to_vec())
+            .map(|step| {
+                crate::hooks::git_guard::command_argv(&step.text)[1..]
+                    .iter()
+                    .map(|arg| slashes(arg))
+                    .collect()
+            })
             .collect()
     }
 
@@ -1447,7 +1461,7 @@ mod tests {
         for i in 0..10 {
             assert!(steps
                 .iter()
-                .any(|step| step.text.contains(&format!("/project/d{i}'"))));
+                .any(|step| slashes(&step.text).contains(&format!("/project/d{i}'"))));
         }
         assert!(values("cd a || cd b && probe $PWD").contains(&vec!["/project/a".into()]));
         assert!(values("cd a && cd b || probe $PWD").contains(&vec!["/project".into()]));
@@ -1479,7 +1493,7 @@ mod tests {
                 } else {
                     assert!(step.unresolved.is_empty(), "{line}: {step:?}");
                     assert_eq!(
-                        crate::hooks::git_guard::command_argv(&step.text)[1..],
+                        crate::hooks::git_guard::command_argv(&slashes(&step.text))[1..],
                         ["/project", "/project", "/project"]
                     );
                 }
