@@ -5581,7 +5581,20 @@ fn installed_push_hook_runs_codeflow_ci_and_no_test_target() {
         &["push", "upstream", "HEAD:refs/heads/feat/probe"],
     );
     assert_eq!(refused.status.code(), Some(1), "{}", both_streams(&refused));
-    git(dir.path(), &["reset", "-q", "--hard", "HEAD~1"]);
+    // The reference-transaction hook needs the binary on PATH; this reset
+    // only undoes the fixture commit, so it runs without hooks.
+    ok(
+        "git",
+        dir.path(),
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "reset",
+            "-q",
+            "--hard",
+            "HEAD~1",
+        ],
+    );
 
     let protected = with_installed_hooks(
         "git",
