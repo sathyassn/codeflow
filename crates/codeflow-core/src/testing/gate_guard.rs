@@ -1,4 +1,4 @@
-//! Guards for a full test gate (TSK-134): one full gate at a time, and no
+//! Guards for heavy test work: one heavy gate at a time, and no
 //! cargo target directory shared between worktrees.
 //!
 //! **One gate at a time.** Concurrent full gates on one machine turned green
@@ -12,7 +12,8 @@
 //!   worktree of the repository.
 //!
 //! Every configured lock must be opened and acquired before targets start,
-//! so two full gates never run at once on one machine. An unavailable lock
+//! so essential and full gates, heavy quick targets and reserved commands
+//! exclude each other on one machine. An unavailable lock
 //! refuses, naming the path and sandbox error. The shipped Claude settings
 //! presets allow sandboxed writes to `~/.codeflow/locks` and
 //! `~/.codeflow/gate-runs` (TSK-216), the two home directories a full gate
@@ -21,9 +22,9 @@
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
-//! **Targets outlive a killed gate on Unix.** Each target runs in its own
-//! process group, so killing the gate process frees its lock while the
-//! target keeps running. While a gate holds the lock, the runner records
+//! **Target lifetime on Unix.** Heavy quick targets and reserved commands
+//! have a watcher that ends their process group when the controller exits.
+//! Other targets can outlive a killed gate. While a gate holds the lock, the runner records
 //! each running target's process group in the holder record
 //! ([`target_group_started`]). A free lock whose record names a process
 //! group with a live process is still held: the next gate refuses until
@@ -53,12 +54,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// File name of the gate lock in each lock directory.
 pub const LOCK_FILE: &str = "full-gate.lock";
 
-/// A held full-gate lock. The locks release when this value drops (or when
+/// A held heavy-work lock. The locks release when this value drops (or when
 /// the process exits); a clean drop also clears the holder record.
 #[derive(Debug)]
 pub struct GateLock {
     id: u64,
-    files: Vec<File>,
+    files: Vec<AcquiredFile>,
     /// Degradations and reclaimed stale locks, for the caller to print.
     pub notes: Vec<String>,
 }
@@ -70,6 +71,8 @@ struct Held {
     paths: Vec<PathBuf>,
     record: String,
     groups: BTreeSet<u32>,
+    #[cfg(unix)]
+    descriptors: Vec<std::os::fd::RawFd>,
 }
 
 static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
@@ -88,13 +91,13 @@ impl Drop for GateLock {
         for file in &mut self.files {
             // Best effort: an uncleared record only reads as a stale lock,
             // which the next gate reclaims.
-            let _ = file.set_len(0);
-            os_lock::unlock(file);
+            let _ = file.0.set_len(0);
+            // AcquiredFile explicitly unlocks before its descriptor closes.
         }
     }
 }
 
-/// Why a full gate may not start.
+/// Why heavy work may not start.
 #[derive(Debug)]
 pub struct LockHeld {
     /// The lock file that is held.
@@ -126,8 +129,8 @@ impl std::fmt::Display for LockHeld {
             let groups: Vec<String> = self.running_groups.iter().map(u32::to_string).collect();
             return write!(
                 f,
-                "another full gate's targets are still running on this machine: process \
-                 group {} of {holder}, whose gate process has exited. Only one full gate \
+                "another heavy gate's targets are still running on this machine: process \
+                 group {} of {holder}, whose gate process has exited. Only one heavy gate \
                  runs at a time; wait for those targets to finish or stop them (lock: {})",
                 groups.join(", "),
                 crate::git::display_path(&self.path)
@@ -135,7 +138,7 @@ impl std::fmt::Display for LockHeld {
         }
         write!(
             f,
-            "another full gate is running on this machine: {holder}. Only one full gate \
+            "another heavy gate is running on this machine: {holder}. Only one heavy gate \
              runs at a time; wait for it to finish (lock: {})",
             crate::git::display_path(&self.path)
         )
@@ -211,6 +214,65 @@ pub fn unwritable_gate_dirs(
     unwritable
 }
 
+/// Read holder records without taking a lock, changing a record, or creating directories.
+/// These are snapshots: admission still checks the OS lock and live target groups.
+/// # Errors
+/// Refuses discovery failures and unreadable or oversized records.
+pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
+    let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
+        .map_err(|error| format!("cannot discover gate lock directories: {error}"))?;
+    dirs.into_iter()
+        .map(|dir| {
+            let path = dir.join(LOCK_FILE);
+            let record = crate::absence::proven_absent(&path)
+                .and_then(|absent| {
+                    if absent {
+                        Ok(String::new())
+                    } else {
+                        read_record(&mut File::open(&path)?)
+                    }
+                })
+                .map_err(|error| {
+                    format!(
+                        "cannot read gate lock {}: {error}",
+                        crate::git::display_path(&path)
+                    )
+                })?;
+            let description = if record.trim().is_empty() {
+                "no recorded holder".to_string()
+            } else {
+                let started = record
+                    .lines()
+                    .find_map(|line| line.strip_prefix("started="))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string());
+                format!(
+                    "recorded holder: {}; started_unix={started}",
+                    crate::git::display_line(&describe_holder(&record))
+                )
+            };
+            Ok(format!(
+                "{}: {description}",
+                crate::git::display_path(&path)
+            ))
+        })
+        .collect()
+}
+
+/// Acquire the machine and repository locks, with the operator's repair pointer.
+/// # Errors
+/// Refuses unavailable directories and held locks before starting heavy work.
+pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, String> {
+    let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
+        .map_err(|error| format!("gate lock unavailable: cannot discover repository: {error}; run `codeflow doctor --check permissions`"))?;
+    acquire_gate_lock(&dirs, root, mode).map_err(|held| {
+        let message = held.to_string();
+        if message.contains("gate lock unavailable") {
+            format!("{message}; run `codeflow doctor --check permissions` to identify the directories to repair")
+        } else { message }
+    })
+}
+
 /// Take every full-gate lock in `dirs`, or refuse naming the holder.
 ///
 /// # Errors
@@ -218,12 +280,23 @@ pub fn unwritable_gate_dirs(
 /// Returns [`LockHeld`] when another process holds any of the locks. Locks
 /// already taken in this call are released before returning.
 pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<GateLock, LockHeld> {
+    acquire_gate_lock(dirs, project_dir, "full")
+}
+
+/// Take the shared heavy-work locks and record the requested mode.
+/// # Errors
+/// Returns the holder or the unavailable lock path without starting work.
+pub fn acquire_gate_lock(
+    dirs: &[PathBuf],
+    project_dir: &Path,
+    mode: &str,
+) -> Result<GateLock, LockHeld> {
     let mut lock = GateLock {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
         notes: Vec::new(),
     };
-    let record = holder_record(project_dir);
+    let record = holder_record(project_dir, mode);
     let mut paths = Vec::new();
     if dirs.is_empty() {
         lock.notes.push(
@@ -262,7 +335,9 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 });
             }
         }
-        let previous = read_record(&mut file).map_err(|error| LockHeld {
+        let mut acquired = AcquiredFile(file);
+        let file = &mut acquired.0;
+        let previous = read_record(file).map_err(|error| LockHeld {
             holder: format!("cannot read gate lock record: {error}"),
             path: path.clone(),
             running_groups: Vec::new(),
@@ -289,13 +364,13 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 crate::git::display_line(&describe_holder(&previous))
             ));
         }
-        if let Err(error) = write_record(&mut file, &record) {
+        if let Err(error) = write_record(file, &record) {
             lock.notes.push(format!(
                 "gate lock at {} is held but its holder record could not be written: {error}",
                 crate::git::display_path(&path)
             ));
         }
-        lock.files.push(file);
+        lock.files.push(acquired);
         paths.push(path);
     }
     if !paths.is_empty() {
@@ -304,13 +379,36 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
             paths,
             record,
             groups: BTreeSet::new(),
+            #[cfg(unix)]
+            descriptors: {
+                use std::os::fd::AsRawFd;
+                lock.files.iter().map(|file| file.0.as_raw_fd()).collect()
+            },
         });
     }
     Ok(lock)
 }
 
+/// Duplicate held locks for a target's lifetime watcher before spawning it.
+/// The registry guard prevents `GateLock::drop` from closing a borrowed descriptor.
+#[cfg(unix)]
+pub(crate) fn inherited_gate_locks() -> std::io::Result<Vec<File>> {
+    use std::os::fd::BorrowedFd;
+    let locks = held();
+    locks
+        .iter()
+        .flat_map(|lock| &lock.descriptors)
+        .map(|&descriptor| {
+            // SAFETY: the registry guard keeps the owning GateLock alive during this clone.
+            unsafe { BorrowedFd::borrow_raw(descriptor) }
+                .try_clone_to_owned()
+                .map(File::from)
+        })
+        .collect()
+}
+
 /// Record that a target started in process group `pgid`, in every full-gate
-/// lock this process holds. A no-op when it holds none (quick mode, or a
+/// lock this process holds. A no-op when it holds none (light-only quick work, or a
 /// runner used outside `codeflow test`).
 pub fn target_group_started(pgid: u32) {
     update_groups(|groups| {
@@ -387,6 +485,15 @@ fn group_alive(_pgid: u32) -> bool {
     // its gate through the target's job object (TSK-142), so nothing can
     // outlive the gate.
     false
+}
+
+#[derive(Debug)]
+struct AcquiredFile(File);
+
+impl Drop for AcquiredFile {
+    fn drop(&mut self) {
+        os_lock::unlock(&self.0);
+    }
 }
 
 /// The OS lock behind a gate lock. On Unix it is `flock` on the whole file.
@@ -487,12 +594,12 @@ fn read_record(file: &mut File) -> std::io::Result<String> {
     Ok(text)
 }
 
-fn holder_record(project_dir: &Path) -> String {
+fn holder_record(project_dir: &Path, mode: &str) -> String {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     format!(
-        "pid={}\nstarted={started}\ndir={}\n",
+        "pid={}\nstarted={started}\ndir={}\nmode={mode}\n",
         std::process::id(),
         project_dir.display()
     )
@@ -524,7 +631,10 @@ fn describe_holder(record: &str) -> String {
             format!(", started {} s ago", now.saturating_sub(started))
         })
         .unwrap_or_default();
-    format!("pid {pid}{dir}{age}")
+    format!(
+        "pid {pid}{dir}{age}, {} mode",
+        field("mode").unwrap_or("full")
+    )
 }
 
 /// Warn about a `CARGO_TARGET_DIR` outside the worktree when the gate runs
@@ -621,7 +731,7 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("in /work/a"), "{message}");
-        assert!(message.contains("one full gate"), "{message}");
+        assert!(message.contains("one heavy gate"), "{message}");
 
         drop(first);
         // A sibling test forking a child can hold a duplicate of the lock
@@ -850,5 +960,52 @@ mod r22_regressions {
         }
         std::fs::write(dir.path().join(LOCK_FILE), "pid=999999\n").unwrap();
         assert!(acquire_full_gate_lock(&[dir.path().to_path_buf()], dir.path()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod heavy_admission_tests {
+    use super::*;
+
+    #[test]
+    fn essential_record_adds_only_mode_and_legacy_reader_keeps_holder_fields() {
+        let record = holder_record(Path::new("/work/essential"), "essential");
+        let keys: BTreeSet<_> = record
+            .lines()
+            .map(|line| line.split_once('=').unwrap().0)
+            .collect();
+        assert_eq!(keys, BTreeSet::from(["pid", "started", "dir", "mode"]));
+        // 3.1 looks up known key prefixes and ignores additional keys.
+        let old_field = |key: &str| {
+            record
+                .lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .map(str::trim)
+        };
+        assert_eq!(
+            old_field("pid"),
+            Some(std::process::id().to_string().as_str())
+        );
+        assert_eq!(old_field("dir"), Some("/work/essential"));
+        assert!(old_field("started").unwrap().parse::<u64>().is_ok());
+        assert!(describe_holder(&record).contains("essential mode"));
+        assert!(describe_holder("pid=9\ndir=/old\n").contains("full mode"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refusal_unlocks_even_when_a_fork_duplicate_keeps_the_descriptor_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOCK_FILE);
+        let file = open_lock_file(&path).unwrap();
+        os_lock::try_lock(&file).unwrap();
+        // dup and fork share the open file description behind flock.
+        let inherited = file.try_clone().unwrap();
+        let refused = AcquiredFile(file);
+        drop(refused);
+        let next = open_lock_file(&path).unwrap();
+        os_lock::try_lock(&next).expect("explicit unlock also releases inherited descriptors");
+        os_lock::unlock(&next);
+        drop(inherited);
     }
 }

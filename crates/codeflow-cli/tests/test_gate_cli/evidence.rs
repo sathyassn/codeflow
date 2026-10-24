@@ -1304,11 +1304,7 @@ fn repair_requested_modes_report_passed_without_incomplete_suffix() {
         }
     });
     for mode in ["quick", "essential"] {
-        let output = run(
-            fixture.root.path(),
-            fixture.home.as_path(),
-            &["test", "--mode", mode, "--all", "--strict"],
-        );
+        let output = fixture.full(&["test", "--mode", mode, "--all", "--strict"]);
         assert!(output.status.success(), "{}", stderr(&output));
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -1327,20 +1323,25 @@ fn essential_default_comparison_uses_the_declared_line() {
             target["evidence"]["covers_modes"] = json!(["quick", "essential"]);
         }
     });
-    let output = run(
-        fixture.root.path(),
-        fixture.home.as_path(),
-        &["test", "--mode", "essential"],
-    );
+    // The enclosing gate owns the real account's machine lock. Exercise CLI
+    // comparison routing under an isolated home, then selection credit through
+    // the same core engine under the real account, as Fixture's seeding does.
+    let output = fixture.full(&["test", "--mode", "essential"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         stderr(&output).contains("integration/checks"),
         "{}",
         stderr(&output)
     );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
     if cfg!(unix) {
+        let outcome =
+            codeflow_core::testing::gate::run_gate(fixture.root.path(), "essential").unwrap();
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("executed 0; skipped 2; not complete")
+            matches!(outcome, codeflow_core::testing::gate::GateOutcome::Completed {
+            results, passed: true, evidence_skipped: 2, ..
+        } if results.is_empty()),
+            "essential retains the same account-backed selection credit"
         );
     } else {
         assert!(stderr(&output).contains("account home unavailable"));
@@ -1404,4 +1405,82 @@ fn repair_explicit_full_comparison_remains_local_incomplete_evidence() {
         assert_eq!(results.len(), 2);
         assert!(skipped.is_empty());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_pre_push_honors_the_undeclared_quick_class_and_wait_bound() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let fixture = Fixture::new(|config| {
+        config["execution"]["quick_default_class"] = json!("heavy");
+        config["execution"]["heavy_wait_seconds"] = json!(1);
+    });
+    let root = fixture.root.path();
+    let home = fixture.isolated_home.path();
+    let destination = push_destination(root);
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let head = String::from_utf8(head.stdout).unwrap();
+    let hook = root.join(".git/hooks/pre-push");
+    std::fs::write(
+        &hook,
+        include_str!("../../../../assets/base/git-hooks/pre-push"),
+    )
+    .unwrap();
+    let linked = home.join("linked");
+    git(
+        root,
+        &["worktree", "add", "--detach", linked.to_str().unwrap()],
+    );
+    std::fs::write(linked.join(".codeflow/test-config.json"), r#"{"schema_version":"1.0","targets":[{"name":"holder","runner":"custom","timeout_seconds":15,"modes":{"full":{"command":"while ! test -f release; do sleep 0.01; done"}}}]}"#).unwrap();
+    let (mut holder, rx, _stdout) = super::spawn(command(&linked, home, &["test"]));
+    super::wait_for(&rx, "starting target 'holder'");
+    let invoke = || {
+        let mut child = Command::new("sh")
+            .arg(&hook)
+            .arg("origin")
+            .arg(&destination)
+            .current_dir(root)
+            .env_remove("CODEFLOW_HOME")
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CI")
+            .env(
+                "CODEFLOW_HOOK_BINARY",
+                std::env::var_os("CODEFLOW_TEST_GATE_BIN")
+                    .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into()),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(child.stdin.take().unwrap(), "refs/heads/task/TSK-001-selection {} refs/heads/task/TSK-001-selection 0000000000000000000000000000000000000000", head.trim()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let start = Instant::now();
+    let refused = invoke();
+    let text = stderr(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{text}");
+    assert!(start.elapsed() >= Duration::from_secs(1));
+    assert!(text.contains("waiting up to 1s"), "{text}");
+    assert!(text.contains(&format!("pid {}", holder.id())), "{text}");
+    assert!(text.contains("full mode"), "{text}");
+    assert!(text.contains(linked.to_str().unwrap()), "{text}");
+    assert!(!text.contains("starting target 'rust-check'"), "{text}");
+    std::fs::write(linked.join("release"), "done").unwrap();
+    assert!(holder.wait().unwrap().success());
+    let after = invoke();
+    assert!(after.status.success(), "{}", stderr(&after));
+    assert!(
+        stderr(&after).contains("quick targets passed"),
+        "{}",
+        stderr(&after)
+    );
 }

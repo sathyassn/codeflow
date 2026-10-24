@@ -47,12 +47,14 @@ impl Drop for Judgment {
     fn drop(&mut self) {
         if self.owner {
             JUDGMENT.with(|memo| *memo.borrow_mut() = None);
+            super::acceptance::clear_import_cache();
         }
     }
 }
 
 /// Discard a snapshot after an object fetch may have updated shallow metadata.
 pub(super) fn refresh(repo: &Repository) {
+    super::acceptance::clear_import_cache();
     JUDGMENT.with(|memo| {
         if let Some(memo) = memo.borrow_mut().as_mut() {
             memo.remove(repo.path());

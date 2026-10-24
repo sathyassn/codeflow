@@ -228,7 +228,10 @@ fn shown(target: &str) -> String {
 ///
 /// Returns the reason when an explicit remote-tracking ref names no
 /// configured remote.
-fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
+pub(crate) fn target_fetch_remote(
+    repo: &Repository,
+    declared: &str,
+) -> Result<Option<String>, String> {
     // OS text rule (issue 79): a remote name that is not valid UTF-8 cannot be
     // a fetch remote CodeFlow names. The owner decides which remote is
     // refreshed, so an owner that cannot be read is an error and never a
