@@ -3,10 +3,12 @@
 # update` (charter §4.3): an unmodified copy is replaced on update; your edits
 # are preserved via 3-way merge, never clobbered.
 #
-# Linux and Windows gates run on pull requests into main and master, on
-# ready pull requests into integration/**, pushes below, and scheduled or
-# manual runs. Integration drafts keep the security jobs and fail both
-# verdicts because the gates did not run. Marking a pull request ready starts the gates without a push.
+# Linux and Windows gates run on ready pull requests into main, master and
+# integration/**, pushes below, and scheduled or manual runs. A draft keeps
+# the security jobs and skips the gates and both verdicts, so its verdicts
+# end neutral; merge admission is `commit standards` in codeflow-policy.yml,
+# which passes only on a successful ready run at the exact head (TSK-449).
+# Marking a pull request ready starts the gates without a push.
 #
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
@@ -20,7 +22,7 @@ on:
   # The weekly and manual runs scan the full history of the default branch
   # for secrets and audit dependencies, and run the full Linux and Windows
   # gates. The weekly run tests main's tip. Every event receives both
-  # verdicts; skipped gates on drafts or unsupported PR bases fail.
+  # verdicts; skipped gates on unsupported PR bases fail.
   schedule:
     - cron: "37 5 * * 1"
   workflow_dispatch:
@@ -105,10 +107,36 @@ jobs:
           --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
           --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
 
-  gates:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    name: codeflow gates (${{ matrix.part }})
+  # The release binary every gate part runs `codeflow test` with is built
+  # once here and shared as an artifact, never rebuilt per part (TSK-449).
+  # It keeps for a day, long enough for a re-run of a failed part.
+  gates-build:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow build
     needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: build-v1
+      - name: Build codeflow from source
+        run: cargo build --release -p codeflow-cli
+      - name: Keep the build for the gate parts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-release
+          path: target/release/codeflow
+          retention-days: 1
+          if-no-files-found: error
+
+  gates:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: codeflow gates (${{ matrix.part }})
+    needs: [reuse, gates-build]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -147,8 +175,9 @@ jobs:
       # floating stable clippy cannot break CI out from under a green local run.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Each part builds different things (release, debug), so each keeps its
-      # own cache. A cache is saved only under a new key, so the key changes
+      # Each part builds different things (debug, test and benchmark
+      # builds), so each keeps its own cache. A cache is saved only under a
+      # new key, so the key changes
       # when what a part keeps in target/ changes: v1 holds the binary-delta
       # check's build, now named by the locked dependencies (TSK-270).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -238,10 +267,15 @@ jobs:
           echo "::error::the Playwright install failed twice; see the attempts above"
           exit 1
 
-      - name: Build codeflow from source
+      - name: Fetch the codeflow build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codeflow-release
+          path: ${{ runner.temp }}/codeflow-bin
+      - name: Put the codeflow build on PATH
         run: |
-          cargo build --release -p codeflow-cli
-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+          chmod 755 "$RUNNER_TEMP/codeflow-bin/codeflow"
+          echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"
 
       # What adopters get passes their secret scan (TSK-206): fresh scaffolds
       # of every tier from the binary just built, and the adopter CI
@@ -287,7 +321,7 @@ jobs:
   # 1 to 2 minutes, and gets the Windows partitions' 30; the report job only
   # reads files.
   gates-coverage:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
     needs: reuse
     runs-on: ubuntu-24.04
@@ -370,7 +404,7 @@ jobs:
   # It runs when a shard fails, so the journeys and the partition check
   # still report; it only reads the shards' files.
   gates-coverage-report:
-    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.gates-coverage.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: codeflow gates (coverage report)
     needs: gates-coverage
     runs-on: ubuntu-24.04
@@ -422,7 +456,7 @@ jobs:
   # unsupported bases fail. It passes only when every part, coverage shard
   # and report passed, or reuse named a run and all were skipped.
   gates-verdict:
-    if: always()
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: codeflow gates
     needs: [reuse, gates, gates-coverage, gates-coverage-report]
     runs-on: ubuntu-24.04
@@ -442,7 +476,7 @@ jobs:
             exit 0
           fi
           if [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]; then
-            echo "::error::the Linux gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Linux gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
@@ -465,7 +499,7 @@ jobs:
   # partition is planned at about 5.5 minutes of tests, a fifth of the old
   # 27.2 minute peak; the release journey took 4.3 to 4.7 minutes.
   windows-build:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows test build
     needs: reuse
     runs-on: windows-latest
@@ -523,7 +557,7 @@ jobs:
           retention-days: 7
 
   windows-tests:
-    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows tests (${{ matrix.partition }} of 12)
     needs: windows-build
     runs-on: windows-latest
@@ -592,8 +626,8 @@ jobs:
           retention-days: 7
 
   windows:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    name: windows checks (fmt, doc, clippy, Node)
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: windows checks (doc, clippy, Node)
     needs: reuse
     runs-on: windows-latest
     timeout-minutes: 25
@@ -604,9 +638,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-
-      - name: cargo fmt --all --check
-        run: cargo fmt --all -- --check
 
       - name: cargo doctests
         run: cargo test --workspace --doc
@@ -642,7 +673,7 @@ jobs:
   # here from the start (TSK-265); the journeys job runs the rest. Together
   # the two parts run every journey once.
   windows-release-journey:
-    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows release journey
     needs: reuse
     runs-on: windows-latest
@@ -659,7 +690,7 @@ jobs:
   # Windows. It runs when a partition fails, so the journeys still report;
   # it only reads results.
   windows-journeys:
-    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/') && !github.event.pull_request.draft) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.windows-tests.result != 'skipped' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
@@ -701,7 +732,7 @@ jobs:
   # requests and unsupported bases fail. It passes only when all Windows
   # jobs passed, or reuse named a run and all were skipped.
   windows-verdict:
-    if: always()
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}
     name: windows
     needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
@@ -724,7 +755,7 @@ jobs:
             exit 0
           fi
           if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
-            echo "::error::the Windows gates did not run; draft integration pull requests and bases outside main, master or integration/** cannot supply a passing verdict"
+            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
             exit 1
           fi
           if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then

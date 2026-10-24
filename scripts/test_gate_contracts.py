@@ -108,7 +108,7 @@ class GateContracts(unittest.TestCase):
         for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: reuse\n', jobs[key])
+                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 
@@ -132,7 +132,7 @@ class GateContracts(unittest.TestCase):
         "            \"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\" -o \"${RUNNER_TEMP}/pull.json\"\n"
     )
 
-    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow):
+    def assert_policy_cancels_only_superseded_pull_request_runs(self, workflow, admission=False):
         self.assertEqual(workflow.count('concurrency:'), 1, 'one workflow-level group, no job-level one')
         self.assertIn(self.POLICY_CONCURRENCY, workflow)
         self.assertLess(workflow.index(self.POLICY_CONCURRENCY), workflow.index('\njobs:\n'))
@@ -140,9 +140,10 @@ class GateContracts(unittest.TestCase):
         self.assertIn('          GH_TOKEN: ${{ github.token }}\n', workflow)
         self.assertIn('          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}\n', workflow)
         self.assertNotIn('github.event.pull_request.body', workflow)
-        self.assertIn('    permissions:\n      contents: read\n      pull-requests: read\n    steps:\n', workflow)
+        actions = '      actions: read\n' if admission else ''
+        self.assertIn(f'    permissions:\n      contents: read\n      pull-requests: read\n{actions}    steps:\n', workflow)
         self.assertNotIn(': write', workflow)
-        self.assertIn('    timeout-minutes: 20\n', workflow)
+        self.assertIn('    timeout-minutes: 45\n' if admission else '    timeout-minutes: 20\n', workflow)
 
     def test_one_target_source_build_judges_policy_and_registry_and_cancels_only_pr_runs(self):
         workflow = read('.github/workflows/codeflow-policy.yml')
@@ -151,10 +152,45 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(workflow.count('cargo build --release'), 1)
         self.assertIn('codeflow ids check --base', workflow)
         self.assertIn('codeflow ci --base', workflow)
-        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow)
+        self.assert_policy_cancels_only_superseded_pull_request_runs(workflow, admission=True)
         self.assertIn('Swatinem/rust-cache@', workflow)
         self.assertNotIn('github.event.pull_request.head.sha }}\n          fetch-depth', workflow)
         self.assertFalse((ROOT / '.github/workflows/codeflow-registry.yml').exists())
+
+    def test_commit_standards_admits_only_the_exact_heads_ready_run(self):
+        # TSK-449 AC-6: merge admission is the required `commit standards`
+        # check. It reruns when a draft is made ready, reads run records with
+        # a read-only token from the trusted target checkout, and refuses a
+        # draft at once (no wait) while a ready head waits for its run.
+        workflow = read('.github/workflows/codeflow-policy.yml')
+        self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
+        step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
+        self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
+        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA"', step)
+        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
+        self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
+        wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
+        self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
+        self.assertNotIn('pull_request.head.ref', step)
+
+    def test_the_release_binary_is_built_once_and_windows_skips_fmt(self):
+        # TSK-449 AC-5: one release build per workflow, shared by every gate
+        # part; Windows runs clippy, doctests, rustdoc and the partitions,
+        # and no fmt.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        builds = [name for name, text in jobs.items() if re.search(r'^\s*run: cargo build --release', text, re.M)]
+        self.assertEqual(builds, ['gates-build'])
+        self.assertIn('name: codeflow-release', jobs['gates'])
+        self.assertNotIn('cargo build', jobs['gates'])
+        windows = [name for name in jobs if name.startswith('windows')]
+        runs = '\n'.join(re.findall(r'^\s*run: (.+)$', ''.join(jobs[n] for n in windows), re.M))
+        self.assertNotIn('cargo fmt', runs)
+        for command in ('cargo clippy --workspace --all-targets -- -D warnings', 'cargo test --workspace --doc',
+                        'cargo nextest run --archive-file'):
+            self.assertIn(command, runs)
 
     def test_the_adopter_policy_template_cancels_only_pr_runs_the_same_way(self):
         self.assert_policy_cancels_only_superseded_pull_request_runs(read('assets/base/ci/codeflow-policy.yml'))

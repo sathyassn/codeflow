@@ -63,7 +63,7 @@ def gate_event_condition(workflow: str) -> str:
 
 class GateParityControls(unittest.TestCase):
     def assert_parity(self, cfg: dict) -> None:
-        self.assertEqual(parity.local_rust_commands(cfg), CI)
+        self.assertEqual(parity.windows_owed(parity.local_rust_commands(cfg)), CI)
 
     def assert_drift(self, cfg: dict) -> list[str]:
         notes: list[str] = []
@@ -383,12 +383,20 @@ ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file t
 
 class WindowsRefereeControls(unittest.TestCase):
     def test_every_raw_rust_floor_is_required(self):
-        for command in ["cargo fmt --all -- --check", ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
+        for command in [ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
                         "cargo clippy --workspace --all-targets -- -D warnings",
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
                 self.assertIn("run: " + command, WORKFLOW)
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
+
+    def test_windows_runs_no_fmt_and_the_parity_needs_none(self):
+        # TSK-449 AC-5: formatting is platform independent, so only the Linux
+        # rust-format target runs it; Windows keeps the other raw floors.
+        windows = parity.workflow_jobs(WORKFLOW)["windows"]
+        self.assertNotIn("cargo fmt", windows)
+        self.assertIn("cargo fmt --all -- --check", parity.local_rust_commands(CONFIG))
+        self.assertEqual(parity.rust_parity(), 0)
 
 
 class WindowsPartitionControls(unittest.TestCase):
@@ -472,7 +480,8 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always()\n"
+    DRAFT_NEUTRAL = "${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
+    VERDICT_IF = (f"    if: {DRAFT_NEUTRAL}\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
@@ -494,7 +503,7 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                self.VERDICT_IF, self.VERDICT_IF.replace("if: always()", "if: always() && false")),
+                self.VERDICT_IF, self.VERDICT_IF.replace("always() && ", "always() && false && ")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
@@ -677,18 +686,31 @@ class VerdictOutcomeControls(unittest.TestCase):
 class HostedEventParityControls(unittest.TestCase):
     """Ready integration pull requests must keep both verdict contracts intact."""
 
-    READY = ("github.event_name == 'pull_request' && "
+    READY = ("github.event_name == 'pull_request' && !github.event.pull_request.draft && "
              "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
-             "startsWith(github.event.pull_request.base.ref, 'integration/') && "
-             "!github.event.pull_request.draft) || github.event_name == 'push' || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || "
              "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
 
-    def test_both_verdicts_run_for_every_event(self):
+    def test_both_verdicts_run_for_every_event_but_a_draft(self):
+        # TSK-449 AC-6: a draft's verdicts are skipped (neutral); every
+        # other event gets a verdict, and a weaker or missing guard is drift.
         for name in ("gates-verdict", "windows-verdict"):
             job = parity.workflow_jobs(WORKFLOW)[name]
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
-            self.assertEqual(condition,
-                             "always()")
+            self.assertEqual(condition, GatePartControls.DRAFT_NEUTRAL)
+        for old, new in (("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: always()\n    name: windows\n"),
+                         ("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n")):
+            self.assertIn(old, WORKFLOW)
+            problems = parity.windows_verdict_problems(WORKFLOW.replace(old, new))
+            self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
+
+    def test_a_draft_skips_every_gate_job(self):
+        # Every gate job's pull request clause requires a non-draft, whatever
+        # the base, so a draft runs no gate and spends no runner on one.
+        self.assertTrue(self.READY.startswith(
+            "github.event_name == 'pull_request' && !github.event.pull_request.draft && ("))
 
     def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
         trigger = WORKFLOW.split("permissions:", 1)[0]
@@ -719,7 +741,7 @@ class HostedEventParityControls(unittest.TestCase):
     def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
         workflow = self.ready_workflow()
         job = parity.workflow_jobs(workflow)["windows-verdict"]
-        narrowed = job.replace("    if: always()", "    if: always() && github.event_name == 'push'")
+        narrowed = job.replace("    if: ${{ always() && ", "    if: ${{ always() && github.event_name == 'push' && ")
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
