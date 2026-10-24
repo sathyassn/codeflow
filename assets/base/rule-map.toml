@@ -406,7 +406,7 @@ key = "review"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "give a review"
-action = "review at four stages (plan settlement, PR ready, hand-resolved landing hunks, epic close); verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block"
+action = "review at four stages (plan settlement, PR ready, a landing candidate with a hand-resolved hunk, epic close); verdict: criteria with file:line, gates, findings by consequence (effort never lowers severity), nits with a disposition, what was not verified; only material findings block"
 see = [
   { target = ".codeflow/rules/workflow-discipline.md", section = "Review verdicts", note = "the stages, the sibling sweep and the security lens" },
   { target = "cf-reviewer", must_open = true, reason = "the verdict format" },

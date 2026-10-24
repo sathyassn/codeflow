@@ -60,10 +60,10 @@ records the required interactive seat unavailable and the reduced assurance.
       siblings first. Then get the independent review of the whole unit at
       this head that `.codeflow/rules/workflow-discipline.md` "Review
       verdicts" defines, by the other lineage, with `cf-reviewer` only as the
-      fallback it names. A `cf-reviewer` run goes in the foreground
-      (`run_in_background: false` when offered) and its actual verdict is
-      collected before the primary turn ends; never defer it to a later
-      callback or bypass review. Claude Code
+      fallback it names. For lifecycle-tracked Claude runs, invoke
+      `cf-reviewer` in the foreground (`run_in_background: false` when
+      offered) and collect its actual verdict before the primary turn ends;
+      never defer it to a later callback or bypass review. Claude Code
       unattended/batch runs use `.claude/workflows/pipeline.workflow.js` for
       the same build/review/verify stages.
    c. On `changes_requested`, act on the findings as

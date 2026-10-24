@@ -95,7 +95,7 @@
     ".agents/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ffaa775d1a07b9030c991342f116951bba6dfdc36f77f2ee42c7eef4ec6e13e",
+      "sha256": "4083058790d1552cdbc7ec47f80d528468335ef938662af85d9f5e2581c62de9",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/SKILL.md": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "9021f7681572f9dc2e245fa6efbc3fde414223aaefed54057cfa99c57dabd576",
+      "sha256": "f19d90c6acca1134f200b675855f47e570698b1481d451c44b34056d0da299f5",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -935,7 +935,7 @@
     ".claude/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ffaa775d1a07b9030c991342f116951bba6dfdc36f77f2ee42c7eef4ec6e13e",
+      "sha256": "4083058790d1552cdbc7ec47f80d528468335ef938662af85d9f5e2581c62de9",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/SKILL.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "9021f7681572f9dc2e245fa6efbc3fde414223aaefed54057cfa99c57dabd576",
+      "sha256": "f19d90c6acca1134f200b675855f47e570698b1481d451c44b34056d0da299f5",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "c61bb3e603b3cb34e12e3c693b3c38ac67f982f89d956111289be601f41a39be",
+      "sha256": "de39b8e23f7197049f5b13d70c597865c964d8e230028c8e01068065417457fd",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {
@@ -1829,7 +1829,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "16a8ba0ac1ea0c432d42ce331b634b9e06196fb3f6a58adc812dd9bde5e9949b",
+      "sha256": "11cc30cd60c6ceae77ab6a6cbf60b0ac51dbb0088246e7a5da70ab793378d1a5",
       "exec": false
     },
     "CLAUDE.md": {

@@ -285,8 +285,9 @@ Review runs at four stages, and only these:
 
 - plan settlement, for an epic's breakdown only;
 - PR ready: a holistic pass over the whole unit;
-- the landing candidate: only the hunks resolved by hand, since the full
-  gate covers the clean merge;
+- the landing candidate, only when a product hunk was resolved by hand:
+  that task's whole unit at its new head; a clean merge carries the review,
+  as the batch landing rules say;
 - epic close: the epic's criteria and journeys on the final candidate.
 
 Between stages the finder confirms each material fix on the delta plus the
