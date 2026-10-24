@@ -266,6 +266,57 @@ fn ci_remerge_refuses_introductions_and_passes_inherited_names() {
     println!("CI passed inherited blocked name and refused merge introduction");
 }
 
+/// Review probe H: an exception landed only on the declared integration
+/// line passes pre-commit as it passes `codeflow ci` against that line.
+#[test]
+fn hook_and_ci_agree_on_an_exception_landed_only_on_the_line() {
+    let f = Adopter::new(&json!({}));
+    f.stage(
+        "project-management/tasks/TSK-007.md",
+        0o100_644,
+        b"---\nid: TSK-007\nintegration_target: integration/x\n---\n",
+    );
+    let main = f.commit(&[f.base]);
+    let line_policy = json!({"git":{"blocked_names":[{"pattern":"*.pem",
+        "except_under":["fixtures"],"reason":"public certificates"}]}})
+    .to_string();
+    f.stage(".codeflow/policy.json", 0o100_644, line_policy.as_bytes());
+    let line = f.commit(&[main]);
+    f.repo
+        .remote("origin", "https://example.invalid/repo.git")
+        .unwrap();
+    for (name, id) in [("main", main), ("integration/x", line)] {
+        f.repo
+            .reference(&format!("refs/remotes/origin/{name}"), id, true, "fixture")
+            .unwrap();
+    }
+    f.repo
+        .reference("refs/heads/task/TSK-007-certs", line, true, "fixture")
+        .unwrap();
+    f.repo.set_head("refs/heads/task/TSK-007-certs").unwrap();
+    std::fs::write(f.dir.path().join(".codeflow/policy.json"), &line_policy).unwrap();
+    f.stage("fixtures/cert.pem", 0o100_644, b"public");
+    verdict(&f.hook(), false);
+    let head = f.commit(&[line]);
+    let base = line.to_string();
+    let ci = f
+        .command(env!("CARGO_BIN_EXE_codeflow"))
+        .args([
+            "ci",
+            "--base",
+            &base,
+            "--head",
+            &head.to_string(),
+            "--branch",
+            "task/TSK-007-certs",
+        ])
+        .output()
+        .unwrap();
+    assert!(!said(&ci).contains("git.path_policy"), "{}", said(&ci));
+    f.stage("other/cert.pem", 0o100_644, b"public");
+    verdict(&f.hook(), true);
+}
+
 #[test]
 fn branch_only_exceptions_and_disabled_level_cannot_relax_target_policy() {
     let f = Adopter::new(&json!({"protected_paths":[{"prefix":"private", "allow":[]}]}));

@@ -181,6 +181,9 @@ fn symlinks_are_judged_by_objects_without_following_them() {
         ("ordinary", "missing-public-file", false),
         ("ordinary", "x:public", false),
         ("links/ordinary", "public", false),
+        ("ordinary", "./docs", false),
+        ("ordinary", "docs/", false),
+        ("ordinary", "./private/data/", true),
     ] {
         let f = Fixture::new();
         let base = f.commit(&[]);
@@ -368,6 +371,86 @@ fn declared_integration_target_contributes_denials_and_intersects_waivers() {
         assert_eq!(!report.violations.is_empty(), blocked, "{path}: {report:?}");
         f.delete(path);
     }
+}
+
+/// A remote holding `main` and `integration/paths` at the given policies,
+/// with the task branch on the line and the line's policy checked out.
+fn line_fixture(main: &str, line: &str) -> Fixture {
+    let f = Fixture::new();
+    f.stage(".codeflow/policy.json", 0o100_644, main.as_bytes());
+    f.stage(
+        "project-management/tasks/TSK-007.md",
+        0o100_644,
+        b"---\nid: TSK-007\nintegration_target: integration/paths\n---\n",
+    );
+    let main_id = f.commit(&[]);
+    f.stage(".codeflow/policy.json", 0o100_644, line.as_bytes());
+    let line_id = f.commit(&[main_id]);
+    f.repo
+        .remote("origin", "https://example.invalid/repo.git")
+        .unwrap();
+    for (name, id) in [("main", main_id), ("integration/paths", line_id)] {
+        f.repo
+            .reference(&format!("refs/remotes/origin/{name}"), id, true, "fixture")
+            .unwrap();
+    }
+    f.repo
+        .reference("refs/heads/task/TSK-007-paths", line_id, true, "fixture")
+        .unwrap();
+    f.repo.set_head("refs/heads/task/TSK-007-paths").unwrap();
+    std::fs::create_dir_all(f.dir.path().join(".codeflow")).unwrap();
+    std::fs::write(f.dir.path().join(".codeflow/policy.json"), line).unwrap();
+    f
+}
+
+#[test]
+fn line_exceptions_stand_and_a_line_cannot_remove_a_main_denial() {
+    let f = line_fixture(
+        r#"{"git":{"blocked_names":["main-only"],"protected_paths":[{"prefix":"vault","allow":[]}]}}"#,
+        r#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"}],
+            "protected_paths":[{"prefix":"private","allow":[{"path":"private/examples","reason":"public"}]}]}}"#,
+    );
+    let local = codeflow_core::hooks::Policy::load(f.dir.path())
+        .unwrap()
+        .git;
+    let p = codeflow_core::hooks::landed_policy::staged_paths(f.dir.path(), &local).unwrap();
+    for (path, blocked) in [
+        ("fixtures/cert.pem", false),
+        ("private/examples/x", false),
+        ("other/cert.pem", true),
+        ("private/x", true),
+        ("main-only", true),
+        ("vault/x", true),
+    ] {
+        f.stage(path, 0o100_644, b"public");
+        let report = path_policy::staged(&f.repo, &p).unwrap();
+        assert_eq!(!report.violations.is_empty(), blocked, "{path}: {report:?}");
+        f.delete(path);
+    }
+}
+
+#[test]
+fn identical_policies_with_explicit_rules_report_no_local_difference() {
+    let policy = r#"{"git":{"blocked_names":[{"pattern":"*.pem","except_under":["fixtures"],"reason":"public"},"extra"],
+        "protected_paths":[{"prefix":"private","allow":[{"path":"private/examples","reason":"public"}]}]}}"#;
+    let f = line_fixture(policy, policy);
+    let landed = codeflow_core::hooks::landed_policy::load(f.dir.path()).unwrap();
+    assert!(
+        landed.source.contains("integration/paths"),
+        "{}",
+        landed.source
+    );
+    assert!(!landed.local_differs);
+    std::fs::write(
+        f.dir.path().join(".codeflow/policy.json"),
+        r#"{"git":{"blocked_names":["extra"]}}"#,
+    )
+    .unwrap();
+    assert!(
+        codeflow_core::hooks::landed_policy::load(f.dir.path())
+            .unwrap()
+            .local_differs
+    );
 }
 
 #[test]

@@ -299,7 +299,10 @@ fn check_entry(
         let blob = repo
             .find_blob(id)
             .map_err(|e| format!("cannot read symlink {shown}: {e}"))?;
-        let target = normalize(blob.content());
+        // "./docs" and "docs/" name the same path as "docs".
+        let content = blob.content();
+        let content = content.strip_prefix(b"./").unwrap_or(content);
+        let target = normalize(content.strip_suffix(b"/").unwrap_or(content));
         match target {
             Ok(target)
                 if !(target.starts_with('/') || target.as_bytes().get(1..3) == Some(b":/")) =>

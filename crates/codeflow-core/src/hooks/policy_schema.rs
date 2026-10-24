@@ -713,7 +713,7 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "git.protected_paths", kind: KeyKind::PathRules,
         valid: "{prefix, allow: [{path, reason}]} entries",
         purpose: "Refuse every change under root-anchored component prefixes.",
-        notes: "Denials union and exceptions intersect across authorities; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
+        notes: "Denials union across authorities; exceptions come from a declared integration line, otherwise they intersect; branch-only exceptions discharge nothing. Gate inputs and every .gitignore are exempt. Symlinks are judged without following them. The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.secret_scan",

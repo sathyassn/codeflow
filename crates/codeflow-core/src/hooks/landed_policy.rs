@@ -111,12 +111,20 @@ fn load_raw(root: &Path) -> Result<LandedPolicy, String> {
         })
         .collect::<Vec<_>>()
         .join(" + ");
+    // The first declared line supplies path exceptions, as `codeflow ci`
+    // reads them from the target; the default branch adds only denials.
+    let mut beneath = true;
     for target in targets {
         let target_ref = format!("refs/remotes/{remote}/{target}");
         if !defaults.contains(&target_ref) {
             let (line, line_project) = at(&repo, &target_ref)
                 .map_err(|error| format!("{error}; run git fetch {remote}"))?;
-            policy = stricter(policy, &line)?;
+            policy = if beneath {
+                over_target(policy, &line)?
+            } else {
+                stricter(policy, &line)?
+            };
+            beneath = false;
             project = line_project.or(project);
             let _ = write!(
                 sources,
@@ -190,8 +198,7 @@ fn finish(
     project: Option<toml::Value>,
     source: String,
 ) -> Result<LandedPolicy, String> {
-    let local_differs = serde_json::to_value(Policy::load(root)?).map_err(|e| e.to_string())?
-        != serde_json::to_value(&policy).map_err(|e| e.to_string())?
+    let local_differs = !same_inputs(&Policy::load(root)?, &policy)?
         || super::policy::read_project_toml(root)? != project;
     Ok(LandedPolicy {
         policy,
@@ -200,6 +207,34 @@ fn finish(
         local_differs,
         remote_head_advice: None,
     })
+}
+
+/// Whether two policies hold the same settings. Path keys compare by their
+/// expanded rules, so shipped defaults written back by composition, rule
+/// order, repeats and allowance reasons do not count as a difference.
+fn same_inputs(local: &Policy, authority: &Policy) -> Result<bool, String> {
+    type Rules = std::collections::BTreeSet<(String, std::collections::BTreeSet<String>)>;
+    fn canonical(git: &super::policy::GitPolicy) -> Result<(PolicyLevel, Rules, Rules), String> {
+        let paths = super::path_policy::PathPolicy::from_git(git)?;
+        let names = paths
+            .names
+            .into_iter()
+            .map(|r| (r.pattern, r.except_under.into_iter().collect()))
+            .collect();
+        let protected = paths
+            .protected
+            .into_iter()
+            .map(|r| (r.prefix, r.allow.into_iter().map(|a| a.path).collect()))
+            .collect();
+        Ok((paths.level, names, protected))
+    }
+    let plain = |policy: &Policy| {
+        let mut policy = policy.clone();
+        policy.git.blocked_names.clear();
+        policy.git.protected_paths.clear();
+        serde_json::to_value(policy).map_err(|e| e.to_string())
+    };
+    Ok(plain(local)? == plain(authority)? && canonical(&local.git)? == canonical(&authority.git)?)
 }
 
 /// The `.codeflow/policy.json` text recorded at `rev`, read as git data
@@ -372,6 +407,25 @@ fn stricter(base: Policy, line: &Policy) -> Result<Policy, String> {
         &super::path_policy::PathPolicy::from_git(&line.git)?,
         PathPolicySource::Landed,
     );
+    stricter_levels(base, line, paths)
+}
+
+/// The default-branch policy beneath a declared integration line: path
+/// exceptions come from the line, denials from both.
+fn over_target(base: Policy, line: &Policy) -> Result<Policy, String> {
+    let paths = compose_paths(
+        super::path_policy::PathPolicy::from_git(&line.git)?,
+        &super::path_policy::PathPolicy::from_git(&base.git)?,
+        PathPolicySource::DefaultBranch,
+    );
+    stricter_levels(base, line, paths)
+}
+
+fn stricter_levels(
+    base: Policy,
+    line: &Policy,
+    paths: super::path_policy::PathPolicy,
+) -> Result<Policy, String> {
     let mut base = serde_json::to_value(base).map_err(|e| e.to_string())?;
     let line = serde_json::to_value(line).map_err(|e| e.to_string())?;
     for key in policy_schema::schema().iter().filter(|key| match key.kind {
@@ -463,17 +517,23 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
     ))
 }
 
-/// Whether the second policy is another landed authority or an untrusted
-/// working copy. Working copies may add denials but cannot grant exceptions.
+/// Whether the second policy is another landed authority, an untrusted
+/// working copy, or the default branch beneath a declared integration line.
+/// Working copies may add denials but cannot grant exceptions. The default
+/// branch adds the denials the line lacks and leaves the line's exceptions
+/// as they are, so pre-commit accepts what `codeflow ci` against the line
+/// accepts unless the default branch holds a denial the line removed.
 #[derive(Clone, Copy, Debug)]
 pub enum PathPolicySource {
     Landed,
     WorkingCopy,
+    DefaultBranch,
 }
 
 /// Union denials and intersect the areas their exceptions cover. A missing
 /// declaration never removes an existing denial. Defaults are expanded before
-/// composition; only landed policy can supply exceptions to a new rule.
+/// composition; only landed policy can supply exceptions to a new rule, and
+/// [`PathPolicySource::DefaultBranch`] keeps the base's exceptions unchanged.
 #[must_use]
 pub fn compose_paths(
     mut base: super::path_policy::PathPolicy,
@@ -492,6 +552,9 @@ pub fn compose_paths(
             .filter(|r| r.pattern == incoming.pattern)
         {
             found = true;
+            if matches!(source, PathPolicySource::DefaultBranch) {
+                continue;
+            }
             rule.except_under = rule
                 .except_under
                 .iter()
@@ -510,7 +573,7 @@ pub fn compose_paths(
         }
         if !found {
             let mut rule = incoming.clone();
-            if matches!(source, PathPolicySource::WorkingCopy) {
+            if !matches!(source, PathPolicySource::Landed) {
                 rule.except_under.clear();
             }
             base.names.push(rule);
@@ -524,6 +587,9 @@ pub fn compose_paths(
             .filter(|r| r.prefix == incoming.prefix)
         {
             found = true;
+            if matches!(source, PathPolicySource::DefaultBranch) {
+                continue;
+            }
             rule.allow = rule
                 .allow
                 .iter()
@@ -546,7 +612,7 @@ pub fn compose_paths(
         }
         if !found {
             let mut rule = incoming.clone();
-            if matches!(source, PathPolicySource::WorkingCopy) {
+            if !matches!(source, PathPolicySource::Landed) {
                 rule.allow.clear();
             }
             base.protected.push(rule);
