@@ -20,6 +20,7 @@ pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;
 pub mod line_adoption;
+pub mod line_drift;
 pub mod readiness;
 pub mod record_template;
 pub mod record_text;

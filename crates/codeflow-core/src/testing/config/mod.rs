@@ -45,6 +45,22 @@ pub struct TestConfig {
     pub targets: Vec<TargetConfig>,
 }
 
+/// Default class for undeclared targets in a configured quick mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickTargetClass {
+    #[default]
+    Light,
+    Heavy,
+}
+
+impl QuickTargetClass {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // Serde skip_serializing_if borrows the field.
+    fn is_light(&self) -> bool {
+        *self == Self::Light
+    }
+}
+
 /// Execution settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionConfig {
@@ -55,6 +71,18 @@ pub struct ExecutionConfig {
     /// Maximum number of concurrently running targets. Omitted uses CPU count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<usize>,
+
+    /// Default for undeclared targets in a configured quick mode; fallback stays heavy.
+    #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
+    pub quick_default_class: QuickTargetClass,
+
+    /// Maximum wait for heavy quick targets to acquire the shared gate lock.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub heavy_wait_seconds: u64,
+
+    /// Total workers shared by concurrent heavy targets. Omitted leaves tools unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_budget: Option<usize>,
 
     /// Changes to these shared inputs select every target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -154,6 +182,16 @@ pub struct TargetConfig {
     /// Audited dependencies used to compare an execution with candidate evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidenceConfig>,
+
+    /// Heavy work requires admission in quick mode. False explicitly declares light work.
+    /// Omitted is light in a real quick mode, heavy in quick's essential fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy: Option<bool>,
+
+    /// Workers this heavy target needs from `execution.worker_budget` before it starts.
+    /// Omitted targets divide the currently available workers among ready heavy targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<usize>,
 
     /// Run with no other target alongside it.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -469,6 +507,11 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires a reference
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 fn default_true() -> bool {
     true
 }
@@ -496,6 +539,8 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "input_class",
         "evidence",
         "exclusive",
+        "heavy",
+        "workers",
     ];
     if let Some(targets) = raw.get("targets").and_then(|targets| targets.as_array()) {
         for (index, target) in targets.iter().enumerate() {
@@ -554,6 +599,12 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
         validate_globs(&rule.include)?;
         validate_globs(&rule.exclude)?;
     }
+    if config.execution.worker_budget == Some(0) {
+        return Err(TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: "worker_budget must be positive".into(),
+        });
+    }
     if config.execution.max_parallel == Some(0) {
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
@@ -563,6 +614,20 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
         validate_globs(&target.narrow)?;
+        if let Some(workers) = target.workers {
+            if workers == 0
+                || target.heavy != Some(true)
+                || config
+                    .execution
+                    .worker_budget
+                    .is_none_or(|budget| workers > budget)
+            {
+                return Err(TestingError::ConfigInvalid {
+                    path: path.to_path_buf(),
+                    message: format!("target '{}': workers requires heavy=true and must be within the positive execution.worker_budget", target.name),
+                });
+            }
+        }
         if !seen_names.insert(&target.name) {
             return Err(TestingError::DuplicateTarget(target.name.clone()));
         }
@@ -1041,6 +1106,8 @@ mod tests {
                 input_class: None,
                 evidence: None,
                 exclusive: false,
+                heavy: None,
+                workers: None,
                 runner: RunnerType::Custom,
                 modes: BTreeMap::from([(
                     "full".to_string(),

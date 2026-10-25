@@ -28,7 +28,8 @@ on:
   push:
     branches: [main, master]
   # The weekly and manual runs scan the full history of the default branch
-  # for secrets; a pull request or push scans only its own commits.
+  # for secrets and run the full gate; a pull request or push scans only its
+  # own commits.
   schedule:
     - cron: "37 5 * * 1"
   workflow_dispatch:
@@ -41,9 +42,11 @@ jobs:
   # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
   # under these jobs without a commit here. Move the label deliberately, after
   # a green run on the new image. Actions are on the node24 runtime.
+  # The gate runs essential on pull requests and full on pushes to the
+  # protected branch, the weekly schedule and manual runs (TSK-449). A test
+  # config with no essential target runs full on pull requests too.
   gates:
     name: codeflow gates
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -165,8 +168,14 @@ jobs:
       # exports reach the gate and a failing command fails the job. The
       # project owns the file; `codeflow update` never writes it.
       - name: codeflow test
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -eu
+          codeflow_mode=full
+          if [ "${EVENT:-}" = pull_request ] && python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); sys.exit(0 if any("essential" in (t.get("modes") or {}) for t in c.get("targets", [])) else 1)' 2>/dev/null; then
+            codeflow_mode=essential
+          fi
           # The hook runs with the gate's authority, like this file, so it is
           # reviewed as this file is. These lines keep it from skipping the gate
           # by accident: the shell variables naming the binary and folder are
@@ -174,7 +183,7 @@ jobs:
           # returns, and a run it ends (an `exit`) fails.
           codeflow_bin=$(command -v codeflow)
           codeflow_root=$(pwd)
-          readonly codeflow_bin codeflow_root
+          readonly codeflow_bin codeflow_root codeflow_mode
           codeflow_gated=
           trap '[ -n "$codeflow_gated" ] || { echo "::error::the run ended before codeflow test ran; a project setup hook must not exit"; exit 1; }' EXIT
           if [ -f .codeflow/ci-setup.sh ]; then
@@ -184,7 +193,7 @@ jobs:
             cd "$codeflow_root"
           fi
           codeflow_gated=1
-          "$codeflow_bin" test --strict
+          "$codeflow_bin" test --strict --mode "$codeflow_mode"
 
       - name: codeflow validate --docs
         run: codeflow validate --docs

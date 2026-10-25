@@ -115,6 +115,8 @@ fn build_rust_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Cargo,
         modes: BTreeMap::from([
             (
@@ -154,6 +156,8 @@ fn build_vitest_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Vitest,
         modes: BTreeMap::from([
             (
@@ -193,6 +197,8 @@ fn build_jest_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Jest,
         modes: BTreeMap::from([
             (
@@ -232,6 +238,8 @@ fn build_go_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Go,
         modes: BTreeMap::from([
             (
@@ -271,6 +279,8 @@ fn build_python_target() -> TargetConfig {
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner: RunnerType::Pytest,
         modes: BTreeMap::from([
             (

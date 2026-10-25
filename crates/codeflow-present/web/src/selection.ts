@@ -8,7 +8,7 @@ const REGION_SCALE = 1_000_000;
 const ANNOTATABLE = [
   "h1", "h2", "h3", "p", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td",
   "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside", ".cf-line",
-  ".cf-field",
+  ".cf-field", "[role=tab]",
 ].join(",");
 
 /**
@@ -101,6 +101,9 @@ function resolveFrom(block: HTMLElement, element: Element): Resolution {
   if (entity && block.contains(entity) && entity !== block) return entityResolution(block, entity);
   const shape = element.closest(TARGETS);
   if (!shape || shape === block || !block.contains(shape)) return blockResolution(block);
+  if (isSvgRoot(shape)) {
+    return { block, element: shape, via: "shape", label: collapseLabel(labelTextOf(shape)) || blockLabel(block) };
+  }
   const own = ownLabel(block, shape);
   if (own) return { block, element: shape, via: "shape", label: own };
   // A shape inside a labelled group resolves to the nearest labelled group.
@@ -250,9 +253,8 @@ export function segmentDistance(point: Point, from: Point, to: Point): number {
   return Math.hypot(point.x - (from.x + t * dx), point.y - (from.y + t * dy));
 }
 
-// Figure and table framing (SPC-014 B5): the title line, legend, caption and
-// Details sit outside a block's review text; they take element notes
-// labelled by their text, never text selections.
+// Figure and table framing (SPC-014 B5) takes element notes. The AC-5
+// amendment gives drawn figure legend words their own text roots below.
 const FRAME = ".cf-frame-title, .cf-frame-caption, .cf-frame-details, .cf-legend, .cf-fig-title, .cf-fig-caption, .cf-fig-details";
 /** Text the page draws that is never review text: a diff line's label and marker. */
 export const REVIEW_SKIP = "[data-cf-review-skip]";
@@ -266,7 +268,9 @@ const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcapti
  * non-prose" rule made stage labels select with no Text chip.
  */
 export function isTextualTarget(target: Element): boolean {
+  if (target.closest("[data-cf-review-text-base]")) return true;
   if (target.closest(FRAME)) return false;
+  if (target.closest("[role=tab]")) return true;
   const tag = target.tagName.toUpperCase();
   if (tag === "TEXT" || tag === "TSPAN") return true;
   if ((target.namespaceURI ?? "").includes("svg")) return false;
@@ -303,7 +307,8 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   const startElement = closestElement(range.startContainer, "[data-cf-review-text-root]");
   const endElement = closestElement(range.endContainer, "[data-cf-review-text-root]");
   if (!startElement || startElement !== endElement || !documentRoot.contains(startElement)) return null;
-  if (closestElement(range.startContainer, FRAME) || closestElement(range.endContainer, FRAME)) return null;
+  if (!startElement.hasAttribute("data-cf-review-text-base")
+    && (closestElement(range.startContainer, FRAME) || closestElement(range.endContainer, FRAME))) return null;
   const block = startElement.closest<HTMLElement>("[data-cf-block-id]");
   const blockId = block?.dataset.cfBlockId;
   if (!block || !blockId) return null;
@@ -314,8 +319,9 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
   // Rendered formatting and canonical text can differ in whitespace (and HTML
   // blocks may have a canonical title prefix), but never guess through a
   // substantive mismatch or an ambiguous mapping.
-  const canonical =
-    startElement.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
+  const canonicalRoot = startElement.hasAttribute("data-cf-review-text-base")
+    ? startElement.parentElement?.closest("[data-cf-review-text-root]") : startElement;
+  const canonical = canonicalRoot?.getAttribute("data-cf-canonical-text") ?? startElement.textContent ?? "";
   const offsets = canonicalRangeOffsets(startElement, range, canonical);
   if (!offsets) return null;
 
@@ -323,9 +329,49 @@ export function captureSelection(documentRoot: HTMLElement): CapturedTarget | nu
     blockId,
     blockLabel: block.dataset.cfBlockLabel ?? blockId,
     selector: selectorFromOffsets(canonical, offsets.start, offsets.end),
-    summary: `Text: ${truncate(exact.trim(), 96)}`,
-    excerptText: exact.trim(),
+    summary: `Text: ${truncate(selectionExcerpt(canonical, offsets.start, offsets.end), 96)}`,
+    excerptText: selectionExcerpt(canonical, offsets.start, offsets.end),
   };
+}
+
+/** Preserve the exact anchor; disclose a word cut in its displayed excerpt. */
+function selectionExcerpt(text: string, start: number, end: number): string {
+  const word = (char: string) => /[\p{L}\p{N}\p{M}_]/u.test(char);
+  return `${word(text.charAt(start - 1)) && word(text.charAt(start)) ? "…" : ""}${text.slice(start, end).trim()}${word(text.charAt(end - 1)) && word(text.charAt(end)) ? "…" : ""}`;
+}
+
+/** Resolve the same canonical offsets used during capture, including each SVG occurrence. */
+export function resolveTextRanges(documentRoot: HTMLElement, blockId: string, selector: TextSelector): Range[] {
+  const block = documentRoot.querySelector(`[data-cf-block-id="${CSS.escape(blockId)}"]`);
+  if (!block) return [];
+  const ranges: Range[] = [];
+  for (const root of block.querySelectorAll<HTMLElement>("[data-cf-review-text-root]")) {
+    const canonicalRoot = root.hasAttribute("data-cf-review-text-base") ? root.parentElement?.closest("[data-cf-review-text-root]") : root;
+    const canonical = canonicalRoot?.getAttribute("data-cf-canonical-text") ?? root.textContent ?? "";
+    if (canonical.slice(selector.start_utf16, selector.end_utf16) !== selector.exact) continue;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (node.parentElement?.closest("[data-cf-review-text-root]") !== root || node.parentElement?.closest("script,style,svg title,svg desc")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const offsets = canonicalRangeOffsets(root, range, canonical);
+      if (!offsets || offsets.end <= selector.start_utf16 || offsets.start >= selector.end_utf16) continue;
+      let position = offsets.start;
+      let first = -1;
+      let last = -1;
+      for (let i = 0; i < node.length; i++) {
+        if (/\s/u.test(node.data.charAt(i))) continue;
+        while (/\s/u.test(canonical.charAt(position)) && position < canonical.length) position++;
+        if (position >= selector.start_utf16 && position < selector.end_utf16) { if (first < 0) first = i; last = i + 1; }
+        position++;
+      }
+      if (first < 0) continue;
+      range.setStart(node, first); range.setEnd(node, last);
+      if ([...range.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) ranges.push(range);
+    }
+  }
+  return ranges;
 }
 
 function canonicalRangeOffsets(root: HTMLElement, range: Range, canonical: string): { start: number; end: number } | null {
@@ -333,8 +379,17 @@ function canonicalRangeOffsets(root: HTMLElement, range: Range, canonical: strin
   const rendered = compact(reviewText(root));
   const normalized = compact(canonical);
   if (!rendered) return null;
-  const base = normalized.indexOf(rendered);
-  if (base < 0 || normalized.indexOf(rendered, base + 1) >= 0) return null;
+  const declaredBase = root.getAttribute("data-cf-review-text-base");
+  let base: number;
+  if (declaredBase !== null) {
+    const offset = Number(declaredBase);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > canonical.length) return null;
+    base = compact(canonical.slice(0, offset)).length;
+    if (normalized.slice(base, base + rendered.length) !== rendered) return null;
+  } else {
+    base = normalized.indexOf(rendered);
+    if (base < 0 || normalized.indexOf(rendered, base + 1) >= 0) return null;
+  }
 
   const prefix = range.cloneRange();
   prefix.selectNodeContents(root);

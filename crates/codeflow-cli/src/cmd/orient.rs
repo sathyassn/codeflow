@@ -1,4 +1,4 @@
-//! `codeflow orient` — print the session-start digest directly
+//! `codeflow orient` — print the session-start digest and line drift directly
 //! (charter §3.1/§3.4; the same text the `session-orient` hook injects).
 
 use codeflow_core::hooks::orient;

@@ -54,7 +54,9 @@
       "scripts/test_coverage_merge.py",
       "scripts/fixtures/coverage-merge/**",
       "scripts/test_gate_portal_windows.py"
-    ]
+    ],
+    "worker_budget": 9,
+    "heavy_wait_seconds": 0
   },
   "defaults": {
     "coverage": []
@@ -96,7 +98,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 1200
+      "timeout_seconds": 1200,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "codeflow-bin",
@@ -111,13 +115,15 @@
         }
       },
       "requires": [
-        "present-web-build"
+        "rust-build"
       ],
       "outputs": [
         "target/debug/codeflow"
       ],
       "exclusive": false,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-format",
@@ -153,7 +159,9 @@
         "format": "junit",
         "path": "target/nextest/essential/junit.xml"
       },
-      "shell": "sh"
+      "shell": "sh",
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "repository-update-noop",
@@ -164,7 +172,9 @@
           "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "contract-scans",
@@ -175,7 +185,9 @@
           "command": "python3 -B scripts/contract-scans.py"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-doctest",
@@ -187,8 +199,10 @@
         }
       },
       "requires": [
-        "rust-build"
-      ]
+        "codeflow-bin"
+      ],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-clippy",
@@ -205,7 +219,12 @@
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         }
       },
-      "requires": []
+      "requires": [],
+      "heavy": true,
+      "env": {
+        "CARGO_TARGET_DIR": "target/clippy"
+      },
+      "workers": 9
     },
     {
       "name": "rustdoc",
@@ -220,8 +239,10 @@
         }
       },
       "requires": [
-        "rust-build"
-      ]
+        "codeflow-bin"
+      ],
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "rust-coverage",
@@ -239,7 +260,9 @@
       "report": {
         "format": "junit",
         "path": "target/nextest/codeflow/junit.xml"
-      }
+      },
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "release-automation",
@@ -426,6 +449,9 @@
           "command": "python3 -B scripts/journey-gate.py --part python"
         }
       },
+      "requires": [
+        "codeflow-bin"
+      ],
       "timeout_seconds": 900
     },
     {
@@ -494,7 +520,9 @@
       ],
       "outputs": [],
       "exclusive": true,
-      "timeout_seconds": 900
+      "timeout_seconds": 900,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "prose-exhaustive",
@@ -510,7 +538,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 7200
+      "timeout_seconds": 7200,
+      "heavy": true,
+      "workers": 9
     },
     {
       "name": "present-supply-chain",
@@ -558,7 +588,9 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 2400
+      "timeout_seconds": 2400,
+      "heavy": true,
+      "workers": 9
     }
   ],
   "_description": "Candidate gate: model-eval-kit is a structural and tooling check, not native behavioural qualification."

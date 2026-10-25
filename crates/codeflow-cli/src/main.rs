@@ -147,6 +147,9 @@ enum Command {
     Orient,
     /// Run the test gate (configured targets or runtime stack detection).
     Test(cmd::test::TestArgs),
+
+    /// Run a direct heavy command under the shared gate lock.
+    Reserve(cmd::reserve::ReserveArgs),
     /// Adopt or reconcile the opt-in documentation portal (utility craft over durable docs).
     Portal(cmd::portal::PortalArgs),
     /// Validate record frontmatter; --docs adds the doc-graph integrity lint.
@@ -242,6 +245,10 @@ fn update(
         diff_out: diff,
     };
     let mut report = scaffold::update(assets, cwd, &options)?;
+    for file in &mut report.files {
+        file.notes
+            .retain(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(note));
+    }
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }
@@ -459,6 +466,7 @@ fn run() -> anyhow::Result<()> {
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
         Command::Orient => std::process::exit(cmd::orient::run()),
         Command::Test(args) => std::process::exit(cmd::test::run(&args)),
+        Command::Reserve(args) => std::process::exit(cmd::reserve::run(&args)),
         Command::Portal(args) => std::process::exit(cmd::portal::run(&args, &assets)),
         Command::Validate(args) => std::process::exit(cmd::validate::run(&args)),
         Command::Ci(args) => std::process::exit(cmd::ci::run(&args)),

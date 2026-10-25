@@ -245,6 +245,8 @@ pub fn run_add_target_wizard(
         input_class: None,
         evidence: None,
         exclusive: false,
+        heavy: None,
+        workers: None,
         runner,
         modes,
         report: None,
@@ -468,6 +470,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes: BTreeMap::from([
                 (
@@ -519,6 +523,8 @@ mod tests {
             input_class: None,
             evidence: None,
             exclusive: false,
+            heavy: None,
+            workers: None,
             runner: RunnerType::Cargo,
             modes: BTreeMap::new(),
             report: None,

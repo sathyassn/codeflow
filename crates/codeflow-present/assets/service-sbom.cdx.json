@@ -5,45 +5,45 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-AKLGJKAT.css.br",
-      "name": "service/app-AKLGJKAT.css.br",
+      "bom-ref": "service/app-27OXJXS4.js.br",
+      "name": "service/app-27OXJXS4.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "40eed1958c66ebed7f01455ad463fb5f1c8ba013a8964fc4a232e7abcb13b3e4"
+          "content": "31312619137608e6917aa3b2e37a1a63362403234bee3aa956188d3a3d9c8c64"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-AKLGJKAT.css.gz",
-      "name": "service/app-AKLGJKAT.css.gz",
+      "bom-ref": "service/app-27OXJXS4.js.gz",
+      "name": "service/app-27OXJXS4.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a66fb3021ef4d7335d65efcbe62325a3e0aca8e9ccbd29fd73d1ad0040b40d70"
+          "content": "f655cb0cb55f4d98ad48a5f3b7870b998e1c0aa8790b6d4b223e7ea7a37aba51"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-VSQNMC4W.js.br",
-      "name": "service/app-VSQNMC4W.js.br",
+      "bom-ref": "service/app-L4DMET5O.css.br",
+      "name": "service/app-L4DMET5O.css.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a2d122b0cbedd515778b0185562305529580d9ba98f9d8e66fec5cac380db645"
+          "content": "c9c62fca30325de09156dac83211019f58eba8107d072d9d1246351fc9caddbe"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-VSQNMC4W.js.gz",
-      "name": "service/app-VSQNMC4W.js.gz",
+      "bom-ref": "service/app-L4DMET5O.css.gz",
+      "name": "service/app-L4DMET5O.css.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "07f8614854dbb449f78ecbe0af6e823c1c3404de0efb482052ff82fb8e073101"
+          "content": "0f58f75e33e2f2f97f1ec88ece57ca284df934a6ee47b3b0ce5b81a128c1d771"
         }
       ]
     },
@@ -115,23 +115,23 @@
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-figure-ZQX66N7I.js.br",
-      "name": "service/chunk-figure-ZQX66N7I.js.br",
+      "bom-ref": "service/chunk-figure-DTYGMMC5.js.br",
+      "name": "service/chunk-figure-DTYGMMC5.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "6a793b54f6430d6db410923dd4dcd61c29f0d776eac584159a11ac6a3e73b904"
+          "content": "c86f1bb58debb089aaeae60cbbbd3521a884c63c27208e3af1cab83a68434d6d"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/chunk-figure-ZQX66N7I.js.gz",
-      "name": "service/chunk-figure-ZQX66N7I.js.gz",
+      "bom-ref": "service/chunk-figure-DTYGMMC5.js.gz",
+      "name": "service/chunk-figure-DTYGMMC5.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "b2f9a6e4c26a25e400636ddd5c80ce94cde3981269d63e391ec75acd213688cf"
+          "content": "5caab1216a0f79ce7c8751fe3fe9b42d5a9af3ebd5bd91002aea180d5b646954"
         }
       ]
     },

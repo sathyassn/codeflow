@@ -1,3 +1,5 @@
+import declarationRules from "./figure-declaration-rules.json" with { type: "json" };
+
 // The figure grammar runtime (figure-grammar.md, ADR-0068). One module, shared
 // byte for byte by the portal adapter (Node) and the present review surface
 // (browser, crates/codeflow-present/web/src/figure-grammar.mjs). It validates a
@@ -25,8 +27,8 @@ export const THRESHOLDS = Object.freeze({
   overprintDepthPx: 1,
   widthChannelPx: 0.5,
   minChannels: 2,
-  wideMaxWidth: 720,
-  narrowMaxWidth: 368,
+  wideMaxWidth: declarationRules.composition.wideMaxWidth,
+  narrowMaxWidth: declarationRules.composition.narrowMaxWidth,
 });
 
 // The twelve rules, numbered as figure-grammar.md section 2 numbers them.
@@ -100,7 +102,7 @@ export const CHANNELS = Object.freeze(["interior", "edge", "width", "dash", "sha
 // The closed set of fact checks (rule 6). Each re-derives one value from a
 // committed source so a wrong fact fails even when its anchor exists. The
 // portal adapter and the Rust validator implement the same three.
-export const FACT_CHECKS = Object.freeze(["contains", "count-items", "json"]);
+export const FACT_CHECKS = Object.freeze(declarationRules.factChecks);
 
 const DECORATIONS = Object.freeze({ rule: "cf-f-rule", axis: "cf-f-axis", tick: "cf-f-tick" });
 const TEXT_STYLES = Object.freeze({ strong: "cf-t--strong", mute: "cf-t--mute", head: "cf-t--head", mono: "cf-t--mono" });
@@ -213,7 +215,7 @@ function validateFact(fact, index, fail) {
     if (source !== null && (source.anchor !== null || !source.path.endsWith(".json"))) fail(`${where}: a json check reads a JSON file with no anchor`);
     if (fact.value === undefined) fail(`${where}: a json check asserts a value`);
   }
-  if (source !== null && fact.check.kind !== "json" && source.path.endsWith(".json")) fail(`${where}: a JSON source takes the json check`);
+  if (source !== null && fact.check.kind !== declarationRules.jsonSourceCheck && source.path.endsWith(".json")) fail(`${where}: a JSON source takes the json check`);
 }
 
 function validateLayout(figure, fail) {
@@ -266,8 +268,8 @@ function validateLayout(figure, fail) {
 
 function validateComposition(composition, name, stateNames, maxWidth, fail) {
   if (!isObject(composition)) { fail(`${name} must declare width, height and draw`); return; }
-  if (!(Number.isFinite(composition.width) && composition.width >= 120 && composition.width <= maxWidth)) fail(`${name}.width must be 120 to ${maxWidth} units`);
-  if (!(Number.isFinite(composition.height) && composition.height >= 40 && composition.height <= 2400)) fail(`${name}.height must be 40 to 2400 units`);
+  if (!(Number.isFinite(composition.width) && composition.width >= declarationRules.composition.minWidth && composition.width <= maxWidth)) fail(`${name}.width must be ${declarationRules.composition.minWidth} to ${maxWidth} units`);
+  if (!(Number.isFinite(composition.height) && composition.height >= declarationRules.composition.minHeight && composition.height <= declarationRules.composition.maxHeight)) fail(`${name}.height must be ${declarationRules.composition.minHeight} to ${declarationRules.composition.maxHeight} units`);
   if (!Array.isArray(composition.draw) || composition.draw.length === 0 || composition.draw.length > LIMITS.draw) { fail(`${name}.draw must list 1 to ${LIMITS.draw} items`); return; }
   const ids = new Set();
   const references = [];

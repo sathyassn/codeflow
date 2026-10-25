@@ -641,7 +641,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
         assert!(
-            err.contains("another full gate is running"),
+            err.contains("another heavy gate is running"),
             "{tier}: {err}"
         );
         drop(held);
@@ -1480,6 +1480,42 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     .unwrap();
 }
 
+/// The installed doctrine sentences a fresh scaffold must carry.
+const DOCTRINE_PINS: [(&str, &str); 9] = [
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Every blocker or major finding carries the smallest evidenced remedy",
+    ),
+    // TSK-452: the review cadence has one home, "Review verdicts" in
+    // the discipline rules; findings points there.
+    (
+        ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "are stated once in `.codeflow/rules/workflow-discipline.md` \"Review verdicts\"",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Review runs at four stages, and only these:",
+    ),
+    (
+        ".codeflow/rules/workflow-discipline.md",
+        "Between stages the finder confirms each material fix on the delta plus the affected tests",
+    ),
+    (
+        ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "An already approved departure is reused and not asked again.",
+    ),
+    (
+        ".claude/skills/cf-develop/SKILL.md",
+        "No cycle count decides: continue while repairs produce relevant evidence",
+    ),
+    (
+        ".claude/agents/cf-reviewer.md",
+        "remedy: <blocker and major",
+    ),
+    (".codeflow/rules/writing.md", "## Copy guide"),
+    (".codeflow/rules/writing.md", "### Microcopy"),
+];
+
 #[test]
 fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
     const FINDINGS_ROW: &str = "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |\n";
@@ -1500,30 +1536,7 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
             );
         }
         // The doctrine an agent in this project reads.
-        for (rel, sentence) in [
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Every blocker or major finding carries the smallest evidenced remedy",
-            ),
-            (
-                ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
-                "Review is one holistic pass per revision",
-            ),
-            (
-                ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-                "An already approved departure is reused and not asked again.",
-            ),
-            (
-                ".claude/skills/cf-develop/SKILL.md",
-                "No cycle count decides: continue while repairs produce relevant evidence",
-            ),
-            (
-                ".claude/agents/cf-reviewer.md",
-                "remedy: <blocker and major",
-            ),
-            (".codeflow/rules/writing.md", "## Copy guide"),
-            (".codeflow/rules/writing.md", "### Microcopy"),
-        ] {
+        for (rel, sentence) in DOCTRINE_PINS {
             let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(
                 words(&read(&root, rel)).contains(sentence),
@@ -2508,7 +2521,9 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     git_with_binary(root, &["commit", "-q", "-m", "docs: record a legacy task"]);
     seed(root, dest, target);
 
-    // A pre-push with a ci finding at warn and the stale task.
+    // A pre-push with a ci finding at warn; the stale task is a record
+    // finding `codeflow validate --docs` names, which the push set no longer
+    // runs (TSK-449).
     git_with_binary(root, &["switch", "-q", "-c", "feat/x", &base]);
     std::fs::write(root.join("x.txt"), "x\n").unwrap();
     git_with_binary(root, &["add", "x.txt"]);
@@ -2519,15 +2534,20 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     assert!(
         err.contains("warning — policy rule git.commit_format (warn)")
             && err.contains("reword it with `git commit --amend` as `type(scope): description`")
-            && err.contains("stale status: in_progress with no active branch carrying TSK-001")
+            && !err.contains("stale status")
             && err.contains("codeflow pre-push: push not stopped")
             && !err.contains("BLOCKED"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(
+        validated.contains("stale status: in_progress with no active branch carrying TSK-001"),
+        "{validated}"
+    );
 
     // Each step, run as printed.
     git_with_binary(root, &["commit", "-q", "--amend", "-m", "feat: add x"]);
-    let step = printed_step(&err, "stale status: in_progress");
+    let step = printed_step(&validated, "stale status: in_progress");
     assert_eq!(step[..2], ["codeflow", "task"], "{step:?}");
     let args: Vec<&str> = step[1..].iter().map(String::as_str).collect();
     let status = codeflow(root, &args);
@@ -2548,9 +2568,11 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
         !err.contains("git.commit_format")
             && !err.contains("stale status")
             && !err.contains("warning")
-            && err.contains("codeflow pre-push: push not stopped"),
+            && err.contains("codeflow pre-push: push set finished"),
         "{err}"
     );
+    let validated = output_text(&codeflow(root, &["validate", "--docs"]));
+    assert!(!validated.contains("stale status"), "{validated}");
 }
 
 /// The refusals line of `codeflow report ceremony` over every date.

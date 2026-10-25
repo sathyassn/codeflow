@@ -252,6 +252,58 @@ mod tests {
     }
 
     #[test]
+    fn export_html_stage_keeps_content_and_sandbox() {
+        let document: crate::document::PresentationDocument = serde_json::from_value(serde_json::json!({
+            "schema_version": 2, "title": "Stage export", "blocks": [{
+                "type": "html", "id": "stage", "title": "Review stage", "caption": "Review precedes landing.",
+                "html": "<svg viewBox=\"0 0 360 120\"><title>Review stage</title><text x=\"20\" y=\"40\">Visible stage</text></svg>"
+            }]
+        })).unwrap();
+        document.validate().unwrap();
+        let rendered = crate::render::render_document(
+            &document,
+            &crate::render::RenderOptions {
+                session_id: "export",
+                revision: 1,
+                event_sequence: 0,
+                response_sequence: 0,
+                answers: None,
+                script_path: None,
+                style_path: None,
+                prepaint_source: None,
+                utility_style: None,
+                identity: None,
+                feedback: None,
+                read_only_warning: None,
+                interactive: false,
+                retired: None,
+            },
+        );
+        let exported = super::enhance_export(
+            rendered,
+            super::ExportTheme::Slate,
+            super::ExportMode::Light,
+            "",
+        )
+        .unwrap();
+        let page = scraper::Html::parse_document(&exported);
+        let selector = scraper::Selector::parse("iframe").unwrap();
+        let frame = page.select(&selector).next().expect("export stage sandbox");
+        assert_eq!(frame.value().attr("sandbox"), Some(""));
+        let source = frame.value().attr("srcdoc").unwrap();
+        let stage = scraper::Html::parse_document(source);
+        let selector = scraper::Selector::parse("svg text").unwrap();
+        assert_eq!(
+            stage
+                .select(&selector)
+                .next()
+                .map(|node| node.text().collect::<String>()),
+            Some("Visible stage".into())
+        );
+        assert_eq!(frame.value().attr("data-cf-export-stage"), Some(""));
+    }
+
+    #[test]
     fn export_bootstrap_never_contains_network_endpoint_or_auth_name() {
         assert!(!EXPORT_BOOTSTRAP.contains("http:"));
         assert!(!EXPORT_BOOTSTRAP.contains("cookie"));

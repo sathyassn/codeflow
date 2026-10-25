@@ -20,6 +20,7 @@
     { "path": "scripts/child-lifecycle.mjs", "ownership": "managed" },
     { "path": "scripts/chrome-verify.mjs", "ownership": "managed" },
     { "path": "scripts/evidence.mjs", "ownership": "managed" },
+    { "path": "scripts/figure-declaration-rules.json", "ownership": "managed" },
     { "path": "scripts/figure-grammar.mjs", "ownership": "managed" },
     { "path": "scripts/generator.mjs", "ownership": "managed" },
     { "path": "scripts/git-snapshot.mjs", "ownership": "managed" },
@@ -98,6 +99,7 @@
     { "path": "tests/fixtures/figures/rendered/controls/layering-toned.html", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tests/page-shapes.mjs", "ownership": "managed" },
+    { "path": "tests/present-parity.test.mjs", "ownership": "managed" },
     { "path": "tests/portal-fixture.mjs", "ownership": "managed" },
     { "path": "tsconfig.json", "ownership": "managed" }
   ]
