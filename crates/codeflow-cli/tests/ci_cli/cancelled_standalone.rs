@@ -405,8 +405,14 @@ fn issue_journey_cancels_on_the_task_branch_and_lands_through_a_plan_branch() {
 /// `codeflow ci` on the cancellation branch with the given environment.
 fn ci_env(root: &Path, body: &str, env: &[(&str, &str)]) -> Output {
     let mut command = codeflow();
+    // Named one by one: a fixture never sets a variable it does not name.
     for (key, value) in env {
-        command.env(key, value);
+        match *key {
+            "CODEFLOW_PR_IS_DRAFT" => command.env("CODEFLOW_PR_IS_DRAFT", value),
+            "GITHUB_EVENT_PATH" => command.env("GITHUB_EVENT_PATH", value),
+            "CODEFLOW_PR_DRAFT" => command.env("CODEFLOW_PR_DRAFT", value),
+            other => panic!("unexpected variable {other}"),
+        };
     }
     command
         .args([

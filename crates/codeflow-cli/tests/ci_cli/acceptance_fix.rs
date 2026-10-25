@@ -173,8 +173,14 @@ fn ci_with(root: &Path, reviews: &str, env: &[(&str, &str)]) -> std::process::Ou
         "## Summary\nRepair work.\n\n- repair\n\nTask: TSK-001\n## Changes\n- repair\n\n## Testing\n- fixture\n{reviews}"
     );
     let mut command = codeflow();
+    // Named one by one: a fixture never sets a variable it does not name.
     for (key, value) in env {
-        command.env(key, value);
+        match *key {
+            "CODEFLOW_PR_IS_DRAFT" => command.env("CODEFLOW_PR_IS_DRAFT", value),
+            "GITHUB_EVENT_PATH" => command.env("GITHUB_EVENT_PATH", value),
+            "CODEFLOW_PR_DRAFT" => command.env("CODEFLOW_PR_DRAFT", value),
+            other => panic!("unexpected variable {other}"),
+        };
     }
     command
         .args([
