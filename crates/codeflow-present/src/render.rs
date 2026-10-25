@@ -259,26 +259,32 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         output.push_str("</details></section>");
         return;
     }
-    if let Block::Tabs { tabs, .. } = block {
-        output.push_str(
-            "<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root data-cf-canonical-text=\"",
-        );
+    if let Block::Tabs { id, title, tabs } = block {
+        output.push_str("<div class=\"tabs\" data-cf-tabs>");
+        if let Some(title) = title {
+            output.push_str("<h2>");
+            escape_html_to(title, output);
+            output.push_str("</h2>");
+        }
+        output.push_str("<div class=\"tabs__labels\" role=\"tablist\" aria-label=\"");
+        escape_attr_to(&block.review_label(), output);
+        output.push_str("\" data-cf-review-text-root data-cf-canonical-text=\"");
         escape_attr_to(&block.canonical_review_text(framing), output);
         output.push_str("\">");
-        for tab in tabs {
-            output.push_str("<span>");
+        let prefix = format!("cf-tabs-{}", sandbox_id(options.session_id, id));
+        for (index, tab) in tabs.iter().enumerate() {
+            let selected = index == 0;
+            let _ = write!(output, "<button type=\"button\" role=\"tab\" id=\"{prefix}-tab-{index}\" aria-controls=\"{prefix}-panel-{index}\" aria-selected=\"{selected}\" tabindex=\"{}\">", if selected { 0 } else { -1 });
             escape_html_to(&tab.label, output);
-            output.push_str("</span>");
+            output.push_str("</button>");
         }
         output.push_str("</div>");
-        for tab in tabs {
-            output.push_str("<details><summary>");
-            escape_html_to(&tab.label, output);
-            output.push_str("</summary>");
+        for (index, tab) in tabs.iter().enumerate() {
+            let _ = write!(output, "<div role=\"tabpanel\" id=\"{prefix}-panel-{index}\" aria-labelledby=\"{prefix}-tab-{index}\" tabindex=\"0\"{}>", if index == 0 { "" } else { " hidden" });
             for child in &tab.blocks {
                 render_block(child, context, output);
             }
-            output.push_str("</details>");
+            output.push_str("</div>");
         }
         output.push_str("</div></section>");
         return;
@@ -553,7 +559,7 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
             } else {
                 output.push_str("<figure class=\"stage\"><iframe sandbox title=\"");
                 escape_attr_to(title.as_deref().unwrap_or("Sandboxed content"), output);
-                output.push_str("\" srcdoc=\"");
+                output.push_str("\" data-cf-export-stage srcdoc=\"");
                 escape_attr_to(html, output);
                 output.push_str("\"></iframe></figure>");
             }
@@ -1470,6 +1476,7 @@ pub(crate) mod tests {
             },
             Block::Tabs {
                 id: "tabs".to_string(),
+                title: None,
                 tabs: vec![
                     Tab {
                         label: "Café".to_string(),

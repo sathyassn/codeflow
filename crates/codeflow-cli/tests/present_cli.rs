@@ -3605,6 +3605,72 @@ fn tsk193_capture_io_failure_warns_but_open_and_update_succeed() {
     close_and_clear(&fixture, id);
 }
 
+#[test]
+fn check_refuses_figures_with_json_contains_checks() {
+    assert_undrawable_figure_refused("json-fact", "JSON source takes the json check");
+}
+
+#[test]
+fn check_refuses_figures_wider_than_the_render_limit() {
+    assert_undrawable_figure_refused("wide", "wide.width must be 120 to 720");
+}
+
+fn assert_undrawable_figure_refused(name: &str, expected: &str) {
+    let project = setup_project();
+    let fixture =
+        include_str!("../../codeflow-present/tests/fixtures/contract-v2/documents/v2-framed.json");
+    let mut document: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    let figure = &mut document["blocks"][1]["declaration"]["figure"];
+    if name == "json-fact" {
+        figure["family"] = "sequence".into();
+        figure["facts"][0]["source"] = "facts.json".into();
+    } else {
+        figure["family"] = "coverage".into();
+        figure["wide"]["width"] = 760.into();
+    }
+    let path = project.project.join(format!("{name}.json"));
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(9), "{name}: {text}");
+    assert!(text.contains(expected), "{text}");
+}
+
+#[test]
+fn check_warns_when_an_explanation_has_no_figure() {
+    let project = setup_project();
+    let path = project.project.join("explanation.json");
+    fs::write(&path, r###"{"schema_version":2,"title":"How review works","blocks":[{"type":"narrative","id":"concept","markdown":"## Concept\nA change travels through review before it lands."}]}"###).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("figure-balance"), "{text}");
+}
+
+#[test]
+fn check_warns_when_narrative_dominates_without_refusing() {
+    let project = setup_project();
+    let path = project.project.join("narrative.json");
+    let document = serde_json::json!({"schema_version": 2, "title": "An explanation", "blocks": [
+        {"type": "narrative", "id": "long", "markdown": "word ".repeat(501)}
+    ]});
+    fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let output = codeflow(
+        &project.project,
+        &project.home,
+        &["present", "check", "--file", path.to_str().unwrap()],
+    );
+    let text = require_success(&output);
+    assert!(text.contains("narrative text dominates"), "{text}");
+}
+
 /// End review's route (TSK-441 AC-6) refuses a request without the session's
 /// cookie, origin and marker, and with them closes the session as
 /// `present close` does: the session reads closed and its service exits.

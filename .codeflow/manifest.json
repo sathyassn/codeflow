@@ -689,7 +689,7 @@
     ".agents/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "6ab0c460e44e0fbabfbf4f2cc58fe8bc749e1f84bea5be7ed4921c123a8b8e39",
+      "sha256": "5717403100099bb041e4ea6e77744c624f91568c8b0c8703f83633afa8e5732d",
       "exec": false
     },
     ".agents/skills/cf-present/references/feedback-loop.md": {
@@ -1529,7 +1529,7 @@
     ".claude/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "6ab0c460e44e0fbabfbf4f2cc58fe8bc749e1f84bea5be7ed4921c123a8b8e39",
+      "sha256": "5717403100099bb041e4ea6e77744c624f91568c8b0c8703f83633afa8e5732d",
       "exec": false
     },
     ".claude/skills/cf-present/references/feedback-loop.md": {
@@ -1739,13 +1739,13 @@
     ".codeflow/schemas/present/document-v1.schema.json": {
       "src": "present/schemas/document-v1.schema.json",
       "ownership": "managed",
-      "sha256": "ded3c22c000f28ff0457be53f9133f59f06ef8ece85036f498924c4462cbb074",
+      "sha256": "c31a5fa51e3c79960d5d4631b54c3202f4570e038787bba415a6f78a311eddf2",
       "exec": false
     },
     ".codeflow/schemas/present/document-v2.schema.json": {
       "src": "present/schemas/document-v2.schema.json",
       "ownership": "managed",
-      "sha256": "e77f7bf7c59ada46ccb79cf0b8bb8b38191b214546e2e2322d13c0438edec551",
+      "sha256": "0251f4230acbd1744ab905973ff4825ab70cc1577e464600675de488b24f3ce2",
       "exec": false
     },
     ".codeflow/schemas/present/session-history-v1.schema.json": {
