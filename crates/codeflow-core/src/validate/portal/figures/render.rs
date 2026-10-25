@@ -421,8 +421,9 @@ fn validate_tones(
     name: &str,
     state_mark: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
-    // Only a visible label counts: a non-blank string, as the module's
-    // `text` check requires (JavaScript `trim` also strips U+FEFF).
+    // Only a non-blank string counts as a label, as the module's `text`
+    // check requires; blank is JavaScript `trim`'s set, which strips U+FEFF
+    // and keeps U+0085.
     let labelled: BTreeSet<&str> = draw
         .iter()
         .filter(|item| {
@@ -430,7 +431,9 @@ fn validate_tones(
                 .and_then(Value::as_str)
                 .is_some_and(|text| {
                     !text
-                        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                        .trim_matches(|c: char| {
+                            (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
+                        })
                         .is_empty()
                 })
         })
@@ -2176,6 +2179,10 @@ mod tests {
                 "{blank}"
             );
         }
+        // JavaScript `trim` keeps U+0085, so the module takes it as a label.
+        assert!(
+            toned_control(|d| d["figure"]["wide"]["draw"][11]["text"] = "\u{85}".into()).is_ok()
+        );
         let no_id = toned_control(|d| {
             d["figure"]["wide"]["draw"][15]
                 .as_object_mut()

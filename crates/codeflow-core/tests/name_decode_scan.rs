@@ -4399,6 +4399,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:ecmascript-svg",
     ),
+    // A toned mark needs a label the module accepts: a non-blank string under the ECMAScript trim set (BOM stripped, NEL kept), so blank text never stands in for the non-hue cue.
+    (
+        "crates/codeflow-core/src/validate/portal/figures/render.rs",
+        "validate_tones",
+        "is_whitespace",
+        1,
+        "grammar:ecmascript-svg",
+    ),
+    (
+        "crates/codeflow-core/src/validate/portal/figures/render.rs",
+        "validate_tones",
+        "trim_matches",
+        1,
+        "grammar:ecmascript-svg",
+    ),
     // String JSON values display as text and non-strings use js_stringify; this is deliberate polymorphic table rendering, not failed decoding or defaulted identity.
     (
         "crates/codeflow-core/src/validate/portal/figures/render.rs",
