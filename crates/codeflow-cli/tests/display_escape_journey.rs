@@ -1036,11 +1036,14 @@ fn block_lines_start_with_text_codeflow_owns() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let workspace = workspace.canonicalize().unwrap();
     let mut files = Vec::new();
-    sources(
-        &workspace.join("crates/codeflow-core/src"),
-        &workspace,
-        &mut files,
-    );
+    // Core's block builders, and any CLI file that builds a block itself.
+    for krate in ["codeflow-core", "codeflow-cli"] {
+        sources(
+            &workspace.join("crates").join(krate).join("src"),
+            &workspace,
+            &mut files,
+        );
+    }
     let mut found = std::collections::BTreeMap::new();
     for (rel, source) in &files {
         if !source.contains("TextBlock::new()") || rel.ends_with("git/name.rs") {
@@ -1080,6 +1083,12 @@ fn block_lines_start_with_text_codeflow_owns() {
         ("crates/codeflow-core/src/scaffold/report.rs", 1),
         // The `estimates:` line.
         ("crates/codeflow-core/src/status.rs", 1),
+        // A task group's heading: a `TSK-` id `task_of` validated, or the
+        // fixed `no task`.
+        ("crates/codeflow-core/src/worktree_inventory.rs", 1),
+        // The list heading, one of two fixed phrases; a full record's
+        // first line, its validated `FU-NNN` id.
+        ("crates/codeflow-cli/src/cmd/follow.rs", 2),
     ]
     .into_iter()
     .map(|(rel, count)| (rel.to_string(), count))
@@ -1096,6 +1105,7 @@ fn listed_block_printers() -> std::collections::BTreeMap<String, usize> {
         ("crates/codeflow-cli/src/cmd/delegate.rs", 1),
         ("crates/codeflow-cli/src/cmd/estimate.rs", 3),
         ("crates/codeflow-cli/src/cmd/feedback.rs", 1),
+        ("crates/codeflow-cli/src/cmd/follow.rs", 3),
         ("crates/codeflow-cli/src/cmd/integrate.rs", 1),
         ("crates/codeflow-cli/src/cmd/models.rs", 1),
         ("crates/codeflow-cli/src/cmd/orient.rs", 1),
@@ -1104,7 +1114,7 @@ fn listed_block_printers() -> std::collections::BTreeMap<String, usize> {
         ("crates/codeflow-cli/src/cmd/remote.rs", 1),
         ("crates/codeflow-cli/src/cmd/report.rs", 1),
         ("crates/codeflow-cli/src/cmd/status.rs", 2),
-        ("crates/codeflow-cli/src/cmd/work.rs", 1),
+        ("crates/codeflow-cli/src/cmd/work.rs", 2),
         ("crates/codeflow-cli/src/main.rs", 4),
     ]
     .into_iter()

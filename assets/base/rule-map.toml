@@ -121,7 +121,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 [[rule]]
 id = "evidence"
 title = "Evidence, never assumption."
-text = "Every claim carries file:line, command output or a reproducible check; say what was not verified. Another model's work counts only with native, recheckable provenance."
+text = "Every claim carries file:line, command output or a reproducible check; say what was not verified. State that can change is checked live when stated or acted on; an earlier result is a lead, never a fact. Another model's work counts only with native, recheckable provenance."
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
@@ -533,7 +533,7 @@ key = "status"
 group = "delivery"
 tiers = ["standard", "full"]
 when = "report status or hand off"
-action = "check live remote refs, PRs and checks before handing the operator a command; sweep lanes and seats for items parked on process; each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
+action = "before reporting or handing the operator a command, check live each changeable fact it rests on (refs, PRs, checks, seats), or mark it unverified with its last check time; sweep lanes and seats for items parked on process; each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
 see = [
   { target = ".codeflow/rules/writing.md", section = "Replies and status" },
   { target = "cf-method/references/autonomy.md", section = "Multi-session coordination" },
@@ -545,7 +545,7 @@ key = "status"
 group = "delivery"
 tiers = ["minimal"]
 when = "report status or hand off"
-action = "check live remote refs, PRs and checks before handing the operator a command; each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
+action = "before reporting or handing the operator a command, check live each changeable fact it rests on (refs, PRs, checks, seats), or mark it unverified with its last check time; each item by its outcome in words, IDs after; operator-owned items once under NEED YOUR ATTENTION, none when nothing is owed"
 see = [{ target = ".codeflow/rules/writing.md", section = "Replies and status" }]
 
 [[moment]]
