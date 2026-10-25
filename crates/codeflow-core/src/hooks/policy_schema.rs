@@ -95,7 +95,7 @@ pub enum KeyKind {
     Profiles,
     /// The PR-section mapping object (SPC-013 R-84).
     SectionMapping,
-    /// A list of argument-bound retry entry objects (TSK-174).
+    /// Legacy retry entries, validated for compatibility but never enforced.
     RetryEntries,
     /// Path denial declarations with explained exceptions.
     PathRules,
@@ -134,13 +134,34 @@ pub struct KeySpec {
     pub notes: &'static str,
 }
 
+/// Accepted compatibility keys with no enforcement reader. This list grants
+/// no behavior; it makes the absence explicit in diagnostics and the contract.
+pub const UNSUPPORTED_KEYS: &[&str] = &[
+    "git.direct_changes",
+    "git.clean_regenerable",
+    "security.script_bypass",
+    "security.interpreter_scan",
+    "security.enforcement_baseline",
+    "security.workflow_pushes",
+    "security.sandbox_retry",
+    "security.sandbox_retry_allow",
+];
+
+impl KeySpec {
+    /// Whether this accepted key has no implementation.
+    #[must_use]
+    pub fn is_unsupported(self) -> bool {
+        UNSUPPORTED_KEYS.contains(&self.path)
+    }
+}
+
 /// Valid-values text shared by every Level key.
 const LEVEL_VALID: &str = "off | warn | allow | block";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 73] = [
+pub const SCHEMA: [KeySpec; 74] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -332,6 +353,14 @@ pub const SCHEMA: [KeySpec; 73] = [
                 shell grammar, so a path built by interpreter code, such as \
                 Python adjacent string literals or a node `+` concatenation, \
                 is part of that residual.",
+    },
+    KeySpec {
+        path: "git.line_sync_interval",
+        kind: KeyKind::UInt,
+        valid: "days; 0 disables reminders",
+        purpose: "Orient flags integration lines past this interval since their last sync or evidenced creation.",
+        notes: "Unknown creation without a sync and lines with no own commits are never flagged. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
@@ -668,7 +697,7 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "git.direct_changes",
         kind: KeyKind::Enum(&["allow", "forbid"]),
         valid: "allow | forbid",
-        purpose: "Retired compatibility key; accepted and ignored.",
+        purpose: "Not supported, has no effect. Retired compatibility key; accepted and ignored.",
         notes: "Every pull request names its task or epic (R-70), regardless of this retained key.",
     },
     KeySpec {
@@ -791,9 +820,8 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "git.clean_regenerable",
         kind: KeyKind::StringList,
         valid: "an array of directory paths, each ending with `/`",
-        purpose: "Regenerable build and dependency directories `git clean` may remove without a discard refusal (ADR-0075).",
-        notes: "Default target/, node_modules/, dist/, build/, .venv/, \
-                __pycache__/, coverage/.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     // ---- security ----------------------------------------------------------
     KeySpec {
@@ -827,8 +855,8 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "security.script_bypass",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Refused actions found inside a script file a command runs (ADR-0075).",
-        notes: "Default warn: a script is read on a best-effort basis.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     KeySpec {
         path: "security.outward_actions",
@@ -841,8 +869,8 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "security.interpreter_scan",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Refused actions embedded in an interpreter call (`python -c`, `node -e`) (ADR-0075).",
-        notes: "Default block.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.secret_reads",
@@ -855,33 +883,29 @@ pub const SCHEMA: [KeySpec; 73] = [
         path: "security.enforcement_baseline",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Commits and ref moves whose enforcement files match no identity the operator approved (ADR-0075).",
-        notes: "Default block.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.workflow_pushes",
         kind: KeyKind::Enum(&["queue", "allow"]),
         valid: "queue | allow",
-        purpose: "A push from an agent session that introduces a `.github/workflows/` change (ADR-0075 D9).",
-        notes: "Default queue: refused and queued for the operator, whose \
-                login can push workflows. `allow` is for an agent credential \
-                with workflow rights.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "No enforcement code reads this key. Existing guard rules apply independently of its value.",
     },
     KeySpec {
         path: "security.sandbox_retry",
         kind: KeyKind::Enum(&["allowlist", "block"]),
         valid: "allowlist | block",
-        purpose: "Claude's unsandboxed retry from a primary session (ADR-0075 decision 6).",
-        notes: "Default allowlist: only an argument vector an entry of \
-                sandbox_retry_allow spells out. `block` refuses every retry.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     KeySpec {
         path: "security.sandbox_retry_allow",
         kind: KeyKind::RetryEntries,
         valid: "an array of entry objects, each naming its `program`",
-        purpose: "The argument-bound entries the unsandboxed retry may run (ADR-0075 decision 6).",
-        notes: "The shipped entry is the Codex plugin companion, pinned by \
-                path, version and digest at qualification.",
+        purpose: "Not supported, has no effect. Accepted only for compatibility with older policy files.",
+        notes: "There is no enforcement reader. Hooks warn when this key is present. Update removes a prior shipped value and keeps an edited value.",
     },
     // ---- guidance ----------------------------------------------------------
     KeySpec {
@@ -1008,7 +1032,7 @@ fn deprecated_key(key: &str) -> Option<&'static str> {
         .map(|(_, why)| *why)
 }
 
-/// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
+/// One warning per deprecated or unsupported control key present in `<root>/.codeflow/policy.json`.
 /// An absent or unreadable file gives none; [`validate_policy`] reports that.
 #[must_use]
 pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
@@ -1038,7 +1062,43 @@ pub fn deprecation_warnings(root: &Path) -> Vec<crate::remedy::Finding> {
             crate::remedy::POLICY_DEPRECATED.with(&[("key", "git.direct_changes")]),
         ));
     }
+    warnings.extend(unsupported_control_warnings(&value));
     warnings
+}
+
+/// Claim an unsupported-key diagnostic before printing it. Repeated policy
+/// loads and multiple reporting paths share this process-wide set. Collection
+/// and validation stay pure, and a later load can still report a different key.
+/// Other diagnostic text is not deduplicated here.
+#[must_use]
+pub fn first_unsupported_warning(text: &str) -> bool {
+    static REPORTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if !text.starts_with("policy key ") || !text.ends_with(" is not supported, has no effect") {
+        return true;
+    }
+    REPORTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(text.to_string())
+}
+
+/// Compatibility diagnostics for controls with no enforcement reader.
+#[must_use]
+pub fn unsupported_control_warnings(value: &Value) -> Vec<crate::remedy::Finding> {
+    schema()
+        .iter()
+        .filter(|spec| {
+            spec.path.contains('.') && spec.path != "git.direct_changes" && spec.is_unsupported()
+        })
+        .filter(|spec| lookup(value, spec.path).is_some())
+        .map(|spec| {
+            crate::remedy::Finding::new(
+                format!("policy key {} is not supported, has no effect", spec.path),
+                crate::remedy::POLICY_UNSUPPORTED.with(&[("key", spec.path)]),
+            )
+        })
+        .collect()
 }
 
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].
@@ -1491,11 +1551,8 @@ fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     }
 }
 
-/// Validate `git.pr_section_mapping`: an object with a known `state`, an
-/// optional `headings` map of strings, and `decided` as `none` or a date.
-/// Validate `security.sandbox_retry_allow` as far as this unit owns it: an
-/// array of objects, each naming a non-empty `program`. The retry check
-/// (TSK-174) owns the meaning of every other field.
+/// Validate the legacy entry shape without claiming a working retry control.
+/// Each entry must be an object naming a non-empty `program`.
 fn validate_retry_entries(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     let Some(list) = value.as_array() else {
         errors.push(PolicyError::invalid_value(
@@ -1611,7 +1668,17 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 2] = ["git.pr_section_mapping", "git.release_branch_pattern"];
+        const OPTIONAL: [&str; 9] = [
+            "git.pr_section_mapping",
+            "git.release_branch_pattern",
+            "git.clean_regenerable",
+            "security.interpreter_scan",
+            "security.enforcement_baseline",
+            "security.workflow_pushes",
+            "security.script_bypass",
+            "security.sandbox_retry",
+            "security.sandbox_retry_allow",
+        ];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -1730,6 +1797,19 @@ mod tests {
                 errors.iter().all(|error| error.key == "git.claim_remotes"),
                 "{errors:?}"
             );
+        }
+    }
+
+    #[test]
+    fn line_sync_interval_accepts_days_and_defaults_off() {
+        assert_eq!(default_policy_value()["git"]["line_sync_interval"], 0);
+        for value in ["0", "7", "4294967295"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_ok(), "{text}");
+        }
+        for value in ["-1", "1.5", "4294967296", "\"7d\"", "null"] {
+            let text = format!(r#"{{"git":{{"line_sync_interval":{value}}}}}"#);
+            assert!(validate_policy_str(&text).is_err(), "{text}");
         }
     }
 

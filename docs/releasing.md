@@ -178,9 +178,12 @@ Concurrency:
 Release impact rules for each PR:
 
 - The PR carries one `Release impact` section with `Impact`, `Breaking`,
-  `Rationale`, `Migration`, `Unit` and `Evidence`.
-- `Breaking: yes` holds if and only if `Impact: major`, and the checkers
-  enforce both directions. A break needs substantive migration guidance.
+  `Rationale` and `Migration`.
+- `codeflow ci`'s one evaluator judges the section's fields, and `check-pr`
+  calls it and judges nothing of the section separately (TSK-451).
+  `Breaking: yes` needs `Impact: major` and substantive migration guidance;
+  `check-pr` also refuses a major pending entry the PR adds or edits without
+  `Breaking: yes`.
 - An edit of a pending major entry is assessed at major, so it declares the
   break and keeps its migration guidance.
 - A field left at the template's alternatives fails.

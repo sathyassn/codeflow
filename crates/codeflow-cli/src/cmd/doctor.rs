@@ -279,7 +279,7 @@ fn preflight_report(
 }
 
 /// The testable core of [`run`]: explicit options and output sink, no
-/// process-global state.
+/// process-global state except deduplication of unsupported-policy notices.
 fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
     if args.list {
         for name in doctor::check_names() {
@@ -289,7 +289,10 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
     }
     for note in codeflow_core::hooks::policy_schema::deprecation_warnings(std::path::Path::new(
         &opts.project_dir,
-    )) {
+    ))
+    .into_iter()
+    .filter(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(&note.text))
+    {
         let _ = term_writeln!(out, "note  policy: {}", note.text);
         let _ = term_writeln!(out, "      clear it: {}", note.remedy);
     }

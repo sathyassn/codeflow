@@ -14,7 +14,7 @@ use std::path::Path;
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     is_correction, pull_request_findings_judged, Criteria, Finding, AUTHORITY_NOTE, FROZEN_RULE,
-    IMPORT_RULE, SCOPE_NOTE,
+    IMPORT_RULE, REMOVAL_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -24,11 +24,13 @@ use super::classification::{range_changes, root_branch_at, Class, Range};
 
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
-/// class, when it was classified.
+/// class, when it was classified. `body` is the pull request body, which
+/// gives the reason for each criterion a task removes from its own record.
 #[allow(clippy::too_many_arguments)] // The run's shared state and the stacked heads, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
+    body: Option<&str>,
     range: Option<&Range<'_>>,
     names: &super::Names<'_>,
     class: Option<&Class>,
@@ -80,7 +82,11 @@ pub(super) fn dispatch(
     match found {
         Ok(found) => {
             for found in found {
-                if found.note {
+                if found.rule == REMOVAL_RULE {
+                    if let Some(refused) = removal(body, &found) {
+                        tagged.push(refused);
+                    }
+                } else if found.note {
                     let remedy = if found.rule == AUTHORITY_NOTE {
                         codeflow_core::remedy::CRITERIA_AUTHORITY.remedy()
                     } else if is_correction(&found) {
@@ -354,6 +360,35 @@ fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, Stri
 /// Criteria frozen and a planning amendment's epic scope always block
 /// (R-80, ADR-0078); the binding and journey rules take the
 /// `git.work_records` level.
+/// A criterion `found` names (`<task> <criterion>`) that a task removes
+/// from its own record (TSK-451): the pull request body gives the reason on
+/// a visible line naming the criterion and its removal, or the removal is
+/// refused, so weakening a criterion stays visible to the review. A push
+/// has no body yet and is judged on its pull request.
+fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation> {
+    let (task, criterion) = found.message.split_once(' ')?;
+    let Some(body) = body else {
+        let note = codeflow_core::remedy::Finding::new(
+            format!("{REMOVAL_RULE}: {task} removes {criterion}; its pull request body gives the reason"),
+            codeflow_core::remedy::CRITERIA_DELTA.remedy(),
+        );
+        println!("{}", note.line("codeflow ci", "note"));
+        return None;
+    };
+    if super::pr_body::gives_removal_reason(body, criterion) {
+        println!("codeflow ci: {task} removes {criterion}, with the reason in the PR body");
+        return None;
+    }
+    Some(super::TaggedViolation {
+        sha: None,
+        violation: Violation::always_blocking(
+            REMOVAL_RULE,
+            format!("{task} removes its criterion {criterion}, and the PR body gives no reason for it"),
+            "give the reason in the PR body on a line naming the criterion, for example `- AC-2 removed: <why the remaining criteria suffice>`, or keep the criterion",
+        ),
+    })
+}
+
 fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
     let violation = if found.rule == FROZEN_RULE {
         Violation::always_blocking(

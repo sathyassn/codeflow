@@ -267,10 +267,11 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target; see cf-method/references/project-organization.md#acceptance-waivers-and-redactions for its field and format, or the record-only redaction route ({note})";
-    /// A PR body whose Reviews section does not approve the commit the
-    /// task's acceptance block binds (issue 121).
+    /// A PR body whose Reviews row names another commit or verdict than the
+    /// task's acceptance block, from which the row is derived (issue 121,
+    /// TSK-451).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
-        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
+        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; or leave the section out or point it at the task's acceptance block, from which `codeflow ci` derives the row (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
@@ -319,6 +320,10 @@ catalog! {
     /// A deprecated policy key.
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
         "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
+
+    /// A policy key with no enforcement reader.
+    POLICY_UNSUPPORTED = Step::Edit(".codeflow/policy.json"),
+        "the operator removes {key} from .codeflow/policy.json; `codeflow update` removes only an unchanged retired default and preserves edited values";
 
     // Protected branches and the sanctioned landing path.
 
