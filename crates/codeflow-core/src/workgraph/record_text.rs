@@ -551,6 +551,23 @@ pub(crate) fn section_span(lines: &[ScannedLine], heading: &str) -> Option<(usiz
     Some((start, end))
 }
 
+/// A record's text without the level-two section `heading` (heading and
+/// body), read as Markdown with the frontmatter hidden; the whole text when
+/// the record has no such section (TSK-1001).
+pub(crate) fn without_section(content: &str, heading: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let scanned = scan_record(&lines);
+    match section_span(&scanned, heading) {
+        Some((start, end)) => lines[..start]
+            .iter()
+            .chain(&lines[end..])
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => lines.join("\n"),
+    }
+}
+
 /// The scanned lines of the section `heading`, excluding the heading line.
 fn section(body: &str, heading: &str) -> Option<Vec<ScannedLine>> {
     let lines: Vec<&str> = body.lines().collect();

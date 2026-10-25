@@ -333,7 +333,7 @@ pub enum CancellationJudge<'a> {
 ///
 /// # Errors
 /// Returns a diagnostic for unreadable history or an invalid cancellation
-/// range. Lifecycle validation still checks the record's full schema.
+/// range, including a record that fails the full task schema.
 pub fn cancelled_standalone(
     root: &std::path::Path,
     base: &str,
@@ -405,12 +405,15 @@ pub fn cancelled_standalone(
     let id = &record.id;
     cancellation_lines(record)?;
     let texts = rule_texts(paths)?;
+    let history = history_paths(&repo, base, head)?;
     if texts
         .iter()
+        .chain(&history)
         .any(|path| !path.starts_with("project-management/"))
     {
-        return Err("a standalone cancellation amendment changes only project-management/ paths; keep product changes on the task branch".into());
+        return Err("a standalone cancellation amendment changes only project-management/ paths, in every commit as well as the final diff; keep product changes on the task branch".into());
     }
+    schema_problem(record)?;
     if let Some(problem) = range_problem(&repo, base, head, &texts) {
         return Err(problem);
     }
@@ -426,6 +429,38 @@ pub fn cancelled_standalone(
         ));
     }
     Ok(Some(id.clone()))
+}
+
+/// The full task schema of an incoming cancelled record (TSK-1001): the
+/// lifecycle view carries no title or standalone reason, so the record is
+/// validated as `codeflow validate` validates a task file.
+fn schema_problem(record: &RecordView) -> Result<(), String> {
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let name = record
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or("record.md")
+        .to_string();
+    let folder = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let path = folder.join(name);
+    std::fs::write(&path, &record.content).map_err(|error| error.to_string())?;
+    let (errors, _) =
+        crate::validate::validate_task(&path, &crate::validate::ValidateOptions::default())
+            .map_err(|error| format!("{} is not a valid task record: {error}", record.id))?;
+    if errors.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not a valid task record: {}",
+        record.id,
+        errors
+            .iter()
+            .map(|error| format!("{}: {}", error.field, error.message))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
 }
 
 /// A cancelled record carries its reason and scope in the Closeout.
@@ -567,6 +602,26 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             }
         }
     }
+    // The final diff can hide a path a commit added and a later one
+    // reverted; that history still lands, so each commit is held to the
+    // admitted set too (TSK-1001).
+    match history_paths(repo, base, head) {
+        Err(error) => {
+            return Some(format!(
+                "cannot read the range's commits to classify it: {error}"
+            ))
+        }
+        Ok(history) => {
+            for path in &history {
+                if amendment_path(path, &project).is_none() {
+                    let path = crate::git::display_key(path);
+                    return Some(format!(
+                        "a commit of this planning-only pull request changes {path}, outside the admitted set, though the final diff may not show it; a planning amendment's history carries planning paths only, so drop that commit (rebase it out) and keep product changes on a task branch"
+                    ));
+                }
+            }
+        }
+    }
     if let Some(path) = text {
         let path = crate::git::display_key(path);
         for (side, at) in [("target", base), ("head", head)] {
@@ -594,6 +649,69 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     None
+}
+
+/// Every path a commit of the range (reachable from `head`, not from
+/// `base`) changes: a commit's change against its one parent, a root
+/// commit's whole tree, and for a merge the paths it changes against every
+/// parent, which is what the merge itself introduced. A name that is not
+/// UTF-8 is an error, never a lookalike (TSK-1001).
+///
+/// # Errors
+/// Returns a message when the history or a tree cannot be read.
+pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet<String>, String> {
+    let message = |error: git2::Error| error.message().to_string();
+    let mut walk = repo.revwalk().map_err(message)?;
+    walk.push(head).map_err(message)?;
+    walk.hide(base).map_err(message)?;
+    let changed =
+        |from: Option<&git2::Tree<'_>>, to: &git2::Tree<'_>| -> Result<BTreeSet<Vec<u8>>, String> {
+            let diff = repo
+                .diff_tree_to_tree(from, Some(to), None)
+                .map_err(message)?;
+            let mut paths = BTreeSet::new();
+            for delta in diff.deltas() {
+                for file in [delta.old_file(), delta.new_file()] {
+                    if let Some(name) = file.path_bytes() {
+                        paths.insert(name.to_vec());
+                    }
+                }
+            }
+            Ok(paths)
+        };
+    let mut found = BTreeSet::new();
+    for oid in walk {
+        let commit = repo.find_commit(oid.map_err(message)?).map_err(message)?;
+        let tree = commit.tree().map_err(message)?;
+        let parents: Vec<git2::Tree<'_>> = commit
+            .parents()
+            .map(|parent| parent.tree())
+            .collect::<Result<_, _>>()
+            .map_err(message)?;
+        let paths = match parents.as_slice() {
+            [] => changed(None, &tree)?,
+            [parent] => changed(Some(parent), &tree)?,
+            [first, rest @ ..] => {
+                let mut common = changed(Some(first), &tree)?;
+                for parent in rest {
+                    let other = changed(Some(parent), &tree)?;
+                    common.retain(|path| other.contains(path));
+                }
+                common
+            }
+        };
+        for path in paths {
+            let text = String::from_utf8(path).map_err(|error| {
+                odd_name_problem(
+                    &crate::git::GitName::from_bytes(error.as_bytes())
+                        .display()
+                        .to_string(),
+                )
+            })?;
+            found.insert(text);
+        }
+    }
+    Ok(found)
 }
 
 /// Why an entry named `shown` cannot ride in a planning amendment: its name

@@ -362,7 +362,7 @@ fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, Stri
 /// `git.work_records` level.
 /// A criterion `found` names (`<task> <criterion>`) that a task removes
 /// from its own record (TSK-451): the pull request body gives the reason on
-/// a visible line naming the criterion and its removal, or the removal is
+/// a visible line `AC-n removed: <reason>` (TSK-1001), or the removal is
 /// refused, so weakening a criterion stays visible to the review. A push
 /// has no body yet and is judged on its pull request.
 fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation> {
@@ -375,7 +375,7 @@ fn removal(body: Option<&str>, found: &Finding) -> Option<super::TaggedViolation
         println!("{}", note.line("codeflow ci", "note"));
         return None;
     };
-    if super::pr_body::gives_removal_reason(body, criterion) {
+    if super::pr_body::gives_removal_reason(body, task, criterion) {
         println!("codeflow ci: {task} removes {criterion}, with the reason in the PR body");
         return None;
     }

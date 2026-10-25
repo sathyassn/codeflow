@@ -21,6 +21,8 @@ fn codeflow() -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_BASE_REF")
@@ -1079,6 +1081,14 @@ fn a_task_pull_request_amends_its_own_record_with_a_reason_per_removal() {
         "a removal naming no reason",
         &["work.criteria_removal"],
     );
+    // TSK-1001 AC-7: ids are no reason, and a negation declares nothing.
+    for line in ["AC-1 AC-2 AC-3 removed\n", "Do not remove AC-1\n"] {
+        assert_blocks(
+            &ci_body(root, branch, "Task: TSK-001", line),
+            line,
+            &["work.criteria_removal"],
+        );
+    }
     assert_passes(
         &ci_body(
             root,
