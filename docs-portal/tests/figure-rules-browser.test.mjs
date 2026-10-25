@@ -85,6 +85,10 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
     const html = renderFigure(layering, { idPrefix: "g" });
     const clean = await probe(page, css, html);
     assert.deepEqual(figureRuleFailures(clean), [], "the layering specimen holds every rule");
+    // Tones change hue only (TSK-444): the toned layering control holds every
+    // rule too, rule 3 included, in light and dark.
+    const toned = await probe(page, css, renderFigure(await specimen("controls/layering-toned.json"), { idPrefix: "q" }));
+    assert.deepEqual(figureRuleFailures(toned), [], "the toned layering control holds every rule");
     const rulesOf = (observed, evidence = null) => [...new Set(figureRuleFailures({ ...observed, evidence }).map((failure) => failure.rule))];
     const breakages = {
       1: () => document.querySelector("figure.cf-fig").setAttribute("data-cf-figure", ""),
