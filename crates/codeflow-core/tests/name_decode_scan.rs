@@ -1489,6 +1489,44 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
+    // TSK-1003: an unreadable Codex config reports the builder profile line
+    // unavailable and runs nothing; Codex's version and refusal text are
+    // trimmed only to print them, and decide nothing but which line prints.
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "codex_builder_line",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "load",
+        "trim",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_codex_builder_profile",
+        "lines",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_codex_builder_profile",
+        "trim",
+        1,
+        "display",
+    ),
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
         "find_on_path",
@@ -6268,7 +6306,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
-    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor never runs it."),
+    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor runs only codex, and only for the builder profile line (TSK-1003)."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),
