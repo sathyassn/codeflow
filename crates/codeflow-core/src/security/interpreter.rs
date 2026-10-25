@@ -14,10 +14,11 @@ pub(crate) fn evaluate(
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     if levels.secret_reads.is_active() {
-        for args in outward::unwrapped_commands(command) {
+        for unwrapped in outward::unwrapped_commands(command, cwd, home) {
+            let args = &unwrapped.args;
             let name = args
                 .first()
-                .map_or("", |s| s.rsplit('/').next().unwrap_or(s));
+                .map_or("", |s| super::unresolved::writer_name(s));
             if matches!(
                 name,
                 "cat"
@@ -34,7 +35,21 @@ pub(crate) fn evaluate(
                     | "base64"
                     | "Get-Content"
             ) {
-                if let Some(path) = args.iter().skip(1).find(|word| secret_path(word, home)) {
+                // Only a word the shell expands names files it never spells;
+                // a quoted search pattern such as `'^/etc/.*'` is text.
+                let expands = |at: usize| {
+                    unwrapped
+                        .expands
+                        .as_ref()
+                        .is_none_or(|flags| flags.get(at).copied().unwrap_or(true))
+                };
+                let reader_cwd = unwrapped.cwd.as_deref().unwrap_or(cwd);
+                if let Some((_, path)) = args
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find(|(at, word)| secret_path(word, reader_cwd, home, Some(expands(*at))))
+                {
                     violations.push(Violation::new(
                         "security.secret_reads",
                         levels.secret_reads,
@@ -55,7 +70,7 @@ pub(crate) fn evaluate(
             }
         }
         for word in outward::literal_words(&code) {
-            if levels.secret_reads.is_active() && secret_path(&word, home) {
+            if levels.secret_reads.is_active() && secret_path(&word, cwd, home, None) {
                 violations.push(Violation::new(
                     "security.secret_reads",
                     levels.secret_reads,
@@ -102,26 +117,51 @@ pub(crate) fn evaluate(
     violations
 }
 
-fn secret_path(word: &str, home: Option<&Path>) -> bool {
+/// `reader` is `Some` for a reader's argument, saying whether the shell
+/// expands it as a pattern, and `None` for a literal in interpreter code.
+fn secret_path(word: &str, cwd: &Path, home: Option<&Path>, reader: Option<bool>) -> bool {
     let expanded_word = word
         .strip_prefix("$HOME/")
         .or_else(|| word.strip_prefix("${HOME}/"))
         .map(|suffix| format!("~/{suffix}"));
     let word = expanded_word.as_deref().unwrap_or(word);
-    actions::table().sandbox_read_denies.iter().any(|pattern| {
-        let expanded = pattern
-            .strip_prefix("~/")
-            .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
-        let matches = [Some(pattern.as_str()), expanded.as_deref()]
-            .into_iter()
-            .flatten()
-            .any(|path| {
-                word == path
-                    || word
-                        .strip_prefix(path)
-                        .is_some_and(|tail| tail.starts_with('/'))
-            });
-        matches
+    // A named home may be another user's, but the configured store suffix
+    // remains sensitive. Never let a leading slash replace the joined home.
+    let tilde_word = word
+        .strip_prefix('~')
+        .and_then(|tail| tail.split_once('/'))
+        .map(|(_, suffix)| format!("~/{}", suffix.trim_start_matches('/')));
+    let word = tilde_word.as_deref().unwrap_or(word);
+    // Keep the literal spelling for home patterns even when HOME is unknown.
+    // Also judge relative store names from the payload cwd, without reading
+    // files or resolving symlinks. Do not reduce paths to their basename:
+    // auth.json is protected in its store, not in every project directory.
+    let absolute = if let Some(suffix) = word.strip_prefix("~/") {
+        home.map(|home| outward::lexical_join(home, Path::new(suffix)))
+    } else {
+        Some(outward::lexical_join(cwd, Path::new(word)))
+    };
+    secret_path_spelling(word, home, reader)
+        || absolute.as_deref().is_some_and(|path| {
+            secret_path_spelling(&crate::portable_path::slashed(path), home, reader)
+        })
+}
+
+fn secret_path_spelling(word: &str, home: Option<&Path>, reader: Option<bool>) -> bool {
+    let word = word.to_ascii_lowercase();
+    let home_relative = home.and_then(|home| {
+        let home = crate::portable_path::slashed(home).to_ascii_lowercase();
+        word.strip_prefix(home.trim_end_matches('/'))
+            .filter(|tail| tail.starts_with('/'))
+            .map(|tail| format!("~{tail}"))
+    });
+    let word = home_relative.as_deref().unwrap_or(&word);
+    actions::table().sandbox_read_denies.iter().any(|path| {
+        word == path
+            || word
+                .strip_prefix(path)
+                .is_some_and(|tail| tail.starts_with('/'))
+            || reader.is_some_and(|expands| secret_prefix(word, path, expands))
     }) || actions::table().claude_read_groups.iter().any(|group| {
         // This group has no carve-outs; source-name and env-file groups do.
         group.carveouts.is_empty()
@@ -130,13 +170,39 @@ fn secret_path(word: &str, home: Option<&Path>) -> bool {
                 else {
                     return false;
                 };
-                let expanded = pattern
-                    .strip_prefix("~/")
-                    .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
                 matches_extended_glob(word, pattern)
-                    || expanded.is_some_and(|p| matches_extended_glob(word, &p))
+                    || reader.is_some_and(|expands| secret_prefix(word, pattern, expands))
             })
     })
+}
+
+/// A reader can traverse a named directory or expand a pattern without naming
+/// the protected leaf. Only a nonempty literal prefix supplies that evidence.
+/// A word the shell does not expand is all literal: its wildcards are text.
+fn secret_prefix(word: &str, store: &str, expands: bool) -> bool {
+    let wildcard = |c| matches!(c, '*' | '?' | '[' | '{');
+    let prefix = if expands {
+        word.split(wildcard).next().unwrap_or("")
+    } else {
+        word
+    };
+    if prefix.is_empty() {
+        return false;
+    }
+    let patterned = prefix.len() != word.len();
+    if let Some(basename) = store.strip_prefix("**/") {
+        let stem = basename.split(wildcard).next().unwrap_or("");
+        let name = prefix.rsplit('/').next().unwrap_or("");
+        return patterned && !name.is_empty() && !stem.is_empty() && stem.starts_with(name);
+    }
+    let stem = store.split(wildcard).next().unwrap_or("");
+    if patterned {
+        // A wildcard at the home root names no store; `*.md` stays ordinary.
+        prefix != "~/" && stem.starts_with(prefix)
+    } else {
+        stem.strip_prefix(prefix.trim_end_matches('/'))
+            .is_some_and(|tail| tail.starts_with('/'))
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +218,289 @@ mod tests {
             Path::new("/fixture"),
             Some(Path::new("/fixture-home")),
         )
+    }
+
+    #[test]
+    fn hard_secret_filename_spellings_receive_the_same_verdict() {
+        for name in [
+            "id_rsa",
+            "id_rsa.pub",
+            "id_ed25519",
+            "id_ed25519.pub",
+            "certificate.pem",
+            "private.key",
+            "bundle.p12",
+            "bundle.pfx",
+            ".netrc",
+        ] {
+            for prefix in ["", "./", "nested/", "/fixture/", "~/", "$HOME/", "${HOME}/"] {
+                let path = format!("{prefix}{name}");
+                for command in [
+                    format!("cat {path}"),
+                    format!("python3 -c 'open(\"{path}\")'"),
+                ] {
+                    assert!(
+                        check(&command, &SecuritySection::default())
+                            .iter()
+                            .any(|v| v.rule == "security.secret_reads"),
+                        "{command}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn configured_secret_stores_match_relative_to_the_session_directory() {
+        let table = actions::table();
+        let stores = table.sandbox_read_denies.iter().cloned().chain(
+            table
+                .claude_read_groups
+                .iter()
+                .filter(|group| group.carveouts.is_empty())
+                .flat_map(|group| &group.denies)
+                .filter_map(|rule| {
+                    rule.strip_prefix("Read(~/")
+                        .and_then(|rule| rule.strip_suffix(')'))
+                })
+                .map(|path| {
+                    format!(
+                        "~/{}",
+                        path.replace("**/", "nested/")
+                            .replace("**", "entry")
+                            .replace('*', "fixture")
+                    )
+                }),
+        );
+        for store in stores {
+            let suffix = store.strip_prefix("~/").unwrap();
+            let home = Path::new("/fixture-home");
+            let absolute = home.join(suffix);
+            let parent = absolute.parent().unwrap();
+            let basename = absolute.file_name().unwrap().to_str().unwrap();
+            for (cwd, spelling) in [
+                (parent, basename.to_string()),
+                (parent, format!("./{basename}")),
+                (home, suffix.to_string()),
+                (home, crate::portable_path::slashed(&absolute)),
+                (home, store.clone()),
+                (home, format!("$HOME/{suffix}")),
+                (home, format!("${{HOME}}/{suffix}")),
+            ] {
+                let findings = evaluate(
+                    &format!("cat {spelling}"),
+                    &SecuritySection::default(),
+                    PolicyLevel::Block,
+                    cwd,
+                    Path::new("/fixture"),
+                    Some(home),
+                );
+                assert!(
+                    findings.iter().any(|v| v.rule == "security.secret_reads"),
+                    "{cwd:?}: {spelling}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_names_and_carveout_groups_keep_their_shell_verdict() {
+        for name in [
+            "README.md",
+            "auth.json",
+            "./auth.json",
+            "id_ordinary",
+            "identity_rsa",
+            "certificate.pem.txt",
+            "private.key.rs",
+            ".netrc-notes",
+            "~/.ssh-notes/file",
+            "~/.codex/auth.json.old",
+            "~/.password-store-notes/item",
+            ".env",
+            ".env.production",
+            ".env.example",
+            ".env.sample",
+            ".env.template",
+            ".env.dist",
+            "secret.txt",
+            "credentials.json",
+            "secret_scan.rs",
+            "credentials.py",
+        ] {
+            assert!(
+                !check(&format!("cat {name}"), &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads"),
+                "{name}"
+            );
+        }
+    }
+
+    fn assert_secret_commands(commands: &[&str], cwd: &Path) {
+        for command in commands {
+            assert!(
+                evaluate(
+                    command,
+                    &SecuritySection::default(),
+                    PolicyLevel::Block,
+                    cwd,
+                    Path::new("/fixture"),
+                    Some(Path::new("/fixture-home"))
+                )
+                .iter()
+                .any(|v| v.rule == "security.secret_reads"),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_f1_home_aliases_cannot_hide_stores() {
+        assert_secret_commands(
+            &[
+                "cat ~//.codex/auth.json",
+                "cat $HOME//.codex/auth.json",
+                "cat ${HOME}///.codex/auth.json",
+                "cat ~someone/.codex/auth.json",
+                "cat ~$USER/.codex/auth.json",
+                "cat ~someone/.aws/credentials",
+            ],
+            Path::new("/fixture"),
+        );
+    }
+
+    #[test]
+    fn review_f2_secret_spelling_is_ascii_case_insensitive() {
+        assert_secret_commands(
+            &[
+                "cat ID_RSA",
+                "cat ~/.Codex/auth.json",
+                "cat ~/.codex/AUTH.JSON",
+                "cat ~/.AWS/credentials",
+                "cat .PYPIRC",
+            ],
+            Path::new("/fixture-home"),
+        );
+        for store in &actions::table().sandbox_read_denies {
+            assert_secret_commands(
+                &[&format!("cat {}", store.to_ascii_uppercase())],
+                Path::new("/fixture"),
+            );
+        }
+    }
+
+    #[test]
+    fn review_f3_patterns_directories_and_input_redirects_reach_stores() {
+        assert_secret_commands(
+            &[
+                "cat ~/.codex/auth.*",
+                "cat ~/.codex/auth.jso?",
+                "cat ~/.pypir?",
+                "cat id_rs?",
+                "cat ~/.codex/auth.{json}",
+                "cat ~/.codex/*",
+                "grep -r token ~/.codex",
+                "cat ~/.ssh",
+                "cat < ~/.ssh/id_rsa",
+                "sh -c 'cat < ~/.codex/auth.json'",
+                "wc 0<~/.codex/auth.json",
+                "cat auth.*",
+                "cat auth.jso?",
+                "cat auth.{json}",
+            ],
+            Path::new("/fixture-home/.codex"),
+        );
+    }
+
+    #[test]
+    fn review_f4_reader_paths_follow_directory_changes() {
+        assert_secret_commands(
+            &[
+                "cd ~/.codex && cat auth.json",
+                "cd ~/.gem && cat credentials",
+                "sh -c 'cd ~/.codex && cat auth.json'",
+                "cd /fixture-home && cd .codex && cat auth.json",
+                "cd $HOME/.codex && cat < auth.json",
+            ],
+            Path::new("/fixture"),
+        );
+    }
+
+    #[test]
+    fn review_controls_keep_patterns_and_redirect_data_readable() {
+        for command in [
+            "cat src/*.rs",
+            "cat *.md",
+            "cat src/{a,b}.rs",
+            "cat ~/.codex-notes/*",
+            "cat ~/.codex/auth.json.old",
+            "cat < README.md",
+            "echo '< ~/.codex/auth.json'",
+            "cat <<'~/.codex/auth.json'",
+            "cat <<< '~/.codex/auth.json'",
+            "cd src && cat auth.json",
+            "cat ID_ORDINARY",
+        ] {
+            assert!(
+                !check(command, &SecuritySection::default())
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads"),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_quoted_wildcard_is_text_and_an_unquoted_one_expands() {
+        let reads = |command: &str| {
+            evaluate(
+                command,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                Path::new("/fixture"),
+                Path::new("/fixture"),
+                Some(Path::new("/fixture-home")),
+            )
+            .iter()
+            .any(|v| v.rule == "security.secret_reads")
+        };
+        for command in [
+            "rg '^/etc/.*' docs",
+            "grep -e '^/etc/.*' docs",
+            "rg --files | xargs rg '^/etc/.*'",
+            "cat 'id_rs?'",
+            "cat \"~/.codex/auth.*\"",
+        ] {
+            assert!(!reads(command), "{command}");
+        }
+        for command in [
+            "cat /etc/.*",
+            "cat id_rs?",
+            "cat ~/.codex/auth.*",
+            "rg x ~/.codex/*",
+        ] {
+            assert!(reads(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn reader_prefixes_do_not_turn_code_fragments_into_store_reads() {
+        for command in ["cat *.md", "cat src/*.rs", r#"python3 -c 'print("/")'"#] {
+            assert!(
+                !evaluate(
+                    command,
+                    &SecuritySection::default(),
+                    PolicyLevel::Block,
+                    Path::new("/fixture-home"),
+                    Path::new("/fixture"),
+                    Some(Path::new("/fixture-home"))
+                )
+                .iter()
+                .any(|v| v.rule == "security.secret_reads"),
+                "{command}"
+            );
+        }
     }
 
     #[test]
@@ -988,7 +1337,7 @@ mod tests {
         );
         let refusal = integrity_refusal(&findings).unwrap();
         assert!(
-            refusal.message.contains("filled in at run time"),
+            refusal.message.contains(".codeflow/policy.json"),
             "{}",
             refusal.message
         );
@@ -1002,7 +1351,6 @@ mod tests {
         assert_allowed(
             &repo,
             &[
-                "python3 tool.py \"$INPUT\"",
                 "python3 tool.py \"$HOME/notes.md\"",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "W=@ROOT@; python3 tool.py \"$W/src/app.py\"",
@@ -1043,6 +1391,7 @@ mod tests {
                 "find src -name '*.py' -exec python3 -m py_compile {} +",
                 "find . -name '*.py' -exec python3 -m py_compile {} +",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "ls | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
@@ -1215,7 +1564,7 @@ mod tests {
 
     /// TSK-302 review F3: authority metadata refuses in every operand form,
     /// supplied, filled in at run time or globbed, whatever the integrity
-    /// level; ordinary unresolved input stays allowed.
+    /// level. Unresolved shell input near a checkout is covered by TSK-406.
     #[test]
     fn authority_refuses_in_every_operand_form_at_every_level() {
         let repo = repo();
@@ -1239,15 +1588,35 @@ mod tests {
                 level,
             );
             for command in [
-                "python3 tool.py \"$INPUT\"",
                 "ls | xargs python3 tool.py",
-                "find src -exec python3 tool.py {} \\;",
                 "for f in src/*.py; do python3 lint.py \"$f\"; done",
+                "find src -exec python3 tool.py {} \\;",
             ] {
                 let findings = judge_in(&repo, &repo.root, &repo.root, command, level);
                 assert!(findings.is_empty(), "{level:?}: {command}: {findings:?}");
             }
         }
+    }
+
+    /// TSK-406 AC-3 supersedes the old allowances for unresolved shell input.
+    #[test]
+    fn unresolved_shell_expansions_refuse_near_a_checkout() {
+        let repo = repo();
+        assert_public_refused(
+            &repo,
+            &[
+                "python3 tool.py \"$INPUT\"",
+                "python3 tool.py \"$ROOT/$NAME\"",
+                "python3 tool.py \"$ROOT/notes.txt\"",
+                "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
+                "while read f; do python3 lint.py \"$f\"; done < files.txt",
+                "python3 lint.py \"$(echo src/*.py)\"",
+                "python3 lint.py \"$(echo ok src/*.py)\"",
+                "python3 -c 'import sys; print(sys.argv[1:])' \"$config\"",
+                "cd \"$D\" && python3 -c 'import sys; open(sys.argv[1])' \"$IN\"",
+            ],
+            false,
+        );
     }
 
     /// TSK-302 review F4: a line with several suppliers reads what the line
@@ -1547,7 +1916,6 @@ mod tests {
             &[
                 "D=src; cd \"$D\" && python3 -c 'print(1)'",
                 "D=src; cd \"$D\" && python3 -c 'open(\"out.txt\",\"w\")'",
-                "cd \"$D\" && python3 -c 'import sys; open(sys.argv[1])' \"$IN\"",
             ],
         );
     }
@@ -2027,8 +2395,6 @@ mod tests {
                 "print -r '.cla\\x75de/settings.json'",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
-                "python3 tool.py \"$ROOT/$NAME\"",
-                "python3 tool.py \"$ROOT/notes.txt\"",
             ],
         );
     }
@@ -2095,36 +2461,33 @@ mod tests {
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
                 "echo -e \"python3 tool.py .claude/settings.json\"",
                 "print -r '.cla\\x75de/settings.json'",
-                "python3 tool.py \"$ROOT/$NAME\"",
                 "IFS=; arr=('no' 'tes.txt'); python3 tool.py \"${arr[*]}\"",
                 "a=no; b=\"${a}tes.txt\"; python3 tool.py \"$b\"",
                 "export a=notes.txt; python3 tool.py \"$a\"",
                 "f='%s%s\\n'; printf \"$f\" no tes.txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo -ne 'notes.txt' | python3 -c 'import sys; print(sys.stdin.read())'",
-                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 "find src -name '*.py' -exec sh -c 'python3 lint.py \"$1\"' sh {} \\;",
+                "for f in src/*.py; do python3 lint.py \"$f\"; done",
                 // Program output is outside text (operator boundary, 2026-10-15).
-                "ROOT=$(git rev-parse --show-toplevel); python3 \"$ROOT/src/app.py\"",
-                "source venv/bin/activate && echo ok && python3 src/app.py",
                 "echo \"Done $(date)\"; python3 src/app.py",
-                "while read f; do python3 lint.py \"$f\"; done < files.txt",
                 // Ordinary globs an output builtin writes.
                 "echo src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo *.txt; python3 src/app.py",
-                "python3 lint.py \"$(echo src/*.py)\"",
                 "echo ok src/*.py | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$TAG\" *.txt; python3 src/app.py",
-                "python3 lint.py \"$(echo ok src/*.py)\"",
                 "echo notes$(/bin/cat /dev/null).txt | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo notes.txt \"$(/bin/cat /dev/null)\"; python3 src/app.py",
                 // Round 16: a quoted parameter named like a protected
                 // component is a name, not spelled text.
                 "echo \"$config\" | python3 -c 'import sys; print(sys.stdin.read())'",
-                "python3 -c 'import sys; print(sys.argv[1:])' \"$config\"",
                 "echo \"$hooks\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$policy.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
                 "echo \"$settings.json\" | python3 -c 'import sys; print(sys.stdin.read())'",
             ],
+        );
+        assert_public_allowed(
+            &repo,
+            &["source venv/bin/activate && echo ok && python3 src/app.py"],
         );
     }
 }

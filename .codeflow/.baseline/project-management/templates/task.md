@@ -44,7 +44,8 @@ created: {{DATE}}
      a hard-coded or meaningless test merely to satisfy the record. The
      reviewer checks the named evidence, and unsupported claims are defects.
      List each criterion as `- AC-n <criterion>` with no checkbox; ids are
-     unique and never renumbered. End a criterion with
+     unique and never renumbered. This task's own PR may amend them, with a
+     reason in its PR body for each one it removes. End a criterion with
      `(serves EPC-NNN AC-m)` when it serves an epic criterion, or with
      `(journey)` when it names the path exercised. -->
 

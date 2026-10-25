@@ -23,7 +23,8 @@
     "check:windows-profile-confinement": "node scripts/windows-qualification-scope-check.mjs",
     "supply-chain": "node scripts/supply-chain.mjs",
     "check:transport": "node scripts/transport-check.mjs",
-    "check:conversation": "node scripts/conversation-browser-check.mjs"
+    "check:conversation": "node scripts/conversation-browser-check.mjs",
+    "check:lifecycle": "node scripts/lifecycle-browser-check.mjs"
   },
   "dependencies": {
     "@shikijs/core": "4.4.1",

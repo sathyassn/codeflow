@@ -89,6 +89,115 @@ pub fn launch_application(
     )
 }
 
+/// How long the second launch a window opening makes may take to hand its
+/// window to the running browser and exit.
+const WINDOW_HANDOFF_SECONDS: u64 = 10;
+
+/// Open a new review window in the session's running isolated browser, as
+/// `present show` does once every window was closed and the browser is still
+/// within its grace. A second launch on the same profile hands its window to
+/// the running browser and exits, so the recorded browser process stays the
+/// same. Returns `false`, opening nothing, when the recorded browser is no
+/// longer running; the caller then launches a new one.
+pub fn open_window(
+    store: &SessionStore,
+    session_id: Uuid,
+    bootstrap_path: &Path,
+    profile_dir: &Path,
+) -> Result<bool> {
+    verify_runtime_descendant(store.runtime_root(), bootstrap_path)?;
+    verify_profile_path(store.runtime_root(), profile_dir)?;
+    let _launch_lease = store.acquire_browser_launch_lease(session_id)?;
+    let session = store.load(session_id)?;
+    let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) else {
+        return Ok(false);
+    };
+    if process_identity(pid, instance_id, profile_dir)? != ProcessIdentity::Owned {
+        return Ok(false);
+    }
+    // A debug build under the headless lifecycle check: headless Chrome
+    // takes no second launch, so the window opens over the debugging port
+    // instead. The headed check and a release build take the second launch.
+    #[cfg(debug_assertions)]
+    if let Some(port) = test_debugging_port().filter(|_| !test_headed()) {
+        return open_test_window(port, &file_url(bootstrap_path)?).map(|()| true);
+    }
+    let executable = qualified_browser()?;
+    let handoff_instance = Uuid::new_v4();
+    let mut command = configured_browser_launch_command(
+        &executable,
+        &file_url(bootstrap_path)?,
+        profile_dir,
+        handoff_instance,
+    );
+    let mut child = command
+        .spawn()
+        .map_err(|error| PresentError::io(&executable, error))?;
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(WINDOW_HANDOFF_SECONDS);
+    loop {
+        if child
+            .try_wait()
+            .map_err(|error| PresentError::io(&executable, error))?
+            .map(handoff_outcome)
+            .transpose()?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            // The handoff never reached the running browser: this launch
+            // became a browser of its own, which nothing records, so it goes.
+            let cleanup = terminate_qualified_process(child.id(), handoff_instance, profile_dir);
+            let _ = child.wait();
+            return Err(PresentError::BrowserUnavailable(format!(
+                "the running isolated browser did not take the new window within {WINDOW_HANDOFF_SECONDS} s{}",
+                cleanup.err().map_or_else(String::new, |error| format!("; cleanup: {error}"))
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A second launch that handed its window over exits 0; any other exit
+/// opened nothing, so `show` says so instead of reporting a window.
+fn handoff_outcome(status: std::process::ExitStatus) -> Result<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PresentError::BrowserUnavailable(format!(
+            "the second browser launch exited with {status} without opening a window"
+        )))
+    }
+}
+
+/// Opens a page in the headless test browser through its debugging port.
+#[cfg(debug_assertions)]
+fn open_test_window(port: u16, url: &str) -> Result<()> {
+    use std::io::{Read as _, Write as _};
+    let unavailable = |error: std::io::Error| PresentError::BrowserUnavailable(error.to_string());
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).map_err(unavailable)?;
+    write!(
+        stream,
+        "PUT /json/new?{url} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+    )
+    .map_err(unavailable)?;
+    // The debugging server may hold the connection open: the status line
+    // is all this needs.
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(unavailable)?;
+    let mut buffer = [0_u8; 512];
+    let read = stream.read(&mut buffer).map_err(unavailable)?;
+    if buffer[..read].starts_with(b"HTTP/1.1 200") {
+        Ok(())
+    } else {
+        Err(PresentError::BrowserUnavailable(
+            "the test browser refused a new window".to_string(),
+        ))
+    }
+}
+
 fn launch_url(
     store: &SessionStore,
     session_id: Uuid,
@@ -342,6 +451,30 @@ fn terminate_recovery_record(record: &LaunchRecoveryRecord) -> Result<()> {
     Ok(())
 }
 
+/// Read by debug builds only; see `configured_browser_launch_command`.
+#[cfg(debug_assertions)]
+const TEST_DEBUGGING_PORT_ENV: &str = "CF_PRESENT_TEST_DEBUGGING_PORT";
+
+/// Read by debug builds only: with the debugging port, runs the browser
+/// headed so the check proves the production second launch.
+#[cfg(debug_assertions)]
+const TEST_HEADED_ENV: &str = "CF_PRESENT_TEST_HEADED";
+
+/// Whether the lifecycle check asked for a headed browser.
+#[cfg(debug_assertions)]
+fn test_headed() -> bool {
+    std::env::var_os(TEST_HEADED_ENV).is_some()
+}
+
+/// The lifecycle check's debugging port, when it set one.
+#[cfg(debug_assertions)]
+fn test_debugging_port() -> Option<u16> {
+    std::env::var_os(TEST_DEBUGGING_PORT_ENV)?
+        .to_str()?
+        .parse::<u16>()
+        .ok()
+}
+
 fn browser_launch_command(executable: &Path) -> Command {
     crate::platform::restricted_command(executable)
 }
@@ -361,9 +494,25 @@ fn configured_browser_launch_command(
         .arg("--disable-sync")
         .arg("--disable-default-apps")
         .arg("--disable-extensions")
+        // Never touch the operator's keychain: a profile under another HOME
+        // made macOS offer to reset the login keychain (TSK-441).
+        .arg("--use-mock-keychain")
+        .arg("--password-store=basic")
         .arg("--disk-cache-size=33554432")
         .arg("--media-cache-size=8388608")
-        .arg(format!("--app={app_url}"))
+        .arg(format!("--app={app_url}"));
+    // A debug build only: the real-browser lifecycle check drives the browser
+    // codeflow launched over a loopback debugging port, headless so a test run
+    // never opens a window on the host. A release build never reads the
+    // variable.
+    #[cfg(debug_assertions)]
+    if let Some(port) = test_debugging_port() {
+        if !test_headed() {
+            command.arg("--headless=new");
+        }
+        command.arg(format!("--remote-debugging-port={port}"));
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -1549,6 +1698,40 @@ fn rendered_command_line_contains_argument(command: &[u8], expected: &str) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `show` reports a window only when the second launch handed it over
+    /// (exit 0); a launch that failed fast is an error naming its status.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_second_launch_opens_no_window() {
+        use std::os::unix::process::ExitStatusExt as _;
+        assert!(handoff_outcome(std::process::ExitStatus::from_raw(0)).is_ok());
+        let failed = handoff_outcome(std::process::ExitStatus::from_raw(21 << 8))
+            .expect_err("a non-zero exit is refused");
+        assert!(failed.to_string().contains("exit status: 21"), "{failed}");
+    }
+
+    /// Every launch keeps off the operator's keychain (TSK-441): a profile
+    /// under another HOME made macOS offer to reset the login keychain.
+    #[test]
+    fn every_launch_uses_a_mock_keychain_and_basic_password_store() {
+        let command = configured_browser_launch_command(
+            Path::new("browser"),
+            "file:///bootstrap.html",
+            Path::new("/runtime/browser-profile"),
+            Uuid::nil(),
+        );
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        for flag in ["--use-mock-keychain", "--password-store=basic"] {
+            assert!(
+                arguments.iter().any(|argument| argument == flag),
+                "{flag} missing: {arguments:?}"
+            );
+        }
+    }
 
     #[cfg(target_os = "macos")]
     static PROCESS_GROUP_TEST_LEASE: std::sync::Mutex<()> = std::sync::Mutex::new(());

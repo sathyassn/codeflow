@@ -1260,6 +1260,313 @@ fn update_twice_preserves_merged_user_edits() {
 }
 
 #[test]
+fn update_resolved_conflict_stays_resolved() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    let mine = DEVELOP_V1.replace("step one", "step one (project)");
+    std::fs::write(root.join(dest), &mine).unwrap();
+    let (_a2, assets_v2) = fixture_assets(true);
+    let first = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&first, dest), Action::Conflicted);
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+
+    let resolved = DEVELOP_V2.replace("step one (improved)", "step one (project)");
+    std::fs::write(root.join(format!("{dest}.new")), &resolved).unwrap();
+    std::fs::rename(root.join(format!("{dest}.new")), root.join(dest)).unwrap();
+    let second = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&second, dest), Action::KeptUserModified);
+    assert!(!second.has_conflicts());
+    assert_eq!(read(&root, dest), resolved);
+    assert!(!root.join(format!("{dest}.new")).exists());
+    assert_shipped_baseline(&root, dest, DEVELOP_V2);
+}
+
+// Doctor previews through `decide`: an open proposal stays a conflict there,
+// while the update itself refuses until the proposal is resolved.
+#[test]
+fn update_preview_reports_an_open_proposal_as_a_conflict() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V1.replace("step one", "step one (project)"),
+    )
+    .unwrap();
+    let (_a2, source) = fixture_assets(true);
+    let first = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&first, dest), Action::Conflicted);
+    assert!(root
+        .join(format!(".codeflow/.pending-update/{dest}.json"))
+        .exists());
+
+    let decision = scaffold::update::decide(&source, &root, dest, "2.1.0").unwrap();
+    assert!(
+        matches!(
+            decision,
+            Some(scaffold::update::Decision::ConflictProposal(_))
+        ),
+        "{decision:?}"
+    );
+    let error = scaffold::update(&source, &root, &update_opts("2.1.0"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("update changed nothing"), "{error}");
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+}
+
+fn assert_shipped_baseline(root: &Path, dest: &str, shipped: &str) {
+    assert_eq!(read(root, &format!(".codeflow/.baseline/{dest}")), shipped);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
+    assert_eq!(
+        manifest["files"][dest]["sha256"],
+        scaffold::sha256_hex(shipped.as_bytes())
+    );
+}
+
+// Start at v1, conflict at v2, then retain the project edit in the v2 file.
+fn resolved_update_fixture() -> (tempfile::TempDir, PathBuf, tempfile::TempDir, DirSource) {
+    isolate_git();
+    let (project, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let dest = ".claude/workflows/develop.md";
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V1.replace("step one", "step one (project)"),
+    )
+    .unwrap();
+    let (assets, source) = fixture_assets(true);
+    let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, dest), Action::Conflicted);
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+    std::fs::write(
+        root.join(dest),
+        DEVELOP_V2.replace("step one (improved)", "step one (project)"),
+    )
+    .unwrap();
+    std::fs::remove_file(root.join(format!("{dest}.new"))).unwrap();
+    (project, root, assets, source)
+}
+
+#[test]
+fn update_resolved_conflict_merges_later_release_against_accepted_base() {
+    for accept_on_same_release in [true, false] {
+        for overlaps in [true, false] {
+            let (_p, root, assets, source) = resolved_update_fixture();
+            let dest = ".claude/workflows/develop.md";
+            if accept_on_same_release {
+                scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+                assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            }
+            let third = if overlaps {
+                DEVELOP_V2.replace("step one (improved)", "step one (v3)")
+            } else {
+                DEVELOP_V2.replace("step eight", "step eight (v3)")
+            };
+            std::fs::write(
+                assets.path().join("base/claude/workflows/develop.md"),
+                &third,
+            )
+            .unwrap();
+            let report = scaffold::update(&source, &root, &update_opts("2.2.0")).unwrap();
+            let live = read(&root, dest);
+            assert!(live.contains("step one (project)"));
+            if overlaps {
+                assert_eq!(action_of(&report, dest), Action::Conflicted);
+                let proposal = read(&root, &format!("{dest}.new"));
+                assert!(
+                    proposal.contains("step one (improved)"),
+                    "v2 is the conflict base: {proposal}"
+                );
+                assert!(proposal.contains("step one (v3)"));
+                assert!(proposal.contains("step one (project)"));
+                assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            } else {
+                assert_eq!(action_of(&report, dest), Action::Merged);
+                assert!(live.contains("step eight (v3)"));
+                assert_shipped_baseline(&root, dest, &third);
+            }
+        }
+    }
+}
+
+fn snapshot_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                visit(root, &entry.path(), files);
+            } else if kind.is_file() {
+                files.insert(
+                    entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(entry.path()).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+#[test]
+fn update_pending_resolution_refuses_invalid_state_without_writes() {
+    let dest = ".claude/workflows/develop.md";
+    for case in [
+        "proposal",
+        "opening",
+        "base",
+        "separator",
+        "separator_crlf",
+        "closing",
+        "baseline",
+        "manifest",
+        "pending",
+        "missing",
+    ] {
+        for force in [false, true] {
+            let (_p, root, _assets, source) = resolved_update_fixture();
+            match case {
+                "proposal" => {
+                    std::fs::write(root.join(format!("{dest}.new")), "partly resolved proposal")
+                        .unwrap();
+                }
+                "opening" | "base" | "separator" | "separator_crlf" | "closing" => {
+                    let marker = match case {
+                        "opening" => "<<<<<<< ours",
+                        "base" => "||||||| base",
+                        "separator" => "=======",
+                        "separator_crlf" => "=======\r",
+                        _ => ">>>>>>> theirs",
+                    };
+                    std::fs::write(root.join(dest), format!("{marker}\n{}", read(&root, dest)))
+                        .unwrap();
+                }
+                "baseline" => std::fs::write(
+                    root.join(format!(".codeflow/.baseline/{dest}")),
+                    "not shipped",
+                )
+                .unwrap(),
+                "manifest" => {
+                    let mut manifest: serde_json::Value =
+                        serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+                    manifest["files"][dest]["sha256"] = "not a shipped hash".into();
+                    std::fs::write(
+                        root.join(".codeflow/manifest.json"),
+                        serde_json::to_vec(&manifest).unwrap(),
+                    )
+                    .unwrap();
+                }
+                "pending" => std::fs::write(
+                    root.join(format!(".codeflow/.pending-update/{dest}.json")),
+                    "invalid json",
+                )
+                .unwrap(),
+                "missing" => std::fs::remove_file(root.join(dest)).unwrap(),
+                _ => unreachable!(),
+            }
+            let before = snapshot_files(&root);
+            let mut opts = update_opts("2.1.0");
+            opts.force = force;
+            opts.diff_out = Some(root.join("update.diff"));
+            let error = scaffold::update(&source, &root, &opts)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("update changed nothing"), "{case}: {error}");
+            assert_eq!(snapshot_files(&root), before, "{case}, force={force}");
+            // Invalid metadata is preserved; unaffected metadata remains pristine.
+            if !["baseline", "manifest"].contains(&case) {
+                assert_shipped_baseline(&root, dest, DEVELOP_V1);
+            }
+        }
+    }
+}
+
+#[test]
+fn update_resolution_recovers_partial_baseline_writes_and_keeps_ours() {
+    let dest = ".claude/workflows/develop.md";
+    for new_baseline in [false, true] {
+        for new_manifest in [false, true] {
+            let (_p, root, _assets, source) = resolved_update_fixture();
+            // Keeping exactly the pre-update file is a valid resolution too.
+            let mine = DEVELOP_V1.replace("step one", "step one (project)");
+            std::fs::write(root.join(dest), &mine).unwrap();
+            if new_baseline {
+                std::fs::write(root.join(format!(".codeflow/.baseline/{dest}")), DEVELOP_V2)
+                    .unwrap();
+            }
+            if new_manifest {
+                let mut manifest: serde_json::Value =
+                    serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
+                manifest["files"][dest]["sha256"] =
+                    scaffold::sha256_hex(DEVELOP_V2.as_bytes()).into();
+                std::fs::write(
+                    root.join(".codeflow/manifest.json"),
+                    serde_json::to_vec(&manifest).unwrap(),
+                )
+                .unwrap();
+            }
+            let decision = scaffold::update::decide(&source, &root, dest, "2.1.0").unwrap();
+            assert_eq!(
+                decision,
+                Some(scaffold::update::Decision::KeptUserModification)
+            );
+            let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+            assert_eq!(action_of(&report, dest), Action::KeptUserModified);
+            assert_eq!(read(&root, dest), mine);
+            assert_shipped_baseline(&root, dest, DEVELOP_V2);
+            assert!(!root
+                .join(format!(".codeflow/.pending-update/{dest}.json"))
+                .exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn update_pending_resolution_refuses_linked_metadata_without_writes() {
+    let dest = ".claude/workflows/develop.md";
+    for rel in [
+        format!(".codeflow/.pending-update/{dest}.json"),
+        format!(".codeflow/.baseline/{dest}"),
+        dest.to_string(),
+    ] {
+        let (_p, root, _assets, source) = resolved_update_fixture();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        let content = read(&root, &rel);
+        std::fs::write(&sentinel, &content).unwrap();
+        std::fs::remove_file(root.join(&rel)).unwrap();
+        std::os::unix::fs::symlink(&sentinel, root.join(&rel)).unwrap();
+        let before = snapshot_files(&root);
+        let error = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), content);
+        assert_eq!(snapshot_files(&root), before);
+    }
+}
+
+#[test]
+fn update_pending_resolution_honors_ignored_paths() {
+    let (_p, root, _assets, source) = resolved_update_fixture();
+    let dest = ".claude/workflows/develop.md";
+    let pending = format!(".codeflow/.pending-update/{dest}.json");
+    let before = read(&root, &pending);
+    std::fs::write(root.join(format!("{dest}.new")), "unresolved").unwrap();
+    add_scaffold_ignore(&root, &[".claude/**"]);
+    let report = scaffold::update(&source, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, dest), Action::Skipped);
+    assert_eq!(read(&root, &pending), before);
+    assert_eq!(read(&root, &format!("{dest}.new")), "unresolved");
+    assert_shipped_baseline(&root, dest, DEVELOP_V1);
+}
+
+#[test]
 fn update_conflict_writes_dot_new_and_never_clobbers() {
     isolate_git();
     let (_p, root) = project_dir();

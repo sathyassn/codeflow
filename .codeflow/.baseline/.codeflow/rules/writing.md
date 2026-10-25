@@ -154,12 +154,14 @@ marks, not the choice. Draw a figure only when a relationship carries the
 point, then draw the family that relationship names, with one idea, every
 mark explained and one caption line. The forms by surface:
 
-- Where the current surface renders one, an inline figure is the default,
-  such as an inline HTML figure in a desktop harness.
-- When people will open, comment on or share it, use a review or share
-  page: `cf-present` (standard and full tiers) when one coherent surface
-  with anchored feedback materially helps, or the harness's page publisher;
-  say why you opened it. Formatting preference alone never opens one.
+- Where the current surface renders one and the answer is short, an inline
+  figure is the default, such as an inline HTML figure in a desktop harness.
+- A figure or explanation that needs more than an inline reply goes to
+  `cf-present` (standard and full tiers) by default; say why you opened it.
+  Formatting preference alone never opens one.
+- The harness's own page or widget, such as a Claude Artifact page, is the
+  exception: use it only when the operator asks for it or the content must
+  be shared, since `cf-present` is local and cannot be shared.
 - On docs-portal pages, use the portal's figure grammar, a declared figure
   block (standard and full tiers).
 - Markdown files, PR bodies and records are ASCII surfaces. Use fenced
