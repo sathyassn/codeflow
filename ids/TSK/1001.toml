@@ -1,0 +1,11 @@
+id = "TSK-1001"
+uid = "fe25c406-3cde-47aa-b1b6-52d1084a9430"
+kind = "TSK"
+title = "Merge admission and PR checks refuse what the retro review found"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-25T02:32:59Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
