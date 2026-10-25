@@ -2774,3 +2774,274 @@ fn review_cadence_and_security_lens_are_stated_once() {
         assert!(triggers.contains(&kept), "routing policy lost {kept}");
     }
 }
+
+/// TSK-455: changeable state is checked live at the moment it is stated,
+/// routed on or acted on. The full rule has one home in the workflow
+/// discipline; the always rule, the orchestrator, transport, cf-delegate and
+/// the status rules point to it and never carry a once-per-session expiry.
+#[test]
+fn changeable_state_is_checked_live_and_stated_once() {
+    let home = "Check changeable state live";
+    let discipline = normalize_whitespace(&read("assets/base/rules/workflow-discipline.md"));
+    assert_eq!(
+        discipline.matches(&format!("## {home}")).count(),
+        1,
+        "workflow-discipline.md must hold the one {home} section"
+    );
+    for sentence in [
+        "This is the one statement of how a session treats state that can change; other files point here.",
+        "Changeable state is anything that can differ from the last time you looked: seat and model availability and usage limits; tools, MCP servers and credentials; CI runs, required checks and rulesets; PR, branch and integration-line state; task record status; host load and locks; and other agents' progress.",
+        "Before you state such a fact, route on it or act on it, check it live with a probe that observes it now:",
+        "**An earlier result is a lead, never a fact.**",
+        "a stated expiry or reset time is not proof that the state still holds.",
+        "**A fresh check is not a retry.**",
+        "**Facts bound to an immutable identity need no re-check.**",
+        "**Resume, compaction and summaries change nothing.**",
+    ] {
+        assert_eq!(
+            discipline.matches(sentence).count(),
+            1,
+            "{home} must state once: {sentence}"
+        );
+    }
+
+    // The always rule carries the short clause, in the map and every render.
+    let clause = "State that can change is checked live when stated or acted on; an earlier result is a lead, never a fact.";
+    for path in [
+        "assets/base/rule-map.toml",
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "AGENTS.md",
+    ] {
+        assert_eq!(
+            normalize_whitespace(&read(path)).matches(clause).count(),
+            1,
+            "{path} must carry the live-state clause of the evidence rule once"
+        );
+    }
+
+    // Every other site points to the one home rather than restating it.
+    let pointer = format!("\"{home}\"");
+    for path in [
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        "assets/base/claude/skills/cf-delegate/SKILL.md",
+        "assets/base/rules/writing.md",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        assert!(
+            text.contains(&pointer),
+            "{path} must point to workflow-discipline.md {pointer}"
+        );
+        for restated in [
+            "Changeable state is anything that can differ",
+            "**Resume, compaction and summaries change nothing.**",
+        ] {
+            assert!(!text.contains(restated), "{path} restates {restated:?}");
+        }
+    }
+}
+
+/// One live-state obligation: the operative clause a file must carry inside
+/// one section (`""` is the text before the first `## ` heading), and a
+/// reversed wording that keeps the heading but drops the duty.
+struct LiveStateObligation {
+    path: &'static str,
+    section: &'static str,
+    clause: &'static str,
+    reversed: &'static str,
+}
+
+const LIVE_STATE_OBLIGATIONS: &[LiveStateObligation] = &[
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Sessions and state",
+        clause: "On a resume, check live the facts that may have changed (the target tip, the seats, the open findings) before continuing,",
+        reversed: "On a resume, rely on the facts the summary carries (the target tip, the seats, the open findings) before continuing,",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "A fact carried in a summary, a compacted context or a resumed session is an earlier result; check it again before you rely on it.",
+        reversed: "A fact carried in a summary, a compacted context or a resumed session is current; rely on it.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "say the fact is unverified and give the time of the last check,",
+        reversed: "state the last known value as current,",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "A check made for a decision covers the action that immediately carries it out; a later decision needs a check of its own.",
+        reversed: "A check made for a decision covers every later decision in the session.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "A check before a later decision is a new observation for that decision, so it runs even when the same probe failed for an earlier one.",
+        reversed: "A check before a later decision is a retry, so it is skipped when the same probe failed for an earlier one.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Check changeable state live",
+        clause: "The content at a commit SHA, a merged PR's merge commit or a finished run's recorded result stays true.",
+        reversed: "The content at a commit SHA, a merged PR's merge commit or a finished run's recorded result is checked again at each use.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/workflow-discipline.md",
+        section: "Navigate blockers",
+        clause: "A fresh check before a later decision is not such a retry (\"Check changeable state live\").",
+        reversed: "A fresh check before a later decision is such a retry.",
+    },
+    LiveStateObligation {
+        path: "assets/base/rules/writing.md",
+        section: "Replies and status",
+        clause: "is checked live for that report, or marked unverified with the time of its last check;",
+        reversed: "may be carried from an earlier report;",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        section: "Preflight",
+        clause: "Its seat availability expires: before each routing decision (an assignment, a review routing or a fallback), probe the seats that decision depends on live,",
+        reversed: "Its seat availability holds for the session: before each routing decision (an assignment, a review routing or a fallback), reuse the preflight result,",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        section: "Invariants",
+        clause: "Record reduced assurance only after a live probe fails, naming the probe and its time.",
+        reversed: "Record reduced assurance as soon as a seat is believed unavailable.",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        section: "Invariants",
+        clause: "A seat recorded unavailable is probed live again before every later assignment and review routing;",
+        reversed: "A seat recorded unavailable stays unavailable for later assignments and review routing;",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        section: "",
+        clause: "Reading them is not checking availability: whether a seat can run is probed live before each routing decision,",
+        reversed: "Reading them also settles availability for the session,",
+    },
+    LiveStateObligation {
+        path: "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md",
+        section: "Cross-family transport",
+        clause: "Whether a seat can run is changeable state: probe it live before each routing decision",
+        reversed: "Whether a seat can run is settled at preflight",
+    },
+    LiveStateObligation {
+        path: "assets/base/claude/skills/cf-delegate/SKILL.md",
+        section: "Preflight: is the delegate even available",
+        clause: "Run this check before each consult or handoff: an earlier failure or usage-limit message is a lead, never a fact",
+        reversed: "Run this check once per session: an earlier failure or usage-limit message settles it",
+    },
+];
+
+/// The whitespace-normalized body of each `## ` section, keyed by heading.
+fn markdown_sections(raw: &str) -> BTreeMap<String, String> {
+    let mut sections = BTreeMap::new();
+    let mut heading = String::new();
+    let mut body = String::new();
+    for line in raw.lines() {
+        if let Some(next) = line.strip_prefix("## ") {
+            sections.insert(heading, normalize_whitespace(&body));
+            heading = next.trim().to_string();
+            body = String::new();
+        } else {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    sections.insert(heading, normalize_whitespace(&body));
+    sections
+}
+
+/// Each obligation whose clause is missing from its section.
+fn live_state_gaps(files: &BTreeMap<&str, BTreeMap<String, String>>) -> Vec<String> {
+    LIVE_STATE_OBLIGATIONS
+        .iter()
+        .filter(|duty| {
+            !files
+                .get(duty.path)
+                .and_then(|sections| sections.get(duty.section))
+                .is_some_and(|body| body.contains(duty.clause))
+        })
+        .map(|duty| format!("{} \"{}\": {}", duty.path, duty.section, duty.clause))
+        .collect()
+}
+
+fn live_state_files() -> BTreeMap<&'static str, BTreeMap<String, String>> {
+    LIVE_STATE_OBLIGATIONS
+        .iter()
+        .map(|duty| (duty.path, markdown_sections(&read(duty.path))))
+        .collect()
+}
+
+/// TSK-455 review round 1: the operative clauses, not their headings, are
+/// pinned inside their sections, and a reversed wording of each one fails.
+#[test]
+fn live_state_obligations_hold_and_a_reversed_clause_fails() {
+    let files = live_state_files();
+    assert_eq!(live_state_gaps(&files), Vec::<String>::new());
+    for duty in LIVE_STATE_OBLIGATIONS {
+        let mut mutated = files.clone();
+        let body = mutated
+            .get_mut(duty.path)
+            .and_then(|sections| sections.get_mut(duty.section))
+            .expect("section present");
+        *body = body.replace(duty.clause, duty.reversed);
+        let gaps = live_state_gaps(&mutated);
+        assert!(
+            gaps.iter().any(|gap| gap.ends_with(duty.clause)),
+            "reversing {:?} in {} must fail the check",
+            duty.clause,
+            duty.path
+        );
+    }
+}
+
+/// TSK-455: the status row in each tier names live-checked facts, and the
+/// incident wording (read or preflight once per session, rechecked only on a
+/// visible change) is gone from every copy and baseline.
+#[test]
+fn status_rows_name_live_checked_facts_and_preflight_expires() {
+    let status = "check live each changeable fact it rests on (refs, PRs, checks, seats), or mark it unverified with its last check time";
+    for path in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "AGENTS.md",
+    ] {
+        assert!(
+            normalize_whitespace(&read(path)).contains(status),
+            "{path} status row must name live-checked facts"
+        );
+    }
+
+    let mut paths = Vec::new();
+    for tree in [
+        "assets/base/agents/skills",
+        ".claude/skills",
+        ".agents/skills",
+        ".codeflow/.baseline/.claude/skills",
+        ".codeflow/.baseline/.agents/skills",
+    ] {
+        for file in ["SKILL.md", "resources/capability-routing.md"] {
+            paths.push(format!("{tree}/cf-model-orchestrator/{file}"));
+        }
+    }
+    for path in paths {
+        let text = normalize_whitespace(&read(&path));
+        for retired in [
+            "Run preflight once per session per lane.",
+            "Recheck it explicitly when a tool, binding, permission or selector changed since it ran.",
+            "read once per session and rechecked explicitly when a tool, binding, permission or selector changed.",
+        ] {
+            assert!(!text.contains(retired), "{path} keeps the retired {retired:?}");
+        }
+    }
+}
