@@ -8750,6 +8750,8 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
     let root = tmp.path().join("repo");
     std::fs::create_dir_all(&root).unwrap();
     enforced_repo(&root);
+    // A `cd` the guard can follow needs a destination that exists (TSK-397).
+    std::fs::create_dir_all(root.join("src")).unwrap();
     let linked = root.join(".worktrees/w");
     git(
         &root,
@@ -8889,7 +8891,8 @@ fn exec_guard_judges_the_paths_an_interpreter_is_given() {
         "find . -name '*.py' -exec python3 -m py_compile {} +",
         "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
         "python3 tool.py -v -n3 -o out.json",
-        "cd src && python3 app.py settings.json",
+        // `./` skips CDPATH, so this `cd` is followed (TSK-397).
+        "cd ./src && python3 app.py settings.json",
         "find . -name '*.rs' -execdir python3 lint.py {} +",
         "find src -execdir python3 lint.py notes.txt \\;",
         "cd .codex && python3 -c 'print(1)'",
@@ -9228,13 +9231,13 @@ fn exec_guard_contract_3(dir: &Path, command: &str) -> Output {
 }
 
 #[test]
-fn exec_guard_narrows_successful_cd_before_interpreter() {
+fn exec_guard_keeps_the_starting_directory_after_cd() {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
     enforced_repo(&root);
     std::fs::create_dir(root.join("src")).unwrap();
     for (line, allowed) in [
-        ("cd src && python3 tool.py ..", true),
+        ("cd src && python3 tool.py ..", false),
         ("cd src && python3 tool.py ../.claude/settings.json", false),
         ("cd src; python3 tool.py ..", false),
         ("cd src || python3 tool.py ..", false),

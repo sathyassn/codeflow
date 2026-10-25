@@ -1046,21 +1046,46 @@ mod tests {
                 "ls | xargs python3 edit.py",
                 "cat > notes.md <<'EOF'\nexample: python3 edit.py .claude/settings.json\nEOF",
                 "printf '%s\\n' 'python3 edit.py .claude/settings.json' > notes.md",
-                "cd src && python3 app.py settings.json",
+                // `./` skips CDPATH, so this `cd` is followed (TSK-397).
+                "cd ./src && python3 app.py settings.json",
                 "python3 edit.py \"@ROOT@/src/app.py\"",
             ],
         );
     }
 
+    /// TSK-397 (operator decision): after `cd`, the guard keeps judging
+    /// interpreter arguments from the starting directory too. Where a `cd`
+    /// lands depends on shell state the guard cannot see, so narrowing
+    /// cannot be made sound; a parent path that is legitimate from the
+    /// destination still refuses when it leaves the checkout from the start.
     #[test]
-    fn successful_cd_narrows_interpreter_arguments() {
+    fn cd_keeps_the_starting_directory() {
         let repo = repo();
-        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
+        std::fs::create_dir_all(repo.root.join("lib")).unwrap();
         assert_refused(
             &repo,
             &repo.root,
             &repo.root,
-            &["cd src && python3 tool.py ../.claude/settings.json"],
+            &[
+                "cd src && python3 tool.py ..",
+                "cd src && python3 tool.py ../.claude/settings.json",
+                "cd src && python3.13 tool.py ..",
+                "cd src && node tool.js ..",
+                "cd src && ruby tool.rb ..",
+                "cd src && perl tool.pl ..",
+                "cd -P src && python3 tool.py ..",
+                "cd -- src && python3 tool.py ..",
+                // A bare name may be found through a `CDPATH` only the shell
+                // holds, so its destination is unknown (Codex finding 3).
+                "cd src && python3 app.py settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "cd ./src && python3 tool.py ../lib",
+                "cd ./src && python3 app.py settings.json",
+            ],
         );
     }
 
@@ -1113,16 +1138,20 @@ mod tests {
         );
     }
 
-    /// TSK-397 Grok attacker review fixture: `src/lnk` and `safe/lnk` point
-    /// at `.claude`, and `hidden` is `.claude` under another name.
+    /// TSK-397 review fixture: `src/lnk` and `safe/lnk` point at `.claude`,
+    /// `hidden` is `.claude` under another name, and `bridge` is
+    /// `.claude/deep`, so `bridge/..` is `.claude` when read physically.
     #[cfg(unix)]
     fn linked_repo() -> Repo {
         let repo = repo();
-        std::fs::create_dir_all(repo.root.join("safe")).unwrap();
+        for dir in ["safe", ".claude/src", ".claude/deep"] {
+            std::fs::create_dir_all(repo.root.join(dir)).unwrap();
+        }
         for (at, to) in [
             ("src/lnk", "../.claude"),
             ("safe/lnk", "../.claude"),
             ("hidden", ".claude"),
+            ("bridge", ".claude/deep"),
         ] {
             std::os::unix::fs::symlink(to, repo.root.join(at)).unwrap();
         }
@@ -1130,8 +1159,7 @@ mod tests {
     }
 
     /// Grok finding 1: from a symlinked hook cwd, `cd ..` may land in the
-    /// link target's parent, so a logical `cd` that differs from the
-    /// physical one keeps the wider set.
+    /// link target's parent; a `..` makes the directory unknown.
     #[cfg(unix)]
     #[test]
     fn a_symlinked_cwd_keeps_both_parents() {
@@ -1146,7 +1174,6 @@ mod tests {
                 "cd -P .. && python3 .claude/settings.json",
             ],
         );
-        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
     }
 
     /// Grok finding 2: `ruby -C` changes directory physically, so
@@ -1167,7 +1194,6 @@ mod tests {
                 "cd safe && ruby -C .. .claude/settings.json",
             ],
         );
-        assert_allowed(&repo, &["cd src && ruby tool.rb .."]);
     }
 
     /// Grok finding 3: the shell removes quotes and backslashes and
@@ -1208,13 +1234,17 @@ mod tests {
                 r"export ${X:-CDPATH}=hidden && cd src && python3 tool.py ../settings.json",
                 r"export CD$'\x50'ATH=hidden && cd src && python3 tool.py ../settings.json",
                 r"printf -v $'\x43DPATH' hidden && cd src && python3 tool.py ../settings.json",
+                // F6: backtick substitution spells it without a `$`.
+                r"export `printf '\103DPATH'`=hidden && cd src && python3 tool.py ../settings.json",
+                r"export `rev <<< HTAPDC`=hidden && cd src && python3 tool.py ../settings.json",
+                r"export `echo HTAPDC | rev`=hidden && cd src && python3 tool.py ../settings.json",
             ],
         );
-        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
     }
 
     /// Grok finding 4: a path-named interpreter may be a wrapper, and an
     /// option before the script may load code that changes directory first.
+    /// These were bypasses of the withdrawn narrowing; they stay refusals.
     #[cfg(unix)]
     #[test]
     fn interpreters_that_load_code_first_keep_the_wider_set() {
@@ -1235,18 +1265,57 @@ mod tests {
                 "cd safe && NODE_OPTIONS=--require=./ch.js node read.js .claude/settings.json",
             ],
         );
-        assert_allowed(
+    }
+
+    /// TSK-397 Codex review round 2: shell functions, `chpwd` hooks and
+    /// `PATH` wrappers (1), the shell's logical `PWD` (2), a `CDPATH` only
+    /// the shell holds (3), zsh's two-operand `cd` (6) and `cdable_vars` (7)
+    /// all move the shell where the guard cannot follow, so each refuses.
+    /// Finding 4 is pinned by `cdpath_entries_resolve_links_before_parents`
+    /// and finding 5 by `an_encoded_cdpath_makes_the_directory_unknown`.
+    #[cfg(unix)]
+    #[test]
+    fn shell_state_the_guard_cannot_see_keeps_the_wider_set() {
+        let repo = linked_repo();
+        assert_refused(
             &repo,
+            &repo.root,
+            &repo.root,
             &[
-                "cd src && python3 tool.py ..",
-                "cd -P src && python3 tool.py ..",
+                "cd src && python3 tool.py .claude/settings.json",
+                "cd src && python3 tool.py ../settings.json",
+                "cd destination && python3 settings.json",
+                "cd destination && python3 .claude/settings.json",
             ],
+        );
+        assert_refused(
+            &repo,
+            &repo.root.join("src"),
+            &repo.root,
+            &[
+                "cd .. && python3 settings.json",
+                "cd src hidden && python3 settings.json",
+                "cd -- src hidden && python3 settings.json",
+            ],
+        );
+        let set = |line: &str, cwd: &Path| outward::line_directories(line, cwd, None);
+        assert!(set("cd src hidden", &repo.root.join("src")).unknown);
+        assert!(set("cd destination", &repo.root).unknown);
+        assert!(set("cd ..", &repo.root.join("src")).unknown);
+        assert!(set("cd src", &repo.root).unknown);
+        assert!(!set("cd ./src", &repo.root).unknown);
+        assert!(
+            !set(
+                &format!("cd {}", repo.root.join("src").display()),
+                &repo.root
+            )
+            .unknown
         );
     }
 
-    /// TSK-397 security review F1: after the narrowed `cd`, a word the guard
-    /// does not model may be a user alias or function that returns to the
-    /// start directory, so only a single interpreter call is narrowed.
+    /// TSK-397 security review F1: after a `cd`, a word the guard does not
+    /// model may be a user alias or function that returns to the start
+    /// directory (oh-my-zsh `-` and `1`, zoxide `z`).
     #[test]
     fn unmodeled_commands_after_cd_keep_the_starting_directory() {
         let repo = repo();
@@ -1265,13 +1334,6 @@ mod tests {
                 "cd src && - && python3 tool.py .claude",
                 "cd src && true && python3 tool.py .claude/settings.json",
                 "cd src && python3 tool.py .. && python3 tool.py .claude/settings.json",
-            ],
-        );
-        assert_allowed(
-            &repo,
-            &[
-                "cd src && python3.13 tool.py ..",
-                "cd src && node tool.js ..",
             ],
         );
     }
@@ -1332,18 +1394,61 @@ mod tests {
         );
     }
 
+    /// Codex review round 2 finding 4: a `CDPATH` entry such as `bridge/..`
+    /// is resolved physically, so `.claude/src` is in the set.
     #[cfg(unix)]
     #[test]
-    fn successful_cd_resolves_symlink_parents_physically() {
+    fn cdpath_entries_resolve_links_before_parents() {
+        const CHILD_ROOT: &str = "CODEFLOW_TEST_397_CDPATH_LINK_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let line = "cd -P src && python3 tool.py ../settings.json";
+            let findings = evaluate(
+                line,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                &root,
+                &root,
+                None,
+            );
+            assert!(argument_refusal(&findings), "{findings:?}");
+            let dirs = outward::line_directories(line, &root, None);
+            assert!(dirs.dirs.contains(&root.join(".claude/src")), "{dirs:?}");
+            return;
+        }
+        let repo = linked_repo();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "security::interpreter::tests::cdpath_entries_resolve_links_before_parents",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &repo.root)
+            .env("CDPATH", "bridge/..")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A `cd` through a symbolic link keeps its physical destination in the
+    /// set beside the starting directory, matching `pwd -P` in bash and zsh.
+    #[cfg(unix)]
+    #[test]
+    fn a_cd_through_a_link_keeps_its_physical_destination() {
         let repo = repo();
         std::os::unix::fs::symlink(repo.root.join("src"), repo.root.join("link")).unwrap();
-        assert_allowed(&repo, &["cd link && python3 tool.py .."]);
         let dirs = outward::line_directories(
             "cd link && python3 tool.py ..",
             &repo.root,
             Some(&repo.home),
         );
-        assert_eq!(dirs.dirs, [repo.root.join("src")]);
+        assert!(dirs.dirs.contains(&repo.root), "{dirs:?}");
+        assert!(dirs.dirs.contains(&repo.root.join("src")), "{dirs:?}");
         for shell in ["bash", "zsh"] {
             let Ok(output) = std::process::Command::new(shell)
                 .args(["-c", "cd link && /bin/pwd -P"])
@@ -1356,7 +1461,8 @@ mod tests {
             };
             assert!(output.status.success());
             let printed = String::from_utf8(output.stdout).unwrap();
-            assert_eq!(Path::new(printed.trim()), dirs.dirs[0], "{shell}");
+            let actual = PathBuf::from(printed.trim());
+            assert!(dirs.dirs.contains(&actual), "{shell}: {actual:?}");
         }
         std::os::unix::fs::symlink(&repo.home, repo.root.join("outside")).unwrap();
         assert_refused(
@@ -1364,6 +1470,7 @@ mod tests {
             &repo.root,
             &repo.root,
             &[
+                "cd link && python3 tool.py ..",
                 "cd link && python3 tool.py ../.claude/settings.json",
                 "cd outside && python3 tool.py ../repo/.claude/settings.json",
             ],
@@ -1710,7 +1817,8 @@ mod tests {
         assert_public_allowed(
             &repo,
             &[
-                "cd src && python3 app.py settings.json",
+                // `./` skips CDPATH, so this `cd` is followed (TSK-397).
+                "cd ./src && python3 app.py settings.json",
                 "find . -name '*.py' -execdir python3 -m py_compile {} +",
                 "find . -name '*.rs' -execdir python3 lint.py {} +",
                 "find src -execdir python3 lint.py notes.txt \\;",

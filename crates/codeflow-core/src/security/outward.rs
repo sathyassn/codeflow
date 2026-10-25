@@ -316,10 +316,6 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
     if depth > 16 {
         return;
     }
-    if let Some((rest, dir)) = cwd.and_then(|cwd| successful_cd_prefix(command, cwd)) {
-        visit(rest, Some(&dir), depth + 1, out);
-        return;
-    }
     shell_inputs(command, out);
     let inherited = out.config_trigger.clone();
     let mut persistent = inherited
@@ -383,9 +379,11 @@ fn visit(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
 /// Every directory a line may run an interpreter in (TSK-302 review round
 /// 2): the session directory and each one a directory change anywhere on
 /// the line may reach, applied in order to every directory listed before
-/// it, whether or not it succeeds. A proven leading `cd` in a literal AND
-/// chain narrows this to its physical destination. `unknown` is set when a
-/// change cannot be resolved, so a command may run anywhere.
+/// it, whether or not it succeeds. The starting directory is never dropped:
+/// where a `cd` lands depends on shell state the guard cannot see (aliases,
+/// functions, `chpwd` hooks, `PATH` wrappers, the shell's own `PWD` and
+/// `CDPATH`, zsh options), so the set fails closed (TSK-397). `unknown` is
+/// set when a change cannot be resolved, so a command may run anywhere.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct DirSet {
     pub(crate) dirs: Vec<PathBuf>,
@@ -401,6 +399,16 @@ impl DirSet {
     pub(crate) fn change(&mut self, change: &DirChange) {
         match change {
             DirChange::To(target) => {
+                // A `..` is resolved against the shell's logical `PWD`,
+                // which may be a symbolic link path the hook's directory
+                // does not show (TSK-397 Codex review finding 2).
+                if target
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    self.unknown = true;
+                }
+                let mut resolved = false;
                 let next: Vec<PathBuf> = self
                     .dirs
                     .iter()
@@ -408,12 +416,22 @@ impl DirSet {
                         let mut next = vec![lexical_join(dir, target)];
                         // Keep the logical reading for later shell changes,
                         // and the physical one for an interpreter's operands.
-                        next.extend(std::fs::canonicalize(dir.join(target)));
+                        let mut physical = |path: PathBuf, next: &mut Vec<PathBuf>| {
+                            if let Ok(found) = std::fs::canonicalize(path) {
+                                resolved = true;
+                                next.push(found);
+                            }
+                        };
+                        physical(dir.join(target), &mut next);
                         if cdpath_searches(target) {
                             if let Some(cdpath) = std::env::var_os("CDPATH") {
                                 for base in std::env::split_paths(&cdpath) {
-                                    let candidate = lexical_join(&dir.join(base), target);
-                                    next.extend(std::fs::canonicalize(&candidate));
+                                    let candidate = lexical_join(&dir.join(&base), target);
+                                    physical(candidate.clone(), &mut next);
+                                    // An entry such as `link/..` is resolved
+                                    // physically by the shell, before `..`
+                                    // (Codex review finding 4).
+                                    physical(dir.join(&base).join(target), &mut next);
                                     next.push(candidate);
                                 }
                             }
@@ -421,6 +439,13 @@ impl DirSet {
                         next
                     })
                     .collect();
+                // No reading reaches an existing directory: the shell may
+                // still resolve the name (`cdable_vars`, `CDABLE_VARS`, a
+                // `CDPATH` it holds), so where it lands is unknown (Codex
+                // review finding 7).
+                if !resolved {
+                    self.unknown = true;
+                }
                 for dir in next {
                     if !self.dirs.contains(&dir) {
                         self.dirs.push(dir);
@@ -467,99 +492,12 @@ fn mentions_cdpath(command: &str) -> bool {
     name.contains("CDPATH") || name.contains("cdpath")
 }
 
-/// Whether the hook's environment, or the line, sets a variable that makes
-/// an interpreter load code before its script (`NODE_OPTIONS=--require`,
-/// `RUBYOPT=-r`, `PERL5OPT=-M`). That code may change directory first.
-fn preload_environment(command: &str) -> bool {
-    ["NODE_OPTIONS", "RUBYOPT", "PERL5OPT"].iter().any(|name| {
-        command.contains(name) || std::env::var_os(name).is_some_and(|value| !value.is_empty())
-    })
-}
-
 fn cdpath_searches(target: &Path) -> bool {
     !target.is_absolute()
         && !matches!(
             target.components().next(),
             Some(std::path::Component::CurDir | std::path::Component::ParentDir)
         )
-}
-
-/// Prove a leading `cd` succeeds before the one command after it runs.
-/// Only `cd <dir> && <interpreter> ...`, literal, qualifies: the rest must
-/// be a single interpreter call, because any other word may be a user alias
-/// or function that changes directory (oh-my-zsh `-` and `1`, zoxide `z`;
-/// TSK-397 security review F1). Other syntax keeps the conservative union,
-/// including subshells, substitutions, redirections, mixed joins, commands
-/// before the `cd` and any mention of `CDPATH` or `cdpath`.
-fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, PathBuf)> {
-    if mentions_cdpath(command) {
-        return None;
-    }
-    let (prefix, rest) = command.split_once("&&")?;
-    if rest.contains("&&") {
-        return None;
-    }
-    let mut call = rest.split([' ', '\t']).filter(|w| !w.is_empty());
-    let program = call.next()?;
-    // The rest must start with an interpreter named bare; any other word
-    // may be an alias, function or script that changes directory, and a
-    // path (`./python3`) may be a wrapper that does (Grok finding 4).
-    if program.contains('/') {
-        return None;
-    }
-    interpreter_family(program)?;
-    // An option before the script may load code that runs first and
-    // changes directory (`-m`, `-r`, `--require`, `--import`, `-M`, `-I`),
-    // so only a script operand directly after the interpreter qualifies.
-    if call.next().is_none_or(|word| word.starts_with('-')) || preload_environment(command) {
-        return None;
-    }
-    if command.split("&&").any(|segment| {
-        segment.chars().all(|c| matches!(c, ' ' | '\t'))
-            || !segment.chars().all(|c| {
-                c.is_alphanumeric() || matches!(c, ' ' | '\t' | '/' | '.' | '_' | '-' | '=' | ':')
-            })
-    }) {
-        return None;
-    }
-    // The character check above admits only space and tab as separators.
-    let words: Vec<_> = prefix
-        .split([' ', '\t'])
-        .filter(|w| !w.is_empty())
-        .collect();
-    let (target, physical) = match words.as_slice() {
-        ["cd", target] | ["cd", "--" | "-L", target] => (*target, false),
-        ["cd", "-P", target] => (*target, true),
-        _ => return None,
-    };
-    if target.starts_with('-') {
-        return None;
-    }
-    let target = Path::new(target);
-    // CDPATH can select a different destination. The union below includes
-    // its search paths and keeps the starting directory in that case.
-    if cdpath_searches(target) && std::env::var_os("CDPATH").is_some_and(|p| !p.is_empty()) {
-        return None;
-    }
-    if expand_commands(rest).iter().any(|segment| {
-        let words = command_argv(segment);
-        words
-            .iter()
-            .any(|word| matches!(word.as_str(), "popd" | "dirs" | "eval"))
-            || !dir_changes(&words, None).is_empty()
-    }) {
-        return None;
-    }
-    // The shell may resolve `..` logically or physically, depending on
-    // how it learned its directory, so a logical `cd` narrows only when
-    // both readings reach the same directory (Grok finding 1).
-    let dir = std::fs::canonicalize(cwd.join(target)).ok()?;
-    if !physical && std::fs::canonicalize(lexical_join(cwd, target)).ok()? != dir {
-        return None;
-    }
-    // A metadata error or a non-directory returns None, which keeps the
-    // wider directory set; absence is never read as an answer here.
-    dir.is_dir().then_some((rest, dir))
 }
 
 /// `dir` joined with `target`, `.` and `..` removed by spelling, as the
@@ -956,6 +894,11 @@ fn cd_destination(
         operand = Some(word);
         break;
     }
+    // zsh reads `cd old new` as a substitution in the current path, which
+    // may reach any directory (TSK-397 Codex review finding 6).
+    if operand.is_some() && operands.next().is_some() {
+        return Some(DirChange::Unknown);
+    }
     match operand {
         Some(operand) if name == "pushd" && operand.starts_with('+') => None,
         Some(operand) => Some(target(operand)),
@@ -985,12 +928,6 @@ fn hides_a_directory_change(rest: &[String]) -> bool {
 /// The directory set of `command` from `cwd`: every simple command the
 /// line runs, nested bodies included, read in order.
 pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -> DirSet {
-    if let Some((_, dir)) = successful_cd_prefix(command, cwd) {
-        return DirSet {
-            dirs: vec![dir],
-            unknown: false,
-        };
-    }
     // A line that names `CDPATH` or `cdpath` may set it in a form this
     // parser does not read (`+=`, `export`, `declare`, arrays, `read`,
     // `printf -v`), and its search paths may not be enumerable, so the
@@ -1003,13 +940,14 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
         for change in dir_changes(&words, home) {
-            // An expansion or `$'...'` quote can spell `CDPATH` in a form
-            // no reading of the text recovers (`$'\x43DPATH'`,
-            // `${X:-CDPATH}`), so a `cd` that CDPATH could redirect lands
-            // somewhere unknown on such a line (TSK-397 review F4).
-            if command.contains('$')
-                && matches!(&change, DirChange::To(target) if cdpath_searches(target))
-            {
+            // A `cd` that CDPATH could redirect lands somewhere unknown:
+            // the shell may hold a `CDPATH` from its profile that the hook
+            // never sees (TSK-397 Codex review finding 3), and a line can
+            // spell one in forms no reading of the text recovers
+            // (`$'\x43DPATH'`, `${X:-CDPATH}`, `` `rev <<< HTAPDC` ``;
+            // security review F4 and F6). Only `./`, `../` and absolute
+            // targets skip the search.
+            if matches!(&change, DirChange::To(target) if cdpath_searches(target)) {
                 set.unknown = true;
             }
             set.change(&change);
