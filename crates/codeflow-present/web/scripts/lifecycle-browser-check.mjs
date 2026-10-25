@@ -139,13 +139,35 @@ try {
   page = await reviewPage(browser);
   step(`present show relaunched browser ${secondPid}`);
 
-  // AC-6: queue a note, then End review.
+  // AC-6: keep a draft note, then End review.
   await page.locator("#cf-comment-toggle").click();
-  await page.getByTestId("notes-dock").locator(".cf-tools summary").click();
+  // A narrow window shows the notes as a collapsed sheet; open it first.
+  const dock = page.getByTestId("notes-dock");
+  if (await page.getByTestId("notes-expand").isVisible() && (await dock.getAttribute("data-expanded")) !== "true") await page.getByTestId("notes-expand").click();
   await page.getByRole("button", { name: "Whole document" }).click();
   await page.getByTestId("composer-text").fill("Queued before End review.");
   await page.getByTestId("composer-save").click();
   await page.getByTestId("composer").waitFor({ state: "detached" });
+  // TSK-443: End review never sends a verdict the reviewer did not choose.
+  // With the panel closed and no verdict, it opens the notes at the verdict,
+  // names what is missing and keeps the session and the draft note.
+  await page.getByTestId("comment-leave").click();
+  let asked = false;
+  const refuse = (dialog) => { asked = true; void dialog.dismiss(); };
+  page.on("dialog", refuse);
+  await page.getByTestId("end-review").click();
+  await page.getByTestId("verdict-error").waitFor();
+  if ((await page.getByTestId("verdict-error").innerText()) !== "Choose a verdict first.") throw new Error("End review without a verdict did not name the verdict");
+  if (!(await page.getByTestId("verdict-error").isVisible())) throw new Error("the verdict message is not visible");
+  if ((await dock.getAttribute("data-open")) !== "true") throw new Error("End review without a verdict left the notes closed");
+  if ((await page.getByTestId("note-row").count()) !== 1) throw new Error("End review without a verdict lost the draft note");
+  if (await page.evaluate(() => document.activeElement?.id) !== "cf-review-verdict") throw new Error("the verdict is not focused");
+  if (asked) throw new Error("End review without a verdict asked to end");
+  if (session().status !== "active") throw new Error("End review without a verdict ended the session");
+  await page.screenshot({ path: join(output, "lifecycle-end-without-verdict.png") });
+  step("End review without a verdict kept the session and asked for one");
+  page.off("dialog", refuse);
+  await page.locator("#cf-review-verdict").selectOption("approve_with_notes");
   await page.screenshot({ path: join(output, "lifecycle-before-end.png") });
   page.once("dialog", (dialog) => { void dialog.accept(); });
   const servicePort = session().service_port;

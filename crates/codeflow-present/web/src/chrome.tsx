@@ -1293,12 +1293,23 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
   };
 
-  // End review: queued notes go first, as a review; only once the service has
+  // End review: draft notes go first, as a review; only once the service has
   // them is the session closed, so ending never loses a note. The service then
   // quits this browser, as `codeflow present close` does.
   const endReview = async (): Promise<void> => {
     if (submittingRef.current || closedRef.current) return;
     const queued = notesRef.current.length;
+    // End review never sends a verdict the reviewer did not choose: it opens
+    // the notes at the verdict, says what is missing and keeps the session.
+    if ((queued || instruction.trim()) && !verdict) {
+      if (!commentModeRef.current) armComment(true);
+      setPanelOpen(true);
+      setSheetExpanded(true);
+      setVerdictError("Choose a verdict first.");
+      setStatus("Choose a verdict first. The review stays open.");
+      requestAnimationFrame(() => document.getElementById("cf-review-verdict")?.focus());
+      return;
+    }
     const question = queued
       ? `End this review? Your ${queued} draft ${queued === 1 ? "note is" : "notes are"} sent first, then this window closes.`
       : "End this review? This window closes and the session ends.";
@@ -1555,7 +1566,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             type="button"
             class="cf-end-btn"
             data-testid="end-review"
-            title="Send any queued notes, end this review and close the window"
+            title="Send any draft notes, end this review and close the window"
             disabled={busy || sessionClosed}
             onClick={() => { void endReview(); }}
           >

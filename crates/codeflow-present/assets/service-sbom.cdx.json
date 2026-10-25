@@ -5,6 +5,28 @@
   "components": [
     {
       "type": "file",
+      "bom-ref": "service/app-FRK775BE.js.br",
+      "name": "service/app-FRK775BE.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "acf41689b7cdf749ac1aa0349581c6913c85caaedbf1aabf7940c8c091da482d"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-FRK775BE.js.gz",
+      "name": "service/app-FRK775BE.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "64936a51ca7f2c3823f0723708c5f8d143a08c2b23e42f357c990c7fcb1bea36"
+        }
+      ]
+    },
+    {
+      "type": "file",
       "bom-ref": "service/app-O4RB4NLN.css.br",
       "name": "service/app-O4RB4NLN.css.br",
       "hashes": [
@@ -22,28 +44,6 @@
         {
           "alg": "SHA-256",
           "content": "889595570de2b98e0d893d5428ee5629ee2c2dff116419b87e20a06a0b9e9728"
-        }
-      ]
-    },
-    {
-      "type": "file",
-      "bom-ref": "service/app-Q5DDKGYN.js.br",
-      "name": "service/app-Q5DDKGYN.js.br",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "4c971bf6d21100e1ff8feac1baa4c948d70d4e206b0632ed6056073b8c894137"
-        }
-      ]
-    },
-    {
-      "type": "file",
-      "bom-ref": "service/app-Q5DDKGYN.js.gz",
-      "name": "service/app-Q5DDKGYN.js.gz",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "e1d5a9cd6e7d4cab7300ea01287f97844028b4ec0f1dc4438ce51dd544a22e5a"
         }
       ]
     },
