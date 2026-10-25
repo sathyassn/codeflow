@@ -1490,8 +1490,10 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
     // TSK-1003: an unreadable Codex config reports the builder profile line
-    // unavailable and runs nothing; Codex's version and refusal text are
-    // trimmed only to print them, and decide nothing but which line prints.
+    // unavailable and runs nothing. Codex's refusal text is trimmed only to
+    // print it. Its version line and feature table are read by their
+    // format: a line that does not fit makes the line unavailable, never
+    // accepted.
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
         "codex_builder_line",
@@ -1515,17 +1517,31 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
     (
         "crates/codeflow-core/src/doctor/codex_profile.rs",
-        "probe_codex_builder_profile",
+        "probe_with_timeout",
         "lines",
         1,
-        "display",
+        "format-contract",
     ),
     (
         "crates/codeflow-core/src/doctor/codex_profile.rs",
-        "probe_codex_builder_profile",
+        "feature_table",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "probe_with_timeout",
         "trim",
         1,
-        "display",
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/doctor/codex_profile.rs",
+        "feature_table",
+        "trim",
+        1,
+        "format-contract",
     ),
     (
         "crates/codeflow-cli/src/cmd/doctor.rs",
