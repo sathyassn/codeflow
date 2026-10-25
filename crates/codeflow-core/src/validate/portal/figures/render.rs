@@ -421,9 +421,19 @@ fn validate_tones(
     name: &str,
     state_mark: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
+    // Only a visible label counts: a non-blank string, as the module's
+    // `text` check requires (JavaScript `trim` also strips U+FEFF).
     let labelled: BTreeSet<&str> = draw
         .iter()
-        .filter(|item| item.get("text").is_some())
+        .filter(|item| {
+            item.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| {
+                    !text
+                        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                        .is_empty()
+                })
+        })
         .filter_map(|item| item.get("for").and_then(Value::as_array))
         .flatten()
         .filter_map(Value::as_str)
@@ -2143,6 +2153,29 @@ mod tests {
             unlabelled_narrow.unwrap_err(),
             "narrow.draw[9] is toned but no text item labels l1: hue is never alone"
         );
+        // A blank or non-string label is no label: wide item 11 labels m1,
+        // narrow item 0 labels l1.
+        for blank in [
+            serde_json::json!(""),
+            serde_json::json!("  \t "),
+            serde_json::json!("\u{feff}"),
+            serde_json::json!(7),
+            serde_json::json!(["Git hooks"]),
+        ] {
+            let wide = toned_control(|d| d["figure"]["wide"]["draw"][11]["text"] = blank.clone());
+            assert_eq!(
+                wide.unwrap_err(),
+                "wide.draw[15] is toned but no text item labels m1: hue is never alone",
+                "{blank}"
+            );
+            let narrow =
+                toned_control(|d| d["figure"]["narrow"]["draw"][0]["text"] = blank.clone());
+            assert_eq!(
+                narrow.unwrap_err(),
+                "narrow.draw[9] is toned but no text item labels l1: hue is never alone",
+                "{blank}"
+            );
+        }
         let no_id = toned_control(|d| {
             d["figure"]["wide"]["draw"][15]
                 .as_object_mut()
