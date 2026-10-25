@@ -266,22 +266,26 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
     lines
 }
 
-/// Whether the installed Codex opens a builder seat as the managed launch
-/// selects its profile (TSK-1003). This is the one preflight value that runs
-/// a binary: `codex features list` with the builder overrides, which loads
-/// config and starts no model, session or sandbox. Codex 0.163 and later
-/// load config at startup without the project file, so a launch that names
-/// a project-only profile stops there; the probe loads it both ways.
+/// What the installed Codex says about the builder launch overrides
+/// (TSK-1003). This is the one preflight value that runs a binary:
+/// `codex --version` and `codex features list` with the overrides, which
+/// load config and start no model, session or sandbox. An exit code of 0
+/// shows only that Codex accepted the command; whether the project config
+/// loaded is read from the feature table, and is otherwise unverified.
 fn codex_builder_line(
     root: &std::path::Path,
     look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
 ) -> String {
-    use codeflow_core::doctor::CodexLoad;
+    use codeflow_core::doctor::{CodexLoad, ProjectLayer};
     let label = "codex builder profile";
-    let defines_builder = std::fs::read_to_string(root.join(".codex/config.toml"))
+    let config = std::fs::read_to_string(root.join(".codex/config.toml"))
         .ok()
-        .and_then(|text| codex_profiles(&text))
-        .is_some_and(|(_, profiles)| profiles.iter().any(|name| name == "cf-builder"));
+        .and_then(|text| text.parse::<toml::Table>().ok());
+    let defines_builder = config
+        .as_ref()
+        .and_then(|config| config.get("permissions"))
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.contains_key("cf-builder"));
     if !defines_builder {
         return format!("{label}: unavailable: .codex/config.toml defines no cf-builder profile");
     }
@@ -289,40 +293,65 @@ fn codex_builder_line(
         return format!("{label}: unavailable: codex not found on PATH");
     };
     let probe = codeflow_core::doctor::probe_codex_builder_profile(root, &codex);
-    let version = probe
-        .version
-        .as_deref()
-        .unwrap_or("codex of unknown version");
-    let describe = |stage: &str, load: &CodexLoad| match load {
-        CodexLoad::Accepted => None,
-        CodexLoad::Rejected(reason) => Some(format!("rejected in the {stage}: {reason}")),
-        CodexLoad::NotRun(reason) => Some(format!("not checked in the {stage}: {reason}")),
+    let version = match &probe.version {
+        Ok(version) => version.clone(),
+        Err(reason) => return format!("{label}: unavailable: {}", shown(reason)),
     };
-    let problems: Vec<String> = [
-        describe("startup load, without the project config", &probe.startup),
-        describe("project load", &probe.project),
+    let version = shown(&version);
+    let stage = |load: &CodexLoad, name: &str| match load {
+        CodexLoad::Accepted(_) => None,
+        CodexLoad::Rejected(reason) => Some((true, format!("rejected {name}: {reason}"))),
+        CodexLoad::NotRun(reason) => Some((false, format!("not checked {name}: {reason}"))),
+    };
+    let problems: Vec<(bool, String)> = [
+        stage(&probe.startup, "without a project config"),
+        stage(&probe.project, "in the project folder"),
     ]
     .into_iter()
     .flatten()
     .collect();
-    let rejected = matches!(probe.startup, CodexLoad::Rejected(_))
-        || matches!(probe.project, CodexLoad::Rejected(_));
-    if problems.is_empty() {
-        format!(
-            "{label}: observed accepted by {version} with the builder launch overrides, in the startup load and the project load; doctor cannot observe the boundary a running seat enforces",
-            version = shown(&version)
-        )
-    } else if rejected {
-        format!(
-            "{label}: observed REJECTED by {version}: {problems}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
-            version = shown(&version),
-            problems = shown(&problems.join("; "))
-        )
-    } else {
-        format!(
-            "{label}: unavailable: {problems}",
-            problems = shown(&problems.join("; "))
-        )
+    if problems.iter().any(|(rejected, _)| *rejected) {
+        let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
+        return format!(
+            "{label}: observed REJECTED by {version}: {}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
+            shown(&text.join("; "))
+        );
+    }
+    if !problems.is_empty() {
+        let text: Vec<&str> = problems.iter().map(|(_, text)| text.as_str()).collect();
+        return format!("{label}: unavailable: {}", shown(&text.join("; ")));
+    }
+    let configured: std::collections::BTreeMap<String, bool> = config
+        .as_ref()
+        .and_then(|config| config.get("features"))
+        .and_then(toml::Value::as_table)
+        .map(|features| {
+            features
+                .iter()
+                .filter_map(|(name, value)| value.as_bool().map(|value| (name.clone(), value)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let accepted = format!(
+        "{label}: observed {version} accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder"
+    );
+    let boundary = "doctor cannot observe the boundary a running seat enforces";
+    match probe.project_layer(&configured) {
+        Some(ProjectLayer::Loaded { feature, value }) => format!(
+            "{accepted}; the project config loaded there (features.{feature} = {value} appears only with it); {boundary}",
+            feature = shown(&feature)
+        ),
+        Some(ProjectLayer::NotLoaded {
+            feature,
+            shown: seen,
+            configured,
+        }) => format!(
+            "{accepted}, but Codex did not load the project config there (features.{feature} shows {seen}, the project sets {configured}); trust the project in Codex, or a builder seat runs the restricted startup profile; {boundary}",
+            feature = shown(&feature)
+        ),
+        Some(ProjectLayer::Unverified) | None => format!(
+            "{accepted}; whether Codex loaded the project config is unverified, because no feature the project sets differs from the user config; {boundary}"
+        ),
     }
 }
 

@@ -68,7 +68,10 @@ pub struct GateLock {
 /// process groups of running targets.
 struct Held {
     id: u64,
-    paths: Vec<PathBuf>,
+    /// Duplicates of the acquired lock descriptors. Records are rewritten
+    /// through these, never by reopening a path a sandboxed seat may have
+    /// swapped for a link since (TSK-1003).
+    writers: Vec<File>,
     record: String,
     groups: BTreeSet<u32>,
     #[cfg(unix)]
@@ -224,20 +227,12 @@ pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
     dirs.into_iter()
         .map(|dir| {
             let path = dir.join(LOCK_FILE);
-            let record = crate::absence::proven_absent(&path)
-                .and_then(|absent| {
-                    if absent {
-                        Ok(String::new())
-                    } else {
-                        read_record(&mut File::open(&path)?)
-                    }
-                })
-                .map_err(|error| {
-                    format!(
-                        "cannot read gate lock {}: {error}",
-                        crate::git::display_path(&path)
-                    )
-                })?;
+            let record = gate_lock_record(&path).map_err(|error| {
+                format!(
+                    "cannot read gate lock {}: {error}",
+                    crate::git::display_path(&path)
+                )
+            })?;
             let description = if record.trim().is_empty() {
                 "no recorded holder".to_string()
             } else {
@@ -297,7 +292,7 @@ pub fn acquire_gate_lock(
         notes: Vec::new(),
     };
     let record = holder_record(project_dir, mode);
-    let mut paths = Vec::new();
+    let mut writers = Vec::new();
     if dirs.is_empty() {
         lock.notes.push(
             "no gate lock location (no CodeFlow home and no git repository); \
@@ -370,13 +365,15 @@ pub fn acquire_gate_lock(
                 crate::git::display_path(&path)
             ));
         }
+        if let Ok(writer) = acquired.0.try_clone() {
+            writers.push(writer);
+        }
         lock.files.push(acquired);
-        paths.push(path);
     }
-    if !paths.is_empty() {
+    if !lock.files.is_empty() {
         held().push(Held {
             id: lock.id,
-            paths,
+            writers,
             record,
             groups: BTreeSet::new(),
             #[cfg(unix)]
@@ -432,11 +429,13 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
             // Writing to a String cannot fail.
             let _ = writeln!(text, "group={group}");
         }
-        for path in &lock.paths {
-            // Best effort, through a second descriptor: `flock` locks belong
-            // to the open file description, so this neither takes nor drops
-            // the lock. A missed write only weakens the killed-gate check.
-            let _ = std::fs::write(path, &text);
+        for writer in &mut lock.writers {
+            // Best effort, through a duplicate of the acquired descriptor:
+            // `flock` locks belong to the open file description, so this
+            // neither takes nor drops the lock, and it writes the file that
+            // was locked even if its path now names something else. A missed
+            // write only weakens the killed-gate check.
+            let _ = write_record(writer, &text);
         }
     }
 }
@@ -572,16 +571,50 @@ mod os_lock {
     }
 }
 
+/// The trusted folder a lock file is opened beneath, and the lock's path
+/// relative to it: `<anchor>/<lock folder>/full-gate.lock`. The lock folder
+/// may be writable by a sandboxed seat (`~/.codeflow/locks` for a Codex
+/// builder, the common `.git` for any seat that commits), so it and the lock
+/// file are opened without following links (TSK-1003).
+fn lock_anchor(path: &Path) -> std::io::Result<(&Path, String)> {
+    let unsupported = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate lock path has no parent folder or is not valid UTF-8",
+        )
+    };
+    let dir = path.parent().ok_or_else(unsupported)?;
+    let anchor = dir.parent().ok_or_else(unsupported)?;
+    let folder = dir
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(unsupported)?;
+    let leaf = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(unsupported)?;
+    Ok((anchor, format!("{folder}/{leaf}")))
+}
+
+/// Open (creating if needed) the lock file at `path`. The lock folder and
+/// the file are refused when either is a link, and the file when it is not
+/// a regular file; the type is checked on the opened descriptor.
 fn open_lock_file(path: &Path) -> std::io::Result<File> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let (anchor, relative) = lock_anchor(path)?;
+    std::fs::create_dir_all(anchor)?;
+    crate::contained::Tree::open(anchor)?.lock_file(&relative)
+}
+
+/// A lock file's holder record, read without taking the lock; empty when
+/// the file is absent.
+fn gate_lock_record(path: &Path) -> std::io::Result<String> {
+    if crate::absence::proven_absent(path)? {
+        return Ok(String::new());
     }
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
+    // The same anchored, link-refusing read as the lock itself (TSK-1003).
+    let (anchor, relative) = lock_anchor(path)?;
+    let bytes = crate::contained::Tree::open(anchor)?.read(&relative, 4096)?;
+    String::from_utf8(bytes).map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn read_record(file: &mut File) -> std::io::Result<String> {
@@ -904,6 +937,88 @@ mod tests {
             found,
             [blocker.join(HOME_LOCK_DIR), blocker.join(HOME_EVIDENCE_DIR)]
         );
+    }
+
+    /// TSK-1003: a sandboxed seat that may write a lock folder must not be
+    /// able to redirect a later, less restricted gate's writes. A lock file
+    /// planted as a link is refused and its target is left unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_file_planted_as_a_link_is_refused_and_its_target_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = tmp.path().join("sentinel");
+        std::fs::write(&target, "keep me\n").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join(LOCK_FILE)).unwrap();
+        let error = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect_err("a linked lock file is refused");
+        assert!(
+            error.to_string().contains("gate lock unavailable"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
+        assert!(gate_lock_record(&dir.join(LOCK_FILE)).is_err());
+    }
+
+    /// TSK-1003: a lock folder replaced by a link is refused as well.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_folder_planted_as_a_link_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let target = elsewhere.join(LOCK_FILE);
+        std::fs::write(&target, "keep me\n").unwrap();
+        let dir = tmp.path().join("locks");
+        std::os::unix::fs::symlink(&elsewhere, &dir).unwrap();
+        let error = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect_err("a linked lock folder is refused");
+        assert!(
+            error.to_string().contains("gate lock unavailable"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
+    }
+
+    /// TSK-1003: a special file in place of the lock is refused, without
+    /// blocking on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_file_that_is_a_fifo_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo =
+            std::ffi::CString::new(dir.join(LOCK_FILE).as_os_str().as_encoded_bytes().to_vec())
+                .unwrap();
+        // SAFETY: a NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let error = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect_err("a FIFO lock is refused");
+        assert!(
+            error.to_string().contains("gate lock unavailable"),
+            "{error}"
+        );
+    }
+
+    /// TSK-1003: once the lock is held, its record is updated through the
+    /// acquired descriptor. A path swapped for a link afterwards is never
+    /// written through.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_path_swapped_for_a_link_after_acquisition_is_not_written_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
+        let target = tmp.path().join("sentinel");
+        std::fs::write(&target, "keep me\n").unwrap();
+        std::fs::remove_file(dir.join(LOCK_FILE)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.join(LOCK_FILE)).unwrap();
+        target_group_started(4_000_003);
+        target_group_finished(4_000_003);
+        drop(lock);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
     }
 
     #[test]

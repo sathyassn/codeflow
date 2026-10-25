@@ -30,7 +30,8 @@ mod remote_perimeter;
 mod startup_files;
 
 pub use codex_profile::{
-    probe_codex_builder_profile, CodexBuilderProbe, CodexLoad, CODEX_BUILDER_OVERRIDES,
+    probe_codex_builder_profile, CodexBuilderProbe, CodexLoad, ProjectLayer,
+    CODEX_BUILDER_OVERRIDES,
 };
 
 /// Outcome of a health check.

@@ -245,9 +245,14 @@ dangerously_allow_all_unix_sockets = false
 # restricted stub and fails closed.
 #
 # `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
-# and the gates, which hold `~/.codeflow/locks/full-gate.lock` besides the
-# lock under the common `.git`. Nothing else under the home folder is
-# writable; a relocated `CODEFLOW_HOME` is not covered.
+# and the heavy quick targets, which hold `~/.codeflow/locks/full-gate.lock`
+# besides the lock under the common `.git`. CodeFlow opens both lock files
+# without following links and rewrites them only through the locked
+# descriptor, so a file planted there cannot redirect a later gate's
+# writes. A full gate also writes its evidence to `~/.codeflow/gate-runs`,
+# which stays unwritable here: that decision is TSK-337's. Nothing else
+# under the home folder is writable; a relocated `CODEFLOW_HOME` is not
+# covered.
 [permissions.cf-builder]
 extends = "cf-guard"
 description = "CodeFlow builder seat"

@@ -1775,7 +1775,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "cd51d5b30b80f0eb07cfa77f337a46a3d7397c052b1052a899ee6049ef2b549f",
+      "sha256": "7fb0408f4219b377886b7ab9f35d60decfca76f5ae5b4ab339715bd95188aa8e",
       "exec": false
     },
     ".codex/hooks.json": {
