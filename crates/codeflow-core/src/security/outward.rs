@@ -1003,6 +1003,15 @@ pub(crate) fn line_directories(command: &str, cwd: &Path, home: Option<&Path>) -
         let mut words = command_argv(&segment);
         strip_reserved_words(&mut words);
         for change in dir_changes(&words, home) {
+            // An expansion or `$'...'` quote can spell `CDPATH` in a form
+            // no reading of the text recovers (`$'\x43DPATH'`,
+            // `${X:-CDPATH}`), so a `cd` that CDPATH could redirect lands
+            // somewhere unknown on such a line (TSK-397 review F4).
+            if command.contains('$')
+                && matches!(&change, DirChange::To(target) if cdpath_searches(target))
+            {
+                set.unknown = true;
+            }
             set.change(&change);
         }
     }

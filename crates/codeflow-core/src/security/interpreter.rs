@@ -1191,6 +1191,28 @@ mod tests {
         );
     }
 
+    /// TSK-397 security review F4: an encoded or expanded `CDPATH` name
+    /// cannot be read from the text, so any expansion on a line whose `cd`
+    /// CDPATH could redirect makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn an_encoded_cdpath_makes_the_directory_unknown() {
+        let repo = linked_repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                r"export $'\x43DPATH'=hidden && cd src && python3 tool.py ../settings.json",
+                r"export $'\103DPATH'=hidden && cd src && python3 tool.py ../settings.json",
+                r"export ${X:-CDPATH}=hidden && cd src && python3 tool.py ../settings.json",
+                r"export CD$'\x50'ATH=hidden && cd src && python3 tool.py ../settings.json",
+                r"printf -v $'\x43DPATH' hidden && cd src && python3 tool.py ../settings.json",
+            ],
+        );
+        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
+    }
+
     /// Grok finding 4: a path-named interpreter may be a wrapper, and an
     /// option before the script may load code that changes directory first.
     #[cfg(unix)]
