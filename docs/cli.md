@@ -343,12 +343,6 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 
 <!-- codeflow-derived command-reference end -->
 
-### Integration lines in the session digest
-
-`codeflow orient` lists integration-line drift and open epics. See
-[session orientation](session-orientation.md) for row meanings, local
-fallback, started-task counts and the optional `git.line_sync_interval` reminder.
-
 ### Scaffold notes
 
 `codeflow update` and `codeflow init` on an initialized project check the
