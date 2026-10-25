@@ -17,7 +17,8 @@ name: codeflow-ci
 # commit it tested. Merge admission (scripts/ci-reuse.py admit) reads it, and
 # only after proving this file at the head is the base's own, so the pull
 # request cannot write it (TSK-1001). Other events keep GitHub's default.
-run-name: ${{ github.event_name == 'pull_request' && format('codeflow-ci pull request #{0} into {1} at {2}', github.event.pull_request.number, github.event.pull_request.base.ref, github.event.pull_request.base.sha) || '' }}
+# The value is double-quoted: unquoted, YAML reads ` #` as a comment.
+run-name: "${{ github.event_name == 'pull_request' && format('codeflow-ci pull request #{0} into {1} at {2}', github.event.pull_request.number, github.event.pull_request.base.ref, github.event.pull_request.base.sha) || '' }}"
 
 on:
   # `edited` reruns the gates when the base changes (a retarget), since a

@@ -230,9 +230,22 @@ class GateContracts(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('ci_reuse', ROOT / 'scripts' / 'ci-reuse.py')
         reuse = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(reuse)
-        self.assertIn("run-name: ${{ github.event_name == 'pull_request' && format('codeflow-ci pull request #{0} "
-                      "into {1} at {2}', github.event.pull_request.number, github.event.pull_request.base.ref, "
-                      "github.event.pull_request.base.sha) || '' }}\n", workflow)
+        # Double-quoted, or YAML reads ` #` as a comment and GitHub refuses
+        # the file before any job starts (run 40179230387).
+        self.assertIn('run-name: "${{ github.event_name == \'pull_request\' && format(\'codeflow-ci pull request #{0} '
+                      'into {1} at {2}\', github.event.pull_request.number, github.event.pull_request.base.ref, '
+                      'github.event.pull_request.base.sha) || \'\' }}"\n', workflow)
+        # No top-level or job-level plain scalar of the workflow holds ` #`
+        # outside a comment line or a quoted value.
+        for number, line in enumerate(workflow.splitlines(), 1):
+            text = line.lstrip()
+            if text.startswith('#') or ': ' not in text:
+                continue
+            value = text.split(': ', 1)[1]
+            if value[:1] in ('"', "'", '|', '>'):
+                continue
+            self.assertNotIn(' #', value.split(' # ', 1)[0] if '${{' not in value else value,
+                             f'line {number}: a plain value holds " #", which YAML reads as a comment')
         title = 'codeflow-ci pull request #{0} into {1} at {2}'.format(5, 'integration/EPC-1-x', 'a' * 40)
         self.assertEqual(reuse.run_title({'display_title': title}), (5, 'integration/EPC-1-x', 'a' * 40))
         self.assertIn('    types: [opened, synchronize, reopened, ready_for_review, edited]\n', workflow)
