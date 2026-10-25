@@ -485,7 +485,7 @@
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "a4a925382a42338965bf6d2429a3be4ccd09f37e9758c8d626a7f02b43d1e551",
+      "sha256": "29334892716a8358ac205f68b96149e6defde3edb52e3ace81b501ead21b54f5",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
@@ -1325,7 +1325,7 @@
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "a4a925382a42338965bf6d2429a3be4ccd09f37e9758c8d626a7f02b43d1e551",
+      "sha256": "29334892716a8358ac205f68b96149e6defde3edb52e3ace81b501ead21b54f5",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "12e8ebb384041629617c993269b072040ed5b8fe815ef64107f4bdf36438e952",
+      "sha256": "f1cfb5b4ea40ee12811c0380237b0b0f510a8b954a0410ecc014f4775b37919e",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

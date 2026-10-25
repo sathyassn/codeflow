@@ -63,7 +63,8 @@ the failed attempt and new evidence, then try one bounded probe tied to a
 different hypothesis. One bounded confirmation of a prior failure is
 allowed only when current provenance or freshness materially matters;
 after it confirms the same failure, change hypothesis or strategy and never
-retry it again unchanged. If the tactic fails, step back to the real
+retry it again unchanged. A fresh check before a later decision is not such
+a retry ("Check changeable state live"). If the tactic fails, step back to the real
 constraint and critical path, compare viable routes, and take the safest
 evidence-backed reversible route that preserves accepted outcome, scope,
 authority, and quality. Escalate only an external dependency or a choice
@@ -235,8 +236,19 @@ other files point here.
   locks; and other agents' progress.
 - **Check it at the moment of use.** Before you state such a fact, route on
   it or act on it, check it live with a probe that observes it now: a
-  command, an API read or a native canary. Each claim, routing decision and
-  action gets its own check; an earlier check does not cover a later one.
+  command, an API read or a native canary. Each claim and routing decision
+  gets its own check. A check made for a decision covers the action that
+  immediately carries it out; a later decision needs a check of its own.
+- **A fresh check is not a retry.** "Navigate blockers" bounds recovery
+  within one attempt: one confirmation of a failure, then a new hypothesis,
+  never the same retry unchanged. A check before a later decision is a new
+  observation for that decision, so it runs even when the same probe failed
+  for an earlier one. If it fails, that decision takes its fallback with no
+  further retries; if it succeeds, the decision uses the recovered state.
+- **Facts bound to an immutable identity need no re-check.** The content at
+  a commit SHA, a merged PR's merge commit or a finished run's recorded
+  result stays true. What can change is whether that identity is still the
+  one that matters, such as where a branch points now; check that live.
 - **An earlier result is a lead, never a fact.** A previous probe, an error
   or usage-limit message, a peer's report or a note in a record tells you
   where to look. It never establishes the current state, and a stated
