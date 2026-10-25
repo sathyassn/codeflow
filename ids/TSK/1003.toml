@@ -1,0 +1,11 @@
+id = "TSK-1003"
+uid = "aa18cc2e-1715-4dd8-ba82-9ec95eea1c57"
+kind = "TSK"
+title = "The Codex builder permission profile opens on Codex 0.164"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-25T03:15:07Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
