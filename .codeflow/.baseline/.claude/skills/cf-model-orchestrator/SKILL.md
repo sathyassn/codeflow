@@ -161,9 +161,9 @@ asks for just that.
   gave before the loss stays as given. Record reduced assurance only after
   a live probe fails, naming the probe and its time. A seat recorded
   unavailable is probed live again before every later assignment and review
-  routing; an earlier failure or usage-limit message is a lead, never a fact. Buying credits is spend and stays
-  with the operator: do not purchase, name it in the report and continue on
-  the fallback. If no
+  routing; an earlier failure or usage-limit message is a lead, never a
+  fact. Buying credits is spend and stays with the operator: do not
+  purchase, name it in the report and continue on the fallback. If no
   cross-lineage route remains, use the documented solo fallback with its
   fresh-context independent review, and record reduced assurance naming the
   review that is missing: never faked, never silently waived, never turned
