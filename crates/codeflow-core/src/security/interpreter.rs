@@ -1621,20 +1621,32 @@ mod tests {
 
     /// TSK-302 review F4: a line with several suppliers reads what the line
     /// names once, so five `xargs` interpreters stay within the hook's
-    /// 10-second budget with a wide margin.
+    /// 10-second budget. TSK-453 counts the reads instead of timing them,
+    /// so host load cannot fail the test.
     #[test]
     fn several_suppliers_read_the_line_once() {
+        use super::super::arguments::{LineReads, LINE_READS};
         let repo = repo();
         let line = (0..5)
             .map(|n| format!("ls | xargs python3 check{n}.py"))
             .collect::<Vec<_>>()
             .join("; ");
-        let started = std::time::Instant::now();
+        let none = LineReads {
+            asked: 0,
+            enforcement: 0,
+            authority: 0,
+        };
+        LINE_READS.with(|reads| reads.set(none));
         assert!(judge_in(&repo, &repo.root, &repo.root, &line, PolicyLevel::Block).is_empty());
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "{:?}",
-            started.elapsed()
+        // Each of the five calls asks for both readings, and one enforcement
+        // reading and one authority reading answer all of them.
+        assert_eq!(
+            LINE_READS.with(std::cell::Cell::get),
+            LineReads {
+                asked: 10,
+                enforcement: 1,
+                authority: 1,
+            }
         );
     }
 
