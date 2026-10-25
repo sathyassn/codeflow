@@ -264,97 +264,216 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.main(broken), (0, ""))
 
 
+BASE = "d" * 40
+BASE_REF = "integration/EPC-022-x"
+TRUSTED = [WORKFLOW, "scripts/ci-reuse.py"]
+TITLE = f"codeflow-ci pull request #95 into {BASE_REF} at {BASE}"
+
+
+def admission_run(**changes):
+    changes.setdefault("display_title", TITLE)
+    changes.setdefault("pull_requests", [{"number": 95, "base": {"ref": BASE_REF}}])
+    return run(**changes)
+
+
+class FilesGit:
+    """The trusted files at each commit: the base's and, unless changed,
+    the same bytes at the head."""
+
+    def __init__(self, head_files=None, missing=()):
+        self.files = {BASE: {path: f"trusted {path}".encode() for path in TRUSTED}}
+        self.files[HEAD] = dict(self.files[BASE], **(head_files or {}))
+        self.missing = set(missing)
+
+    def show(self, commit, path):
+        if (commit, path) in self.missing or path not in self.files.get(commit, {}):
+            raise reuse.Skip(f"no {path} at {commit}")
+        return self.files[commit][path]
+
+
+class AdmissionApi(FakeApi):
+    def __init__(self, live=None, **kwargs):
+        kwargs.setdefault("runs", [admission_run()])
+        super().__init__(**kwargs)
+        self.live = {"state": "open", "head": {"sha": HEAD}, "base": {"ref": BASE_REF, "sha": BASE}}
+        self.live.update(live or {})
+
+    def pull(self, number):
+        return self.live
+
+
 class AdmissionTests(unittest.TestCase):
-    """TSK-449 AC-6: `commit standards` admits a pull request only on a
-    completed successful ready run at the exact head; each other case
-    refuses, and only a pending or absent run is worth waiting for."""
+    """TSK-449 AC-6 and TSK-1001 AC-1, AC-2: `commit standards` admits a
+    pull request only on a completed successful ready run at its live head,
+    titled by the trusted workflow for its live base, with the workflow and
+    verdict script unchanged from the base; each other case refuses, and
+    only a pending or absent run is worth waiting for."""
 
-    def admitted(self, api):
-        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95)
+    def admitted(self, api, git=None):
+        return reuse.admit(HEAD, WORKFLOW, REQUIRED, api, 95, git or FilesGit(), TRUSTED)
 
-    def refused(self, api, pending=False):
+    def refused(self, api, pending=False, git=None):
         with self.assertRaises(reuse.Skip) as caught:
-            self.admitted(api)
+            self.admitted(api, git)
         self.assertEqual(isinstance(caught.exception, reuse.Pending), pending, str(caught.exception))
         return str(caught.exception)
 
     def test_a_successful_ready_run_at_the_exact_head_admits(self):
-        self.assertEqual(self.admitted(FakeApi()), 77)
+        self.assertEqual(self.admitted(AdmissionApi()), 77)
+
+    def test_a_pull_request_that_changes_the_workflow_or_verdict_script_refuses(self):
+        # AC-1: two successful no-op jobs named like the verdicts, from a
+        # workflow the pull request rewrote, never admit.
+        noop = [job("codeflow gates"), job("windows")]
+        for path in TRUSTED:
+            with self.subTest(path=path):
+                reason = self.refused(AdmissionApi(jobs={77: noop}), git=FilesGit({path: b"jobs: no-op"}))
+                self.assertIn(f"the pull request changes {path}", reason)
+        reason = self.refused(AdmissionApi(), git=FilesGit(missing={(HEAD, WORKFLOW)}))
+        self.assertIn(f"cannot read {WORKFLOW}", reason)
+        with self.assertRaises(reuse.Skip):
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, FilesGit(), [])
+        with self.assertRaises(reuse.Skip):
+            reuse.admit(HEAD, WORKFLOW, REQUIRED, AdmissionApi(), 95, None, TRUSTED)
+
+    def test_a_run_for_another_base_or_a_retargeted_pull_request_refuses(self):
+        # AC-2: the run's trusted title must name the live base branch and
+        # commit; a run made for another base waits for a fresh one.
+        other_base = admission_run(display_title=f"codeflow-ci pull request #95 into {BASE_REF} at {MAIN}")
+        self.assertIn("tested the base", self.refused(AdmissionApi(runs=[other_base]), pending=True))
+        retargeted = AdmissionApi(live={"base": {"ref": "main", "sha": BASE}})
+        self.assertIn("tested the base main", self.refused(retargeted, pending=True))
+        moved = AdmissionApi(live={"base": {"ref": BASE_REF, "sha": MAIN}})
+        git = FilesGit()
+        git.files[MAIN] = git.files[BASE]
+        self.assertIn(f"at {MAIN}", self.refused(moved, pending=True, git=git))
+
+    def test_a_run_without_the_trusted_title_or_for_another_pull_request_refuses(self):
+        for title in (None, "", "codeflow-ci", f"codeflow-ci pull request #96 into {BASE_REF} at {BASE}",
+                      f"{TITLE} extra"):
+            with self.subTest(title=title):
+                self.refused(AdmissionApi(runs=[admission_run(display_title=title)]), pending=True)
+
+    def test_a_moved_head_a_closed_pull_request_or_an_unreadable_base_refuses(self):
+        self.assertIn("re-run it for the current head", self.refused(AdmissionApi(live={"head": {"sha": MAIN}})))
+        self.assertIn("not open", self.refused(AdmissionApi(live={"state": "closed"})))
+        self.assertIn("names no base", self.refused(AdmissionApi(live={"base": {}})))
 
     def test_a_draft_neutral_run_at_the_same_head_refuses(self):
         draft = [job("codeflow gates", "skipped"), job("windows", "skipped"), job("secret scan")]
-        reason = self.refused(FakeApi(jobs={77: draft}))
+        reason = self.refused(AdmissionApi(jobs={77: draft}))
         self.assertIn("'codeflow gates' of run 77 concluded skipped", reason)
         self.assertIn("mark the pull request ready", reason)
 
     def test_no_ready_run_refuses_and_may_be_waited_for(self):
-        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95 exists",
-                      self.refused(FakeApi(runs=[]), pending=True))
+        self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run of #95",
+                      self.refused(AdmissionApi(runs=[]), pending=True))
 
     def test_a_pending_run_refuses_and_may_be_waited_for(self):
         for status in ("queued", "in_progress", "waiting"):
             with self.subTest(status=status):
-                api = FakeApi(runs=[run(status=status, conclusion=None)])
+                api = AdmissionApi(runs=[admission_run(status=status, conclusion=None)])
                 self.assertIn(f"is {status}", self.refused(api, pending=True))
 
     def test_a_cancelled_or_failed_run_refuses(self):
         for conclusion in ("cancelled", "failure", "timed_out", "skipped"):
             with self.subTest(conclusion=conclusion):
-                self.assertIn(f"concluded {conclusion}", self.refused(FakeApi(runs=[run(conclusion=conclusion)])))
+                api = AdmissionApi(runs=[admission_run(conclusion=conclusion)])
+                self.assertIn(f"concluded {conclusion}", self.refused(api))
 
     def test_a_green_run_on_another_head_refuses(self):
-        api = FakeApi(runs=[run(head_sha=MAIN)])
+        api = AdmissionApi(runs=[admission_run(head_sha=MAIN)])
         self.assertIn("no .github/workflows/codeflow-ci.yml pull_request run", self.refused(api, pending=True))
-
-    def test_a_green_run_at_the_same_head_for_another_pull_request_refuses(self):
-        other = run(pull_requests=[{"number": 96, "base": {"ref": "main"}}])
-        self.assertIn("run of #95 exists", self.refused(FakeApi(runs=[other]), pending=True))
-        self.refused(FakeApi(runs=[run(pull_requests=[])]), pending=True)
 
     def test_another_workflow_or_event_never_admits(self):
         for changes in ({"path": ".github/workflows/other.yml"}, {"event": "push"}):
             with self.subTest(changes=changes):
-                self.refused(FakeApi(runs=[run(**changes)]), pending=True)
+                self.refused(AdmissionApi(runs=[admission_run(**changes)]), pending=True)
 
     def test_the_newest_run_at_the_head_decides(self):
         # A ready run started after the draft's neutral run is still pending.
-        api = FakeApi(runs=[run(), run(id=78, run_number=6, status="in_progress", conclusion=None)])
+        api = AdmissionApi(runs=[admission_run(), admission_run(id=78, run_number=6, status="in_progress",
+                                                                conclusion=None)])
         self.assertIn("run 78", self.refused(api, pending=True))
         # A missing verdict job refuses.
         self.assertIn("'windows' of run 77 concluded nothing",
-                      self.refused(FakeApi(jobs={77: [job("codeflow gates")]})))
+                      self.refused(AdmissionApi(jobs={77: [job("codeflow gates")]})))
 
     def test_main_waits_only_for_a_pending_run_and_fails_closed(self):
-        def run_main(api, wait):
+        def run_main(api, wait, trusted=True):
             out = io.StringIO()
-            with mock.patch.object(reuse, "Api", return_value=api), \
+            files = ["--trusted-file", WORKFLOW, "--trusted-file", "scripts/ci-reuse.py"] if trusted else []
+            with mock.patch.object(reuse, "Api", return_value=api), mock.patch.object(reuse, "Git", FilesGit), \
                     mock.patch.object(reuse.time, "sleep") as sleep, redirect_stdout(out):
                 code = reuse.admit_main(["--repo", "o/r", "--head", HEAD, "--workflow", WORKFLOW,
-                                         "--require", "codeflow gates", "--require", "windows",
+                                         "--require", "codeflow gates", "--require", "windows", *files,
                                          "--pull", "95", "--wait", str(wait)])
             return code, out.getvalue(), sleep.call_count
-        self.assertEqual(run_main(FakeApi(), 0)[0], 0)
-        code, text, slept = run_main(FakeApi(runs=[run(status="in_progress", conclusion=None)]), 0)
+        self.assertEqual(run_main(AdmissionApi(), 0)[0], 0)
+        self.assertEqual(run_main(AdmissionApi(), 0, trusted=False)[0], 1)
+        code, text, slept = run_main(AdmissionApi(runs=[admission_run(status="in_progress", conclusion=None)]), 0)
         self.assertEqual((code, slept), (1, 0), text)
-        code, text, slept = run_main(FakeApi(runs=[run(conclusion="failure")]), 600)
+        code, text, slept = run_main(AdmissionApi(runs=[admission_run(conclusion="failure")]), 600)
         self.assertEqual((code, slept), (1, 0), text)
 
-        class Finishing(FakeApi):
+        class Finishing(AdmissionApi):
             calls = 0
 
             def runs(self, head):
                 Finishing.calls += 1
-                return [run()] if Finishing.calls > 2 else [run(status="in_progress", conclusion=None)]
+                return [admission_run()] if Finishing.calls > 2 else [admission_run(status="in_progress",
+                                                                                     conclusion=None)]
         with mock.patch.object(reuse.time, "monotonic", return_value=0.0):
             code, text, slept = run_main(Finishing(), 600)
         self.assertEqual((code, slept), (0, 2), text)
 
-        class Broken(FakeApi):
+        class Broken(AdmissionApi):
             def runs(self, head):
                 raise OSError("network down")
         code, text, _ = run_main(Broken(), 0)
         self.assertEqual(code, 1)
         self.assertIn("refused: the decision failed", text)
+
+
+class EditReuseTests(unittest.TestCase):
+    """TSK-1001 AC-3: a run an `edited` event started without changing the
+    base reuses the newest earlier green run of the same pull request, head
+    and base; anything else runs every gate."""
+
+    def reused(self, api):
+        return reuse.edit_reuse(HEAD, WORKFLOW, REQUIRED, api, 95, BASE_REF, BASE, 90)
+
+    def skipped(self, api):
+        with self.assertRaises(reuse.Skip) as caught:
+            self.reused(api)
+        return str(caught.exception)
+
+    def test_the_newest_green_run_of_the_same_base_is_reused(self):
+        self.assertEqual(self.reused(AdmissionApi()), 77)
+
+    def test_this_run_another_base_or_a_failed_newest_run_runs_every_gate(self):
+        self.skipped(AdmissionApi(runs=[admission_run(id=90)]))
+        self.skipped(AdmissionApi(runs=[admission_run(display_title=f"codeflow-ci pull request #95 into main at {BASE}")]))
+        newer_failure = [admission_run(), admission_run(id=78, run_number=6, conclusion="failure")]
+        self.assertIn("run 78", self.skipped(AdmissionApi(runs=newer_failure)))
+        running = [admission_run(id=78, run_number=6, status="in_progress", conclusion=None)]
+        self.skipped(AdmissionApi(runs=running))
+        self.skipped(AdmissionApi(jobs={77: [job("codeflow gates")]}))
+
+    def test_main_writes_the_run_only_on_reuse_and_never_fails(self):
+        def run_main(api):
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "out"
+                output.write_text("")
+                argv = ["--repo", "sathyassn/codeflow", "--head", HEAD, "--pull", "95", "--base-ref", BASE_REF,
+                        "--base-sha", BASE, "--workflow-ref", f"sathyassn/codeflow/{WORKFLOW}@refs/pull/95/merge",
+                        "--run-id", "90", "--require", "codeflow gates", "--require", "windows"]
+                with mock.patch.object(reuse, "Api", return_value=api), \
+                        mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), redirect_stdout(io.StringIO()):
+                    code = reuse.edit_main(argv)
+                return code, output.read_text()
+        self.assertEqual(run_main(AdmissionApi()), (0, "run=77\n"))
+        self.assertEqual(run_main(AdmissionApi(runs=[])), (0, ""))
 
 
 class GitTests(unittest.TestCase):
@@ -385,6 +504,9 @@ class GitTests(unittest.TestCase):
             self.assertTrue(reader.is_ancestor(base, head))
             self.assertFalse(reader.is_ancestor(merged, head))
             self.assertEqual(reader.changed(base, merged), ["Cargo.lock"])
+            self.assertEqual(reader.show(head, "Cargo.lock"), b"lock\n")
+            with self.assertRaises(reuse.Skip):
+                reader.show(base, "Cargo.lock")
 
 
 if __name__ == "__main__":

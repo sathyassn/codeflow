@@ -400,7 +400,7 @@ def coverage_job_problems(cfg: dict, jobs: dict[str, str], condition: str,
 # (scripts/test_ci_reuse.py) cover each condition.
 GATES_IF = re.compile(r"^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.run == '' && \((.+)\) \}\}$")
 REUSE_JOB = """\
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.pull_request.draft && github.event.changes.base.ref.from == ''
     name: reuse a pull request verdict
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -424,11 +424,21 @@ REUSE_JOB = """\
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \\
+              --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \\
+              --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \\
+              --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          else
+            python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \\
+              --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \\
+              --require "codeflow gates" --require windows
+          fi
 """
 
 
@@ -540,6 +550,7 @@ VERDICT_JOB = """\
           REPORT: ${{{{ needs.gates-coverage-report.result }}}}
           REUSE: ${{{{ needs.reuse.result }}}}
           REUSED: ${{{{ needs.reuse.outputs.run }}}}
+          RELEASE_OWED: ${{{{ github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/master"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}}}
         run: |
           if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
@@ -551,6 +562,10 @@ VERDICT_JOB = """\
           fi
           if [ "$PARTS" != success ] || [ "$SHARDS" != success ] || [ "$REPORT" != success ]; then
             echo "::error::the full gate concluded parts=${{PARTS}} coverage shards=${{SHARDS}} coverage report=${{REPORT}}; see the codeflow gates jobs"
+            exit 1
+          fi
+          if [ "$RELEASE_OWED" = true ] && [ "$RELEASE" != success ]; then
+            echo "::error::this event owes the release parts, and they concluded ${{RELEASE}}; see the codeflow gates (release) jobs"
             exit 1
           fi
           if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
@@ -578,7 +593,7 @@ def norm_job(text: str) -> list[str]:
 # inherits) is refused rather than read past. This catches drift in a
 # reviewed edit; it is not a boundary against someone who also edits this
 # script in the same change.
-TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
+TOP_KEYS = ("name", "run-name", "on", "concurrency", "permissions", "jobs")
 GATES_KEYS = ("if", "name", "needs", "runs-on", "timeout-minutes", "strategy", "steps")
 STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
 PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")

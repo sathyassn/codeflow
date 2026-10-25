@@ -158,7 +158,12 @@ jobs:
             codeflow ids check
           fi
 
-      # Merge admission (TSK-449 AC-6). A draft's codeflow-ci verdicts are
+      # Merge admission (TSK-449 AC-6, TSK-1001). It binds trusted identity
+      # only: the pull request read live (head and base commits, base
+      # branch), the codeflow-ci workflow and this verdict script hashed at
+      # the head against the base (a pull request that edits either picks
+      # its own jobs and is refused), and the run title the trusted workflow
+      # writes for this pull request and base. A draft's codeflow-ci verdicts are
       # skipped, which a required-check rule reads as passing, so this
       # required check passes only when the newest codeflow-ci pull_request
       # run at exactly this head completed with success and both verdicts
@@ -181,5 +186,6 @@ jobs:
           wait=2100
           if [ "$DRAFT" = true ]; then wait=0; fi
           python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-            --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
-            --wait "$wait"
+            --workflow .github/workflows/codeflow-ci.yml \
+            --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
+            --require "codeflow gates" --require windows --wait "$wait"

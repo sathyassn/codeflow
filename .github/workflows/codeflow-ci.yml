@@ -13,10 +13,18 @@
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
 name: codeflow-ci
+# A pull request run's title names the pull request and the base branch and
+# commit it tested. Merge admission (scripts/ci-reuse.py admit) reads it, and
+# only after proving this file at the head is the base's own, so the pull
+# request cannot write it (TSK-1001). Other events keep GitHub's default.
+run-name: ${{ github.event_name == 'pull_request' && format('codeflow-ci pull request #{0} into {1} at {2}', github.event.pull_request.number, github.event.pull_request.base.ref, github.event.pull_request.base.sha) || '' }}
 
 on:
+  # `edited` reruns the gates when the base changes (a retarget), since a
+  # run is evidence only for the base it tested; an edit that keeps the base
+  # reuses the newest green run of the same head and base (the reuse job).
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main, master, "integration/**"]
   # The weekly and manual runs scan the full history of the default branch
@@ -27,9 +35,11 @@ on:
     - cron: "37 5 * * 1"
   workflow_dispatch:
 
+# An edit that keeps the base never cancels a running gate; it waits, then
+# reuses that run's verdict once it is green.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
 
 permissions:
   contents: read
@@ -74,10 +84,14 @@ jobs:
   # Any other push, or a decision that fails, runs every job; so does a push
   # that changes a build cache input, or one for which main lacks the present
   # part's apt cache for this runner image, so main's caches stay current.
-  # Pull request runs skip this job and are never affected. Its token reads
-  # runs, caches and pull requests and writes nothing.
+  # A ready pull request's `edited` run that keeps the base (a title or body
+  # edit) reuses the newest earlier run of the same pull request, head and
+  # base when it passed, so an edit neither reruns nor replaces a verdict;
+  # otherwise every job runs (TSK-1001). Every other pull request run skips
+  # this job. Its token reads runs, caches and pull requests and writes
+  # nothing.
   reuse:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.pull_request.draft && github.event.changes.base.ref.from == ''
     name: reuse a pull request verdict
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -101,11 +115,21 @@ jobs:
           PUSHED_REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: >-
-          python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT"
-          --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF"
-          --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}"
-          --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            python3 -I scripts/ci-reuse.py --repo "$REPOSITORY" --sha "$PUSHED" --event "$EVENT" \
+              --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \
+              --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \
+              --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
+          else
+            python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
+              --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \
+              --require "codeflow gates" --require windows
+          fi
 
   # The release binary every gate part runs `codeflow test` with is built
   # once here and shared as an artifact, never rebuilt per part (TSK-449).
@@ -551,6 +575,7 @@ jobs:
           REPORT: ${{ needs.gates-coverage-report.result }}
           REUSE: ${{ needs.reuse.result }}
           REUSED: ${{ needs.reuse.outputs.run }}
+          RELEASE_OWED: ${{ github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push' && contains(fromJSON('["refs/heads/main","refs/heads/master"]'), github.ref) || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           if [ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ] && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
             echo "the full gate passed on pull request run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${REUSED}, which tested this exact tree"
@@ -565,7 +590,12 @@ jobs:
             exit 1
           fi
           # The release parts run only on the release path; elsewhere their
-          # job is skipped by its own condition, never by a failure.
+          # job is skipped by its own condition, never by a failure. Where
+          # the event owes them, only success passes (TSK-1001).
+          if [ "$RELEASE_OWED" = true ] && [ "$RELEASE" != success ]; then
+            echo "::error::this event owes the release parts, and they concluded ${RELEASE}; see the codeflow gates (release) jobs"
+            exit 1
+          fi
           if [ "$RELEASE" != success ] && [ "$RELEASE" != skipped ]; then
             echo "::error::the release parts concluded ${RELEASE}; see the codeflow gates (release) jobs"
             exit 1

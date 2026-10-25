@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 import unittest
@@ -101,7 +102,13 @@ class GateContracts(unittest.TestCase):
         parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
         jobs = dict(zip(parts[1::2], parts[2::2]))
         reuse = jobs['reuse']
-        self.assertTrue(reuse.startswith("    if: github.event_name == 'push'\n"), reuse)
+        # TSK-1001 AC-3: besides a push, only a ready pull request's `edited`
+        # run that keeps its base asks the decision; a base change runs all.
+        self.assertTrue(reuse.startswith(
+            "    if: github.event_name == 'push' || github.event_name == 'pull_request' && "
+            "github.event.action == 'edited' && !github.event.pull_request.draft && "
+            "github.event.changes.base.ref.from == ''\n"), reuse)
+        self.assertIn('python3 -I scripts/ci-reuse.py edit --repo', reuse)
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
@@ -168,12 +175,101 @@ class GateContracts(unittest.TestCase):
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
         self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
-        self.assertIn('--workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows', step)
+        self.assertIn('--workflow .github/workflows/codeflow-ci.yml \\\n', step)
+        self.assertIn('--require "codeflow gates" --require windows --wait "$wait"', step)
         self.assertIn('          HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n', step)
         self.assertIn('          if [ "$DRAFT" = true ]; then wait=0; fi\n', step)
         wait = int(re.search(r'^          wait=(\d+)$', step, re.M).group(1))
         self.assertLessEqual(wait, 40 * 60, 'the wait stays inside the 45-minute job bound')
         self.assertNotIn('pull_request.head.ref', step)
+
+    def run_verdict(self, **env):
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        job = dict(zip(parts[1::2], parts[2::2]))['gates-verdict']
+        lines = []
+        for line in job.split('        run: |\n', 1)[1].splitlines():
+            if line.strip() and not line.startswith(' ' * 10):
+                break
+            lines.append(line[10:])
+        script = '\n'.join(lines)
+        values = {'PARTS': 'success', 'RELEASE': 'success', 'SHARDS': 'success', 'REPORT': 'success',
+                  'REUSE': 'skipped', 'REUSED': '', 'RELEASE_OWED': 'false', 'GITHUB_SERVER_URL': 'https://x',
+                  'GITHUB_REPOSITORY': 'o/r', 'PATH': os.environ.get('PATH', '')}
+        values.update(env)
+        return subprocess.run(['bash', '-c', script], env=values, capture_output=True, text=True)
+
+    def test_the_verdict_refuses_a_skipped_release_part_the_event_owed(self):
+        # TSK-1001 AC-4: the release parts are owed on the release path;
+        # there a skipped, failed or cancelled release job fails the verdict,
+        # while an integration pull request may skip them.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        owed = re.search(r'^          RELEASE_OWED: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        release_if = re.search(r'^  gates-release:\n    if: \$\{\{ (.+) \}\}$', workflow, re.M).group(1)
+        self.assertIn(owed.replace("github.event_name == 'pull_request' && ",
+                                   "github.event_name == 'pull_request' && !github.event.pull_request.draft && "),
+                      release_if, 'the verdict owes the release parts exactly where gates-release runs')
+        for result in ('skipped', 'failure', 'cancelled'):
+            with self.subTest(result=result):
+                done = self.run_verdict(RELEASE=result, RELEASE_OWED='true')
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertIn('owes the release parts', done.stdout)
+        self.assertEqual(self.run_verdict(RELEASE='skipped').returncode, 0)
+        self.assertEqual(self.run_verdict(RELEASE='success', RELEASE_OWED='true').returncode, 0)
+        self.assertEqual(self.run_verdict(RELEASE='failure').returncode, 1)
+        reused = self.run_verdict(REUSE='success', REUSED='77', PARTS='skipped', RELEASE='skipped',
+                                  SHARDS='skipped', REPORT='skipped', RELEASE_OWED='true')
+        self.assertEqual(reused.returncode, 0, reused.stdout)
+
+    def test_runs_carry_their_base_and_a_retarget_reruns_the_gates(self):
+        # TSK-1001 AC-2, AC-3: the run title names the pull request, base
+        # branch and base commit as admission parses it; `edited` reruns
+        # on a retarget, and only an edit that keeps the base waits instead
+        # of cancelling the running gate.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        spec = importlib.util.spec_from_file_location('ci_reuse', ROOT / 'scripts' / 'ci-reuse.py')
+        reuse = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reuse)
+        self.assertIn("run-name: ${{ github.event_name == 'pull_request' && format('codeflow-ci pull request #{0} "
+                      "into {1} at {2}', github.event.pull_request.number, github.event.pull_request.base.ref, "
+                      "github.event.pull_request.base.sha) || '' }}\n", workflow)
+        title = 'codeflow-ci pull request #{0} into {1} at {2}'.format(5, 'integration/EPC-1-x', 'a' * 40)
+        self.assertEqual(reuse.run_title({'display_title': title}), (5, 'integration/EPC-1-x', 'a' * 40))
+        self.assertIn('    types: [opened, synchronize, reopened, ready_for_review, edited]\n', workflow)
+        self.assertIn("  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != "
+                      "'edited' || github.event.changes.base.ref.from != '') }}\n", workflow)
+        policy = read('.github/workflows/codeflow-policy.yml')
+        step = policy.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
+        self.assertIn('--trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py', step)
+
+    def test_the_adopter_gate_runs_quick_only_targets(self):
+        # TSK-1001 AC-14: a target that defines `quick` but not the mode the
+        # hosted gate runs lost its only automatic run with the pre-push
+        # quick gate; the shipped workflow runs exactly those after the gate.
+        import tempfile
+        workflow = read('assets/base/ci/codeflow-ci.yml')
+        line = re.search(r"^          codeflow_quick_only=\$\(python3 -I -c '(.+)' \"\$codeflow_mode\" 2>/dev/null \|\| true\)$",
+                         workflow, re.M)
+        self.assertIsNotNone(line)
+        self.assertIn('          if [ -n "$codeflow_quick_only" ]; then\n'
+                      '            "$codeflow_bin" test --strict --mode quick --only "$codeflow_quick_only"\n', workflow)
+        self.assertLess(workflow.index('"$codeflow_bin" test --strict --mode "$codeflow_mode"'),
+                        workflow.index('codeflow_quick_only='))
+        self.assertEqual(read('.codeflow/.baseline/.github/workflows/codeflow-ci.yml'), workflow)
+        config = {'targets': [
+            {'name': 'lint', 'modes': {'quick': {}}},
+            {'name': 'unit', 'modes': {'quick': {}, 'essential': {}, 'full': {}}},
+            {'name': 'slow', 'modes': {'full': {}}},
+            {'name': 'off', 'enabled': False, 'modes': {'quick': {}}},
+            {'name': 'smoke', 'modes': {'quick': {}, 'full': {}}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, '.codeflow').mkdir()
+            Path(directory, '.codeflow/test-config.json').write_text(json.dumps(config))
+            def names(mode):
+                return subprocess.run(['python3', '-I', '-c', line.group(1), mode], cwd=directory,
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(names('essential'), 'lint,smoke')
+            self.assertEqual(names('full'), 'lint')
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
