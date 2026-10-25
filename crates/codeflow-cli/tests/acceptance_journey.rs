@@ -975,19 +975,34 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     )
     .unwrap();
     commit(&root, "chore: plan the release journey");
-    // Each line's planning merge names its line. With one message, both
-    // lines start from the same commit, so two merges made within one
-    // second are one commit shared by both lines, and the import check then
-    // sees LINE_B's unpublished history inside LINE_A's push (hosted run
-    // 40158545922).
+    // Both lines take the plan with one message at one pinned second, so
+    // the two merges are one commit P that both lines hold (TSK-1004; hosted
+    // run 40158545922). Each line then advances past P on its own, and P's
+    // planning records are shared provenance, never an import from the
+    // other, still unpublished, line.
     for line in [LINE_A, LINE_B] {
         git(&root, &["switch", "-q", line]);
-        let message = format!("chore: land the plan on {line}");
-        git(
-            &root,
-            &["merge", "-q", "--no-ff", "plan/release", "-m", &message],
-        );
+        let out = with_env(&mut Command::new("git"))
+            .env("GIT_AUTHOR_DATE", "2026-10-25T00:00:00Z")
+            .env("GIT_COMMITTER_DATE", "2026-10-25T00:00:00Z")
+            .args([
+                "merge",
+                "-q",
+                "--no-ff",
+                "plan/release",
+                "-m",
+                "chore: land the plan",
+            ])
+            .current_dir(&root)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "plan merge: {}", text(&out));
     }
+    assert_eq!(
+        git(&root, &["rev-parse", LINE_A]),
+        git(&root, &["rev-parse", LINE_B]),
+        "both lines hold one planning merge"
+    );
 
     // Each line lands a task completed in its own pull request.
     for (line, id, file) in [
