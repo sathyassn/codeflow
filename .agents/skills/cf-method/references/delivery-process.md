@@ -10,16 +10,15 @@ of the task record.
 
 Four rules hold everywhere:
 
-- No work goes without a task record, however small. Every assignment
-  attaches to an existing task or a new one before substantive work starts,
-  research, planning and review with no repository edits included. Review,
-  confirmation and repairs reuse the current task; a finding, a reviewer turn
-  or a status reply never creates one. Only ordinary conversation, or a
-  status update about work already recorded, goes unrecorded.
+- Work that changes the repository or produces a durable artifact has a
+  task record, however small, before substantive work starts. Research,
+  review and consult work that produces no durable artifact needs none.
+  Review, confirmation and repairs reuse the current task; a finding, a
+  reviewer turn or a status reply never creates one.
 - Planning happens only when a brief or spec is broken into an epic and its
   tasks.
-- Review is one whole-unit pass ("Review verdicts" in the discipline rules):
-  material findings are fixed in the open task, nits are recorded, and no
+- Review runs at the four stages "Review verdicts" in the discipline rules
+  states: only material findings block, nits get a disposition, and no
   round count or other hard number decides anything.
 - Only the operator adds process (section 8).
 
@@ -240,18 +239,18 @@ reviewer; another task's criteria are never changed from this PR.
 ```
 
 - Builders run targeted tests and the quick gate (`codeflow test --mode
-  quick`) and cite that evidence, with revision and command, in the task PR.
+  quick`) once before ready, and cite that evidence, with revision and
+  command, in the task PR. The pace of planned work is set in
+  [the workflow lifecycle](workflow-lifecycle.md) "Planned work moves at
+  speed".
   The primary runs the full gate once per batch candidate and links it. A
   standalone PR is its own candidate and runs its own gate.
 - Before asking for review, the builder merges the current integration line
   into the task branch and resolves any conflicts there, so conflicts surface
   in the task, not in the batch gate.
-- Batches stay small and in dependency order, so a red gate drops little.
-  A red gate is diagnosed before anything is dropped: a member leaves the
-  batch only when evidence attributes the failure to it.
-- The primary inspects each landing merge as the skill's batch landing
-  steps say: a clean merge does not reopen unit review; a hand-resolved product
-  hunk returns its task to a whole-unit review at the new head.
+- Batch landing (candidate order, the red-gate diagnosis, which merges
+  reopen review) is stated once in the `cf-method` skill, "Managing a body
+  of work".
 - The PR cites the full gate by its run id and revision from its durable
   home, and the review verdict lives on the PR, so the evidence survives the
   cleanup of worktrees and build directories.
@@ -259,11 +258,9 @@ reviewer; another task's criteria are never changed from this PR.
   primary reads hosted results once at batch assembly. A bounded wait applies
   only where an adopted policy requires hosted checks green before landing.
 - The PR stays a draft until its required evidence exists.
-- Review ends when every criterion not marked deferred has evidence on the
-  reviewed revision, the needed checks are green, no material finding is open
-  and every nit has a disposition. No round count decides it.
-- The finder confirms a material fix inside its next pass, as the
-  discipline rules say under "Review verdicts"; nits need no confirmation.
+- The review stages, the finder's delta confirmation, the final holistic
+  pass and when review ends are stated once in the discipline rules,
+  "Review verdicts".
 - A later task may build on a predecessor's exact reviewed head before that
   predecessor lands, named with `--on TSK-A@<sha>`. The predecessor still
   lands first; a change to it after review means rebase and recheck.
@@ -330,7 +327,7 @@ no epic, with the event that revisits it), or drop with the reason.
                 epic record + task records + edges          other lineage, once
                 (one planning PR)
  build/review   ONE PR per task: code, tests, docs,         other lineage, one pass
-                task record with status and criteria,       (+ security reviewer when
+                task record with status and criteria,       (with the security lens when
                 acceptance block, PR body with evidence      hooks, guards, policy, CI,
                                                              credentials or deps change)
  land           candidate SHA, full gate output cited by    primary; other lineage when

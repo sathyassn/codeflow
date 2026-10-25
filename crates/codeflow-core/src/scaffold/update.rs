@@ -63,6 +63,9 @@ use super::version::check_write_version;
 use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
+mod pending;
+use pending::PendingResolution;
+
 /// Options for [`update`].
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
@@ -184,8 +187,24 @@ pub fn decide(
     };
     let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
-        let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
-        let base = Baseline::read(root, dest)?;
+        // While the `.new` proposal is still beside the file, the conflict
+        // stays open: preview it against the recorded base, as before the
+        // pending record existed. The update itself still refuses.
+        let proposal_open =
+            super::state::read_beneath_root(root, &format!("{dest}.new"))?.is_some();
+        let pending = if proposal_open {
+            None
+        } else {
+            PendingResolution::read(root, dest, &installed)?
+        };
+        let recorded = pending
+            .as_ref()
+            .map(|pending| pending.new_sha256.as_str())
+            .or_else(|| installed.files.get(dest).map(|f| f.sha256.as_str()));
+        let base = pending
+            .as_ref()
+            .map(|pending| pending.shipped.clone())
+            .or(Baseline::read(root, dest)?);
         let step = managed_step(
             current.as_deref(),
             &rendered,
@@ -193,16 +212,7 @@ pub fn decide(
             base.as_deref(),
             false,
         );
-        return Ok(Some(match step {
-            ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
-                Decision::Rewrite(rendered)
-            }
-            ManagedStep::Merge(merged) => Decision::Rewrite(merged),
-            ManagedStep::Adopt => Decision::Current,
-            ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
-            ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
-            ManagedStep::Kept => Decision::KeptUserModification,
-        }));
+        return Ok(Some(step.decision(rendered)));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
@@ -316,6 +326,47 @@ fn update_writes(
         "codeflow update (scaffold {} -> {}, {} tier)",
         state.scaffold_version, opts.binary_version, state.tier
     ));
+    // Validate every outstanding resolution before writing anything, including
+    // state, reports and files that precede the conflicted entry in the manifest.
+    // Include old entries so pruning cannot discard an unresolved proposal.
+    let managed: std::collections::BTreeSet<_> = installed
+        .files
+        .iter()
+        .filter(|(_, file)| file.ownership == Ownership::Managed)
+        .map(|(dest, _)| dest.as_str())
+        .chain(
+            manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.ownership == Ownership::Managed
+                        && entry.applies(state.tier, &state.permission_preset)
+                })
+                .map(|entry| entry.dest.as_str()),
+        )
+        .filter(|dest| !ignore.is_ignored(dest))
+        .collect();
+    let mut resolved = Vec::new();
+    for dest in managed {
+        if let Some(pending) = PendingResolution::read(root, dest, &installed)? {
+            resolved.push((dest.to_string(), pending));
+        }
+    }
+    for (dest, pending) in &resolved {
+        Baseline::write(root, dest, &pending.shipped)?;
+        // `read` requires a manifest entry with a known shipped hash.
+        if let Some(file) = installed.files.get_mut(dest) {
+            file.sha256 = hash::sha256_hex(pending.shipped.as_bytes());
+        }
+    }
+    if !resolved.is_empty() {
+        // Persist the accepted base before dropping its pending record. A retry
+        // accepts either old or new metadata after an interrupted write.
+        installed.store(root)?;
+        for (dest, _) in &resolved {
+            remove_beneath_root(root, &pending::path(dest))?;
+        }
+    }
     let mut diffs = String::new();
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
         .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
@@ -649,6 +700,19 @@ enum ManagedStep {
     Conflict(String),
 }
 
+impl ManagedStep {
+    fn decision(self, rendered: String) -> Decision {
+        match self {
+            Self::Add | Self::Replace | Self::Force => Decision::Rewrite(rendered),
+            Self::Merge(merged) => Decision::Rewrite(merged),
+            Self::Adopt => Decision::Current,
+            Self::NoBaseline => Decision::ConflictProposal(rendered),
+            Self::Conflict(proposal) => Decision::ConflictProposal(proposal),
+            Self::Kept => Decision::KeptUserModification,
+        }
+    }
+}
+
 fn managed_step(
     current: Option<&str>,
     rendered: &str,
@@ -823,10 +887,17 @@ fn update_entry(
                     // overlapping hunks wait for you.
                     let new_path = format!("{}.new", entry.dest);
                     write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                    PendingResolution::write(
+                        root,
+                        &entry.dest,
+                        base.as_deref().expect("conflict requires a baseline"),
+                        &rendered,
+                    )?;
                     let mut notes = vec![format!(
                         "your modifications conflict with the new shipped version; file untouched. \
                          {new_path} holds the 3-way merge: your changes are kept and each \
-                         overlapping hunk carries conflict markers to resolve before you replace the file"
+                         overlapping hunk carries conflict markers. Resolve them, move {new_path} \
+                         over the file, then rerun codeflow update to record the shipped baseline"
                     )];
                     if entry.src == "ci/codeflow-ci.yml" {
                         notes.push(
@@ -994,7 +1065,12 @@ fn sync_user_owned_json(
 
     // Keys the new shipped default dropped and the schema deprecates are
     // deleted (TSK-137): they are inert, and the loader warns while they stay.
-    let removed = remove_deprecated_keys(&mut user, &new_default);
+    let mut removed = remove_deprecated_keys(&mut user, &new_default);
+    removed.extend(remove_unsupported_defaults(
+        &mut user,
+        old_default.as_ref(),
+        &new_default,
+    ));
     added.extend(removed.iter().map(|k| format!("-{k}")));
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
@@ -1006,6 +1082,7 @@ fn sync_user_owned_json(
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
         notes.extend(recommended);
+        notes.extend(unsupported_policy_notes(&user));
         if !prior.is_empty() {
             notes.push(prior_release_note());
         } else if old_default.is_none() {
@@ -1020,13 +1097,7 @@ fn sync_user_owned_json(
 
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
-    let mut notes: Vec<String> = added
-        .iter()
-        .map(|k| match k.strip_prefix('-') {
-            Some(gone) => format!("removed deprecated key {gone}"),
-            None => format!("added key {k}"),
-        })
-        .collect();
+    let mut notes: Vec<String> = added.iter().map(|key| key_change_note(key)).collect();
     notes.extend(moved.iter().map(MovedDefault::note));
     if !prior.is_empty() {
         notes.insert(0, prior_release_note());
@@ -1034,6 +1105,7 @@ fn sync_user_owned_json(
     let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
+    notes.extend(unsupported_policy_notes(&user));
     let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
@@ -1218,6 +1290,59 @@ fn recommend_defaults(
         }
     }
     notes
+}
+
+fn unsupported_policy_notes(value: &serde_json::Value) -> impl Iterator<Item = String> {
+    crate::hooks::policy_schema::unsupported_control_warnings(value)
+        .into_iter()
+        .map(|finding| finding.text)
+}
+
+fn key_change_note(key: &str) -> String {
+    match key.strip_prefix('-') {
+        Some(gone) => {
+            let kind = if crate::hooks::policy_schema::spec_for(gone)
+                .is_some_and(|spec| spec.is_unsupported())
+            {
+                "unsupported"
+            } else {
+                "deprecated"
+            };
+            format!("removed {kind} key {gone}")
+        }
+        None => format!("added key {key}"),
+    }
+}
+
+/// Remove an unsupported policy key only when its value matches the
+/// recorded shipped baseline. Without that evidence, preserve the value.
+fn remove_unsupported_defaults(
+    user: &mut serde_json::Value,
+    old: Option<&serde_json::Value>,
+    new: &serde_json::Value,
+) -> Vec<String> {
+    use crate::hooks::policy_schema::{lookup, schema};
+    let mut removed = Vec::new();
+    for spec in schema()
+        .iter()
+        .filter(|spec| spec.path.contains('.') && spec.is_unsupported())
+    {
+        let previous = old.and_then(|value| lookup(value, spec.path));
+        if previous.is_some()
+            && lookup(user, spec.path) == previous
+            && lookup(new, spec.path).is_none()
+        {
+            let (section, key) = spec.path.split_once('.').expect("section key");
+            if let Some(object) = user
+                .get_mut(section)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                object.remove(key);
+                removed.push(spec.path.to_string());
+            }
+        }
+    }
+    removed
 }
 
 /// Delete each dotted-path [`DEPRECATED_KEYS`] entry the user file carries and

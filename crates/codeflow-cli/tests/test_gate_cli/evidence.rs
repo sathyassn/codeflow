@@ -653,13 +653,15 @@ fn submodule_input_runs() {
     fixture.selected("submodule input");
 }
 
+// TSK-449 AC-1: the push set runs `codeflow ci` and no quick target, for a
+// records-only change and for a code change alike.
 #[test]
-fn pre_push_records_only_change_runs_only_its_quick_reader() {
+fn pre_push_runs_no_quick_target_for_a_records_only_change() {
     pre_push_summary(true);
 }
 
 #[test]
-fn repair_pre_push_zero_execution_is_not_complete() {
+fn pre_push_runs_no_quick_target_for_a_code_change() {
     pre_push_summary(false);
 }
 
@@ -735,37 +737,8 @@ fn pre_push_summary(records_only: bool) {
     writeln!(child.stdin.take().unwrap(), "refs/heads/task/TSK-001-selection {} refs/heads/task/TSK-001-selection 0000000000000000000000000000000000000000", head.trim()).unwrap();
     let output = child.wait_with_output().unwrap();
     let text = stderr(&output);
-    assert!(
-        text.contains(if records_only || !cfg!(unix) {
-            "selected record-check"
-        } else {
-            "skipped record-check"
-        }),
-        "{text}"
-    );
-    assert!(
-        text.contains(if cfg!(unix) {
-            "skipped rust-check"
-        } else {
-            "selected rust-check"
-        }),
-        "{text}"
-    );
-    assert!(
-        text.contains(if cfg!(unix) {
-            if records_only {
-                "executed 1; skipped 1; not complete"
-            } else {
-                "executed 0; skipped 2; not complete"
-            }
-        } else {
-            "executed 2; skipped 0"
-        }),
-        "{text}"
-    );
-    if cfg!(unix) {
-        assert!(text.contains("quick targets not complete"), "{text}");
-        assert!(!text.contains("quick targets passed"), "{text}");
+    for absent in ["record-check", "rust-check", "quick targets", "executed "] {
+        assert!(!text.contains(absent), "{records_only}: {absent}: {text}");
     }
     assert!(text.contains("codeflow ci --base"), "{text}");
     assert!(
@@ -1304,11 +1277,7 @@ fn repair_requested_modes_report_passed_without_incomplete_suffix() {
         }
     });
     for mode in ["quick", "essential"] {
-        let output = run(
-            fixture.root.path(),
-            fixture.home.as_path(),
-            &["test", "--mode", mode, "--all", "--strict"],
-        );
+        let output = fixture.full(&["test", "--mode", mode, "--all", "--strict"]);
         assert!(output.status.success(), "{}", stderr(&output));
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -1327,20 +1296,25 @@ fn essential_default_comparison_uses_the_declared_line() {
             target["evidence"]["covers_modes"] = json!(["quick", "essential"]);
         }
     });
-    let output = run(
-        fixture.root.path(),
-        fixture.home.as_path(),
-        &["test", "--mode", "essential"],
-    );
+    // The enclosing gate owns the real account's machine lock. Exercise CLI
+    // comparison routing under an isolated home, then selection credit through
+    // the same core engine under the real account, as Fixture's seeding does.
+    let output = fixture.full(&["test", "--mode", "essential"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         stderr(&output).contains("integration/checks"),
         "{}",
         stderr(&output)
     );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("executed 2; skipped 0"));
     if cfg!(unix) {
+        let outcome =
+            codeflow_core::testing::gate::run_gate(fixture.root.path(), "essential").unwrap();
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("executed 0; skipped 2; not complete")
+            matches!(outcome, codeflow_core::testing::gate::GateOutcome::Completed {
+            results, passed: true, evidence_skipped: 2, ..
+        } if results.is_empty()),
+            "essential retains the same account-backed selection credit"
         );
     } else {
         assert!(stderr(&output).contains("account home unavailable"));

@@ -166,7 +166,8 @@ pub fn policy_reference() -> Generated {
         if sections.last().is_none_or(|(name, _)| *name != group) {
             sections.push((group, Vec::new()));
         }
-        let default = lookup(&defaults, spec.path).map_or_else(String::new, render_value);
+        let default =
+            lookup(&defaults, spec.path).map_or_else(|| "absent".to_string(), render_value);
         let row = format!(
             "| `{}` | {} | `{}` | {} | {} | {} |",
             spec.path,

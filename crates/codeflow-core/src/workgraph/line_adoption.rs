@@ -161,7 +161,8 @@ fn first_parent_range(repo: &Repository, head: Oid, base: Oid) -> Result<Vec<Oid
 /// line history searched for the merge that brought each entry.
 ///
 /// # Errors
-/// Returns an error only when the history cannot be read. Direct commits
+/// Returns an error when the history or its adoption entries cannot be read.
+/// Malformed head entries are reported in [`AdoptionReport::record_error`]. Direct commits
 /// without a landed adoption are listed in [`AdoptionReport::unadopted`].
 pub fn check_range(
     root: &Path,
@@ -170,6 +171,7 @@ pub fn check_range(
     base: &str,
     head: &str,
 ) -> Result<AdoptionReport, String> {
+    let _judgment = history::judgment();
     let epic = epic_id(branch)?;
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let resolve = |revision: &str| {
@@ -201,7 +203,7 @@ pub fn check_range(
         }
     }
     let at_target = if direct.iter().any(|(_, entry)| entry.is_some()) {
-        entries(&repo, target, epic).unwrap_or_default()
+        entries(&repo, target, epic)?
     } else {
         Vec::new()
     };
@@ -218,24 +220,23 @@ pub fn check_range(
         history.reverse();
         history
             .into_iter()
-            .map(|oid| (oid, entries(&repo, oid, epic).unwrap_or_default()))
-            .collect::<Vec<_>>()
+            .map(|oid| entries(&repo, oid, epic).map(|entries| (oid, entries)))
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         Vec::new()
     };
-    let arrived_by_merge = |entry: &LineAdoption| {
-        history
-            .iter()
-            .find(|(_, entries)| entries.contains(entry))
-            .is_some_and(|(first, _)| {
-                repo.find_commit(*first)
-                    .and_then(|commit| history::parents(&repo, &commit))
-                    .is_ok_and(|parents| parents.len() >= 2)
-            })
+    let arrived_by_merge = |entry: &LineAdoption| -> Result<bool, String> {
+        let Some((first, _)) = history.iter().find(|(_, entries)| entries.contains(entry)) else {
+            return Ok(false);
+        };
+        repo.find_commit(*first)
+            .and_then(|commit| history::parents(&repo, &commit))
+            .map(|parents| parents.len() >= 2)
+            .map_err(|error| error.to_string())
     };
     for (id, adoption) in direct {
         match adoption {
-            Some(entry) if at_target.contains(entry) || arrived_by_merge(entry) => {
+            Some(entry) if at_target.contains(entry) || arrived_by_merge(entry)? => {
                 report.adopted.push(entry.clone());
             }
             _ => report.unadopted.push(id),

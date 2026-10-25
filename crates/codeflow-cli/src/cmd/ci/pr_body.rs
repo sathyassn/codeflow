@@ -944,6 +944,68 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     out
 }
 
+/// Whether the visible body gives a reason for removing `criterion`
+/// (TSK-451): a line naming it as a whole word and a form of "remove", with
+/// at least two more words of reason.
+pub(super) fn gives_removal_reason(body: &str, criterion: &str) -> bool {
+    visible_text(body, false).split('\n').any(|line| {
+        let words: Vec<String> = line
+            .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+            .map(|word| word.trim_matches('-').to_ascii_lowercase())
+            .filter(|word| !word.is_empty())
+            .collect();
+        let names = words
+            .iter()
+            .any(|word| word.eq_ignore_ascii_case(criterion));
+        let removes = words.iter().any(|word| word.starts_with("remov"));
+        let reason = words
+            .iter()
+            .filter(|word| !word.eq_ignore_ascii_case(criterion) && !word.starts_with("remov"))
+            .filter(|word| word.chars().any(char::is_alphabetic))
+            .count();
+        names && removes && reason >= 2
+    })
+}
+
+/// The quick run a ready code PR's Testing section cites for its head tree
+/// (TSK-451).
+pub(super) const QUICK_RUN: &str = "codeflow test --mode quick";
+
+/// A ready code pull request's Testing section cites [`QUICK_RUN`] for the
+/// head tree (TSK-451), reported at the level of the Testing check above
+/// (warn). `exempt` is a draft, or a project without `codeflow test`; none
+/// is owed there, nor by a docs-only or light range, nor by a body with no
+/// Testing section, which the section check reports.
+pub(super) fn quick_citation(
+    git: &GitPolicy,
+    body: &str,
+    class: super::ChangeClass,
+    exempt: bool,
+) -> Vec<Violation> {
+    if exempt || class.docs_only || class.light || !git.pr_sections.is_active() {
+        return Vec::new();
+    }
+    let outline = outline(body);
+    let testing: Vec<_> = outline
+        .sections
+        .iter()
+        .filter(|section| section.matches("Testing"))
+        .collect();
+    if testing.is_empty()
+        || testing
+            .iter()
+            .any(|section| visible_text(section.content(), true).contains(QUICK_RUN))
+    {
+        return Vec::new();
+    }
+    vec![Violation::new(
+        "git.pr_sections",
+        PolicyLevel::Warn,
+        format!("PR Testing cites no `{QUICK_RUN}` run for the head tree; a ready code PR cites it, a draft owes none"),
+        codeflow_core::remedy::PR_PRESENTATION.remedy(),
+    )]
+}
+
 /// One top-level block of a Summary as a reader sees it rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Block {

@@ -3,8 +3,10 @@
 # live here and not in codeflow-ci.yml, the managed CI file every adopter
 # receives. No scaffold manifest entry installs this file.
 #
-# - release impact: every pull request's Release impact block against the
-#   proposed merge tree and the host's published state. It blocks.
+# - release impact: every pull request's declared impact against the
+#   proposed merge tree and the host's published state. It blocks. The
+#   block's own fields are judged by `codeflow ci`'s one evaluator, which
+#   release.py calls; this job judges nothing of the block separately.
 # - release state: the merged state on main and on every integration line,
 #   without writes. Publication reads this job's result on main.
 name: codeflow-release
@@ -32,9 +34,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      # release.py reads the body with the codeflow built from this same
-      # checkout, the reader `codeflow ci` uses, so the two cannot read a
-      # body differently (TSK-147 F4). It never takes a codeflow from PATH.
+      # release.py reads and judges the body with the codeflow built from
+      # this same checkout, the evaluator `codeflow ci` uses, so the two
+      # cannot judge a body differently (TSK-147 F4, TSK-451). It never
+      # takes a codeflow from PATH.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

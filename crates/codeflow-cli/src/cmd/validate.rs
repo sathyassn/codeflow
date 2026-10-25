@@ -146,7 +146,10 @@ fn run_transition_validation(root: &Path, since: &str) -> bool {
 fn validate_policy(root: &Path) -> bool {
     match policy_schema::validate_policy(root) {
         Ok(()) => {
-            for warning in policy_schema::deprecation_warnings(root) {
+            for warning in policy_schema::deprecation_warnings(root)
+                .into_iter()
+                .filter(|warning| policy_schema::first_unsupported_warning(&warning.text))
+            {
                 eprintln!("{}", warning.line("validate", "warning"));
             }
             if root.join(".codeflow").join("policy.json").exists() {

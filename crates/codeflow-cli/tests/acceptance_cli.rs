@@ -896,8 +896,8 @@ fn a_waiver_amendment_changes_planning_records_only() {
 
 // The binding of a completion made after its task landed (the merge rule):
 // R is the second parent of a clean landing merge M on the completion's
-// first-parent chain, only merges and planning records follow M, and the
-// completion changes planning records only. `task status complete` and
+// first-parent chain, only merges, planning records and landed adoptions
+// follow M, and the completion changes planning records only. `task status complete` and
 // `codeflow ci` apply the same judge.
 
 const LINE: &str = "integration/EPC-001-line";
@@ -972,7 +972,7 @@ fn binding_lines(result: &(i32, String)) -> Vec<&str> {
 /// judged where it was introduced, not at the line tip.
 #[test]
 fn the_line_into_main_binds_each_completion_where_it_was_made() {
-    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003"]);
+    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003", "TSK-004"]);
     let root = dir.path();
     let first = build(root, "task/TSK-001-one", "src/one.rs");
     write_done(root, "TSK-001", "complete", &first);
@@ -984,7 +984,9 @@ fn the_line_into_main_binds_each_completion_where_it_was_made() {
     land(root, "task/TSK-001-one");
     land(root, "task/TSK-002-two");
     land(root, "task/TSK-003-three");
-    build(root, "feat/other", "src/other.rs");
+    let other = build(root, "feat/other", "src/other.rs");
+    write_done(root, "TSK-004", "complete", &other);
+    commit(root, "docs: complete the other reviewed task");
     land(root, "feat/other");
     git(root, &["switch", "-C", "plan/complete-tsk003", LINE]);
     write_done(root, "TSK-003", "complete", &third);
@@ -1058,6 +1060,148 @@ fn a_late_completion_binds_to_the_landing_merge() {
         assert_passes(&result, what);
         assert!(binding_lines(&result).is_empty(), "{what}: {}", result.1);
     }
+}
+
+fn write_adoption(root: &Path, commit: &str) {
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replacen(
+            "specs: []",
+            &format!("specs: []\nline_adoptions:\n  - commit: {commit}\n    reason: Owner exemption\n    review: https://example.test/pr/2#review"),
+            1,
+        ),
+    );
+}
+
+fn refused_adoption(what: &str) {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner exemption\n");
+    if what == "changed acceptance" {
+        write_done(root, "TSK-001", "todo", &reviewed);
+    }
+    let direct = commit(root, "chore: direct exemption");
+    if what != "absent" {
+        git(root, &["switch", "-c", "plan/adopt", LINE]);
+        write_adoption(
+            root,
+            if what == "wrong commit" {
+                &reviewed
+            } else {
+                &direct
+            },
+        );
+        commit(root, "docs: adopt exemption");
+        if !matches!(what, "branch only" | "branch merge") {
+            land(root, "plan/adopt");
+        }
+    }
+    if what == "branch merge" {
+        git(root, &["switch", LINE]);
+    }
+    // Keep an unlanded entry in the completion branch for the forgery case.
+    git(root, &["switch", "-c", "plan/complete-tsk001"]);
+    if what == "branch merge" {
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "merge: unlanded adoption",
+                "plan/adopt",
+            ],
+        );
+    }
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs: complete task");
+    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+    let reason = if what == "changed acceptance" {
+        "changes TSK-001's acceptance block"
+    } else {
+        "changes .gitleaksignore after the landing merge"
+    };
+    assert_blocks(&result, what, &["work.acceptance_binding", reason]);
+}
+
+#[test]
+fn a_direct_commit_without_an_adoption_refuses_binding() {
+    refused_adoption("absent");
+}
+
+#[test]
+fn an_adoption_only_on_the_completion_branch_refuses_binding() {
+    refused_adoption("branch only");
+}
+
+#[test]
+fn an_adoption_merged_only_into_the_completion_branch_refuses_binding() {
+    refused_adoption("branch merge");
+}
+
+#[test]
+fn an_adoption_of_another_commit_refuses_binding() {
+    refused_adoption("wrong commit");
+}
+
+#[test]
+fn an_adopted_commit_that_changes_acceptance_refuses_binding() {
+    refused_adoption("changed acceptance");
+}
+
+/// An owner's direct exemption is reviewed and adopted by a landed planning
+/// PR before a separate planning PR completes the already-landed task.
+#[test]
+fn a_late_completion_binds_after_a_landed_line_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    git(root, &["switch", "-c", "plan/complete-tsk001", LINE]);
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status after adoption");
+    commit(root, "docs: complete the task");
+    assert_passes(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "completion after landed adoption",
+    );
+    land(root, "plan/complete-tsk001");
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "adopted line into main");
+    assert!(
+        result
+            .1
+            .lines()
+            .any(|line| line.contains("pull request class:")
+                && line.contains(&format!("adopts {}", &adopted[..9]))),
+        "{}",
+        result.1
+    );
+}
+
+#[test]
+fn status_on_the_line_binds_after_a_landed_adoption() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    write(root, ".gitleaksignore", "# Owner's reviewed exemption\n");
+    let adopted = commit(root, "chore: record an exemption");
+    git(root, &["switch", "-c", "plan/adopt", LINE]);
+    write_adoption(root, &adopted);
+    commit(root, "docs: adopt the exemption");
+    land(root, "plan/adopt");
+    write_done(root, "TSK-001", "in_progress", &reviewed);
+    assert_passes(&status_complete(root, "TSK-001"), "status on the line");
 }
 
 /// A late completion fails when the landing merge is not the clean
@@ -1948,7 +2092,7 @@ fn a_late_completion_carries_an_ancestor_review_past_unrelated_line_work() {
 
 /// Complete a task after its first reviewed work has landed on its line.
 fn late_completed_line() -> (tempfile::TempDir, String, String) {
-    let dir = line_repo(&["TSK-001"]);
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
     let root = dir.path();
     let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
     land(root, "task/TSK-001-work");
@@ -2033,7 +2177,9 @@ fn a_separate_reopen_then_a_landed_fix_binds_a_late_recompletion() {
         let fixed = commit(root, "fix: repair the reopened work");
         git(root, &["switch", "-c", "other/change", LINE]);
         write(root, "src/other.rs", "pub fn other() {}\n");
-        commit(root, "feat: other line work");
+        let other = commit(root, "feat: other line work");
+        write_done(root, "TSK-002", "complete", &other);
+        commit(root, "docs: complete the other reviewed task");
         land(root, "other/change");
         land(root, "task/TSK-001-fix");
         if direct {
@@ -3830,7 +3976,9 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
         let reviewed = build(root, BRANCH, "src/reviewed.rs");
         git(root, &["switch", "-q", "-c", "feat/side", LINE]);
         write(root, "src/side.rs", "pub fn side() {}\n");
-        commit(root, "feat: work on the line");
+        let side = commit(root, "feat: work on the line");
+        write_done(root, "TSK-002", "complete", &side);
+        commit(root, "docs: complete the other reviewed task");
         let line_tip = land(root, "feat/side");
         git(root, &["switch", "-q", BRANCH]);
         git(
@@ -3853,7 +4001,8 @@ fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
                 &[
                     "work.acceptance_binding",
                     "TSK-001",
-                    "src/side.rs changed after the reviewed commit",
+                    "project-management/tasks/TSK-002.md changed after the reviewed commit",
+                    "not on the first-parent line of the target tip",
                 ],
             );
         } else {
@@ -5832,3 +5981,6 @@ fn the_acceptance_help_names_the_key_and_its_fields() {
         }
     }
 }
+
+#[path = "acceptance_cli/imports.rs"]
+mod imports;

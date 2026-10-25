@@ -41,7 +41,7 @@ name: codeflow-policy
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main, master, "integration/**"]
   schedule:
@@ -59,12 +59,13 @@ jobs:
   commit-lint:
     name: commit standards
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    # Read access to pull requests serves the body step below and nothing
-    # else; the token stays read-only.
+    timeout-minutes: 45
+    # Read access to pull requests serves the body step below, and read
+    # access to actions the merge admission; the token stays read-only.
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     steps:
       # The target, never the pull request head: for a pull request its base
       # commit, otherwise the event's own commit. The binary, the pin and the
@@ -156,3 +157,29 @@ jobs:
           else
             codeflow ids check
           fi
+
+      # Merge admission (TSK-449 AC-6). A draft's codeflow-ci verdicts are
+      # skipped, which a required-check rule reads as passing, so this
+      # required check passes only when the newest codeflow-ci pull_request
+      # run at exactly this head completed with success and both verdicts
+      # succeeded. A ready pull request waits for that run, 35 minutes at
+      # most so the job stays inside the 45-minute job bound; a run still
+      # pending then refuses and names the re-run that admits it. A draft,
+      # a cancelled or failed run, a run only for another head or a skipped
+      # verdict refuses at once. `ready_for_review` and a new push start
+      # this job again at the new head. The script comes from the target
+      # checkout above, never from the pull request.
+      - name: the exact head's ready codeflow-ci run passed
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          wait=2100
+          if [ "$DRAFT" = true ]; then wait=0; fi
+          python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
+            --workflow .github/workflows/codeflow-ci.yml --require "codeflow gates" --require windows \
+            --wait "$wait"

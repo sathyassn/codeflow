@@ -21,18 +21,42 @@ struct Entry {
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct Include {
+    /// The canonical file, for inventory and deduplication.
     pub(crate) path: PathBuf,
+    /// The spelling Git reads the file by: the include value resolved
+    /// against the including file's own spelling. Relative includes inside
+    /// it resolve from this path's directory, not the canonical one.
+    pub(crate) logical: PathBuf,
     pub(crate) missing: bool,
+    /// The `includeIf` condition, or `None` for a plain `include.path`.
+    pub(crate) condition: Option<String>,
 }
 
 #[derive(Debug)]
 pub(crate) struct EffectiveConfig {
     entries: Vec<Entry>,
+    /// Files contributing values, resolved from Git's reported origin directory.
+    pub(crate) sources: Vec<PathBuf>,
     /// Includes named by the files Git read, including inactive conditions.
     pub(crate) includes: Vec<Include>,
 }
 
 impl EffectiveConfig {
+    /// Effective key names, without exposing or executing their values.
+    pub(crate) fn keys(&self) -> Result<Vec<&str>, String> {
+        let mut keys = self
+            .entries
+            .iter()
+            .map(|entry| {
+                std::str::from_utf8(&entry.key)
+                    .map_err(|_| "cannot verify Git configuration: a key is not UTF-8".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        keys.sort_unstable();
+        keys.dedup();
+        Ok(keys)
+    }
+
     pub(crate) fn get(&self, key: &str) -> Result<Option<&str>, String> {
         self.get_all(key)
             .last()
@@ -127,6 +151,10 @@ pub(crate) fn read(
             }
             command.args([arg, value]);
             at += 2;
+        } else if arg.starts_with("--exec-path=") || matches!(arg, "-p" | "-P") {
+            // Configuration and rev-parse are builtins. Do not select an
+            // external program or start a pager while inspecting their data.
+            at += 1;
         } else if arg.starts_with("-c")
             || arg.starts_with("-C")
             || [
@@ -210,6 +238,7 @@ fn parse(
         .split(|byte| *byte == 0);
     let mut entries = Vec::new();
     let mut includes = Vec::new();
+    let mut sources = Vec::new();
     while let Some(scope) = fields.next() {
         if scope.is_empty() && bytes.is_empty() {
             break;
@@ -221,6 +250,9 @@ fn parse(
             .map_err(|_| "cannot verify Git configuration: scope is not UTF-8")?;
         let origin = std::str::from_utf8(origin)
             .map_err(|_| "cannot verify Git configuration: origin is not UTF-8")?;
+        if let Some(file) = origin.strip_prefix("file:") {
+            sources.push(directory.join(file));
+        }
         let entry = fields
             .next()
             .ok_or("cannot verify Git configuration: incomplete output")?;
@@ -253,8 +285,27 @@ fn parse(
                     ))
                 }
             };
+            let logical = path.clone();
             let path = path.canonicalize().unwrap_or(path);
-            includes.push(Include { path, missing });
+            let condition = match key
+                .strip_prefix(b"includeif.")
+                .and_then(|rest| rest.strip_suffix(b".path"))
+            {
+                Some(condition) => Some(
+                    std::str::from_utf8(condition)
+                        .map_err(|_| {
+                            "cannot verify Git configuration: an include condition is not UTF-8"
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            includes.push(Include {
+                path,
+                logical,
+                missing,
+                condition,
+            });
             if includes.len() > 128 {
                 return Err("cannot verify Git configuration: more than 128 includes".into());
             }
@@ -268,7 +319,46 @@ fn parse(
     }
     includes.sort();
     includes.dedup();
-    Ok(EffectiveConfig { entries, includes })
+    sources.sort();
+    sources.dedup();
+    Ok(EffectiveConfig {
+        entries,
+        sources,
+        includes,
+    })
+}
+
+/// Read one configuration file and the files it includes, as Git reads
+/// `git config --file`. Used for an include whose condition the caller
+/// cannot evaluate yet, such as one keyed on a worktree that does not exist.
+pub(crate) fn read_file(path: &Path, environment: &Environment) -> Result<EffectiveConfig, String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    validate_environment(environment)?;
+    // Include paths are canonical; Git on Windows does not accept the
+    // verbatim `\\?\` spelling that canonicalization produces there.
+    let path = &crate::portable_path::without_verbatim(path.to_path_buf());
+    let directory = path
+        .parent()
+        .ok_or("cannot verify Git configuration: include file has no parent")?;
+    let mut command = crate::git::command();
+    command
+        .current_dir(directory)
+        .envs(environment)
+        .env_remove("GIT_CONFIG")
+        .stdin(Stdio::null())
+        .arg("--no-pager")
+        .arg("config")
+        .arg("--file")
+        .arg(path)
+        .args([
+            "--null",
+            "--list",
+            "--show-origin",
+            "--show-scope",
+            "--includes",
+        ]);
+    let bytes = bounded_output(&mut command, deadline)?;
+    parse(&bytes, directory, environment)
 }
 
 fn include_path(
@@ -304,7 +394,7 @@ fn include_path(
         .join(path))
 }
 
-fn bounded_output(
+pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {

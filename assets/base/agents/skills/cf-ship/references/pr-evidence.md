@@ -51,7 +51,8 @@ A missing, empty, malformed, repeated or mismatched line is refused.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope as `whole unit at <reviewed>` (the acceptance block's commit, in
   full) and the verdict, nothing more; the verdict and its native
-  provenance live on the PR and findings live in the linked record. A review
+  provenance live on the PR and every finding lives in the one findings
+  record the row links, the reviewer's verdict. A review
   row is the provenance the quality contract requires, not the AI
   attribution the commit and PR checks block.
 - Tables carry tabular data and fenced blocks carry pasted output. A figure
@@ -141,8 +142,9 @@ behavioral evaluations; distinguish added cases from live trials actually
 run. Delete unused template lines. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence
 before marking ready; a prior review carries only across a clean re-merge
-of the target, as `codeflow ci` binds it; any other change gets a new
-whole-unit review at the new head. Lint with
+of the target, as `codeflow ci` binds it. A fix to a review finding is
+confirmed by its finder on the delta, as "Review verdicts" in the discipline
+rules states; any other change gets a new whole-unit review at the new head. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 
