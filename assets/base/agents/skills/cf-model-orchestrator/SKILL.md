@@ -221,7 +221,8 @@ binding, permission or selector changed since it ran.
 
 Start by running `codeflow doctor --preflight` and reading it: it prints the
 seat, sandbox and tool evidence the steps below ask for, each value marked
-configured, observed or unavailable. It cannot establish the live model and
+configured, observed or unavailable, and whether the installed Codex
+accepts the builder launch's profile. It cannot establish the live model and
 effort a seat selected or the boundary a running session enforces, so still
 make the live observations the steps below require.
 

@@ -178,7 +178,7 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let required: &[&str] = if relative == transport {
             &[
-                "`--ask-for-approval never -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
+                "`--ask-for-approval never -c 'permissions.cf-builder.description=\"CodeFlow builder seat\"' -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
                 "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
                 "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
             ]
@@ -319,4 +319,50 @@ fn customization_distinguishes_technical_permissions_from_task_authority() {
             "customization lost permission/authority distinction: {required}"
         );
     }
+}
+
+/// TSK-1003: Codex 0.163 and later load config at TUI startup without the
+/// project file, so the builder launch passes the profile's description as
+/// an override before selecting it. The launch text carries exactly the
+/// overrides `codeflow doctor --preflight` probes, and the shipped profile's
+/// description is the same value, so the session merge changes nothing.
+#[test]
+fn codex_builder_launch_carries_the_probed_overrides() {
+    let transport = std::fs::read_to_string(
+        root()
+            .join("assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md"),
+    )
+    .unwrap();
+    let [description, select] = codeflow_core::doctor::CODEX_BUILDER_OVERRIDES;
+    assert!(
+        transport.contains(&format!("-c '{description}' -c {select}`")),
+        "transport.md launch differs from the probed overrides"
+    );
+    let cfg = shipped_config();
+    let builder = cfg["permissions"]["cf-builder"].as_table().unwrap();
+    let value = description
+        .strip_prefix("permissions.cf-builder.description=")
+        .unwrap()
+        .trim_matches('"');
+    assert_eq!(builder["description"].as_str(), Some(value));
+}
+
+/// TSK-1003: the builder writes `~/.codeflow/locks` for `codeflow reserve`
+/// and nothing else under the home folder.
+#[test]
+fn cf_builder_home_writes_are_only_the_lock_folder() {
+    let cfg = shipped_config();
+    let fs = cfg["permissions"]["cf-builder"]["filesystem"]
+        .as_table()
+        .unwrap();
+    let writes: Vec<&str> = fs
+        .iter()
+        .filter(|(key, value)| !key.starts_with(':') && value.as_str() == Some("write"))
+        .map(|(key, _)| key.as_str())
+        .collect();
+    assert_eq!(writes, ["~/.codeflow/locks"]);
+    let roots = fs[":workspace_roots"].as_table().unwrap();
+    assert_eq!(roots[".git"].as_str(), Some("write"));
+    assert_eq!(roots[".git/hooks"].as_str(), Some("read"));
+    assert_eq!(roots[".git/config"].as_str(), Some("read"));
 }

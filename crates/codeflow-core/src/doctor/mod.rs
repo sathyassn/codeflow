@@ -23,10 +23,15 @@ use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
+mod codex_profile;
 mod git_config;
 mod grok_hooks;
 mod remote_perimeter;
 mod startup_files;
+
+pub use codex_profile::{
+    probe_codex_builder_profile, CodexBuilderProbe, CodexLoad, CODEX_BUILDER_OVERRIDES,
+};
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

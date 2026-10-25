@@ -100,8 +100,14 @@ fn executable_line(
 ) -> String {
     match look(name) {
         Some(path) => format!(
-            "{label} {name}: observed on PATH at {path}; doctor does not run it",
-            path = shown(&path.display())
+            "{label} {name}: observed on PATH at {path}; {run}",
+            path = shown(&path.display()),
+            // The builder profile line loads codex's config (TSK-1003).
+            run = if name == "codex" {
+                "doctor runs it only to load its config for the builder profile line"
+            } else {
+                "doctor does not run it"
+            }
         ),
         None => format!("{label} {name}: unavailable: not found on PATH"),
     }
@@ -260,6 +266,66 @@ fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
     lines
 }
 
+/// Whether the installed Codex opens a builder seat as the managed launch
+/// selects its profile (TSK-1003). This is the one preflight value that runs
+/// a binary: `codex features list` with the builder overrides, which loads
+/// config and starts no model, session or sandbox. Codex 0.163 and later
+/// load config at startup without the project file, so a launch that names
+/// a project-only profile stops there; the probe loads it both ways.
+fn codex_builder_line(
+    root: &std::path::Path,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> String {
+    use codeflow_core::doctor::CodexLoad;
+    let label = "codex builder profile";
+    let defines_builder = std::fs::read_to_string(root.join(".codex/config.toml"))
+        .ok()
+        .and_then(|text| codex_profiles(&text))
+        .is_some_and(|(_, profiles)| profiles.iter().any(|name| name == "cf-builder"));
+    if !defines_builder {
+        return format!("{label}: unavailable: .codex/config.toml defines no cf-builder profile");
+    }
+    let Some(codex) = look("codex") else {
+        return format!("{label}: unavailable: codex not found on PATH");
+    };
+    let probe = codeflow_core::doctor::probe_codex_builder_profile(root, &codex);
+    let version = probe
+        .version
+        .as_deref()
+        .unwrap_or("codex of unknown version");
+    let describe = |stage: &str, load: &CodexLoad| match load {
+        CodexLoad::Accepted => None,
+        CodexLoad::Rejected(reason) => Some(format!("rejected in the {stage}: {reason}")),
+        CodexLoad::NotRun(reason) => Some(format!("not checked in the {stage}: {reason}")),
+    };
+    let problems: Vec<String> = [
+        describe("startup load, without the project config", &probe.startup),
+        describe("project load", &probe.project),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let rejected = matches!(probe.startup, CodexLoad::Rejected(_))
+        || matches!(probe.project, CodexLoad::Rejected(_));
+    if problems.is_empty() {
+        format!(
+            "{label}: observed accepted by {version} with the builder launch overrides, in the startup load and the project load; doctor cannot observe the boundary a running seat enforces",
+            version = shown(&version)
+        )
+    } else if rejected {
+        format!(
+            "{label}: observed REJECTED by {version}: {problems}; a builder seat launched as transport.md says will not open, so qualify the profile on this Codex before building",
+            version = shown(&version),
+            problems = shown(&problems.join("; "))
+        )
+    } else {
+        format!(
+            "{label}: unavailable: {problems}",
+            problems = shown(&problems.join("; "))
+        )
+    }
+}
+
 /// The preflight evidence report (TSK-452): each value is marked
 /// `configured` (what project files request), `observed` (what doctor saw on
 /// this host) or `unavailable` (what doctor cannot establish).
@@ -272,6 +338,7 @@ fn preflight_report(
     ];
     lines.extend(seat_lines(root, look));
     lines.extend(sandbox_lines(root));
+    lines.push(codex_builder_line(root, look));
     for tool in PREFLIGHT_TOOLS {
         lines.push(executable_line("tool", tool, look));
     }

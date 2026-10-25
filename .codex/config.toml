@@ -5,9 +5,10 @@
 # with no `--sandbox` flag: workspace writes with the enforcement files and
 # the shell startup files read only, the pure-secret stores denied, and
 # public network through the proxy with private and link-local targets
-# blocked. `cf-builder` extends it for builder seats. Tested on Codex 0.159.1
-# (probes of 2026-09-29; the profiles and the proxy were first qualified on
-# 0.157.1); earlier versions are unqualified, not unsupported.
+# blocked. `cf-builder` extends it for builder seats. Tested on Codex 0.164.0
+# (probes of 2026-10-25; earlier probes on 0.159.1 of 2026-09-29, and the
+# profiles and the proxy were first qualified on 0.157.1); earlier versions
+# are unqualified, not unsupported.
 #
 # On macOS, Playwright's Chromium did not start under the three sandboxed
 # profiles probed (`cf-guard`, `cf-builder` and the built-in `:workspace`):
@@ -22,11 +23,14 @@
 # operator decisions of 2026-09-28 (ADR-0075) and the D1 spike, as history:
 # - D1 builder seats, as amended on 2026-10-05 (ADR-0075, TSK-242): the
 #   operator moved builders into a sandbox so that no builder can write a
-#   shell startup file. A builder launches with `--ask-for-approval never`
-#   and `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
-#   main checkout root. The spike of 2026-09-29 (Codex 0.159.1) ran fetch,
-#   worktree add, stage, commit, cargo and npm builds unattended with
-#   `.git/hooks` and `.git/config` unwritable; a push to a bare remote
+#   shell startup file. A builder launches with `--ask-for-approval never`,
+#   `-c 'permissions.cf-builder.description="CodeFlow builder seat"'` and
+#   `-c default_permissions="cf-builder"`, no `--sandbox` flag, from the
+#   main checkout root (the description override is explained at
+#   `[permissions.cf-builder]` below; TSK-1003). The spike of 2026-09-29
+#   (Codex 0.159.1) ran fetch, worktree add, stage, commit, cargo and npm
+#   builds unattended with `.git/hooks` and `.git/config` unwritable; a
+#   push to a bare remote
 #   outside the workspace root was denied, and a push to a hosted remote was
 #   not tried. A seat launched inside a linked worktree cannot write its Git
 #   metadata at all, since Codex refuses `..` paths. A `--sandbox` flag
@@ -225,8 +229,31 @@ dangerously_allow_all_unix_sockets = false
 # `allow_local_binding = true` lets dev servers listen and also turns the
 # private-network guard off for this profile: a recorded gap. A push to a
 # remote outside the workspace root is denied (see D1 above).
+#
+# Selecting this profile on Codex 0.163 and later (TSK-1003, issue 213):
+# the TUI's startup `account/read` loads config without the project layer,
+# the user config plus the `-c` overrides only (openai/codex#51872, first
+# in 0.163.0). `-c default_permissions="cf-builder"` alone then names a
+# profile that does not exist in that load, and the seat stops with
+# "failed to load workspace requirements: invalid input parameter". The
+# launch therefore also passes
+# `-c 'permissions.cf-builder.description="CodeFlow builder seat"'`, the
+# same value as below. A description grants nothing and is not inherited,
+# so the startup load sees a profile with no filesystem table (restricted),
+# and the session load, which includes this file, merges the override into
+# this table unchanged. If this file is not loaded, the seat runs that
+# restricted stub and fails closed.
+#
+# `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
+# and the gates, which hold `~/.codeflow/locks/full-gate.lock` besides the
+# lock under the common `.git`. Nothing else under the home folder is
+# writable; a relocated `CODEFLOW_HOME` is not covered.
 [permissions.cf-builder]
 extends = "cf-guard"
+description = "CodeFlow builder seat"
+
+[permissions.cf-builder.filesystem]
+"~/.codeflow/locks" = "write"
 
 [permissions.cf-builder.filesystem.":workspace_roots"]
 ".git" = "write"
