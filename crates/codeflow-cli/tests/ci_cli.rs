@@ -48,6 +48,8 @@ fn codeflow_at(binary: &Path) -> Command {
         // The structure check reads this when no --pr-body flag is given; the
         // developer's shell must not leak a body into the no-body tests.
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("CI_PIPELINE_SOURCE")

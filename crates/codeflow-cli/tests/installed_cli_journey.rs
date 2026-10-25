@@ -41,6 +41,8 @@ fn with_env(command: &mut Command) -> &mut Command {
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
         .env_remove("CODEFLOW_HUMAN_OVERRIDE")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
         .env_remove("GITHUB_BASE_REF")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_EVENT_NAME")
