@@ -661,7 +661,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
 /// Returns a message when the history or a tree cannot be read.
 pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet<String>, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let mut walk = repo.revwalk().map_err(message)?;
+    let mut walk = history::revwalk(repo).map_err(message)?;
     walk.push(head).map_err(message)?;
     walk.hide(base).map_err(message)?;
     let changed =
@@ -683,9 +683,10 @@ pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet
     for oid in walk {
         let commit = repo.find_commit(oid.map_err(message)?).map_err(message)?;
         let tree = commit.tree().map_err(message)?;
-        let parents: Vec<git2::Tree<'_>> = commit
-            .parents()
-            .map(|parent| parent.tree())
+        let parents: Vec<git2::Tree<'_>> = history::parents(repo, &commit)
+            .map_err(message)?
+            .into_iter()
+            .map(|parent| repo.find_commit(parent).and_then(|parent| parent.tree()))
             .collect::<Result<_, _>>()
             .map_err(message)?;
         let paths = match parents.as_slice() {
