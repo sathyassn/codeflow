@@ -1,0 +1,11 @@
+id = "TSK-1002"
+uid = "687cc6e4-f41f-48e0-a4d8-c9715bbf20f1"
+kind = "TSK"
+title = "The guards refuse every spelling of a checkout or secret write and read"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-25T02:40:35Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
