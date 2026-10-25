@@ -183,6 +183,44 @@ try {
   if (session().status !== "active") throw new Error("End review without the required change ended the session");
   await page.screenshot({ path: join(output, "lifecycle-end-without-instruction.png") });
   step("End review with Request changes and no instruction kept the session and asked for it");
+  // A restored draft can hold what the editor would refuse: a review whose
+  // words pass the 256 KiB request limit, and a note over the text limit.
+  // End review names each problem on screen, sends nothing and keeps the session.
+  const draftKey = `cf-present-draft:${sessionId}`;
+  const original = await page.evaluate((key) => sessionStorage.getItem(key), draftKey);
+  if (!original) throw new Error("the draft note was not stored");
+  const restoreDraft = async (notes) => {
+    await page.evaluate(({ key, value }) => sessionStorage.setItem(key, value), { key: draftKey, value: JSON.stringify({ ...JSON.parse(original), verdict: "approve_with_notes", notes }) });
+    await page.reload();
+    await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+  };
+  const [draftNote] = JSON.parse(original).notes;
+  const reviewsSent = () => run(codeflow, ["present", "responses", "list", sessionId, "--kind", "review"]).trim();
+  const before = reviewsSent();
+  await restoreDraft(Array.from({ length: 20 }, (_, i) => ({ ...draftNote, client_id: `oversized-${i}`, body: "x".repeat(16_000) })));
+  await page.getByTestId("end-review").click();
+  await page.getByTestId("toast").filter({ hasText: /too large to send/u }).waitFor();
+  if (!(await page.getByTestId("toast").isVisible())) throw new Error("the size refusal is not visible");
+  if ((await dock.getAttribute("data-open")) !== "true") throw new Error("the size refusal left the notes closed");
+  if (asked) throw new Error("End review asked to end an oversized review");
+  if (reviewsSent() !== before) throw new Error("an oversized review was sent");
+  if (session().status !== "active") throw new Error("the size refusal ended the session");
+  await page.screenshot({ path: join(output, "lifecycle-end-oversized.png") });
+  step("End review with an oversized restored draft showed the size refusal and sent nothing");
+  await restoreDraft([{ ...draftNote, client_id: "over-long", body: "y".repeat(16_385) }]);
+  await page.getByTestId("end-review").click();
+  await page.getByTestId("composer").waitFor();
+  if (!/limited to 16384 characters/u.test(await page.locator(".cf-dock .cf-status").innerText())) throw new Error("the over-long note was not named");
+  if (asked) throw new Error("End review asked to end with an over-long note");
+  if (reviewsSent() !== before) throw new Error("a review with an over-long note was sent");
+  if (session().status !== "active") throw new Error("the over-long note ended the session");
+  await page.screenshot({ path: join(output, "lifecycle-end-over-long.png") });
+  step("End review with an over-long restored note opened that note and sent nothing");
+  await page.getByTestId("composer-cancel").click();
+  if (await page.getByTestId("discard-note").count()) await page.getByTestId("discard-note").click();
+  await restoreDraft([draftNote]);
+  await page.locator("#cf-comment-toggle").click();
+  if (await page.getByTestId("notes-expand").isVisible() && (await dock.getAttribute("data-expanded")) !== "true") await page.getByTestId("notes-expand").click();
   page.off("dialog", refuse);
   await page.locator("#cf-review-verdict").selectOption("approve_with_notes");
   await page.screenshot({ path: join(output, "lifecycle-before-end.png") });

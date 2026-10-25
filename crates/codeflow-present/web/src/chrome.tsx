@@ -1195,7 +1195,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // Every field check a review must pass before it is sent, in one place:
   // Submit and End review both use it, so neither can fail silently.
   type ReviewProblem =
-    | { readonly field: "verdict" | "instruction"; readonly message: string }
+    | { readonly field: "verdict" | "instruction" | "size"; readonly message: string }
     | { readonly field: "note"; readonly message: string; readonly note: PendingFeedback };
   const reviewProblem = (): ReviewProblem | null => {
     if (!verdict) return { field: "verdict", message: "Choose a verdict first." };
@@ -1206,6 +1206,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (long) return { field: "note", message: `Each note is limited to ${limit} characters.`, note: long };
     if (verdict === "request_changes" && !instruction.trim()) return { field: "instruction", message: "Write the change you require." };
     if (instruction.length > limit) return { field: "instruction", message: `The review summary is limited to ${limit} characters.` };
+    // Pictures can be made smaller or left out, words cannot: a review whose
+    // words alone pass the request limit can never be sent as it is.
+    const words = new TextEncoder().encode(JSON.stringify({
+      event_id: "00000000-0000-0000-0000-000000000000",
+      session_id: config.session_id,
+      revision: config.revision,
+      verdict,
+      notes: notesRef.current.map(({ target_summary: _s, excerpt, ...note }) => ({ ...note, ...(excerpt?.text ? { excerpt: { text: excerpt.text } } : {}) })),
+      ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
+    })).byteLength;
+    if (words > config.review_limits.max_payload_bytes) return { field: "size", message: tooLarge(words, config.review_limits.max_payload_bytes) };
     return null;
   };
   // Shows a problem where it can be fixed: the notes open, the failing field
@@ -1215,6 +1226,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setPanelOpen(true);
     setSheetExpanded(true);
     setStatus(`${problem.message} The review stays open.`);
+    if (problem.field === "size") {
+      // The size is no single field's fault: the message stays on screen
+      // until dismissed, as a refused send does, over the opened notes.
+      showToast(`${problem.message} The review stays open.`, { sticky: true });
+      return;
+    }
     if (problem.field === "note") {
       openNoteEditor(problem.note);
       return;
@@ -1269,7 +1286,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       submitAttemptRef.current = { fingerprint, eventId };
       const request: ReviewRequest = { event_id: eventId, ...payload };
       if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
-        setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
+        showReviewProblem({ field: "size", message: tooLarge(new TextEncoder().encode(JSON.stringify(request)).byteLength, config.review_limits.max_payload_bytes) });
         return false;
       }
       setStatus("Submitting review…");
@@ -2078,6 +2095,11 @@ function composerPositionStyle(clientX: number, clientY: number): string {
   const left = Math.min(Math.max(12, clientX - 20), Math.max(12, window.innerWidth - width - 12));
   const top = Math.min(Math.max(12, clientY + 16), Math.max(12, window.innerHeight - 280));
   return `left:${left}px;top:${top}px;width:${width}px`;
+}
+
+/** A refusal for a review over the request limit, in kilobytes. */
+function tooLarge(bytes: number, limit: number): string {
+  return `This review is too large to send: ${Math.ceil(bytes / 1024)} KB of at most ${Math.floor(limit / 1024)} KB. Shorten or remove notes, then send it.`;
 }
 
 function noteQuote(note: PendingFeedback): string {
