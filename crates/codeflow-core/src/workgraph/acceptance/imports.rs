@@ -307,10 +307,9 @@ fn is_new_import(
 }
 
 /// Whether `landing` is shared planning provenance rather than an import
-/// (TSK-1004): the merge that introduced this task record, carried on the
-/// receiving head's own first-parent chain with the record unchanged at
-/// every step since, and a version that holds no completion or acceptance
-/// evidence. Two lines that branch from one planning merge both hold it,
+/// (TSK-1004): an admissible planning landing that introduced this task
+/// record in a permitted state, carried on the receiving head's own
+/// first-parent chain with the record unchanged at every step since. Two lines that branch from one planning merge both hold it,
 /// and each line's own range answers for it, as it would for a planning
 /// merge of its own.
 ///
@@ -331,18 +330,17 @@ fn is_shared_planning(
     {
         return Ok(false);
     }
-    let commit = repo
-        .find_commit(landing)
-        .map_err(|error| error.to_string())?;
-    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
-    let [first, _, ..] = parents.as_slice() else {
+    let Some(first) = admissible_planning_landing(repo, landing) else {
         return Ok(false);
     };
+    if !permitted_at(repo, landing, record) {
+        return Ok(false);
+    }
     let uid = record_uid(&record.content);
     if !matches!(
         presence_at(
             repo,
-            *first,
+            first,
             &record.id,
             uid.as_deref(),
             &own_file_name(record)
@@ -367,6 +365,78 @@ fn is_shared_planning(
             _ => return Ok(false),
         }
     }
+}
+
+/// The first parent of `landing` when it is an admissible planning landing
+/// (TSK-1004): a merge whose tree is the clean merge of its parents, and
+/// whose change from its first parent passes the planning-amendment
+/// admissibility check, touches only records and plans (both names of a
+/// rename) and holds only regular, non-executable files on each side.
+/// Every read failure answers `None`, so the caller keeps its refusal.
+fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Option<Oid> {
+    use super::super::amendment::{landing_problem, project_at};
+    use super::super::classify::{amendment_path, AmendmentPath};
+    let commit = repo.find_commit(landing).ok()?;
+    let parents = history::parents(repo, &commit).ok()?;
+    let [first, _] = parents.as_slice() else {
+        return None;
+    };
+    if !is_clean_remerge(repo, &commit).ok()? {
+        return None;
+    }
+    if landing_problem(repo, Some(*first), landing).ok()?.is_some() {
+        return None;
+    }
+    let project = project_at(repo, *first).ok()?;
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let diff = repo
+        .diff_tree_to_tree(Some(&tree(*first).ok()?), Some(&tree(landing).ok()?), None)
+        .ok()?;
+    for delta in diff.deltas() {
+        for file in [delta.old_file(), delta.new_file()] {
+            if !file.exists() {
+                continue;
+            }
+            let path = std::str::from_utf8(file.path_bytes()?).ok()?;
+            let regular = i32::from(file.mode()) == 0o100_644;
+            if !regular || amendment_path(path, &project) != Some(AmendmentPath::Record) {
+                return None;
+            }
+        }
+    }
+    Some(*first)
+}
+
+/// Whether the task `record` names is in a permitted state at `at`: exactly
+/// one task record there carries its id or uid, every task record there
+/// parses, and that record states `todo` or `blocked` and holds no
+/// acceptance block, active, superseded or malformed.
+fn permitted_at(repo: &Repository, at: Oid, record: &RecordView) -> bool {
+    let Ok(entries) = super::task_entries(repo, at) else {
+        return false;
+    };
+    let uid = record_uid(&record.content);
+    let mut found = Vec::new();
+    for (path, blob) in entries {
+        let Ok(blob) = repo.find_blob(blob) else {
+            return false;
+        };
+        let Ok(content) = std::str::from_utf8(blob.content()) else {
+            return false;
+        };
+        let Ok(task) = RecordView::parse(RecordKind::Task, &path, content) else {
+            return false;
+        };
+        if super::is_same_task(&task, &record.id, uid.as_deref()) {
+            found.push(task);
+        }
+    }
+    let [task] = found.as_slice() else {
+        return false;
+    };
+    matches!(task.status.as_str(), "todo" | "blocked")
+        && task.active_blocks().is_empty()
+        && task.superseded_blocks().is_empty()
 }
 
 /// A line cannot supply import authority to its own current or historical head.

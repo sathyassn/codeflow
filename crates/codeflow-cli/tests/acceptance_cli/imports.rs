@@ -1087,18 +1087,28 @@ fn publish_main(root: &Path) {
     git(root, &["fetch", "origin"]);
 }
 
-/// Both lines hold the planning merge P (`shared`) or each line has its
-/// own planning merge (the control), then each line advances without
-/// changing a planning record.
-fn two_lines(shared: bool) -> tempfile::TempDir {
+/// Both lines hold one merge P of the planning branch, or (`own`) each
+/// line has its own planning merge; then each line advances without
+/// changing a planning record. `product`, `instructions` and `evil` make
+/// the shared P inadmissible: it also carries a product file, or
+/// `project-management/AGENTS.md`, or a hand-made change neither parent
+/// holds.
+fn two_lines(shape: &str) -> tempfile::TempDir {
     let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
     let root = dir.path();
     plan_two_lines(root);
-    if shared {
-        git(root, &["switch", "-c", LINE_A]);
-        merge(root, "plan/lines");
-        git(root, &["branch", LINE_B]);
-    } else {
+    let extra = match shape {
+        "product" => Some("src/planned.rs"),
+        "instructions" => Some("project-management/AGENTS.md"),
+        _ => None,
+    };
+    if let Some(path) = extra {
+        git(root, &["switch", "plan/lines"]);
+        write(root, path, "Not a record.\n");
+        commit(root, "docs: carry a file that is no record");
+        git(root, &["switch", "main"]);
+    }
+    if shape == "own" {
         for line in [LINE_A, LINE_B] {
             git(root, &["switch", "-c", line, "main"]);
             git(
@@ -1112,6 +1122,16 @@ fn two_lines(shared: bool) -> tempfile::TempDir {
                 ],
             );
         }
+    } else {
+        git(root, &["switch", "-c", LINE_A]);
+        if shape == "evil" {
+            git(root, &["merge", "--no-ff", "--no-commit", "plan/lines"]);
+            write(root, "project-management/plans/evil.md", "Unreviewed.\n");
+            commit(root, "chore: land reviewed work");
+        } else {
+            merge(root, "plan/lines");
+        }
+        git(root, &["branch", LINE_B]);
     }
     advance(root, LINE_A, "docs/first.md");
     advance(root, LINE_B, "docs/second.md");
@@ -1121,10 +1141,10 @@ fn two_lines(shared: bool) -> tempfile::TempDir {
 
 /// Push each line first in turn, then the other, through the real
 /// pre-push entry; returns every result that was refused.
-fn push_both(shared: bool) -> Vec<String> {
+fn push_both(shape: &str) -> Vec<String> {
     let mut refused = Vec::new();
     for order in [[LINE_A, LINE_B], [LINE_B, LINE_A]] {
-        let dir = two_lines(shared);
+        let dir = two_lines(shape);
         let root = dir.path();
         for line in order {
             git(root, &["switch", line]);
@@ -1141,14 +1161,34 @@ fn push_both(shared: bool) -> Vec<String> {
 
 #[test]
 fn lines_that_share_one_planning_merge_push_in_either_order() {
-    let refused = push_both(true);
+    let refused = push_both("shared");
     assert!(refused.is_empty(), "{}", refused.join("\n"));
 }
 
 #[test]
 fn lines_with_their_own_planning_merges_push_in_either_order() {
-    let refused = push_both(false);
+    let refused = push_both("own");
     assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+#[test]
+fn a_shared_merge_that_is_no_planning_landing_stays_refused() {
+    let mut failures = Vec::new();
+    for shape in ["product", "instructions", "evil"] {
+        let dir = two_lines(shape);
+        let root = dir.path();
+        git(root, &["switch", LINE_A]);
+        let result = pre_push(root, LINE_A, &"0".repeat(40));
+        let needles = [
+            "work.import_authority",
+            LINE_B,
+            "exists only on unpublished local history",
+        ];
+        if result.0 == 0 || !needles.iter().all(|needle| result.1.contains(needle)) {
+            failures.push(format!("{shape}: {}", result.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Line B lands a home-only version of TSK-002 (or a TSK-003 introduced
