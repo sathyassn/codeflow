@@ -567,7 +567,8 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "{tier}: block did not name the push set check:\n{err}"
         );
 
-        // A failing `quick` target blocks too.
+        // A failing `quick` target no longer runs on push (TSK-449): the push
+        // set is `codeflow ci`, and the quick gate is cited at ready.
         let config = r#"{"schema_version": "1.0", "targets": [
   {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "false"}, "full": {"command": "true"}}}
 ]}"#;
@@ -575,10 +576,10 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
         let cfg = ".codeflow/test-config.json";
         commit_on_branch(&root, "feat/base", "feat/quick-fails", cfg, config, &msg);
         let (ok, err) = push(&root, "feat/quick-fails");
-        assert!(!ok, "{tier}: failing quick target pushed");
+        assert!(ok, "{tier}: a quick target stopped the push:\n{err}");
         assert!(
-            err.contains("push set failed for: lint"),
-            "{tier}: block did not name the failing target:\n{err}"
+            !err.contains("quick targets"),
+            "{tier}: a quick target ran:\n{err}"
         );
     }
 }

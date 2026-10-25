@@ -1,6 +1,6 @@
 //! The session-orient digest (charter §3.4) — deliberately tiny.
 //!
-//! Budget: ≤30 lines / <500 tokens, **pointers not content**. Generated
+//! Base digest guideline: 30 lines / 500 tokens, **pointers not content**. Generated
 //! live, never stored. Missing artifacts are gracefully omitted. The same
 //! digest backs `codeflow orient`, the `SessionStart` hook, and (later)
 //! `mcp serve`. Off-switch: `orient.enabled = false` in
@@ -14,7 +14,7 @@ use crate::workgraph::{MarkdownStore, RecordStore};
 use super::policy::Policy;
 use super::repo::RepoInfo;
 
-/// Hard cap from the charter (§3.4 / D21).
+/// Base digest guideline from the charter; line and epic inventories are complete.
 pub const MAX_LINES: usize = 30;
 
 /// Generate the orient digest for the project at `root`.
@@ -27,6 +27,16 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
     if !enabled(project_toml.as_ref()) {
         return crate::git::TextBlock::new();
     }
+
+    // Orient is a read command (SPC-013 R-103): it never fetches, so line
+    // rows show the remote-tracking refs as last fetched.
+    let remote = line_remote(root);
+    // One backlog read serves the tasks line and the open-epic counts.
+    let backlog = match crate::workgraph::durable_work_tracking_enabled(root) {
+        Ok(true) => crate::workgraph::readiness::backlog(root).map(Some),
+        Ok(false) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    };
 
     // Each `writeln!` is one line under the block rule (TSK-388).
     let mut out = crate::git::TextBlock::new();
@@ -47,7 +57,7 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
         let _ = writeln!(out, "{line}");
     }
 
-    if let Some(line) = tasks_line(root) {
+    if let Some(line) = tasks_line(&backlog) {
         let _ = writeln!(out, "{line}");
     }
 
@@ -93,8 +103,187 @@ pub fn generate(root: &Path) -> crate::git::TextBlock {
         let _ = writeln!(out, "read: {}", pointers.join(" · "));
     }
 
-    debug_assert!(out.lines().count() <= MAX_LINES);
+    append_line_drift(
+        root,
+        remote,
+        authority
+            .as_ref()
+            .ok()
+            .map(|a| a.policy.git.line_sync_interval),
+        &mut out,
+    );
+    append_open_epics(root, &backlog, &mut out);
     out
+}
+
+/// The remote whose tracking `integration/*` refs the line rows read, as last
+/// fetched; `None` reads local lines. Never contacts the remote.
+fn line_remote(root: &Path) -> Result<Option<String>, String> {
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(None);
+    };
+    let remotes = repo.remotes().map_err(|e| e.to_string())?;
+    let names = super::ref_authority::utf8_remote_names(&remotes)?;
+    let remote = if names.iter().any(|n| n == "origin") {
+        "origin"
+    } else {
+        match names.as_slice() {
+            [] => return Ok(None),
+            [name] => name.as_str(),
+            _ => return Err("multiple remotes without origin; showing local lines".into()),
+        }
+    };
+    let tracked = repo
+        .references_glob(&format!("refs/remotes/{remote}/integration/*"))
+        .map_err(|e| e.to_string())?
+        .next()
+        .is_some();
+    Ok(tracked.then(|| remote.into()))
+}
+
+fn append_line_drift(
+    root: &Path,
+    remote: Result<Option<String>, String>,
+    interval: Option<u32>,
+    out: &mut crate::git::TextBlock,
+) {
+    use crate::workgraph::line_drift::{self, date_seconds, date_string};
+    let remote = match remote {
+        Ok(remote) => remote,
+        Err(error) => {
+            let _ = writeln!(out, "integration lines: {error}");
+            None
+        }
+    };
+    let rows = match line_drift::read(root, remote.as_deref()) {
+        Ok(rows) => rows,
+        Err(error) => {
+            let _ = writeln!(out, "integration lines unavailable: {error}");
+            return;
+        }
+    };
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+    .unwrap_or(i64::MAX);
+    for row in rows {
+        let state = if row.oldest_divergent_commit.is_none() {
+            "fresh, no own commits".into()
+        } else if let Some(sync) = row.last_sync {
+            format!("last sync {}", date_string(sync))
+        } else {
+            let creation = row.created.map_or_else(|| "unknown".into(), date_string);
+            format!(
+                "creation {creation}; oldest divergent commit {}",
+                date_string(row.oldest_divergent_commit.unwrap_or_default())
+            )
+        };
+        let age = row
+            .oldest_unlanded_task
+            .as_deref()
+            .and_then(date_seconds)
+            .map_or_else(
+                || "none".into(),
+                |date| format!("{}d", now.saturating_sub(date).max(0) / 86_400),
+            );
+        let flag = if row.sync_due(now, interval.unwrap_or(0)) {
+            format!(
+                "; sync overdue: codeflow line sync {} (pending TSK-421)",
+                crate::git::display_text(&row.line)
+            )
+        } else {
+            String::new()
+        };
+        let source = if row.local {
+            "local"
+        } else {
+            "remote, as last fetched"
+        };
+        let _ = writeln!(
+            out,
+            "line: {} ({source}) · {} behind {} · {state} · oldest unlanded task {age}{flag}",
+            crate::git::display_text(&row.line),
+            row.behind,
+            crate::git::display_text(&row.target)
+        );
+        if !row.undated_tasks.is_empty() {
+            let _ = writeln!(
+                out,
+                "line records: {} skipped, missing or invalid created date: {}",
+                crate::git::display_text(&row.line),
+                crate::git::display_text(&row.undated_tasks.join(", "))
+            );
+        }
+    }
+}
+
+fn append_open_epics(
+    root: &Path,
+    backlog: &Result<Option<crate::workgraph::readiness::Backlog>, String>,
+    out: &mut crate::git::TextBlock,
+) {
+    let pm = root.join("project-management");
+    let result = (|| {
+        if crate::absence::proven_absent(&pm).map_err(|e| e.to_string())? {
+            return Ok(());
+        }
+        // Opening the store creates its folders; a read never does (as in
+        // `work_line`).
+        if pm.is_dir()
+            && !crate::workgraph::layout::records_folder_is_linked(&pm)
+            && !pm.join("epics").is_dir()
+            && !pm.join("tasks").is_dir()
+        {
+            return Ok(());
+        }
+        let store = MarkdownStore::new(&pm).map_err(|e| e.to_string())?;
+        let epics = store
+            .list_epics(EpicFilter::default())
+            .map_err(|e| e.to_string())?;
+        let tasks = store
+            .list_tasks(TaskFilter::default())
+            .map_err(|e| e.to_string())?;
+        let backlog = backlog.as_ref().map_err(Clone::clone)?.as_ref();
+        for epic in epics.into_iter().filter(|e| {
+            !matches!(
+                e.status,
+                EpicStatus::Complete | EpicStatus::Cancelled | EpicStatus::Archived
+            )
+        }) {
+            let started = backlog.as_ref().map_or_else(
+                || {
+                    tasks
+                        .iter()
+                        .filter(|t| {
+                            t.epic_id.as_deref() == Some(&epic.format_id)
+                                && t.status == TaskStatus::InProgress
+                        })
+                        .count()
+                },
+                |b| {
+                    b.entries
+                        .iter()
+                        .filter(|e| {
+                            e.epic_id.as_deref() == Some(&epic.format_id) && !e.branches.is_empty()
+                        })
+                        .count()
+                },
+            );
+            let _ = writeln!(
+                out,
+                "open epic: {} · {} · {started} started tasks",
+                epic.format_id,
+                crate::git::display_message(&epic.title)
+            );
+        }
+        Ok::<_, String>(())
+    })();
+    if let Err(error) = result {
+        let _ = writeln!(out, "open epics unavailable: {error}");
+    }
 }
 
 fn enabled(project_toml: Option<&toml::Value>) -> bool {
@@ -237,11 +426,10 @@ fn work_line(root: &Path) -> Option<String> {
 
 /// Derived task states from the readiness core (SPC-013 R-44), with the
 /// first ready task. Only where durable work tracking is on.
-fn tasks_line(root: &Path) -> Option<String> {
-    if !crate::workgraph::durable_work_tracking_enabled(root).ok()? {
-        return None;
-    }
-    let backlog = crate::workgraph::readiness::backlog(root).ok()?;
+fn tasks_line(
+    backlog: &Result<Option<crate::workgraph::readiness::Backlog>, String>,
+) -> Option<String> {
+    let backlog = backlog.as_ref().ok()?.as_ref()?;
     if backlog.entries.is_empty() {
         return None;
     }

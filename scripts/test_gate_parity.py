@@ -63,7 +63,7 @@ def gate_event_condition(workflow: str) -> str:
 
 class GateParityControls(unittest.TestCase):
     def assert_parity(self, cfg: dict) -> None:
-        self.assertEqual(parity.local_rust_commands(cfg), CI)
+        self.assertEqual(parity.windows_owed(parity.local_rust_commands(cfg)), CI)
 
     def assert_drift(self, cfg: dict) -> list[str]:
         notes: list[str] = []
@@ -383,12 +383,20 @@ ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file t
 
 class WindowsRefereeControls(unittest.TestCase):
     def test_every_raw_rust_floor_is_required(self):
-        for command in ["cargo fmt --all -- --check", ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
+        for command in [ARCHIVED_RUN, ARCHIVE, parity.DOCTESTS,
                         "cargo clippy --workspace --all-targets -- -D warnings",
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
                 self.assertIn("run: " + command, WORKFLOW)
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
+
+    def test_windows_runs_no_fmt_and_the_parity_needs_none(self):
+        # TSK-449 AC-5: formatting is platform independent, so only the Linux
+        # rust-format target runs it; Windows keeps the other raw floors.
+        windows = parity.workflow_jobs(WORKFLOW)["windows"]
+        self.assertNotIn("cargo fmt", windows)
+        self.assertIn("cargo fmt --all -- --check", parity.local_rust_commands(CONFIG))
+        self.assertEqual(parity.rust_parity(), 0)
 
 
 class WindowsPartitionControls(unittest.TestCase):
@@ -448,9 +456,28 @@ class GatePartControls(unittest.TestCase):
 
     def test_a_target_no_part_names_is_refused(self):
         self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
-                            "no gate part or coverage job runs", "read-benchmark")
-        self.assert_problem(WORKFLOW.replace(",journey-python\n", "\n"),
-                            "no gate part or coverage job runs", "journey-python")
+                            "no gate part, release part or coverage job runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-python,", ","),
+                            "no gate part, release part or coverage job runs", "journey-python")
+
+    def test_release_tier_targets_run_only_in_the_release_job(self):
+        # TSK-449 AC-4: the four release-tier targets leave the hosted
+        # landing gate; a target neither the landing gate nor the release
+        # path runs is refused, and so is a release job on landing events.
+        landing = parity.workflow_jobs(WORKFLOW)["gates"]
+        release = parity.workflow_jobs(WORKFLOW)["gates-release"]
+        for name in parity.RELEASE_TARGETS:
+            self.assertNotIn(name, landing)
+            self.assertIn(name, release)
+        self.assertNotIn("integration/", re.search(r"^ {4}if:\s*(.+?)\s*$", release, re.M).group(1))
+        self.assert_problem(WORKFLOW.replace("only: present-browser,present-binary-delta", "only: present-browser"),
+                            "no gate part, release part or coverage job runs", "present-binary-delta")
+        self.assert_problem(WORKFLOW.replace("only: present-supply-chain,cf-present-qualification",
+                                             "only: present-supply-chain,cf-present-qualification,read-benchmark"),
+                            "landing gate parts name release-tier targets")
+        self.assert_problem(WORKFLOW.replace(parity.RELEASE_IF, parity.RELEASE_IF.replace(
+            "github.event_name == 'schedule'", "github.event_name == 'pull_request' || github.event_name == 'schedule'")),
+                            "gates-release job's condition")
 
     def test_a_new_full_mode_target_must_join_a_part(self):
         def add(c):
@@ -472,7 +499,8 @@ class GatePartControls(unittest.TestCase):
             with self.subTest(weaker=weaker):
                 self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
 
-    VERDICT_IF = ("    if: always()\n"
+    DRAFT_NEUTRAL = "${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}"
+    VERDICT_IF = (f"    if: {DRAFT_NEUTRAL}\n"
                   "    name: codeflow gates\n")
     EXACT = "must be exactly the verdict job"
 
@@ -480,9 +508,9 @@ class GatePartControls(unittest.TestCase):
         self.assertIn(self.VERDICT_IF, WORKFLOW)
         self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
                             "exactly one job must be named")
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
-        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates]\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n"), self.EXACT)
         self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
                                              "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
                             self.EXACT)
@@ -494,17 +522,17 @@ class GatePartControls(unittest.TestCase):
         """The four forms the TSK-203 review showed a substring check accepting."""
         controls = {
             "a condition that never runs": WORKFLOW.replace(
-                self.VERDICT_IF, self.VERDICT_IF.replace("if: always()", "if: always() && false")),
+                self.VERDICT_IF, self.VERDICT_IF.replace("always() && ", "always() && false && ")),
             "a forgiven exit": WORKFLOW.replace(
                 "            exit 1\n          fi\n          echo \"every part",
                 "            exit 0\n          fi\n          echo \"every part"),
             "continue-on-error on the verdict": WORKFLOW.replace(
-                "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
+                "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n    continue-on-error: true\n"),
             "a reuse that needs no skipped part": WORKFLOW.replace(
-                '[ "$REUSE" = success ] && [ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]',
+                '[ "$REUSE" = success ] && [ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]',
                 '[ "$REUSE" = success ]'),
             "a reuse that needs only the parts skipped": WORKFLOW.replace(
-                '[ "$PARTS $SHARDS $REPORT" = "skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
+                '[ "$PARTS $RELEASE $SHARDS $REPORT" = "skipped skipped skipped skipped" ]', '[ "$PARTS" = skipped ]'),
         }
         for label, workflow in controls.items():
             with self.subTest(label):
@@ -609,7 +637,7 @@ class GatePartControls(unittest.TestCase):
         })
 
     def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
-        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
+        workflow = WORKFLOW.replace("    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n", "    needs: [reuse, gates, gates-release, gates-coverage, gates-coverage-report]\n\n    # the parts\n")
         self.assertNotEqual(workflow, WORKFLOW)
         self.assertEqual(self.problems(workflow), [])
 
@@ -636,14 +664,23 @@ class VerdictOutcomeControls(unittest.TestCase):
     when all succeeded or the reuse decision named a run and all were
     skipped. Each case runs the committed script in bash."""
 
-    def verdict(self, parts, shards, report, reuse="skipped", reused=""):
+    def verdict(self, parts, shards, report, reuse="skipped", reused="", release="skipped"):
         env = {"PATH": os.environ.get("PATH", ""), "PARTS": parts, "SHARDS": shards, "REPORT": report,
+               "RELEASE": release,
                "REUSE": reuse, "REUSED": reused, "GITHUB_SERVER_URL": "https://github.com",
                "GITHUB_REPOSITORY": "sathyassn/codeflow"}
         return subprocess.run(["bash", "-c", verdict_script()], env=env, capture_output=True, text=True).returncode
 
     def test_it_passes_only_when_every_job_passed(self):
         self.assertEqual(self.verdict("success", "success", "success"), 0)
+
+    def test_the_release_parts_pass_when_run_or_skipped_and_fail_otherwise(self):
+        # TSK-449 AC-4: the release parts are skipped by their own condition
+        # on a landing pull request; a failed or cancelled run fails.
+        for release in ("success", "skipped"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 0, release)
+        for release in ("failure", "cancelled"):
+            self.assertEqual(self.verdict("success", "success", "success", release=release), 1, release)
 
     def test_a_failed_cancelled_or_skipped_job_fails_it(self):
         for outcome in ("failure", "cancelled", "skipped"):
@@ -677,18 +714,31 @@ class VerdictOutcomeControls(unittest.TestCase):
 class HostedEventParityControls(unittest.TestCase):
     """Ready integration pull requests must keep both verdict contracts intact."""
 
-    READY = ("github.event_name == 'pull_request' && "
+    READY = ("github.event_name == 'pull_request' && !github.event.pull_request.draft && "
              "(contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || "
-             "startsWith(github.event.pull_request.base.ref, 'integration/') && "
-             "!github.event.pull_request.draft) || github.event_name == 'push' || "
+             "startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || "
              "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")
 
-    def test_both_verdicts_run_for_every_event(self):
+    def test_both_verdicts_run_for_every_event_but_a_draft(self):
+        # TSK-449 AC-6: a draft's verdicts are skipped (neutral); every
+        # other event gets a verdict, and a weaker or missing guard is drift.
         for name in ("gates-verdict", "windows-verdict"):
             job = parity.workflow_jobs(WORKFLOW)[name]
             condition = re.search(r"^ {4}if:\s*(.+?)\s*$", job, re.M).group(1)
-            self.assertEqual(condition,
-                             "always()")
+            self.assertEqual(condition, GatePartControls.DRAFT_NEUTRAL)
+        for old, new in (("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: always()\n    name: windows\n"),
+                         ("    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft) }}\n    name: windows\n",
+                          "    if: ${{ always() && !github.event.pull_request.draft }}\n    name: windows\n")):
+            self.assertIn(old, WORKFLOW)
+            problems = parity.windows_verdict_problems(WORKFLOW.replace(old, new))
+            self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)
+
+    def test_a_draft_skips_every_gate_job(self):
+        # Every gate job's pull request clause requires a non-draft, whatever
+        # the base, so a draft runs no gate and spends no runner on one.
+        self.assertTrue(self.READY.startswith(
+            "github.event_name == 'pull_request' && !github.event.pull_request.draft && ("))
 
     def test_schedule_and_dispatch_keep_unconditional_security_jobs(self):
         trigger = WORKFLOW.split("permissions:", 1)[0]
@@ -719,7 +769,7 @@ class HostedEventParityControls(unittest.TestCase):
     def test_a_windows_verdict_with_a_different_event_condition_is_refused(self):
         workflow = self.ready_workflow()
         job = parity.workflow_jobs(workflow)["windows-verdict"]
-        narrowed = job.replace("    if: always()", "    if: always() && github.event_name == 'push'")
+        narrowed = job.replace("    if: ${{ always() && ", "    if: ${{ always() && github.event_name == 'push' && ")
         self.assertNotEqual(job, narrowed)
         problems = parity.windows_verdict_problems(workflow.replace(job, narrowed))
         self.assertTrue(any("must be exactly the Windows verdict job" in p for p in problems), problems)

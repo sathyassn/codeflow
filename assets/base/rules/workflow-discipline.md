@@ -199,9 +199,8 @@ that mode or named as not run. Select property or generative tests, targeted
 mutation testing, or project-owned architecture fitness checks only from the
 orchestrator's evidence triggers; `none selected` is valid and is written
 nowhere per task, and normal scenario coverage remains mandatory. Builders
-run targeted tests and
-`codeflow test --mode quick` as they go and cite them with the revision and
-the command; the full gate runs once on each exact landing candidate, one
+run targeted tests as they go and `codeflow test --mode quick` once before
+ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate, one
 at a time, and a standalone PR is its own candidate. Adopted push and CI
 gates still run, and completed evidence is reused only for the same tree.
 Honor what the gate reports; the project's policy sets its level.
@@ -262,27 +261,57 @@ Unknown availability or usage stays unknown.
 
 ## Review verdicts
 
-**Review verdicts need an independent pass.** Review verdicts require
-`cf-reviewer` in Claude Code or, elsewhere, a separate read-only qualified
-interactive pass, never headless, against criteria and evidence.
-Self-review is not review. A review is one holistic pass over the whole
-unit at one head, by a reviewer of the other lineage where a seat exists.
-It reads the full diff against its base, the criteria and acceptance
-evidence, the blast radius (upstream, downstream, adopters, other
-platforms, CI time, docs, records) and the fit (the neighbour it should
-match, what it reuses, each departure with its reason, and the rules and
-decisions that settled how this repository does things), in the manner
-"Ground it in evidence" sets out; that scope is a floor it widens as that
-rule says. Earlier findings are checks within the pass, never its whole
-scope; a round after fixes or after merging the base reviews the whole
-unit again at the new head, and an approval never carries forward to a
-head it did not cover. A same-family fresh-context pass records the
-reduced assurance. The verdict gives each
-criterion with file:line, the gates, the findings ordered by consequence
-with severity and confidence stated apart, the nits with a disposition, and
-what was not verified. Look harder, and at the standard and full tiers add
-the security reviewer, when hooks, guards, policy, CI, templates, sandbox
-or credential paths, untrusted-input sinks or dependencies change.
+**Review verdicts need an independent pass.** A verdict comes from a
+read-only, fresh-context pass against criteria and evidence by a reviewer of
+the other lineage where a seat exists, never headless. Only when no
+other-lineage seat exists does the same-family fallback give it: `cf-reviewer`
+in Claude Code or, elsewhere, a separate qualified interactive pass, with the
+reduced assurance recorded. This is the one statement of when `cf-reviewer`
+runs. Self-review is not review.
+
+A holistic pass reads the whole unit at one head: the full diff against its
+base, the criteria and acceptance evidence, the blast radius (upstream,
+downstream, adopters, other platforms, CI time, docs, records) and the fit
+(the neighbour it should match, what it reuses, each departure with its
+reason, and the rules and decisions that settled how this repository does
+things), in the manner "Ground it in evidence" sets out; that scope is a
+floor it widens as that rule says. The verdict gives each criterion with
+file:line, the gates, the findings ordered by consequence with severity and
+confidence stated apart, the nits with a disposition, and what was not
+verified. An approval names the head it covers; an approval never carries
+forward to a head it did not cover.
+
+Review runs at four stages, and only these:
+
+- plan settlement, for an epic's breakdown only;
+- PR ready: a holistic pass over the whole unit;
+- the landing candidate, only when a product hunk was resolved by hand:
+  that task's whole unit at its new head; a clean merge carries the review,
+  as the batch landing rules say;
+- epic close: the epic's criteria and journeys on the final candidate.
+
+Between stages the finder confirms each material fix on the delta plus the
+affected tests; a small fix whose finding came with a failing probe is
+confirmed by rerunning that probe and those tests, with no model turn. One
+final holistic pass over the whole unit on the final substantive revision
+precedes approval; a PR-ready pass that finds nothing material is that pass.
+
+Before the first review of a class fix (a defect whose mechanism can recur
+elsewhere), the builder sweeps for siblings and lists each site with
+file:line in the PR. A reviewer who finds a sibling the sweep missed returns
+the unit to the sweep, never a site at a time.
+
+When hooks, guards, policy, CI, templates, sandbox or credential paths,
+untrusted-input sinks or dependencies change, the one other-lineage
+whole-unit review runs with the `cf-security-reviewer` checklist as its
+attacker lens, and the Claude side triages the deterministic scanner output
+inside its integrated judgment. Without an other-lineage seat, the
+same-family fallback above runs that checklist. There is no separate
+security pass on top; an extra-family review on the routing policy's
+security trigger joins that one review as another lineage, not a pass on
+top.
+
+Only material findings block; each nit gets a disposition.
 
 A finding is **material** when, shipped unfixed, it would:
 
@@ -304,18 +333,16 @@ Confidence is stated apart from consequence, and the effort to fix never
 lowers materiality. Everything else is a **nit**: style, naming and wording
 with no such reading, structure preference, or an alternative with no
 demonstrated defect. Each
-nit gets one disposition in the PR body: `fix now`, `track once` (one line
+nit gets one disposition in the findings record: `fix now`, `track once` (one line
 in the epic's planning notes, or the task's follow-ups when there is no
 epic, or one entry in the harness's task tools, with the event that
-revisits it), or `drop` with the reason.
+revisits it), or `drop` with the reason. Every finding of a review lives in
+one findings record linked from the PR's review row: the reviewer's verdict,
+with the disposition and evidence of each finding added to it.
 
 The material findings of a pass are fixed in one batch in the open PR,
-never as a task per finding. The finder confirms each material fix inside
-its next pass, a round over the whole unit at the new head; a small fix
-whose finding came with a failing probe is confirmed by rerunning that
-probe and the affected tests, with no model turn, and that rerun is the
-one pass that is not a round; a judgment-dependent fix goes back to the
-finder. Nits need no confirmation. There is no round cap: continue while repairs produce
+never as a task per finding, and confirmed as the stages above say. Nits
+need no confirmation. There is no round cap: continue while repairs produce
 relevant evidence; diagnose a stalled mechanism, an invalid assumption or a
 materially changed scope (split, redesign or an intent question), never a
 round counter and never automatic acceptance. Review ends when every
@@ -341,10 +368,21 @@ disposition.
 ## Durations
 
 Durations, dates and effort for agent-delivered work are agentic estimates
-with stated bases (at the standard and full tiers, `cf-estimate` owns the
-method). Never give human-team weeks, sprints or person-days, and never scale
-a human estimate by an AI speed multiplier. Estimation is optional: offer it
-only when asked or when a capacity or deadline decision needs it.
+with stated bases, taken from planned throughput (at the standard and full
+tiers, `cf-estimate` owns the method). Never give human-team weeks, sprints
+or person-days, never scale a human estimate by an AI speed multiplier, and
+never extrapolate from a slow pace. Estimation is optional: offer it only
+when asked or when a capacity or deadline decision needs it.
+
+## Lanes and queues
+
+Size parallel lanes from the host's observed memory and CPU. A cheap
+targeted check, a named test target in the worktree's own target directory,
+runs freely and never waits in a queue. Heavy work (the full gate,
+essential, heavy quick targets and direct heavy Cargo commands) takes
+resource admission through the gate lock, or through
+`codeflow reserve -- <command>` for a direct command. Only the primary runs
+the full gate.
 
 ## Planning
 
@@ -362,12 +400,12 @@ attaches to its unit, takes its place in the plan's order, is acted on after
 a read of the whole aspect it touches, and closes with evidence. Do not edit
 on the spot in reply to a remark; take it through the plan.
 
-Every assignment, research, planning and review with no edits included,
-attaches to an existing task or a new one before substantive work starts;
-at the standard and minimal tiers the task is the harness's tracked unit.
-Review, confirmation and repairs reuse the current task, never a task per
-finding, reviewer turn or status reply. Only ordinary conversation, or a
-status update on already-recorded work, goes unrecorded. The smallest unit
+Work that changes the repository or produces a durable artifact attaches
+to an existing task or a new one before substantive work starts; at the
+standard and minimal tiers the task is the harness's tracked unit. Research,
+review and consult work that produces no durable artifact needs no task
+record of its own. Review, confirmation and repairs reuse the current task,
+never a task per finding, reviewer turn or status reply. The smallest unit
 is one standalone task whose record and code land in one reviewed PR.
 
 Plan once, at the breakdown: a brief or spec is shaped once into an epic

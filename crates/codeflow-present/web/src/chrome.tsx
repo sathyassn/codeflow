@@ -150,11 +150,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // and are dropped once the service reports the session closed (B6).
   const [draft] = useState(() => readDraft(config.session_id));
   const closedRef = useRef(false);
+  const [sessionClosed, setSessionClosed] = useState(false);
   // Closure is latched once any route reports it: the poll, a refused review
   // or a refused answer. The draft goes, and every form learns of it once.
   const closeSession = (announce: boolean): void => {
     if (closedRef.current) return;
     closedRef.current = true;
+    setSessionClosed(true);
     clearDraft(config.session_id);
     documentRoot.dispatchEvent(new CustomEvent<SessionEventDetail>(SESSION_EVENT, { detail: "session_closed" }));
     if (announce) {
@@ -1102,26 +1104,27 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     pinCapture(selected, 80, 120, { openComposer: true });
   };
 
-  const submitReview = async (): Promise<void> => {
-    if (submittingRef.current) return;
+  // Resolves true once the service has received the review.
+  const submitReview = async (): Promise<boolean> => {
+    if (submittingRef.current) return false;
     // What this review carries: exactly these notes and this instruction.
     const sentNotes = notes;
     const sentInstruction = instruction;
     const normalizedNotes = sentNotes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
     if (normalizedNotes.some((n) => !n.body)) {
       setStatus("Write each pending note before submitting the review.");
-      return;
+      return false;
     }
     if (verdict === "request_changes" && !sentInstruction.trim()) {
       setStatus("Request changes needs a clear instruction.");
-      return;
+      return false;
     }
     if (
       sentInstruction.length > config.review_limits.max_text_utf16 ||
       normalizedNotes.some((n) => n.body.length > config.review_limits.max_text_utf16)
     ) {
       setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
-      return;
+      return false;
     }
     // The guard and the disabled controls come before the first await, so
     // nothing is edited or sent twice while the crops are fitted (C071-1).
@@ -1155,7 +1158,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const request: ReviewRequest = { event_id: eventId, ...payload };
       if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
         setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
-        return;
+        return false;
       }
       setStatus("Submitting review…");
       const response = await postJson<ReviewResponse>("/app/api/reviews", request);
@@ -1171,6 +1174,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"}.${cropNotice}${pending}`;
       setStatus(confirmation);
       showToast(confirmation);
+      return true;
     } catch (error) {
       // SPC-014 I3: a refused review names its reason; the pending notes stay
       // for every refusal, so the reviewer can correct and resend them.
@@ -1178,6 +1182,43 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (refusal?.error === "session_closed") closeSession(false);
       const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const notice = `Review was not submitted: ${reason} Your pending notes are unchanged.`;
+      setStatus(notice);
+      showToast(notice, { sticky: true });
+      return false;
+    } finally {
+      submittingRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  // End review: queued notes go first, as a review; only once the service has
+  // them is the session closed, so ending never loses a note. The service then
+  // quits this browser, as `codeflow present close` does.
+  const endReview = async (): Promise<void> => {
+    if (submittingRef.current || closedRef.current) return;
+    const queued = notesRef.current.length;
+    const question = queued
+      ? `End this review? Your ${queued} queued ${queued === 1 ? "note is" : "notes are"} sent first, then this window closes.`
+      : "End this review? This window closes and the session ends.";
+    if (!window.confirm(question)) return;
+    if ((queued || instruction.trim()) && !await submitReview()) return;
+    submittingRef.current = true;
+    setBusy(true);
+    try {
+      setStatus("Ending the review…");
+      await postJson<{ state: string }>("/app/api/session/end", {});
+      closeSession(false);
+      const notice = "Review ended. This window closes now.";
+      setStatus(notice);
+      showToast(notice, { sticky: true });
+    } catch (error) {
+      const refusal = error instanceof PresentRequestError ? parseServiceError(error.message) : null;
+      if (refusal?.error === "session_closed") {
+        closeSession(true);
+        return;
+      }
+      const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
+      const notice = `The review was not ended: ${reason}`;
       setStatus(notice);
       showToast(notice, { sticky: true });
     } finally {
@@ -1367,6 +1408,16 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             <span class={`cf-count${notes.length > 0 ? " on" : ""}`} aria-label={`${notes.length} pending notes`}>
               {notes.length}
             </span>
+          </button>
+          <button
+            type="button"
+            class="cf-end-btn"
+            data-testid="end-review"
+            title="Send any queued notes, end this review and close the window"
+            disabled={busy || sessionClosed}
+            onClick={() => { void endReview(); }}
+          >
+            End review
           </button>
           {settingsOpen ? (
             <div id="cf-settings-panel" class="cf-settings-panel open" data-testid="settings-panel" role="dialog" aria-label="Display" onKeyDown={(event) => {

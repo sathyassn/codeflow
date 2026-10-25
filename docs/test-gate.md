@@ -27,11 +27,11 @@ separate from the existing digest of tracked working files. Two commits of one
 tree can share evidence; a completion commit that changes a record cannot be
 an exact-tree match to its parent.
 
-The pre-push quick gate uses this selector. Its independent ref, authority,
-range, release-preflight and checked-out-tree checks still run. Targets that
-are skipped have their names and reasons in `selection`, and no executed
-result. Any skipped target makes `complete` false, including a run that skips
-every target.
+A quick run uses this selector; the pre-push hook runs no quick target
+(TSK-449), so cite `codeflow test --mode quick` when the pull request is made
+ready. Targets that are skipped have their names and reasons in `selection`,
+and no executed result. Any skipped target makes `complete` false, including
+a run that skips every target.
 
 Skip credit is a local convenience, never landing evidence. Run records remain
 mutable by their owner. Records must be owned by the effective user and must

@@ -18,10 +18,11 @@ its PR body show:
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - every unit has approved cross-lineage review of the whole unit at its
-  `reviewed` commit and the selected Claude judgment primary has approved the integrated design/code judgment;
+  `reviewed` commit, at the stages "Review verdicts" names, and the selected Claude judgment primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
-- every finding from every review, material and minor, is recorded in the PR
-  body as finding, severity, disposition and evidence, with a disposition that
+- every finding from every review, material and minor, is recorded in the
+  one findings record linked from the PR's review row (the reviewer's
+  verdict) as finding, severity, disposition and evidence, with a disposition that
   [materiality and prioritization](materiality.md) defines: fixed, with the
   commit; tracked once, with its home and event trigger; or dropped, with the
   reason. A minor finding never blocks, and it is never left unrecorded;

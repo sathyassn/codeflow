@@ -811,3 +811,6 @@ mod landed;
 
 #[path = "refusal_journey/line_adoption.rs"]
 mod line_adoption;
+
+#[path = "refusal_journey/secret_paths.rs"]
+mod secret_paths;

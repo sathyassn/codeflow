@@ -653,13 +653,15 @@ fn submodule_input_runs() {
     fixture.selected("submodule input");
 }
 
+// TSK-449 AC-1: the push set runs `codeflow ci` and no quick target, for a
+// records-only change and for a code change alike.
 #[test]
-fn pre_push_records_only_change_runs_only_its_quick_reader() {
+fn pre_push_runs_no_quick_target_for_a_records_only_change() {
     pre_push_summary(true);
 }
 
 #[test]
-fn repair_pre_push_zero_execution_is_not_complete() {
+fn pre_push_runs_no_quick_target_for_a_code_change() {
     pre_push_summary(false);
 }
 
@@ -735,37 +737,8 @@ fn pre_push_summary(records_only: bool) {
     writeln!(child.stdin.take().unwrap(), "refs/heads/task/TSK-001-selection {} refs/heads/task/TSK-001-selection 0000000000000000000000000000000000000000", head.trim()).unwrap();
     let output = child.wait_with_output().unwrap();
     let text = stderr(&output);
-    assert!(
-        text.contains(if records_only || !cfg!(unix) {
-            "selected record-check"
-        } else {
-            "skipped record-check"
-        }),
-        "{text}"
-    );
-    assert!(
-        text.contains(if cfg!(unix) {
-            "skipped rust-check"
-        } else {
-            "selected rust-check"
-        }),
-        "{text}"
-    );
-    assert!(
-        text.contains(if cfg!(unix) {
-            if records_only {
-                "executed 1; skipped 1; not complete"
-            } else {
-                "executed 0; skipped 2; not complete"
-            }
-        } else {
-            "executed 2; skipped 0"
-        }),
-        "{text}"
-    );
-    if cfg!(unix) {
-        assert!(text.contains("quick targets not complete"), "{text}");
-        assert!(!text.contains("quick targets passed"), "{text}");
+    for absent in ["record-check", "rust-check", "quick targets", "executed "] {
+        assert!(!text.contains(absent), "{records_only}: {absent}: {text}");
     }
     assert!(text.contains("codeflow ci --base"), "{text}");
     assert!(
@@ -1405,82 +1378,4 @@ fn repair_explicit_full_comparison_remains_local_incomplete_evidence() {
         assert_eq!(results.len(), 2);
         assert!(skipped.is_empty());
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn installed_pre_push_honors_the_undeclared_quick_class_and_wait_bound() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    let fixture = Fixture::new(|config| {
-        config["execution"]["quick_default_class"] = json!("heavy");
-        config["execution"]["heavy_wait_seconds"] = json!(1);
-    });
-    let root = fixture.root.path();
-    let home = fixture.isolated_home.path();
-    let destination = push_destination(root);
-    let head = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    let head = String::from_utf8(head.stdout).unwrap();
-    let hook = root.join(".git/hooks/pre-push");
-    std::fs::write(
-        &hook,
-        include_str!("../../../../assets/base/git-hooks/pre-push"),
-    )
-    .unwrap();
-    let linked = home.join("linked");
-    git(
-        root,
-        &["worktree", "add", "--detach", linked.to_str().unwrap()],
-    );
-    std::fs::write(linked.join(".codeflow/test-config.json"), r#"{"schema_version":"1.0","targets":[{"name":"holder","runner":"custom","timeout_seconds":15,"modes":{"full":{"command":"while ! test -f release; do sleep 0.01; done"}}}]}"#).unwrap();
-    let (mut holder, rx, _stdout) = super::spawn(command(&linked, home, &["test"]));
-    super::wait_for(&rx, "starting target 'holder'");
-    let invoke = || {
-        let mut child = Command::new("sh")
-            .arg(&hook)
-            .arg("origin")
-            .arg(&destination)
-            .current_dir(root)
-            .env_remove("CODEFLOW_HOME")
-            .env("HOME", home)
-            .env("USERPROFILE", home)
-            .env_remove("CARGO_TARGET_DIR")
-            .env_remove("CI")
-            .env(
-                "CODEFLOW_HOOK_BINARY",
-                std::env::var_os("CODEFLOW_TEST_GATE_BIN")
-                    .unwrap_or_else(|| env!("CARGO_BIN_EXE_codeflow").into()),
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        writeln!(child.stdin.take().unwrap(), "refs/heads/task/TSK-001-selection {} refs/heads/task/TSK-001-selection 0000000000000000000000000000000000000000", head.trim()).unwrap();
-        child.wait_with_output().unwrap()
-    };
-    let start = Instant::now();
-    let refused = invoke();
-    let text = stderr(&refused);
-    assert_eq!(refused.status.code(), Some(1), "{text}");
-    assert!(start.elapsed() >= Duration::from_secs(1));
-    assert!(text.contains("waiting up to 1s"), "{text}");
-    assert!(text.contains(&format!("pid {}", holder.id())), "{text}");
-    assert!(text.contains("full mode"), "{text}");
-    assert!(text.contains(linked.to_str().unwrap()), "{text}");
-    assert!(!text.contains("starting target 'rust-check'"), "{text}");
-    std::fs::write(linked.join("release"), "done").unwrap();
-    assert!(holder.wait().unwrap().success());
-    let after = invoke();
-    assert!(after.status.success(), "{}", stderr(&after));
-    assert!(
-        stderr(&after).contains("quick targets passed"),
-        "{}",
-        stderr(&after)
-    );
 }
