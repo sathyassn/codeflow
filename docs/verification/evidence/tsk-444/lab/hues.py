@@ -7,7 +7,7 @@ out={}
 for pair,t in tokens.items():
     skin=pair.split('-')[0]; mode=pair.split('-')[1]
     La,Ca,Ha=hex2oklch(t['accent']); Ls,Cs,Hs=hex2oklch(t['accent-soft'])
-    Cink=max(Ca,0.10); 
+    Cink=max(Ca,0.10);
     row={}
     for i,h in enumerate(plan[skin],1):
         ink=oklch2hex(La,Cink,h); fill=oklch2hex(Ls,max(Cs,0.025),h)
