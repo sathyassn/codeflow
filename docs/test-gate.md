@@ -29,7 +29,9 @@ an exact-tree match to its parent.
 
 A quick run uses this selector; the pre-push hook runs no quick target
 (TSK-449), so cite `codeflow test --mode quick` when the pull request is made
-ready. Targets that are skipped have their names and reasons in `selection`,
+ready. The shipped CI workflow runs the targets that define `quick` but not
+the mode it runs, after its gate, so a quick-only target keeps an automatic
+run (TSK-1001). Targets that are skipped have their names and reasons in `selection`,
 and no executed result. Any skipped target makes `complete` false, including
 a run that skips every target.
 
