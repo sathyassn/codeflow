@@ -653,7 +653,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
 
 /// Every path a commit of the range (reachable from `head`, not from
 /// `base`) changes: a commit's change against its one parent, a root
-/// commit's whole tree, and for a merge the paths it changes against every
+/// commit nothing beyond the range's own diff, and for a merge the paths it changes against every
 /// parent, which is what the merge itself introduced. A name that is not
 /// UTF-8 is an error, never a lookalike (TSK-1001).
 ///
@@ -689,7 +689,10 @@ pub fn history_paths(repo: &Repository, base: Oid, head: Oid) -> Result<BTreeSet
             .collect::<Result<_, _>>()
             .map_err(message)?;
         let paths = match parents.as_slice() {
-            [] => changed(None, &tree)?,
+            // A root commit starts a disjoint history, which the range
+            // check already reads whole from the target through the
+            // range's own paths; it introduces nothing on top of them.
+            [] => BTreeSet::new(),
             [parent] => changed(Some(parent), &tree)?,
             [first, rest @ ..] => {
                 let mut common = changed(Some(first), &tree)?;
