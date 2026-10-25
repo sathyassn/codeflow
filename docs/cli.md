@@ -436,16 +436,7 @@ standalone task, or a follow-up of it, may correct the wording of that
 task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
 criterion, a changed tag or checkbox form, or an added list item that is
-no criterion (ADR-0080), or any other change to that record or to an epic.
-Once a pull request is known to be ready (the host's event, or
-`CODEFLOW_PR_IS_DRAFT=false`), a code range for a task with no acceptance
-block is refused as not landable, and a record-only cancellation needs a
-Reviews row approving its head; a push or a local lint, which cannot tell,
-is not refused for this. A completed task's derived Reviews row lets the
-section be left out at any `git.pr_sections` level. A planning range is
-held to the planning paths in every commit, and its docs validation runs
-on the candidate head. A criterion removal is given as
-`AC-n removed: <reason>`.
+no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist. It requires the checks in
 `git.required_checks` (by default the shipped CI job names) on a branch that
