@@ -1524,19 +1524,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // An unreadable or unparsable GitHub event proves no draft, so the
-    // pull request is judged ready and the quick-run citation is reported
-    // (TSK-451); the read never grants a pass.
+    // An unparsable GitHub event proves no draft state, so the pull request
+    // is judged unknown: the quick-run citation is still reported (TSK-451)
+    // and no landing refusal turns on it (TSK-1001); the read never grants
+    // a pass.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
-        "pr_is_draft",
-        "obtain-absent:read",
-        1,
-        "unproven",
-    ),
-    (
-        "crates/codeflow-cli/src/cmd/ci.rs",
-        "pr_is_draft",
+        "pr_readiness",
         "obtain-absent:from_slice",
         1,
         "unproven",

@@ -555,7 +555,10 @@ pub(crate) fn section_span(lines: &[ScannedLine], heading: &str) -> Option<(usiz
 /// body), read as Markdown with the frontmatter hidden; the whole text when
 /// the record has no such section (TSK-1001).
 pub(crate) fn without_section(content: &str, heading: &str) -> String {
-    let lines: Vec<&str> = content.lines().collect();
+    let lines: Vec<&str> = content
+        .split_inclusive('\n')
+        .map(without_line_ending)
+        .collect();
     let scanned = scan_record(&lines);
     match section_span(&scanned, heading) {
         Some((start, end)) => lines[..start]

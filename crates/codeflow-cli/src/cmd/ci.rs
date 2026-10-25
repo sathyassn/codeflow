@@ -1761,6 +1761,28 @@ fn visible_graph_check(
     }
 }
 
+/// The full commit id `revision` names in the repository at `root`, read
+/// strictly: anything but one 40-character hex id is an error.
+fn commit_id(root: &Path, revision: &str) -> Result<String, String> {
+    let out = codeflow_core::workgraph::history::command()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .arg(format!("{revision}^{{commit}}"))
+        .output()
+        .map_err(|error| error.to_string())?;
+    let id = out
+        .stdout
+        .strip_suffix(b"\n")
+        .unwrap_or(&out.stdout)
+        .to_vec();
+    if out.status.success() && id.len() == 40 && id.iter().all(u8::is_ascii_hexdigit) {
+        String::from_utf8(id).map_err(|_| format!("{revision} is not a commit here"))
+    } else {
+        Err(format!("{revision} is not a commit here"))
+    }
+}
+
 /// The tree `codeflow ci` validates: the checkout when it is at the head,
 /// else a temporary detached worktree of the head, removed when dropped.
 struct Candidate {
@@ -1770,21 +1792,10 @@ struct Candidate {
 
 impl Candidate {
     fn of(root: &Path, head: &str) -> Result<Self, String> {
-        let resolve = |revision: &str| -> Result<String, String> {
-            let out = codeflow_core::workgraph::history::command()
-                .arg("-C")
-                .arg(root)
-                .args(["rev-parse", "--verify", "--quiet"])
-                .arg(format!("{revision}^{{commit}}"))
-                .output()
-                .map_err(|error| error.to_string())?;
-            if !out.status.success() {
-                return Err(format!("{revision} is not a commit here"));
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-        };
-        let wanted = resolve(head)?;
-        if resolve("HEAD").is_ok_and(|current| current == wanted) {
+        let wanted = commit_id(root, head)?;
+        // A checkout whose HEAD cannot be read is validated through a
+        // fresh worktree of the head, the strict side.
+        if commit_id(root, "HEAD").as_deref() == Ok(wanted.as_str()) {
             return Ok(Self {
                 worktree: None,
                 root: root.to_path_buf(),
@@ -1801,7 +1812,10 @@ impl Candidate {
             .output()
             .map_err(|error| error.to_string())?;
         if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            return Err(format!(
+                "`git worktree add` of {wanted} exited with {}",
+                out.status
+            ));
         }
         Ok(Self {
             worktree: Some((path, holder)),

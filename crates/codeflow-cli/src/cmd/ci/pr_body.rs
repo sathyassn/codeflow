@@ -960,7 +960,10 @@ pub(super) fn gives_removal_reason(body: &str, task: &str, criterion: &str) -> b
         let Some((declared, reason)) = line.split_once(':') else {
             return false;
         };
-        let words: Vec<&str> = declared.split_whitespace().collect();
+        let words: Vec<&str> = declared
+            .split([' ', '\t'])
+            .filter(|word| !word.is_empty())
+            .collect();
         let names = match words.as_slice() {
             [id, removed] => {
                 id.eq_ignore_ascii_case(criterion) && removed.eq_ignore_ascii_case("removed")
