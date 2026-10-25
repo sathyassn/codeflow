@@ -223,6 +223,31 @@ has one consumer per branch, and each copy is checked. A rule or record that
 encodes the operator's guidance quotes or closely paraphrases it; a
 restriction the operator never gave is an invented fact.
 
+## Check changeable state live
+
+This is the one statement of how a session treats state that can change;
+other files point here.
+
+- **What counts.** Changeable state is anything that can differ from the
+  last time you looked: seat and model availability and usage limits; tools,
+  MCP servers and credentials; CI runs, required checks and rulesets; PR,
+  branch and integration-line state; task record status; host load and
+  locks; and other agents' progress.
+- **Check it at the moment of use.** Before you state such a fact, route on
+  it or act on it, check it live with a probe that observes it now: a
+  command, an API read or a native canary. Each claim, routing decision and
+  action gets its own check; an earlier check does not cover a later one.
+- **An earlier result is a lead, never a fact.** A previous probe, an error
+  or usage-limit message, a peer's report or a note in a record tells you
+  where to look. It never establishes the current state, and a stated
+  expiry or reset time is not proof that the state still holds.
+- **When a live check is impossible,** say the fact is unverified and give
+  the time of the last check, for example "Codex unverified, last probed at
+  14:05". Never present it as current.
+- **Resume, compaction and summaries change nothing.** A fact carried in a
+  summary, a compacted context or a resumed session is an earlier result;
+  check it again before you rely on it.
+
 ## Match the gate
 
 **Match the gate to the blast radius.** Recoverable, task-scoped project
@@ -442,8 +467,9 @@ are generated (`codeflow status`); never hand-maintain a dashboard.
   record belong in ADRs, not in chat history.
 - After compaction or resume, re-read the managed block of `AGENTS.md` before
   acting: the skill listing and earlier rules may be gone from context. On
-  a resume, recheck the facts that may have changed (the target tip, the
-  seats, the open findings) before continuing.
+  a resume, check live the facts that may have changed (the target tip, the
+  seats, the open findings) before continuing, as "Check changeable state
+  live" says.
 - **Synchronize implementation truth in the same PR.** The ship flow updates
   capability state, architecture when an accepted ADR declares impact,
   frozen state for approved specs consumed by the ship, and other

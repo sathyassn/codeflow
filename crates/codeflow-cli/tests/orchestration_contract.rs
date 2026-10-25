@@ -2774,3 +2774,131 @@ fn review_cadence_and_security_lens_are_stated_once() {
         assert!(triggers.contains(&kept), "routing policy lost {kept}");
     }
 }
+
+/// TSK-455: changeable state is checked live at the moment it is stated,
+/// routed on or acted on. The full rule has one home in the workflow
+/// discipline; the always rule, the orchestrator, transport, cf-delegate and
+/// the status rules point to it and never carry a once-per-session expiry.
+#[test]
+fn changeable_state_is_checked_live_and_stated_once() {
+    let home = "Check changeable state live";
+    let discipline = normalize_whitespace(&read("assets/base/rules/workflow-discipline.md"));
+    assert_eq!(
+        discipline.matches(&format!("## {home}")).count(),
+        1,
+        "workflow-discipline.md must hold the one {home} section"
+    );
+    for sentence in [
+        "This is the one statement of how a session treats state that can change; other files point here.",
+        "Changeable state is anything that can differ from the last time you looked: seat and model availability and usage limits; tools, MCP servers and credentials; CI runs, required checks and rulesets; PR, branch and integration-line state; task record status; host load and locks; and other agents' progress.",
+        "Before you state such a fact, route on it or act on it, check it live with a probe that observes it now:",
+        "Each claim, routing decision and action gets its own check; an earlier check does not cover a later one.",
+        "**An earlier result is a lead, never a fact.**",
+        "a stated expiry or reset time is not proof that the state still holds.",
+        "say the fact is unverified and give the time of the last check,",
+        "**Resume, compaction and summaries change nothing.**",
+    ] {
+        assert_eq!(
+            discipline.matches(sentence).count(),
+            1,
+            "{home} must state once: {sentence}"
+        );
+    }
+
+    // The always rule carries the short clause, in the map and every render.
+    let clause = "State that can change is checked live when stated or acted on; an earlier result is a lead, never a fact.";
+    for path in [
+        "assets/base/rule-map.toml",
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "AGENTS.md",
+    ] {
+        assert_eq!(
+            normalize_whitespace(&read(path)).matches(clause).count(),
+            1,
+            "{path} must carry the live-state clause of the evidence rule once"
+        );
+    }
+
+    // Every other site points to the one home rather than restating it.
+    let pointer = format!("\"{home}\"");
+    let orchestrator = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    for sentence in [
+        "Its seat availability expires: before each routing decision (an assignment, a review routing or a fallback), probe the seats that decision depends on live,",
+        "Record reduced assurance only after a live probe fails, naming the probe and its time.",
+        "A seat recorded unavailable is probed live again before every later assignment and review routing;",
+    ] {
+        assert_eq!(
+            orchestrator.matches(sentence).count(),
+            1,
+            "cf-model-orchestrator must state once: {sentence}"
+        );
+    }
+    let transport = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md",
+    ));
+    assert!(transport.contains(
+        "Whether a seat can run is changeable state: probe it live before each routing decision"
+    ));
+    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
+    assert!(delegate.contains("Run this check before each consult or handoff:"));
+    let writing = normalize_whitespace(&read("assets/base/rules/writing.md"));
+    assert!(writing.contains("**Status names live-checked facts.**"));
+    for (path, text) in [
+        ("cf-model-orchestrator SKILL.md", &orchestrator),
+        ("transport.md", &transport),
+        ("cf-delegate SKILL.md", &delegate),
+        ("writing.md", &writing),
+    ] {
+        assert!(
+            text.contains(&pointer),
+            "{path} must point to workflow-discipline.md {pointer}"
+        );
+        for restated in [
+            "Changeable state is anything that can differ",
+            "**Resume, compaction and summaries change nothing.**",
+        ] {
+            assert!(!text.contains(restated), "{path} restates {restated:?}");
+        }
+    }
+    assert!(discipline.contains(&format!("as {pointer} says")));
+}
+
+/// TSK-455: the status row in each tier names live-checked facts, and the
+/// incident wording (preflight once per session, rechecked only on a visible
+/// change) is gone from every copy of the orchestrator.
+#[test]
+fn status_rows_name_live_checked_facts_and_preflight_expires() {
+    // The status row in each tier names live-checked facts.
+    let status = "check live each changeable fact it rests on (refs, PRs, checks, seats), or mark it unverified with its last check time";
+    for path in [
+        "assets/base/AGENTS.md.tmpl",
+        "assets/base/AGENTS.full.md.tmpl",
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "AGENTS.md",
+    ] {
+        assert!(
+            normalize_whitespace(&read(path)).contains(status),
+            "{path} status row must name live-checked facts"
+        );
+    }
+
+    // The incident wording: preflight once per session, recheck only on a
+    // visible change.
+    for path in [
+        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
+        ".claude/skills/cf-model-orchestrator/SKILL.md",
+        ".agents/skills/cf-model-orchestrator/SKILL.md",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        for retired in [
+            "Run preflight once per session per lane.",
+            "Recheck it explicitly when a tool, binding, permission or selector changed since it ran.",
+        ] {
+            assert!(!text.contains(retired), "{path} keeps the retired {retired:?}");
+        }
+    }
+}

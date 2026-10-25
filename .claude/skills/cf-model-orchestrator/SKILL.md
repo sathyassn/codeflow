@@ -158,7 +158,10 @@ asks for just that.
   fallback until the model catalog lands, recorded as a reassignment where
   the assignment lives; the lost seat is recorded unavailable with reduced
   assurance, never waited on or recorded as approving, and any verdict it
-  gave before the loss stays as given. Buying credits is spend and stays
+  gave before the loss stays as given. Record reduced assurance only after
+  a live probe fails, naming the probe and its time. A seat recorded
+  unavailable is probed live again before every later assignment and review
+  routing; an earlier failure or usage-limit message is a lead, never a fact. Buying credits is spend and stays
   with the operator: do not purchase, name it in the report and continue on
   the fallback. If no
   cross-lineage route remains, use the documented solo fallback with its
@@ -216,8 +219,11 @@ standing pair through Herdr; it does not start a nested duo.
 
 ## Preflight
 
-Run preflight once per session per lane. Recheck it explicitly when a tool,
-binding, permission or selector changed since it ran.
+Run the full preflight when a lane starts, and again when a tool, binding,
+permission or selector changes. Its seat availability expires: before each
+routing decision (an assignment, a review routing or a fallback), probe the
+seats that decision depends on live, under
+`.codeflow/rules/workflow-discipline.md` "Check changeable state live".
 
 Start by running `codeflow doctor --preflight` and reading it: it prints the
 seat, sandbox and tool evidence the steps below ask for, each value marked
