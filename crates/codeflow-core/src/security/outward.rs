@@ -438,7 +438,42 @@ impl DirSet {
 /// Whether the line names the shell's `cd` search path, in bash or zsh
 /// spelling.
 fn mentions_cdpath(command: &str) -> bool {
-    command.contains("CDPATH") || command.contains("cdpath")
+    // Read the line as the shell would spell a name: quotes and
+    // backslashes removed and parameter expansions dropped, so `CD''PATH`,
+    // `CD\PATH` and `CD${E}PATH` count (TSK-397 Grok review finding 3).
+    let mut name = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '\\' => {}
+            '$' if chars.peek() == Some(&'{') => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+            }
+            '$' => {
+                while chars
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    chars.next();
+                }
+            }
+            c => name.push(c),
+        }
+    }
+    name.contains("CDPATH") || name.contains("cdpath")
+}
+
+/// Whether the hook's environment, or the line, sets a variable that makes
+/// an interpreter load code before its script (`NODE_OPTIONS=--require`,
+/// `RUBYOPT=-r`, `PERL5OPT=-M`). That code may change directory first.
+fn preload_environment(command: &str) -> bool {
+    ["NODE_OPTIONS", "RUBYOPT", "PERL5OPT"].iter().any(|name| {
+        command.contains(name) || std::env::var_os(name).is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn cdpath_searches(target: &Path) -> bool {
@@ -464,10 +499,21 @@ fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, Pa
     if rest.contains("&&") {
         return None;
     }
-    let program = rest.split([' ', '\t']).find(|w| !w.is_empty())?;
-    // The rest must start with an interpreter; any other word may be an
-    // alias or function that changes directory.
-    interpreter_family(program.rsplit('/').next().unwrap_or(program))?;
+    let mut call = rest.split([' ', '\t']).filter(|w| !w.is_empty());
+    let program = call.next()?;
+    // The rest must start with an interpreter named bare; any other word
+    // may be an alias, function or script that changes directory, and a
+    // path (`./python3`) may be a wrapper that does (Grok finding 4).
+    if program.contains('/') {
+        return None;
+    }
+    interpreter_family(program)?;
+    // An option before the script may load code that runs first and
+    // changes directory (`-m`, `-r`, `--require`, `--import`, `-M`, `-I`),
+    // so only a script operand directly after the interpreter qualifies.
+    if call.next().is_none_or(|word| word.starts_with('-')) || preload_environment(command) {
+        return None;
+    }
     if command.split("&&").any(|segment| {
         segment.chars().all(|c| matches!(c, ' ' | '\t'))
             || !segment.chars().all(|c| {
@@ -504,12 +550,13 @@ fn successful_cd_prefix<'a>(command: &'a str, cwd: &Path) -> Option<(&'a str, Pa
     }) {
         return None;
     }
-    let target = if physical {
-        cwd.join(target)
-    } else {
-        lexical_join(cwd, target)
-    };
-    let dir = std::fs::canonicalize(target).ok()?;
+    // The shell may resolve `..` logically or physically, depending on
+    // how it learned its directory, so a logical `cd` narrows only when
+    // both readings reach the same directory (Grok finding 1).
+    let dir = std::fs::canonicalize(cwd.join(target)).ok()?;
+    if !physical && std::fs::canonicalize(lexical_join(cwd, target)).ok()? != dir {
+        return None;
+    }
     // A metadata error or a non-directory returns None, which keeps the
     // wider directory set; absence is never read as an answer here.
     dir.is_dir().then_some((rest, dir))

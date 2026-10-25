@@ -1113,6 +1113,115 @@ mod tests {
         );
     }
 
+    /// TSK-397 Grok attacker review fixture: `src/lnk` and `safe/lnk` point
+    /// at `.claude`, and `hidden` is `.claude` under another name.
+    #[cfg(unix)]
+    fn linked_repo() -> Repo {
+        let repo = repo();
+        std::fs::create_dir_all(repo.root.join("safe")).unwrap();
+        for (at, to) in [
+            ("src/lnk", "../.claude"),
+            ("safe/lnk", "../.claude"),
+            ("hidden", ".claude"),
+        ] {
+            std::os::unix::fs::symlink(to, repo.root.join(at)).unwrap();
+        }
+        repo
+    }
+
+    /// Grok finding 1: from a symlinked hook cwd, `cd ..` may land in the
+    /// link target's parent, so a logical `cd` that differs from the
+    /// physical one keeps the wider set.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cwd_keeps_both_parents() {
+        let repo = linked_repo();
+        assert_refused(
+            &repo,
+            &repo.root.join("src/lnk"),
+            &repo.root,
+            &[
+                "cd .. && python3 .claude/settings.json",
+                "cd .. && python3 .codex/config.toml",
+                "cd -P .. && python3 .claude/settings.json",
+            ],
+        );
+        assert_allowed(&repo, &["cd src && python3 tool.py .."]);
+    }
+
+    /// Grok finding 2: `ruby -C` changes directory physically, so
+    /// `lnk/..` is the link target's parent, with or without a `cd`.
+    #[cfg(unix)]
+    #[test]
+    fn ruby_chdir_resolves_links_before_parents() {
+        let repo = linked_repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd safe && ruby -C lnk/.. .claude/settings.json",
+                "cd safe && ruby -Clnk/.. .codex/config.toml",
+                "cd safe && ruby -C ./lnk/.. .claude/settings.json",
+                "ruby -C safe/lnk/.. .claude/settings.json",
+                "cd safe && ruby -C .. .claude/settings.json",
+            ],
+        );
+        assert_allowed(&repo, &["cd src && ruby tool.rb .."]);
+    }
+
+    /// Grok finding 3: the shell removes quotes and backslashes and
+    /// expands parameters before it reads a name, so a spelled-apart
+    /// `CDPATH` still makes the directory unknown.
+    #[cfg(unix)]
+    #[test]
+    fn a_spelled_apart_cdpath_is_still_cdpath() {
+        let repo = linked_repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "export CD''PATH=hidden && cd src && python3 ../settings.json",
+                "export CD\\PATH=hidden && cd src && python3 ../settings.json",
+                "export CD\"\"PATH=hidden && cd src && python3 ../settings.json",
+                "export CD${E}PATH=hidden && cd src && python3 ../settings.json",
+                "printf -v CD''PATH hidden && cd src && python3 ../settings.json",
+            ],
+        );
+    }
+
+    /// Grok finding 4: a path-named interpreter may be a wrapper, and an
+    /// option before the script may load code that changes directory first.
+    #[cfg(unix)]
+    #[test]
+    fn interpreters_that_load_code_first_keep_the_wider_set() {
+        let repo = linked_repo();
+        assert_refused(
+            &repo,
+            &repo.root,
+            &repo.root,
+            &[
+                "cd safe && ./python3 .claude/settings.json",
+                "cd safe && python3 -m evil .claude/settings.json",
+                "cd safe && python3 -I x.py .claude/settings.json",
+                "cd safe && node -r ./ch.js ./read.js .claude/settings.json",
+                "cd safe && node --require ./ch.js ./read.js .claude/settings.json",
+                "cd safe && node --import ./ch.mjs read.js .claude/settings.json",
+                "cd safe && ruby -r ./ch.rb read.rb .claude/settings.json",
+                "cd safe && perl -Mevil read.pl .claude/settings.json",
+                "cd safe && NODE_OPTIONS=--require=./ch.js node read.js .claude/settings.json",
+            ],
+        );
+        assert_allowed(
+            &repo,
+            &[
+                "cd src && python3 tool.py ..",
+                "cd -P src && python3 tool.py ..",
+            ],
+        );
+    }
+
     /// TSK-397 security review F1: after the narrowed `cd`, a word the guard
     /// does not model may be a user alias or function that returns to the
     /// start directory, so only a single interpreter call is narrowed.

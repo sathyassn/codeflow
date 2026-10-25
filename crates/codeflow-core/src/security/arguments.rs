@@ -361,11 +361,25 @@ fn call_dirs(
         match outward::directory_operand(chdir, facts.home) {
             outward::DirChange::Unknown => set.unknown = true,
             outward::DirChange::To(target) => {
-                set.dirs = set
-                    .dirs
-                    .iter()
-                    .map(|dir| outward::lexical_join(dir, &target))
-                    .collect();
+                // `ruby -C` changes directory physically, so `lnk/..` is the
+                // link target's parent; both readings are kept, and a `..`
+                // that cannot be resolved makes the directory unknown
+                // (TSK-397 Grok finding 2).
+                let parent = target
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+                let mut next = Vec::new();
+                for dir in &set.dirs {
+                    let logical = outward::lexical_join(dir, &target);
+                    match std::fs::canonicalize(dir.join(&target)) {
+                        Ok(physical) if physical != logical => next.push(physical),
+                        Err(_) if parent => set.unknown = true,
+                        Ok(_) | Err(_) => {}
+                    }
+                    next.push(logical);
+                }
+                next.dedup();
+                set.dirs = next;
             }
         }
     }
