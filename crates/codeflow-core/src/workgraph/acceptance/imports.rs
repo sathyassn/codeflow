@@ -174,7 +174,7 @@ fn compute_imports(
             let Some(landed) = landed else {
                 continue;
             };
-            if is_ancestor_or_same(repo, landed, anchor)? {
+            if !is_new_import(repo, record, landed, anchor, head)? {
                 continue;
             }
             let result = prove_record(repo, record, &home, tip, default_tip, landed, base, head)
@@ -284,11 +284,89 @@ fn refuse_unpublished(
         return Ok(());
     }
     if let Some(landing) = matching_landing(repo, record, local, head, Some(base))? {
-        if !is_ancestor_or_same(repo, landing, published)? {
+        if !is_ancestor_or_same(repo, landing, published)?
+            && !is_shared_planning(repo, record, landing, head)?
+        {
             return Err(format!("{}: blocks come from target history on home `{home}`, but its exact record exists only on unpublished local history; land the reviewed work through the home's pull request, fetch the configured remote for `{home}`, then merge that published result", record.id));
         }
     }
     Ok(())
+}
+
+/// A landing the shared anchor already holds, or shared planning
+/// provenance, supplies no new import.
+fn is_new_import(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    anchor: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    Ok(!is_ancestor_or_same(repo, landed, anchor)?
+        && !is_shared_planning(repo, record, landed, head)?)
+}
+
+/// Whether `landing` is shared planning provenance rather than an import
+/// (TSK-1004): the merge that introduced this task record, carried on the
+/// receiving head's own first-parent chain with the record unchanged at
+/// every step since, and a version that holds no completion or acceptance
+/// evidence. Two lines that branch from one planning merge both hold it,
+/// and each line's own range answers for it, as it would for a planning
+/// merge of its own.
+///
+/// Shared ancestry alone never qualifies. A version that changes an
+/// existing record (a completion, evidence or a criteria change) is not an
+/// introduction, so it still needs published home authority. Any record
+/// state it cannot read, a renamed copy included, answers no.
+fn is_shared_planning(
+    repo: &Repository,
+    record: &RecordView,
+    landing: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    if record.kind != RecordKind::Task
+        || !matches!(record.status.as_str(), "todo" | "blocked")
+        || !record.active_blocks().is_empty()
+        || !record.superseded_blocks().is_empty()
+    {
+        return Ok(false);
+    }
+    let commit = repo
+        .find_commit(landing)
+        .map_err(|error| error.to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+    let [first, _, ..] = parents.as_slice() else {
+        return Ok(false);
+    };
+    let uid = record_uid(&record.content);
+    if !matches!(
+        presence_at(
+            repo,
+            *first,
+            &record.id,
+            uid.as_deref(),
+            &own_file_name(record)
+        ),
+        Presence::Absent
+    ) {
+        return Ok(false);
+    }
+    // Bind to the receiver's own first-parent chain, by commit identity:
+    // the record must be this exact version at every commit from the head
+    // back to the landing, so the receiving line has not changed it since.
+    let mut at = head;
+    loop {
+        if record_at(repo, at, record)?.is_none_or(|own| own.content != record.content) {
+            return Ok(false);
+        }
+        if at == landing {
+            return Ok(true);
+        }
+        match first_parent(repo, at)? {
+            Some(parent) if is_ancestor_or_same(repo, landing, parent)? => at = parent,
+            _ => return Ok(false),
+        }
+    }
 }
 
 /// A line cannot supply import authority to its own current or historical head.

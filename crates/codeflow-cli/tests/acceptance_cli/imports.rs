@@ -1022,3 +1022,222 @@ fn retired_home_rejects_a_non_line_source_chain() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+// TSK-1004: two lines that share one planning merge.
+const LINE_A: &str = "integration/EPC-001-first";
+const LINE_B: &str = "integration/EPC-002-second";
+
+/// The planning branch holding a task for each line and the second epic.
+fn plan_two_lines(root: &Path) {
+    git(root, &["switch", "-c", "plan/lines", "main"]);
+    write(
+        root,
+        "project-management/epics/EPC-002.md",
+        &EPIC.replace("EPC-001", "EPC-002"),
+    );
+    for (id, epic, line) in [
+        ("TSK-001", "EPC-001", LINE_A),
+        ("TSK-002", "EPC-002", LINE_B),
+    ] {
+        write(
+            root,
+            &record_path(id),
+            &task(id, "todo", OWN_JOURNEY, "Pending.\n")
+                .replace(
+                    "integration_target: main",
+                    &format!("integration_target: {line}"),
+                )
+                .replace("epic_id: EPC-001", &format!("epic_id: {epic}")),
+        );
+    }
+    commit(root, "docs: plan both lines");
+    git(root, &["switch", "main"]);
+}
+
+/// Advance `line` by merging one branch that changes no record.
+fn advance(root: &Path, line: &str, file: &str) {
+    let branch = format!("docs/advance-{}", file.replace(['/', '.'], "-"));
+    git(root, &["switch", "-c", &branch, line]);
+    write(root, file, "Line notes.\n");
+    commit(root, "docs: advance the line");
+    git(root, &["switch", line]);
+    merge(root, &branch);
+}
+
+/// Seed the id registry and publish it with `main` only, so both lines
+/// are first pushes.
+fn publish_main(root: &Path) {
+    let seed = codeflow()
+        .args(["ids", "seed"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+    let remote = root.join(".git/destination.git");
+    git(
+        root,
+        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
+    git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(root, &["push", "origin", "main", "codeflow/registry"]);
+    git(root, &["fetch", "origin"]);
+}
+
+/// Both lines hold the planning merge P (`shared`) or each line has its
+/// own planning merge (the control), then each line advances without
+/// changing a planning record.
+fn two_lines(shared: bool) -> tempfile::TempDir {
+    let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
+    let root = dir.path();
+    plan_two_lines(root);
+    if shared {
+        git(root, &["switch", "-c", LINE_A]);
+        merge(root, "plan/lines");
+        git(root, &["branch", LINE_B]);
+    } else {
+        for line in [LINE_A, LINE_B] {
+            git(root, &["switch", "-c", line, "main"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    &format!("chore: plan {line}"),
+                    "plan/lines",
+                ],
+            );
+        }
+    }
+    advance(root, LINE_A, "docs/first.md");
+    advance(root, LINE_B, "docs/second.md");
+    publish_main(root);
+    dir
+}
+
+/// Push each line first in turn, then the other, through the real
+/// pre-push entry; returns every result that was refused.
+fn push_both(shared: bool) -> Vec<String> {
+    let mut refused = Vec::new();
+    for order in [[LINE_A, LINE_B], [LINE_B, LINE_A]] {
+        let dir = two_lines(shared);
+        let root = dir.path();
+        for line in order {
+            git(root, &["switch", line]);
+            let result = pre_push(root, line, &"0".repeat(40));
+            if result.0 == 0 {
+                git(root, &["push", "--no-verify", "origin", line]);
+            } else {
+                refused.push(format!("{order:?} {line}: {}", result.1));
+            }
+        }
+    }
+    refused
+}
+
+#[test]
+fn lines_that_share_one_planning_merge_push_in_either_order() {
+    let refused = push_both(true);
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+#[test]
+fn lines_with_their_own_planning_merges_push_in_either_order() {
+    let refused = push_both(false);
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
+}
+
+/// Line B lands a home-only version of TSK-002 (or a TSK-003 introduced
+/// already complete) at a merge M, line A
+/// branches from M, and both lines advance with that version unchanged.
+fn home_only_version_shared_by_ancestry(case: &str) -> tempfile::TempDir {
+    let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
+    let root = dir.path();
+    plan_two_lines(root);
+    git(root, &["switch", "-c", LINE_B]);
+    merge(root, "plan/lines");
+    let record = |status: &str, criteria: &str, closeout: &str| {
+        let id = if case == "born complete" {
+            "TSK-003"
+        } else {
+            "TSK-002"
+        };
+        task(id, status, criteria, closeout)
+            .replace(
+                "integration_target: main",
+                &format!("integration_target: {LINE_B}"),
+            )
+            .replace("epic_id: EPC-001", "epic_id: EPC-002")
+    };
+    git(root, &["switch", "-c", "task/TSK-002-home"]);
+    match case {
+        "completion" => {
+            write(root, "src/lib.rs", "pub fn home_work() {}\n");
+            let reviewed = commit(root, "feat: home work");
+            write(
+                root,
+                &record_path("TSK-002"),
+                &record("complete", OWN_JOURNEY, &valid_block(&reviewed)),
+            );
+        }
+        "born complete" => {
+            // A record introduced already complete is no planning version.
+            write(root, "src/lib.rs", "pub fn home_work() {}\n");
+            let reviewed = commit(root, "feat: home work");
+            write(
+                root,
+                &record_path("TSK-003"),
+                &record("complete", OWN_JOURNEY, &valid_block(&reviewed)),
+            );
+        }
+        "criteria" => {
+            write(
+                root,
+                &record_path("TSK-002"),
+                &record(
+                    "todo",
+                    &OWN_JOURNEY.replace("the system shall work", "the system may work"),
+                    "Pending.\n",
+                ),
+            );
+        }
+        _ => unreachable!("{case}"),
+    }
+    commit(root, "docs: change the home record");
+    git(root, &["switch", LINE_B]);
+    merge(root, "task/TSK-002-home");
+    git(root, &["branch", LINE_A]);
+    advance(root, LINE_A, "docs/first.md");
+    advance(root, LINE_B, "docs/second.md");
+    publish_main(root);
+    git(root, &["switch", LINE_A]);
+    dir
+}
+
+#[test]
+fn shared_ancestry_never_exempts_an_unpublished_home_only_version() {
+    let mut failures = Vec::new();
+    for (case, id) in [
+        ("completion", "TSK-002"),
+        ("criteria", "TSK-002"),
+        ("born complete", "TSK-003"),
+    ] {
+        let dir = home_only_version_shared_by_ancestry(case);
+        let root = dir.path();
+        let result = pre_push(root, LINE_A, &"0".repeat(40));
+        let needles = [
+            "work.import_authority",
+            id,
+            LINE_B,
+            "exists only on unpublished local history",
+        ];
+        if result.0 == 0 || !needles.iter().all(|needle| result.1.contains(needle)) {
+            failures.push(format!("{case}: {}", result.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
