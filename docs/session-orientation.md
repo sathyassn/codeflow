@@ -2,7 +2,7 @@
 
 `codeflow orient` and the `session-orient` SessionStart hook are read
 commands and never fetch. They list the `integration/*` refs of `origin`
-(or the sole configured remote) as last fetched, labelled `remote`; run
+(or the sole configured remote) labelled `remote, as last fetched`; run
 `git fetch` to refresh them. With no remote, or no fetched integration
 refs, they list local lines labelled `local`.
 The protected target is the remote's default branch, falling back to

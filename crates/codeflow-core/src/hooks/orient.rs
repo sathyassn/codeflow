@@ -197,7 +197,11 @@ fn append_line_drift(
         } else {
             String::new()
         };
-        let source = if row.local { "local" } else { "remote" };
+        let source = if row.local {
+            "local"
+        } else {
+            "remote, as last fetched"
+        };
         let _ = writeln!(
             out,
             "line: {} ({source}) · {} behind {} · {state} · oldest unlanded task {age}{flag}",

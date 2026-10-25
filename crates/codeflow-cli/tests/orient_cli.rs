@@ -369,7 +369,8 @@ fn orient_never_fetches_and_reads_lines_as_last_fetched() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        row(&stdout, "one").contains("(remote)") && row(&stdout, "two").contains("(remote)"),
+        row(&stdout, "one").contains("(remote, as last fetched)")
+            && row(&stdout, "two").contains("(remote, as last fetched)"),
         "{stdout}"
     );
     // No git process at all leaves no trace file, which is zero fetches too.
