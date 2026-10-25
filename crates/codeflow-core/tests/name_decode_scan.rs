@@ -2734,14 +2734,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Formats or bounds orientation prose (product summary or ADR titles); no command or filesystem routing uses the normalized text.
-    (
-        "crates/codeflow-core/src/hooks/orient.rs",
-        "generate",
-        "lines",
-        1,
-        "display",
-    ),
     // Compares the fixed hooks-version marker; mismatch only produces an orientation warning.
     (
         "crates/codeflow-core/src/hooks/orient.rs",
@@ -6279,6 +6271,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "read_sed_script", "is_file", 2, "Both path and opened-file metadata are fallibly obtained; errors already yield SedRead::Unreadable."),
     ("crates/codeflow-core/src/hooks/git_hook.rs", "judging_identity", "is_dir", 1, "Only selects an additional source-drift diagnostic; it does not select policy or waive hook enforcement."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "append_open_epics", "is_dir", 3, "Skips the optional open-epic rows so a read creates no record folders; it is not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/orient.rs", "gates_line", "exists", 3, "Selects presence marks in orientation output; the marks do not execute or waive a gate."),
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
