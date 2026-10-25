@@ -783,6 +783,59 @@ fn clears_review_row_binding() {
     );
 }
 
+/// TSK-1001: a ready pull request whose task has no acceptance block is
+/// not landable; the printed step, `codeflow task status <id> complete
+/// --acceptance <file>` with the review of the head, clears it.
+#[test]
+fn clears_unfinished_ready() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    hosted.plan_task("plan/work");
+    hosted.land("plan/work");
+    hosted.branch("task/TSK-001-work");
+    // A code range: a text file alone reads as documentation.
+    commit(root, "src/lib.rs", "feat: add the library");
+    let body = hosted.dir.path().join("ready.md");
+    std::fs::write(&body, BODY).unwrap();
+    let body = body.to_str().unwrap().to_string();
+    let upstream = hosted.upstream();
+    let ready = || {
+        text(
+            &command(exe().to_str().unwrap(), root)
+                .env("CODEFLOW_PR_IS_DRAFT", "false")
+                .args([
+                    "ci",
+                    "--base",
+                    &upstream,
+                    "--head",
+                    "HEAD",
+                    "--branch",
+                    "task/TSK-001-work",
+                    "--pr-body-file",
+                    &body,
+                ])
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "UNFINISHED_READY",
+        "it is not landable yet",
+        ready,
+        |printed| {
+            let acceptance = review_head(root);
+            let step = printed_command(printed, "UNFINISHED_READY", None);
+            run_printed(
+                root,
+                &step,
+                &[("<id>", "TSK-001"), ("<file>", &acceptance)],
+                &[],
+            );
+            commit_all(root, "chore: record the review of the head");
+        },
+    );
+}
+
 /// An epic acceptance block for AC-1 reviewing `reviewed`, written beside
 /// the project; returns its path.
 fn epic_block(root: &Path, reviewed: &str, ac1: &str) -> String {
