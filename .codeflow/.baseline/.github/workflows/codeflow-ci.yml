@@ -44,7 +44,8 @@ jobs:
   # a green run on the new image. Actions are on the node24 runtime.
   # The gate runs essential on pull requests and full on pushes to the
   # protected branch, the weekly schedule and manual runs (TSK-449). A test
-  # config with no essential target runs full on pull requests too.
+  # config with no essential target runs full on pull requests too. Targets
+  # that define only `quick`, not that mode, run after it (TSK-1001).
   gates:
     name: codeflow gates
     runs-on: ubuntu-24.04
@@ -194,6 +195,15 @@ jobs:
           fi
           codeflow_gated=1
           "$codeflow_bin" test --strict --mode "$codeflow_mode"
+          # Targets that define `quick` but not the mode above ran only in
+          # the pre-push quick gate, which no longer runs targets (TSK-449),
+          # so they run here and keep an automatic enforcement point
+          # (TSK-1001). A config that cannot be read runs none here; the run
+          # above already refused it.
+          codeflow_quick_only=$(python3 -I -c 'import json, sys; c = json.load(open(".codeflow/test-config.json")); print(",".join(t["name"] for t in c.get("targets", []) if t.get("enabled", True) and "quick" in (t.get("modes") or {}) and sys.argv[1] not in (t.get("modes") or {})))' "$codeflow_mode" 2>/dev/null || true)
+          if [ -n "$codeflow_quick_only" ]; then
+            "$codeflow_bin" test --strict --mode quick --only "$codeflow_quick_only"
+          fi
 
       - name: codeflow validate --docs
         run: codeflow validate --docs
