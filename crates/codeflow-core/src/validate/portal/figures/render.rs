@@ -157,6 +157,11 @@ pub(super) fn render_figure(
             .and_then(|state| state.get("mark").and_then(Value::as_str))
             .map(str::to_string)
     };
+    // A tone changes hue only, so it is checked before anything renders:
+    // an allowed value on a mark that can take it, labelled in its
+    // composition, as the grammar module's validator checks it.
+    validate_tones(&wide.draw, "wide", &state_mark)?;
+    validate_tones(&narrow.draw, "narrow", &state_mark)?;
     let state_means = |name: &str| -> String {
         states
             .iter()
@@ -385,6 +390,76 @@ pub(super) fn render_figure(
         escape_text(lead),
         twin_table(figure, &fact_values)?
     ))
+}
+
+/// The tones the grammar module allows (figure-grammar.md section 4).
+const TONES: [&str; 3] = ["accent", "cat1", "cat2"];
+
+/// The marks each tone may go on: those whose kind, edge, width and dash the
+/// figure sheet leaves as they are, so the hue is never a channel.
+fn toned_marks(tone: &str) -> &'static [&'static str] {
+    match tone {
+        "accent" => &["layer", "layer-remote", "state", "node"],
+        "cat1" | "cat2" => &[
+            "layer",
+            "layer-remote",
+            "state",
+            "node",
+            "optional",
+            "denied",
+        ],
+        _ => &[],
+    }
+}
+
+/// Refuses a tone the grammar module's validator refuses: a value outside
+/// [`TONES`] or not a string, a mark kind the tone cannot go on, or a toned
+/// mark no text item in the same composition labels. Hue is never alone, so
+/// the reconstruction never emits a tone a reader could only tell by colour.
+fn validate_tones(
+    draw: &[Value],
+    name: &str,
+    state_mark: &dyn Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    let labelled: BTreeSet<&str> = draw
+        .iter()
+        .filter(|item| item.get("text").is_some())
+        .filter_map(|item| item.get("for").and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    for (index, item) in draw.iter().enumerate() {
+        let Some(tone) = item.get("tone") else {
+            continue;
+        };
+        let at = format!("{name}.draw[{index}]");
+        let Some(tone) = tone.as_str().filter(|tone| TONES.contains(tone)) else {
+            return Err(format!("{at} tone must be one of {}", TONES.join(", ")));
+        };
+        let mark_name = item
+            .get("state")
+            .and_then(Value::as_str)
+            .and_then(state_mark)
+            .unwrap_or_default();
+        let allowed = toned_marks(tone);
+        if !allowed.contains(&mark_name.as_str()) {
+            return Err(format!(
+                "{at} tone {tone} goes only on the {} marks",
+                allowed.join(", ")
+            ));
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            return Err(format!(
+                "{at} a toned mark needs an id a text item labels: hue is never alone"
+            ));
+        };
+        if !labelled.contains(id) {
+            return Err(format!(
+                "{at} is toned but no text item labels {id}: hue is never alone"
+            ));
+        }
+    }
+    Ok(())
 }
 
 struct Composition {
@@ -2002,6 +2077,81 @@ mod tests {
         assert_eq!(
             refused,
             "states declared and declares draw the same legend key"
+        );
+    }
+
+    /// The toned control with one edit applied to its declaration.
+    fn toned_control(edit: impl FnOnce(&mut serde_json::Value)) -> Result<String, String> {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs-portal/tests/fixtures/figures/controls/layering-toned.json");
+        let mut declaration: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+        edit(&mut declaration);
+        super::render_figure(&declaration, "cf-fig-0", None)
+    }
+
+    #[test]
+    fn reconstruction_refuses_a_tone_the_grammar_refuses() {
+        assert!(toned_control(|_| {}).is_ok());
+        // Wide draw item 15 is m1, a layer mark toned cat1 and labelled by item 11.
+        let unknown = toned_control(|d| d["figure"]["wide"]["draw"][15]["tone"] = "unknown".into());
+        assert_eq!(
+            unknown.unwrap_err(),
+            "wide.draw[15] tone must be one of accent, cat1, cat2"
+        );
+        for value in [
+            serde_json::json!(1),
+            serde_json::Value::Null,
+            serde_json::json!(["cat1"]),
+        ] {
+            let refused =
+                toned_control(|d| d["figure"]["wide"]["draw"][15]["tone"] = value.clone());
+            assert_eq!(
+                refused.unwrap_err(),
+                "wide.draw[15] tone must be one of accent, cat1, cat2",
+                "{value}"
+            );
+        }
+        // The act mark is a disc whose fill is its channel, so it takes no tone.
+        let disallowed = toned_control(|d| {
+            let draw = d["figure"]["narrow"]["draw"].as_array_mut().unwrap();
+            let act = draw.iter_mut().find(|item| item["state"] == "act").unwrap();
+            act["tone"] = "cat1".into();
+        });
+        assert!(disallowed.unwrap_err().contains(
+            "tone cat1 goes only on the layer, layer-remote, state, node, optional, denied marks"
+        ));
+        assert!(!super::toned_marks("accent").contains(&"optional"));
+        // The label goes from one composition only; the other still labels its marks.
+        let unlabelled = toned_control(|d| {
+            d["figure"]["wide"]["draw"][11]
+                .as_object_mut()
+                .unwrap()
+                .remove("for");
+        });
+        assert_eq!(
+            unlabelled.unwrap_err(),
+            "wide.draw[15] is toned but no text item labels m1: hue is never alone"
+        );
+        let unlabelled_narrow = toned_control(|d| {
+            d["figure"]["narrow"]["draw"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("for");
+        });
+        assert_eq!(
+            unlabelled_narrow.unwrap_err(),
+            "narrow.draw[9] is toned but no text item labels l1: hue is never alone"
+        );
+        let no_id = toned_control(|d| {
+            d["figure"]["wide"]["draw"][15]
+                .as_object_mut()
+                .unwrap()
+                .remove("id");
+        });
+        assert_eq!(
+            no_id.unwrap_err(),
+            "wide.draw[15] a toned mark needs an id a text item labels: hue is never alone"
         );
     }
 
