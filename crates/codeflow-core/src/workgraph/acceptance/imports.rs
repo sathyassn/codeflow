@@ -330,7 +330,7 @@ fn is_shared_planning(
     {
         return Ok(false);
     }
-    let Some(first) = admissible_planning_landing(repo, landing) else {
+    let Some(first) = admissible_planning_landing(repo, landing)? else {
         return Ok(false);
     };
     if !permitted_at(repo, landing, record) {
@@ -372,39 +372,53 @@ fn is_shared_planning(
 /// whose change from its first parent passes the planning-amendment
 /// admissibility check, touches only records and plans (both names of a
 /// rename) and holds only regular, non-executable files on each side.
-/// Every read failure answers `None`, so the caller keeps its refusal.
-fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Option<Oid> {
+///
+/// # Errors
+/// A commit, tree, diff or policy that cannot be read is an error, which
+/// the caller reports as a refusal: unread history never admits a landing.
+fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option<Oid>, String> {
     use super::super::amendment::{landing_problem, project_at};
     use super::super::classify::{amendment_path, AmendmentPath};
-    let commit = repo.find_commit(landing).ok()?;
-    let parents = history::parents(repo, &commit).ok()?;
+    let commit = repo
+        .find_commit(landing)
+        .map_err(|error| error.to_string())?;
+    let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
     let [first, _] = parents.as_slice() else {
-        return None;
+        return Ok(None);
     };
-    if !is_clean_remerge(repo, &commit).ok()? {
-        return None;
+    if !is_clean_remerge(repo, &commit).map_err(|error| error.to_string())?
+        || landing_problem(repo, Some(*first), landing)
+            .map_err(|error| error.to_string())?
+            .is_some()
+    {
+        return Ok(None);
     }
-    if landing_problem(repo, Some(*first), landing).ok()?.is_some() {
-        return None;
-    }
-    let project = project_at(repo, *first).ok()?;
-    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let project = project_at(repo, *first)?;
+    let tree = |oid: Oid| {
+        repo.find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())
+    };
     let diff = repo
-        .diff_tree_to_tree(Some(&tree(*first).ok()?), Some(&tree(landing).ok()?), None)
-        .ok()?;
+        .diff_tree_to_tree(Some(&tree(*first)?), Some(&tree(landing)?), None)
+        .map_err(|error| error.to_string())?;
     for delta in diff.deltas() {
-        for file in [delta.old_file(), delta.new_file()] {
-            if !file.exists() {
-                continue;
-            }
-            let path = std::str::from_utf8(file.path_bytes()?).ok()?;
+        // The side a delta adds or deletes holds no entry; every other side does.
+        let sides = match delta.status() {
+            git2::Delta::Added => vec![delta.new_file()],
+            git2::Delta::Deleted => vec![delta.old_file()],
+            _ => vec![delta.old_file(), delta.new_file()],
+        };
+        for file in sides {
+            let name = crate::git::GitName::from_bytes(file.path_bytes().unwrap_or_default());
+            let path = name.rule_text().map_err(|odd| odd.display().to_string())?;
             let regular = i32::from(file.mode()) == 0o100_644;
             if !regular || amendment_path(path, &project) != Some(AmendmentPath::Record) {
-                return None;
+                return Ok(None);
             }
         }
     }
-    Some(*first)
+    Ok(Some(*first))
 }
 
 /// Whether the task `record` names is in a permitted state at `at`: exactly
