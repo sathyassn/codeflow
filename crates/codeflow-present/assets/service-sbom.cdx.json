@@ -5,28 +5,6 @@
   "components": [
     {
       "type": "file",
-      "bom-ref": "service/app-FRK775BE.js.br",
-      "name": "service/app-FRK775BE.js.br",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "acf41689b7cdf749ac1aa0349581c6913c85caaedbf1aabf7940c8c091da482d"
-        }
-      ]
-    },
-    {
-      "type": "file",
-      "bom-ref": "service/app-FRK775BE.js.gz",
-      "name": "service/app-FRK775BE.js.gz",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "64936a51ca7f2c3823f0723708c5f8d143a08c2b23e42f357c990c7fcb1bea36"
-        }
-      ]
-    },
-    {
-      "type": "file",
       "bom-ref": "service/app-O4RB4NLN.css.br",
       "name": "service/app-O4RB4NLN.css.br",
       "hashes": [
@@ -44,6 +22,28 @@
         {
           "alg": "SHA-256",
           "content": "889595570de2b98e0d893d5428ee5629ee2c2dff116419b87e20a06a0b9e9728"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-O5RGTK3L.js.br",
+      "name": "service/app-O5RGTK3L.js.br",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "420991e59e245f2afaeee0649779398a4299110dce20c88eef8bcdd01617136f"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "bom-ref": "service/app-O5RGTK3L.js.gz",
+      "name": "service/app-O5RGTK3L.js.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0cc20f51eb1ee8c28def758e417928ed120314d8a9f9850b98a4d8fca72d6336"
         }
       ]
     },

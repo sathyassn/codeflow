@@ -161,11 +161,28 @@ try {
   if (!(await page.getByTestId("verdict-error").isVisible())) throw new Error("the verdict message is not visible");
   if ((await dock.getAttribute("data-open")) !== "true") throw new Error("End review without a verdict left the notes closed");
   if ((await page.getByTestId("note-row").count()) !== 1) throw new Error("End review without a verdict lost the draft note");
-  if (await page.evaluate(() => document.activeElement?.id) !== "cf-review-verdict") throw new Error("the verdict is not focused");
+  // Focus moves after the panel has opened, a frame later.
+  await page.waitForFunction(() => document.activeElement?.id === "cf-review-verdict", undefined, { timeout: 5_000 }).catch(() => { throw new Error("the verdict is not focused"); });
   if (asked) throw new Error("End review without a verdict asked to end");
   if (session().status !== "active") throw new Error("End review without a verdict ended the session");
   await page.screenshot({ path: join(output, "lifecycle-end-without-verdict.png") });
   step("End review without a verdict kept the session and asked for one");
+  // Request changes without the required change is held the same way, at
+  // the instruction field, through the same check Submit uses.
+  await page.locator("#cf-review-verdict").selectOption("request_changes");
+  await page.getByTestId("comment-leave").click();
+  await page.getByTestId("end-review").click();
+  await page.getByTestId("instruction-error").waitFor();
+  if ((await page.getByTestId("instruction-error").innerText()) !== "Write the change you require.") throw new Error("End review without the required change did not name it");
+  if (!(await page.getByTestId("instruction-error").isVisible())) throw new Error("the required-change message is not visible");
+  if ((await dock.getAttribute("data-open")) !== "true") throw new Error("End review without the required change left the notes closed");
+  if ((await page.getByTestId("note-row").count()) !== 1) throw new Error("End review without the required change lost the draft note");
+  // Focus moves after the panel has opened, a frame later.
+  await page.waitForFunction(() => document.activeElement?.id === "cf-review-instruction", undefined, { timeout: 5_000 }).catch(() => { throw new Error("the required-change field is not focused"); });
+  if (asked) throw new Error("End review without the required change asked to end");
+  if (session().status !== "active") throw new Error("End review without the required change ended the session");
+  await page.screenshot({ path: join(output, "lifecycle-end-without-instruction.png") });
+  step("End review with Request changes and no instruction kept the session and asked for it");
   page.off("dialog", refuse);
   await page.locator("#cf-review-verdict").selectOption("approve_with_notes");
   await page.screenshot({ path: join(output, "lifecycle-before-end.png") });

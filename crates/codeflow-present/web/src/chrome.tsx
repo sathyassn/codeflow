@@ -1192,34 +1192,52 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     pinCapture(selected, 80, 120, { openComposer: true });
   };
 
+  // Every field check a review must pass before it is sent, in one place:
+  // Submit and End review both use it, so neither can fail silently.
+  type ReviewProblem =
+    | { readonly field: "verdict" | "instruction"; readonly message: string }
+    | { readonly field: "note"; readonly message: string; readonly note: PendingFeedback };
+  const reviewProblem = (): ReviewProblem | null => {
+    if (!verdict) return { field: "verdict", message: "Choose a verdict first." };
+    const empty = notesRef.current.find((note) => !note.body.trim());
+    if (empty) return { field: "note", message: "Write each draft note before submitting the review.", note: empty };
+    const limit = config.review_limits.max_text_utf16;
+    const long = notesRef.current.find((note) => note.body.trim().length > limit);
+    if (long) return { field: "note", message: `Each note is limited to ${limit} characters.`, note: long };
+    if (verdict === "request_changes" && !instruction.trim()) return { field: "instruction", message: "Write the change you require." };
+    if (instruction.length > limit) return { field: "instruction", message: `The review summary is limited to ${limit} characters.` };
+    return null;
+  };
+  // Shows a problem where it can be fixed: the notes open, the failing field
+  // carries the message and takes focus, and nothing is sent or ended.
+  const showReviewProblem = (problem: ReviewProblem): void => {
+    if (!commentModeRef.current) armComment(true);
+    setPanelOpen(true);
+    setSheetExpanded(true);
+    setStatus(`${problem.message} The review stays open.`);
+    if (problem.field === "note") {
+      openNoteEditor(problem.note);
+      return;
+    }
+    if (problem.field === "verdict") setVerdictError(problem.message);
+    else setInstructionError(problem.message);
+    const id = problem.field === "verdict" ? "cf-review-verdict" : "cf-review-instruction";
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+  };
+
   // Resolves true once the service has received the review.
   const submitReview = async (): Promise<boolean> => {
     if (submittingRef.current) return false;
-    if (!verdict) {
-      setVerdictError("Choose a verdict first.");
-      document.getElementById("cf-review-verdict")?.focus();
+    const problem = reviewProblem();
+    if (problem || !verdict) {
+      if (problem) showReviewProblem(problem);
       return false;
     }
+    const chosen: ReviewVerdict = verdict;
     // What this review carries: exactly these notes and this instruction.
     const sentNotes = notes;
     const sentInstruction = instruction;
     const normalizedNotes = sentNotes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
-    if (normalizedNotes.some((n) => !n.body)) {
-      setStatus("Write each draft note before submitting the review.");
-      return false;
-    }
-    if (verdict === "request_changes" && !sentInstruction.trim()) {
-      setInstructionError("Write the change you require.");
-      document.getElementById("cf-review-instruction")?.focus();
-      return false;
-    }
-    if (
-      sentInstruction.length > config.review_limits.max_text_utf16 ||
-      normalizedNotes.some((n) => n.body.length > config.review_limits.max_text_utf16)
-    ) {
-      setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
-      return false;
-    }
     // The guard and the disabled controls come before the first await, so
     // nothing is edited or sent twice while the crops are fitted (C071-1).
     submittingRef.current = true;
@@ -1228,7 +1246,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const payloadOf = (list: readonly (typeof normalizedNotes)[number][]) => ({
         session_id: config.session_id,
         revision: config.revision,
-        verdict,
+        verdict: chosen,
         notes: [...list],
         ...(sentInstruction.trim() ? { instruction: sentInstruction.trim() } : {}),
       });
@@ -1299,16 +1317,15 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const endReview = async (): Promise<void> => {
     if (submittingRef.current || closedRef.current) return;
     const queued = notesRef.current.length;
-    // End review never sends a verdict the reviewer did not choose: it opens
-    // the notes at the verdict, says what is missing and keeps the session.
-    if ((queued || instruction.trim()) && !verdict) {
-      if (!commentModeRef.current) armComment(true);
-      setPanelOpen(true);
-      setSheetExpanded(true);
-      setVerdictError("Choose a verdict first.");
-      setStatus("Choose a verdict first. The review stays open.");
-      requestAnimationFrame(() => document.getElementById("cf-review-verdict")?.focus());
-      return;
+    // End review checks the review before it asks to end: it never sends a
+    // verdict the reviewer did not choose or a review that would be refused.
+    // A problem opens the notes at the failing field and keeps the session.
+    if (queued || instruction.trim()) {
+      const problem = reviewProblem();
+      if (problem) {
+        showReviewProblem(problem);
+        return;
+      }
     }
     const question = queued
       ? `End this review? Your ${queued} draft ${queued === 1 ? "note is" : "notes are"} sent first, then this window closes.`
