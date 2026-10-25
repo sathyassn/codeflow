@@ -5087,6 +5087,38 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // Reads heading and word prose for an advisory figure-balance warning only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "figure_balance_warnings",
+        "lines",
+        1,
+        "prose",
+    ),
+    // Reads heading and word prose for an advisory figure-balance warning only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "figure_balance_warnings",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // Reads heading and word prose for an advisory figure-balance warning only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "figure_balance_warnings",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Reads heading and word prose for an advisory figure-balance warning only; no path or identifier is normalized and no document is refused.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "figure_balance_warnings",
+        "trim_start",
+        2,
+        "prose",
+    ),
     // Removes trailing output LF while constructing canonical human Markdown text; original source/IDs are unchanged.
     (
         "crates/codeflow-present/src/document.rs",
@@ -5148,6 +5180,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-present/src/document.rs",
         "validate_stage_framing",
         "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A missing/non-string fact kind becomes empty, which is outside the closed allowed-kind set and always adds a refusal fault; no source name is changed.
+    (
+        "crates/codeflow-present/src/figure_rules.rs",
+        "declaration_faults",
+        "obtain-absent:as_str",
         1,
         "schema-reject-only",
     ),
