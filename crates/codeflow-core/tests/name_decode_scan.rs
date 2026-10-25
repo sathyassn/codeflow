@@ -700,6 +700,38 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // TSK-422: Free text percent-decoded only to scan it for secrets; the decoded form is never stored or shown.
+    (
+        "codeflow-core/src/coord/text.rs",
+        "percent_decoded",
+        "from_utf8_lossy",
+        1,
+        "prose",
+    ),
+    // TSK-422: git's output and error text for the inventory a person reads; it decides nothing.
+    (
+        "codeflow-core/src/worktree_inventory.rs",
+        "git",
+        "from_utf8_lossy",
+        2,
+        "display",
+    ),
+    // TSK-422: git prints commit ids, which are ASCII hex; nothing is replaced.
+    (
+        "codeflow-core/src/workgraph/readiness.rs",
+        "first_parent_record_changes",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
+    // TSK-422: An epic folder name joined into a record path the reader's layout accepts; a name that is not UTF-8 is never an epic folder.
+    (
+        "codeflow-core/src/workgraph/readiness.rs",
+        "task_record_at",
+        "name",
+        1,
+        "format-contract",
+    ),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -5686,6 +5718,307 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "asserted_evidence",
+        "is_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "suggest",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "suggest",
+        "obtain-absent:Result::ok",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "suggest",
+        "split_whitespace",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "suggest",
+        "trim",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-cli/src/cmd/follow.rs",
+        "suggest",
+        "trim_matches",
+        1,
+        "prose",
+    ),
+    // TSK-422: A missing or non-Unicode variable leaves the actor unbound, which only reads; nothing defaults to a role.
+    (
+        "crates/codeflow-core/src/coord/actor.rs",
+        "Actor::from_env",
+        "obtain-absent:into_string",
+        1,
+        "unproven",
+    ),
+    // TSK-422: A missing or non-Unicode variable leaves the actor unbound, which only reads; nothing defaults to a role.
+    (
+        "crates/codeflow-core/src/coord/actor.rs",
+        "Actor::from_env",
+        "obtain-absent:read",
+        3,
+        "unproven",
+    ),
+    // TSK-422: An observation that cannot be made is unknown, and an unknown state never closes a follow-up.
+    (
+        "crates/codeflow-core/src/coord/due.rs",
+        "commit_on_target",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    // TSK-422: An observation that cannot be made is unknown, and an unknown state never closes a follow-up.
+    (
+        "crates/codeflow-core/src/coord/due.rs",
+        "gh_pull",
+        "obtain-absent:as_str",
+        2,
+        "unproven",
+    ),
+    // TSK-422: An observation that cannot be made is unknown, and an unknown state never closes a follow-up.
+    (
+        "crates/codeflow-core/src/coord/due.rs",
+        "gh_pull",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
+    ),
+    // TSK-422: A records directory that cannot be listed holds no record, so the link is refused as naming nothing.
+    (
+        "crates/codeflow-core/src/coord/reference.rs",
+        "list_markdown",
+        "obtain-absent:Result::ok",
+        1,
+        "unproven",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-core/src/coord/reference.rs",
+        "record_uid",
+        "trim",
+        1,
+        "prose",
+    ),
+    // TSK-422: A clone without a readable origin is recorded as `local`; the identity labels a link and decides nothing.
+    (
+        "crates/codeflow-core/src/coord/reference.rs",
+        "repository_identity",
+        "obtain-absent:Repository::discover",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "liveness",
+        "obtain-absent:Result::ok",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "liveness",
+        "obtain-absent:from_str",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "liveness",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "purge",
+        "lines",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "read",
+        "obtain-absent:from_str",
+        1,
+        "display",
+    ),
+    // TSK-422: Liveness and the instance id are advisory and shown to a person; a missing one reads as unknown and decides no write.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "read",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "check",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "check_required",
+        "trim",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "redact",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
+    (
+        "crates/codeflow-core/src/validate/docs.rs",
+        "lint_ledger_citations",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: git's own output, read for the inventory a person sees; it decides nothing.
+    (
+        "crates/codeflow-core/src/worktree_inventory.rs",
+        "git",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-422: git's own output, read for the inventory a person sees; it decides nothing.
+    (
+        "crates/codeflow-core/src/worktree_inventory.rs",
+        "inspect",
+        "lines",
+        2,
+        "display",
+    ),
+    // TSK-422: git's own output, read for the inventory a person sees; it decides nothing.
+    (
+        "crates/codeflow-core/src/worktree_inventory.rs",
+        "inventory",
+        "trim",
+        1,
+        "display",
+    ),
+    // TSK-422: Splits a diagnostic into words only to withhold secret-shaped ones; the message is shown, never judged.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "scrub",
+        "is_whitespace",
+        1,
+        "display",
+    ),
+    // TSK-422: A quarantined line is judged by its parsed subject; one that does not parse is matched by its subject_id field, and an unmatched line is kept.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "names_subject",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // TSK-422: A quarantined line that is not UTF-8 is judged by its subject_id bytes instead; it is never skipped as absent.
+    (
+        "crates/codeflow-core/src/coord/store.rs",
+        "names_subject",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // TSK-422: Free text scanned line by line for secrets; it decides only what is withheld.
+    (
+        "crates/codeflow-core/src/coord/text.rs",
+        "secret_shaped",
+        "lines",
+        1,
+        "prose",
+    ),
+    // TSK-422: The default target's records name recognised integration lines; an unreadable tip recognises none, so nothing counts as landed.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "default_tip_lines",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-422: git log prints one line of commit ids per first-parent commit that changed a record.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "first_parent_record_changes",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // TSK-422: A record that cannot be read at a commit does not hold the completion there; the completion found is still bound by the CI judge, which refuses on its own.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "task_record_at",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "task_record_at",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "task_record_at",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "task_record_at",
+        "obtain-absent:get_path",
+        2,
+        "unproven",
+    ),
+    // TSK-422: A merge that cannot be read is not the clean re-merge of its parents, so it inherits no proof.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "completion_bound",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
 ];
 
 const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
@@ -6552,6 +6885,14 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/estimate/adoption.rs", "home", "is_file", 1, "The kind of a v<N>.json entry whose file type was read; a type that cannot be read leaves the home unusable."),
     ("crates/codeflow-core/src/estimate/adoption.rs", "real_dirs", "ErrorKind::NotFound", 1, "A forecasts directory that is proven missing holds no forecast; any other metadata error refuses through Home::Unusable."),
     ("crates/codeflow-core/src/estimate/adoption.rs", "real_dirs", "is_dir", 2, "The kinds of the forecasts directory and of each entry, read from metadata that was read; an unreadable entry refuses."),
+    ("crates/codeflow-core/src/coord/reference.rs", "list_markdown", "ErrorKind::NotFound", 1, "TSK-422: A missing records directory holds no record, so a link to one is refused as naming nothing; any other error propagates."),
+    ("crates/codeflow-core/src/coord/store.rs", "ensure_instance", "ErrorKind::NotFound", 1, "TSK-422: Runs under the ledger lock: only NotFound creates the instance file, and any other error refuses the write."),
+    ("crates/codeflow-core/src/coord/store.rs", "liveness", "is_file", 1, "TSK-422: Type check on a read_dir entry; a non-file is skipped, and liveness is advisory, never gate evidence."),
+    ("crates/codeflow-core/src/coord/store.rs", "lock", "exists", 1, "TSK-422: Only chooses whether to sync the directory after the open that creates the log either way; an error reads as absent and costs one extra sync."),
+    ("crates/codeflow-core/src/coord/store.rs", "private_dir", "ErrorKind::NotFound", 1, "TSK-422: Only NotFound creates the directory, private; any other metadata error refuses the write as unwritten."),
+    ("crates/codeflow-core/src/coord/store.rs", "private_dir", "is_dir", 1, "TSK-422: Type check on symlink_metadata; a link or any other non-directory refuses the write."),
+    ("crates/codeflow-core/src/coord/store.rs", "read", "ErrorKind::NotFound", 2, "TSK-422: Only NotFound reads as an empty ledger; any other error is reported as unavailable, never as empty."),
+    ("crates/codeflow-core/src/coord/store.rs", "read_counters", "ErrorKind::NotFound", 1, "TSK-422: Runs under the lock: NotFound starts the counters at zero, and the log's own highest ids still bound every new number from below; other errors refuse."),
 ];
 
 #[test]

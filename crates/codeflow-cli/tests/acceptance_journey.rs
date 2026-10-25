@@ -975,18 +975,17 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     )
     .unwrap();
     commit(&root, "chore: plan the release journey");
+    // Each line's planning merge names its line. With one message, both
+    // lines start from the same commit, so two merges made within one
+    // second are one commit shared by both lines, and the import check then
+    // sees LINE_B's unpublished history inside LINE_A's push (hosted run
+    // 40158545922).
     for line in [LINE_A, LINE_B] {
         git(&root, &["switch", "-q", line]);
+        let message = format!("chore: land the plan on {line}");
         git(
             &root,
-            &[
-                "merge",
-                "-q",
-                "--no-ff",
-                "plan/release",
-                "-m",
-                "chore: land the plan",
-            ],
+            &["merge", "-q", "--no-ff", "plan/release", "-m", &message],
         );
     }
 

@@ -29,8 +29,11 @@ Any host may drive any reachable Herdr server (`herdr status server` reports
 `cf-herdr`'s rules: its own tabs only, unique `cf-` names, a `cwd` check
 before every send, and never the operator's panes.
 
-When the preferred seat cannot run, use these in order and record the
-fallback as such:
+Whether a seat can run is changeable state: probe it live before each
+routing decision (`.codeflow/rules/workflow-discipline.md` "Check
+changeable state live"; the orchestrator's "Degrade legibly" says when a
+seat is recorded unavailable). When the preferred seat cannot run, use these in order and
+record the fallback as such:
 
 1. From a Claude Code host to Codex only: the official Codex plugin, an
    optional fallback under `cf-delegate`'s qualified native fallback.
