@@ -107,6 +107,11 @@ reference lists the patterns under "Meaning taken".
   references, never as the heading or the lead of a bullet.
 - **Titles name the subject in words.** An identifier or bare acronym is
   never the whole title; it goes in the body.
+- **Status names live-checked facts.** Each changeable fact a report or
+  handoff states (a seat, a check, a PR, a line, a task's status, another
+  agent's progress) is checked live for that report, or marked unverified
+  with the time of its last check; `workflow-discipline.md` "Check
+  changeable state live" is the rule.
 - A reply or report opens with the result it serves and where the work
   stands, then what would change that and who resolves it, then what the
   reader must decide or do; steps, gates, counts and tooling come last, and
