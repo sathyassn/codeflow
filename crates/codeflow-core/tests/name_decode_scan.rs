@@ -1486,6 +1486,44 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // TSK-452: doctor's preflight report only prints evidence and decides
+    // nothing. A missing or misread catalog, settings file or PATH entry is
+    // printed as unavailable, never as configured or observed.
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "find_on_path",
+        "obtain-absent:var_os",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "sandbox_lines",
+        "obtain-absent:from_str",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "sandbox_lines",
+        "obtain-absent:read_to_string",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "seat_lines",
+        "obtain-absent:as_str",
+        2,
+        "display",
+    ),
+    (
+        "crates/codeflow-cli/src/cmd/doctor.rs",
+        "seat_lines",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
     // An unreadable or unparsable GitHub event proves no draft, so the
     // pull request is judged ready and the quick-run citation is reported
     // (TSK-451); the read never grants a pass.
@@ -6190,6 +6228,7 @@ const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
 
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-cli/src/cmd/doctor.rs", "find_on_path", "is_file", 1, "Doctor's preflight report (TSK-452) only prints evidence and decides nothing; a PATH entry that is not a readable file is skipped and the executable reports as unavailable; doctor never runs it."),
     ("crates/codeflow-cli/src/cmd/ci.rs", "run", "ErrorKind::NotFound", 1, "Only native NotFound on symlink_metadata skips the quick-run citation warning (TSK-451); every other error counts the test config as present, the side that reports."),
     ("crates/codeflow-core/src/hooks/git_guard/runners.rs", "note_landings", "is_file", 1, "Type check on symlink_metadata; an error or any non-file keeps the copy destination a placement, the reading that refuses a later Git command there."),
     ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_prefix_is_contained", "is_dir", 2, "Both calls inspect FileType returned by entry.file_type(); its error returns false, which refuses the glob fallback. The calls choose canonicalization and directory traversal, never infer absence. Canonicalization and directory-read errors also refuse containment."),

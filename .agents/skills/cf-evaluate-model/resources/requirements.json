@@ -1470,8 +1470,13 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/parallel.md",
           "markers": [
             "CONCURRENCY_CAP:",
-            "one writer, branch and worktree per task",
-            "one full gate runs on that exact candidate before the integration line moves"
+            "one writer, branch and worktree per task"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/SKILL.md",
+          "markers": [
+            "runs one full gate on that exact candidate"
           ]
         }
       ]

@@ -14,6 +14,10 @@ pub struct DoctorArgs {
     /// List available check names.
     #[arg(long)]
     pub list: bool,
+    /// Print the seat, sandbox and tool evidence the orchestrator preflight
+    /// reads, each value marked configured, observed or unavailable.
+    #[arg(long, conflicts_with_all = ["check", "list"])]
+    pub preflight: bool,
 }
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
@@ -28,6 +32,13 @@ pub fn run(args: &DoctorArgs) -> i32 {
             return 2;
         }
     };
+    if args.preflight {
+        let mut out = std::io::stdout();
+        for line in preflight_report(&root, &|name| find_on_path(name)) {
+            let _ = term_writeln!(out, "{line}");
+        }
+        return 0;
+    }
     let Some(project_dir) = root.to_str() else {
         eprintln!(
             "codeflow doctor: the project folder is not valid UTF-8, so it cannot be checked"
@@ -54,6 +65,217 @@ pub fn run(args: &DoctorArgs) -> i32 {
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
+}
+
+/// Where the orchestrator's seat catalog is installed, in reading order.
+const CATALOG_PATHS: [&str; 2] = [
+    ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json",
+];
+
+/// The tools the preflight asks about beyond the seat executables.
+const PREFLIGHT_TOOLS: [&str; 3] = ["git", "gh", "herdr"];
+
+/// The executable a catalog harness runs, by its name's first word
+/// (`claude-code` runs `claude`, `codex-cli` runs `codex`).
+fn harness_executable(harness: &str) -> &str {
+    harness.split('-').next().unwrap_or(harness)
+}
+
+/// The first `name` on `PATH`, as the operating system would find it; never
+/// executed.
+fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+/// One executable's line: observed on `PATH`, or unavailable.
+fn executable_line(
+    label: &str,
+    name: &str,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> String {
+    match look(name) {
+        Some(path) => format!(
+            "{label} {name}: observed on PATH at {path}; doctor does not run it",
+            path = shown(&path.display())
+        ),
+        None => format!("{label} {name}: unavailable: not found on PATH"),
+    }
+}
+
+fn shown(text: &dyn std::fmt::Display) -> String {
+    crate::cmd::shown(text)
+}
+
+/// The seat lines of the preflight report, from the installed catalog.
+fn seat_lines(
+    root: &std::path::Path,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> Vec<String> {
+    let Some((path, text)) = CATALOG_PATHS.iter().find_map(|path| {
+        std::fs::read_to_string(root.join(path))
+            .ok()
+            .map(|text| (*path, text))
+    }) else {
+        return vec![format!(
+            "seats: unavailable: no seat catalog at {}",
+            CATALOG_PATHS[0]
+        )];
+    };
+    let Ok(catalog) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return vec![format!("seats: unavailable: {path} is not valid JSON")];
+    };
+    let list = |key: &str| catalog[key].as_array().cloned().unwrap_or_default();
+    let find = |key: &str, id: &str| {
+        list(key)
+            .into_iter()
+            .find(|item| item["id"].as_str() == Some(id))
+    };
+    let mut lines = Vec::new();
+    for seat_id in list("standing_seats")
+        .iter()
+        .filter_map(|seat| seat.as_str())
+    {
+        let Some(seat) = find("seats", seat_id) else {
+            lines.push(format!(
+                "seat {seat_id}: unavailable: {path} does not define it"
+            ));
+            continue;
+        };
+        let family_id = seat["family"].as_str().unwrap_or_default();
+        let harness = find("families", family_id)
+            .and_then(|family| family["harnesses"].as_array().cloned())
+            .and_then(|harnesses| {
+                harnesses
+                    .last()
+                    .and_then(|h| h.as_str().map(str::to_string))
+            })
+            .unwrap_or_default();
+        let line_id = seat["lines"][0].as_str().unwrap_or_default();
+        let configured = find("lines", line_id).and_then(|line| {
+            let adopted = line["adopted_version"].as_str()?.to_string();
+            let version = line["versions"]
+                .as_array()?
+                .iter()
+                .find(|version| version["id"].as_str() == Some(adopted.as_str()))?
+                .clone();
+            let efforts: Vec<&str> = version["efforts"]
+                .as_array()
+                .map(|efforts| efforts.iter().filter_map(|e| e.as_str()).collect())
+                .unwrap_or_default();
+            Some(format!(
+                "{adopted} through {harness}, efforts {efforts}",
+                efforts = efforts.join("|")
+            ))
+        });
+        lines.push(match configured {
+            Some(configured) => format!("seat {seat_id}: configured {configured} ({path})"),
+            None => format!(
+                "seat {seat_id}: unavailable: line {line_id} has no adopted version in {path}"
+            ),
+        });
+        if !harness.is_empty() {
+            lines.push(executable_line(
+                "  executable",
+                harness_executable(&harness),
+                look,
+            ));
+        }
+        lines.push(format!(
+            "  {seat_id} live model and effort: unavailable: doctor cannot observe what a running session selected; observe it natively in the seat"
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(format!(
+            "seats: unavailable: {path} names no standing seats"
+        ));
+    }
+    lines
+}
+
+/// The `default_permissions` value and the permission profile names a Codex
+/// `config.toml` declares, or `None` when it is not valid TOML.
+fn codex_profiles(text: &str) -> Option<(Option<String>, Vec<String>)> {
+    let config = text.parse::<toml::Table>().ok()?;
+    let default = config
+        .get("default_permissions")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    let profiles = config
+        .get("permissions")
+        .and_then(toml::Value::as_table)
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default();
+    Some((default, profiles))
+}
+
+/// The sandbox lines: what the project settings request, never what a
+/// running session enforces.
+fn sandbox_lines(root: &std::path::Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    let claude = ".claude/settings.json";
+    match std::fs::read_to_string(root.join(claude))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    {
+        Some(settings) => {
+            let flag = |key: &str| match settings["sandbox"][key].as_bool() {
+                Some(value) => value.to_string(),
+                None => "unset".to_string(),
+            };
+            lines.push(format!(
+                "sandbox claude: configured enabled {}, failIfUnavailable {} ({claude})",
+                flag("enabled"),
+                flag("failIfUnavailable")
+            ));
+        }
+        None => lines.push(format!("sandbox claude: unavailable: no readable {claude}")),
+    }
+    let codex = ".codex/config.toml";
+    match std::fs::read_to_string(root.join(codex)) {
+        Ok(text) => match codex_profiles(&text) {
+            Some((default, profiles)) => lines.push(format!(
+                "sandbox codex: configured default profile {default}, profiles {profiles} ({codex})",
+                default = default.as_deref().unwrap_or("unset"),
+                profiles = if profiles.is_empty() {
+                    "none".to_string()
+                } else {
+                    profiles.join("|")
+                }
+            )),
+            None => lines.push(format!(
+                "sandbox codex: unavailable: {codex} is not valid TOML"
+            )),
+        },
+        Err(_) => lines.push(format!("sandbox codex: unavailable: no readable {codex}")),
+    }
+    lines.push(
+        "  effective boundary: unavailable: doctor cannot observe the boundary a running session enforces; check it natively in each seat"
+            .to_string(),
+    );
+    lines
+}
+
+/// The preflight evidence report (TSK-452): each value is marked
+/// `configured` (what project files request), `observed` (what doctor saw on
+/// this host) or `unavailable` (what doctor cannot establish).
+fn preflight_report(
+    root: &std::path::Path,
+    look: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+) -> Vec<String> {
+    let mut lines = vec![
+        "preflight evidence for cf-model-orchestrator; read it, then make the live observations the preflight requires".to_string(),
+    ];
+    lines.extend(seat_lines(root, look));
+    lines.extend(sandbox_lines(root));
+    for tool in PREFLIGHT_TOOLS {
+        lines.push(executable_line("tool", tool, look));
+    }
+    lines
 }
 
 /// The testable core of [`run`]: explicit options and output sink, no
@@ -135,6 +357,7 @@ mod tests {
         DoctorArgs {
             check: check.map(ToString::to_string),
             list,
+            preflight: false,
         }
     }
 
