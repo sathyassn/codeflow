@@ -245,6 +245,10 @@ fn update(
         diff_out: diff,
     };
     let mut report = scaffold::update(assets, cwd, &options)?;
+    for file in &mut report.files {
+        file.notes
+            .retain(|note| codeflow_core::hooks::policy_schema::first_unsupported_warning(note));
+    }
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         decide_pr_template(cwd, &mut report)?;
     }

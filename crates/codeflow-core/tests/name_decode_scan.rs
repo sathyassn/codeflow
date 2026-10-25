@@ -2718,14 +2718,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:guidance-words",
     ),
-    // read returns Result<Option<String>> and ? propagates every obtaining error before map_or_else; only a genuinely absent optional policy file selects the schema default.
-    (
-        "crates/codeflow-core/src/hooks/landed_policy.rs",
-        "at",
-        "obtain-absent:read",
-        1,
-        "format-contract",
-    ),
     // Optional orientation summary only; unreadable input cannot authorize or route a command.
     (
         "crates/codeflow-core/src/hooks/orient.rs",

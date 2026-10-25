@@ -439,9 +439,9 @@ pub struct GitPolicy {
     /// --hard`, `clean`, `stash drop`), judged by git-guard (TSK-172).
     /// Default `block`.
     pub discard_uncommitted: PolicyLevel,
-    /// Regenerable directories `git clean` may remove without refusal
-    /// (TSK-172).
-    pub clean_regenerable: Vec<String>,
+    /// Unsupported legacy key; discard checks do not read this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clean_regenerable: Option<Vec<String>>,
 }
 
 thread_local! {
@@ -588,18 +588,7 @@ impl Default for GitPolicy {
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
             discard_uncommitted: PolicyLevel::Block,
-            clean_regenerable: [
-                "target/",
-                "node_modules/",
-                "dist/",
-                "build/",
-                ".venv/",
-                "__pycache__/",
-                "coverage/",
-            ]
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+            clean_regenerable: None,
         }
     }
 }
@@ -750,8 +739,7 @@ impl GitPolicy {
 /// (ADR-0008, amended by ADR-0075). Separate from the `git` section:
 /// `dangerous_commands` is accepted only as the explicit `block` marker and
 /// remains enforced as a block despite a stale or hand-edited weaker value.
-/// The keys after `headless_peer_runs` are read by the guard families of
-/// TSK-172 to TSK-174; this unit ships their defaults (TSK-171).
+/// Unsupported legacy keys remain optional for policy-file compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecuritySection {
@@ -772,82 +760,30 @@ pub struct SecuritySection {
     /// session or recheckable thread. Default `block` (D4, ADR-0075); a
     /// project can set `headless_peer_runs` to warn or off.
     pub headless_peer_runs: PolicyLevel,
-    /// Findings in a script file a command runs (TSK-172). Default `warn`.
-    pub script_bypass: PolicyLevel,
+    /// Unsupported legacy key; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_bypass: Option<PolicyLevel>,
     /// Outward actions the text rules cannot spell: publishing, releases,
     /// tag pushes and account changes behind flags or wrappers (TSK-172).
     /// Default `block`.
     pub outward_actions: PolicyLevel,
-    /// Interpreter-embedded forms of the refused actions (TSK-172). Default
-    /// `block`.
-    pub interpreter_scan: PolicyLevel,
+    /// Unsupported legacy key; interpreter checks do not read this level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter_scan: Option<PolicyLevel>,
     /// Shell reads of the secret stores (TSK-172). Default `block`.
     pub secret_reads: PolicyLevel,
-    /// Commits and ref moves whose enforcement entries match no approved
-    /// identity of the enforcement baseline (TSK-172). Default `block`.
-    pub enforcement_baseline: PolicyLevel,
-    /// A push that introduces a `.github/workflows/` change: `queue` refuses
-    /// it and queues it for the operator, `allow` lets it through for an
-    /// agent credential with workflow rights (D9, TSK-172 AC-23).
-    pub workflow_pushes: String,
-    /// Claude's unsandboxed retry: `allowlist` permits only an argument
-    /// vector an entry of `sandbox_retry_allow` spells out, `block` refuses
-    /// every retry (TSK-174).
-    pub sandbox_retry: String,
-    /// The argument-bound retry entries (TSK-174). The shipped entry is the
-    /// Codex plugin companion; its qualification fields are filled by
-    /// TSK-174.
-    pub sandbox_retry_allow: Vec<serde_json::Value>,
-}
-
-/// The shipped retry entry: the Codex plugin companion, argument-bound. The
-/// placeholders are replaced by the values TSK-174 records at qualification;
-/// until then no command can match the entry, since its program path is not
-/// absolute.
-fn default_retry_allow() -> Vec<serde_json::Value> {
-    let flags_review = serde_json::json!(["--wait", "--background", "--json"]);
-    let values_review = serde_json::json!({
-        "--base": "git-ref",
-        "--scope": ["auto", "working-tree", "branch"],
-        "--model": "word"
-    });
-    vec![serde_json::json!({
-        "program": "node",
-        "script": "~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs",
-        "program_options": [],
-        "cwd": "project",
-        "refuse_if_env": ["NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE"],
-        "subcommands": {
-            "review": {"flags": flags_review, "values": values_review, "positionals": 0},
-            "adversarial-review": {
-                "flags": flags_review,
-                "values": values_review,
-                "positionals": "text"
-            },
-            "task": {
-                "flags": ["--background", "--write", "--resume-last", "--resume", "--fresh", "--json"],
-                "values": {
-                    "--model": "word",
-                    "--effort": ["none", "minimal", "low", "medium", "high", "xhigh"]
-                },
-                "positionals": "text"
-            },
-            "status": {
-                "flags": ["--all", "--wait", "--json"],
-                "values": {"--timeout-ms": "integer", "--poll-interval-ms": "integer"},
-                "positionals": "job-id"
-            },
-            "result": {"flags": ["--json"], "values": {}, "positionals": "job-id"},
-            "cancel": {"flags": ["--json"], "values": {}, "positionals": "job-id"}
-        },
-        "program_path": "<absolute path recorded at qualification, outside every sandbox-writable directory>",
-        "script_digest": {
-            "scripts/codex-companion.mjs": "<sha256 at qualification>",
-            "scripts/lib/*.mjs": "<sha256 per file at qualification>"
-        },
-        "child_executables": {"codex": "<absolute path recorded at qualification>"},
-        "refuse_writable_path_entries": true
-    })]
+    /// Unsupported legacy key; landed-policy checks do not read this level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement_baseline: Option<PolicyLevel>,
+    /// Unsupported legacy key; workflow push checks do not read this value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_pushes: Option<String>,
+    /// Unsupported legacy key; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_retry: Option<String>,
+    /// Unsupported legacy entries; accepted values have no effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_retry_allow: Option<Vec<serde_json::Value>>,
 }
 
 impl Default for SecuritySection {
@@ -856,14 +792,14 @@ impl Default for SecuritySection {
             dangerous_commands: PolicyLevel::Block,
             privilege_escalation: PolicyLevel::Block,
             headless_peer_runs: PolicyLevel::Block,
-            script_bypass: PolicyLevel::Warn,
+            script_bypass: None,
             outward_actions: PolicyLevel::Block,
-            interpreter_scan: PolicyLevel::Block,
+            interpreter_scan: None,
             secret_reads: PolicyLevel::Block,
-            enforcement_baseline: PolicyLevel::Block,
-            workflow_pushes: "queue".to_string(),
-            sandbox_retry: "allowlist".to_string(),
-            sandbox_retry_allow: default_retry_allow(),
+            enforcement_baseline: None,
+            workflow_pushes: None,
+            sandbox_retry: None,
+            sandbox_retry_allow: None,
         }
     }
 }
@@ -959,6 +895,12 @@ impl Policy {
     /// Policy or project configuration cannot be read.
     pub fn load_effective(root: &Path) -> Result<(Self, bool), String> {
         let mut policy = Self::load(root)?;
+        for warning in super::policy_schema::deprecation_warnings(root)
+            .into_iter()
+            .filter(|warning| super::policy_schema::first_unsupported_warning(&warning.text))
+        {
+            eprintln!("{}", warning.line("codeflow policy", "warning"));
+        }
         let armed = effective_armed(root)?;
         if !armed {
             policy.git.suspend_for_bootstrap();
@@ -1283,18 +1225,15 @@ mod tests {
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
         assert_eq!(s.privilege_escalation, PolicyLevel::Block);
         assert_eq!(s.headless_peer_runs, PolicyLevel::Block);
-        assert_eq!(s.script_bypass, PolicyLevel::Warn);
-        for level in [
-            s.outward_actions,
-            s.interpreter_scan,
-            s.secret_reads,
-            s.enforcement_baseline,
-        ] {
+        assert!(s.script_bypass.is_none());
+        for level in [s.outward_actions, s.secret_reads] {
             assert_eq!(level, PolicyLevel::Block);
         }
-        assert_eq!(s.workflow_pushes, "queue");
-        assert_eq!(s.sandbox_retry, "allowlist");
-        assert_eq!(s.sandbox_retry_allow.len(), 1);
+        assert!(s.interpreter_scan.is_none());
+        assert!(s.enforcement_baseline.is_none());
+        assert!(s.workflow_pushes.is_none());
+        assert!(s.sandbox_retry.is_none());
+        assert!(s.sandbox_retry_allow.is_none());
     }
 
     #[test]

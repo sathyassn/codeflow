@@ -602,7 +602,14 @@ fn update_without_a_baseline_compares_with_the_2_1_0_copy() {
     assert!(read_denied(&settings, SECRET_NAMED_SOURCE));
     let after = policy(&root);
     assert_eq!(after["security"]["privilege_escalation"], "block");
-    assert_eq!(after["security"]["script_bypass"], "warn", "new key added");
+    assert_eq!(
+        after["security"]["headless_peer_runs"], "block",
+        "new key added"
+    );
+    assert!(
+        after["security"].get("script_bypass").is_none(),
+        "a key with no reader is not added"
+    );
     for dest in [".claude/settings.json", ".codeflow/policy.json"] {
         let notes = notes_for(&report, dest);
         assert!(

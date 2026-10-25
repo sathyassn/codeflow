@@ -1709,7 +1709,7 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "da0cb84571f125d7503b10562ce12887ee0e20193ff3e80e0b33fc6808152b30",
+      "sha256": "bf4196793b359f05679e8089bcdcb067c88d5bdbe38ef306ac36a7dcc852a898",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
