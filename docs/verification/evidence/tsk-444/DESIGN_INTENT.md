@@ -166,5 +166,8 @@ decoration whose name already identifies it and one family would be its only
 user; a tone changes hue only, so a toned mark keeps the fill kind, edge,
 width and dash of its state (recorded on ADR-0068).
 
-**Result (AC-6): pending** the operator's visual sign-off on the build in
-each skin and mode.
+**Result (AC-6): matches.** By the operator's decision of 2026-10-24 the
+result check is a fresh-context design reviewer's, not the operator's. That
+reviewer found the build at da8b561eb matches this direction in all six skin
+and mode pairs on both surfaces (2026-10-24). The result captures are in
+`result/`; the task record holds the builder and reviewer checks.
