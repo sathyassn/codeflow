@@ -22,8 +22,9 @@ Each specimen follows `figure-grammar.md`, "Composing a figure": its title
 is a name, its caption one sentence stating its claim, and a specimen with
 a governing path draws it in the accent-bearing marks, grey for context. The
 structure specimen also shows the companion tones: the owner region carries
-the accent, and the live and baseline regions, two named peers, carry
-`cat1` and `cat2`.
+the accent on a filled region, and the live and baseline regions, two
+named peers, carry `cat1` and `cat2` on unfilled outlines, so owner and copy
+still differ in fill and in stroke width without their hue.
 
 Each specimen ends with its chat form: the same facts drawn as a fenced
 ASCII figure for plain-text chat and a README, with one legend line and one
@@ -125,7 +126,7 @@ figure:
 <text x="32" y="64" font-weight="600">assets/base</text>
 <text x="32" y="106" font-family="var(--cf-fig-mono)" font-weight="400">agents/skills/</text>
 <text x="32" y="126" font-family="var(--cf-fig-mono)" font-weight="400">cf-present/</text>
-<g data-state="copy" stroke-width="1.5"><rect x="268" y="24" width="184" height="152" rx="8" fill="var(--cf-fig-cat1-soft)" stroke="var(--cf-fig-cat1)"/><rect x="520" y="24" width="184" height="152" rx="8" fill="var(--cf-fig-cat2-soft)" stroke="var(--cf-fig-cat2)"/></g>
+<g data-state="copy" fill="none" stroke-width="1.5"><rect x="268" y="24" width="184" height="152" rx="8" stroke="var(--cf-fig-cat1)"/><rect x="520" y="24" width="184" height="152" rx="8" stroke="var(--cf-fig-cat2)"/></g>
 <text x="284" y="48" font-weight="600">live mirrors</text>
 <text x="536" y="48" font-weight="600">.codeflow/.baseline</text>
 <g font-family="var(--cf-fig-mono)" font-weight="400"><text x="284" y="96">.claude/skills</text><text x="284" y="148">.agents/skills</text><text x="536" y="96">.claude/skills</text><text x="536" y="148">.agents/skills</text></g>

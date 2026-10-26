@@ -191,7 +191,7 @@
     ".agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
+      "sha256": "a5a4a46eeaf4f37f7b1a77f51731fdef1bdecd342e4fd65af208dde038e471ae",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/figure-grammar.md": {
@@ -761,7 +761,7 @@
     ".agents/skills/cf-present/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
+      "sha256": "a5a4a46eeaf4f37f7b1a77f51731fdef1bdecd342e4fd65af208dde038e471ae",
       "exec": false
     },
     ".agents/skills/cf-present/resources/figure-grammar.md": {
@@ -1031,7 +1031,7 @@
     ".claude/skills/cf-docs-portal/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
+      "sha256": "a5a4a46eeaf4f37f7b1a77f51731fdef1bdecd342e4fd65af208dde038e471ae",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/figure-grammar.md": {
@@ -1601,7 +1601,7 @@
     ".claude/skills/cf-present/resources/figure-grammar-specimens.md": {
       "src": "agents/skills/cf-present/resources/figure-grammar-specimens.md",
       "ownership": "managed",
-      "sha256": "324662cbeea1602067a9a8414e63dda71364f4928878514ed96d7512492b625a",
+      "sha256": "a5a4a46eeaf4f37f7b1a77f51731fdef1bdecd342e4fd65af208dde038e471ae",
       "exec": false
     },
     ".claude/skills/cf-present/resources/figure-grammar.md": {
