@@ -30,7 +30,15 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("repo");
+        // Git matches `includeIf.gitdir:` against the resolved path, and on
+        // macOS the temporary directory sits behind the `/var` symlink.
+        // Windows keeps the path as given, because `canonicalize` adds a
+        // verbatim prefix there.
+        #[cfg(unix)]
+        let base = temp.path().canonicalize().unwrap();
+        #[cfg(not(unix))]
+        let base = temp.path().to_path_buf();
+        let root = base.join("repo");
         std::fs::create_dir(&root).unwrap();
         enforced_repo(&root);
         let linked = root.join(".worktrees/w");
