@@ -419,6 +419,27 @@ fn admissible_planning_landing(repo: &Repository, landing: Oid) -> Result<Option
     Ok(Some(*first))
 }
 
+/// Whether `landed` moved the task's declared home as reviewed planning
+/// (TSK-1004 AC-5): the head under check made the move itself, on its own
+/// first-parent history, through an admissible planning landing, and the
+/// task is in a permitted state at the landing and at its first parent.
+/// It answers only the home-change question; every other proof still runs.
+///
+/// # Errors
+/// Unreadable history is an error, never a planning move.
+fn is_planning_move(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parent: Oid,
+    head: Oid,
+) -> Result<bool, String> {
+    Ok(on_home_chain(repo, landed, head)?
+        && admissible_planning_landing(repo, landed)? == Some(parent)
+        && permitted_at(repo, landed, record)
+        && permitted_at(repo, parent, record))
+}
+
 /// Whether the task `record` names is in a permitted state at `at`: exactly
 /// one task record there carries its id or uid, every task record there
 /// parses, and that record states `todo` or `blocked` and holds no
@@ -769,7 +790,8 @@ fn verify_record_home(
                             .as_deref()
                             .map_or(home, super::super::work_start::logical_target)
                 })
-            }) {
+            }) && !is_planning_move(repo, record, landed, *parent, head)?
+            {
                 return Err("the landing changes the task's declared home".into());
             }
         }
