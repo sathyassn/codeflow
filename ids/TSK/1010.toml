@@ -1,0 +1,11 @@
+id = "TSK-1010"
+uid = "849d774a-a442-4e99-9446-cfd8aad7779b"
+kind = "TSK"
+title = "A project can let more than one heavy gate run at once on one machine"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:15:12Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
