@@ -126,11 +126,19 @@ jobs:
               --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \
               --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \
               --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
-          else
-            python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
-              --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \
-              --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
+          # Edit reuse verifies the reused run's provenance with PyJWT and
+          # cryptography, pinned by SHA-256; when they do not install, every
+          # job runs.
+          elif python3 -m venv "${RUNNER_TEMP}/admission" \
+            && "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes \
+              --no-deps -r scripts/requirements-admission.txt; then
+            "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" \
+              --pull "$PR_NUMBER" --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" \
+              --run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml \
+              --trusted-file scripts/ci-reuse.py --trusted-file scripts/requirements-admission.txt \
               --require "codeflow gates" --require windows
+          else
+            echo "ci-reuse edit: every job runs: the provenance verifier did not install"
           fi
 
   # Run provenance (TSK-1001). GitHub documents no guarantee that a run's
@@ -216,6 +224,24 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
 
       # This repo IS codeflow, so it builds the binary from source rather than
       # using the release installer a consumer project would. These gates block.
@@ -319,6 +345,24 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
 
       # This repo IS codeflow, so it builds the binary from source rather than
       # using the release installer a consumer project would. These gates block.
@@ -470,6 +514,24 @@ jobs:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
       - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
@@ -549,6 +611,24 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
 
       - name: Begin journey check
         shell: bash
@@ -719,6 +799,24 @@ jobs:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
       - name: Install the differential shells
         id: shells
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
@@ -831,6 +929,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
 
       - name: journey gate (Python journeys)
         shell: bash
@@ -848,6 +964,24 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The gate's judge files come from the base revision (TSK-1001): the
+      # test config (targets, commands and floors), the selection scripts,
+      # their measured data and their self-tests. The pull request's copies
+      # are data the gate never runs, so a pull request cannot narrow what
+      # its own gate selects; a change to them is judged once it is on the
+      # base. The code under test is still the pull request's.
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
 
       - name: Begin journey check
         shell: bash

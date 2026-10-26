@@ -108,7 +108,7 @@ class GateContracts(unittest.TestCase):
             "    if: github.event_name == 'push' || github.event_name == 'pull_request' && "
             "github.event.action == 'edited' && !github.event.pull_request.draft && "
             "github.event.changes.base.ref.from == ''\n"), reuse)
-        self.assertIn('python3 -I scripts/ci-reuse.py edit --repo', reuse)
+        self.assertIn('"${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo', reuse)
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         # The one write permission is the provenance job's OIDC token
         # request (TSK-1001); nothing writes to the repository.
@@ -176,7 +176,11 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    types: [opened, synchronize, reopened, edited, ready_for_review]\n', workflow)
         step = workflow.split("      - name: the exact head's ready codeflow-ci run passed\n", 1)[1]
         self.assertIn("        if: github.event_name == 'pull_request_target'\n", step)
-        self.assertIn('python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        self.assertIn('"${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py admit --repo "$REPOSITORY" '
+                      '--head "$HEAD_SHA" --pull "$PR_NUMBER"', step)
+        # The verifier comes only from the target's hash-pinned requirements.
+        self.assertIn('--require-hashes --no-deps \\\n            -r scripts/requirements-admission.txt', step)
+        self.assertIn('--trusted-file scripts/requirements-admission.txt', step)
         self.assertIn('          PR_NUMBER: ${{ github.event.pull_request.number }}\n', step)
         self.assertIn('--workflow .github/workflows/codeflow-ci.yml \\\n', step)
         self.assertIn('--require "codeflow gates" --require windows --wait "$wait"', step)
@@ -289,45 +293,84 @@ class GateContracts(unittest.TestCase):
 
     def test_release_impact_judges_the_candidate_with_the_targets_definitions(self):
         # TSK-1001: `release impact (trusted)` runs on pull_request_target
-        # from the target's base commit, builds only that checkout's
-        # codeflow, runs only its release.py, fetches the candidate as git
-        # data, and pins and rechecks head, base and body. During the
-        # transition the existing `pull_request` job keeps reporting
-        # `release impact` unchanged; TSK-1015 removes it once main carries
-        # the trusted job.
-        workflow = read('.github/workflows/codeflow-release.yml')
-        self.assertIn('  pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
-                      workflow)
-        self.assertIn('  pull_request:\n    types: [opened, synchronize, reopened, edited]\n', workflow)
-        legacy = workflow.split('  release-impact:\n', 1)[1].split('\n  release-impact-trusted:\n', 1)[0]
-        self.assertIn('    name: release impact\n', legacy)
-        self.assertIn("    if: github.event_name == 'pull_request'\n", legacy)
-        job = workflow.split('  release-impact-trusted:\n', 1)[1].split('\n  release-state:\n', 1)[0]
+        # in its own workflow: a protected base only, checked before any
+        # checkout or build; the base commit's codeflow and release.py; the
+        # candidate fetched as git data; head, base and body pinned and
+        # rechecked.
+        workflow = read('.github/workflows/codeflow-release-trusted.yml')
+        job = workflow.split('\njobs:\n', 1)[1]
         self.assertIn('    name: release impact (trusted)\n', job)
-        self.assertIn("    if: github.event_name == 'pull_request_target'\n", job)
+        steps = re.findall(r'^      - (?:name: (.+)|uses: (\S+))', job, re.M)
+        self.assertEqual(steps[0][0], 'The base branch is a protected one', 'the base check runs first')
+        self.assertIn('main|master|integration/*) echo', job)
         checkouts = re.findall(r'uses: actions/checkout@[0-9a-f]{40}[^\n]*\n        with:\n          ref: ([^\n]+)\n', job)
         self.assertEqual(checkouts, ['${{ github.event.pull_request.base.sha }}'])
         self.assertEqual(job.count('uses: actions/checkout@'), 1)
         self.assertNotIn('pull_request.head.ref', job)
         self.assertNotIn('github.event.pull_request.body', job)
-        self.assertNotIn(': write', job)
+        self.assertNotIn(': write', workflow)
         self.assertIn('"+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"', job)
-        # Nothing of the candidate is checked out, built or run.
         for forbidden in ('git checkout', 'git switch', 'git worktree', 'refs/codeflow/pr-head:', '--root',
                           '--config', 'cd '):
             self.assertNotIn(forbidden, job.replace('refs/codeflow/pr-head"', ''), forbidden)
         self.assertEqual(job.count('cargo build --release --locked -p codeflow-cli'), 1)
-        steps = [name for name in re.findall(r'^      - name: (.+)$', job, re.M)]
-        self.assertEqual(steps[-3:], ['Pin the head, base and body judged', 'Validate reviewed release intent',
+        names = re.findall(r'^      - name: (.+)$', job, re.M)
+        self.assertEqual(names[-3:], ['Pin the head, base and body judged', 'Validate reviewed release intent',
                                       'Recheck the pinned snapshot before reporting'])
         self.assertIn('python3 -I scripts/release.py pr-snapshot', job)
         self.assertIn('--expect "$RUNNER_TEMP/release-snapshot.json"', job)
-        self.assertIn('--body-file "$RUNNER_TEMP/release-body.md"', job)
         self.assertIn('--codeflow-bin target/release/codeflow', job)
-        # Merge admission binds the base and body the policy job judged.
+        # The policy job refuses an unprotected base before its checkout.
         policy = read('.github/workflows/codeflow-policy.yml')
+        commit_lint = policy.split('\n  commit-lint:\n', 1)[1]
+        self.assertLess(commit_lint.index('The base branch is a protected one'),
+                        commit_lint.index('uses: actions/checkout@'))
+        self.assertIn('main|master|integration/*) echo', commit_lint)
         self.assertIn('--base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256"', policy)
         self.assertIn('          BODY_SHA256: ${{ steps.body.outputs.sha256 }}\n', policy)
+
+    def test_no_event_reports_either_release_impact_check_as_skipped(self):
+        # Review 3 finding 1: a skipped job can satisfy a required check.
+        # Each release-impact check comes from a workflow that triggers only
+        # on events where that job runs, so no event, ready_for_review
+        # included, reports it skipped; and no other workflow names it.
+        def triggers(text):
+            on = text.split('\non:\n', 1)[1].split('\n\n', 1)[0]
+            found = {}
+            for event, body in re.findall(r'^  ([a-z_]+):\n((?:    .*\n?)*)', on + '\n', re.M):
+                types = re.search(r'types: \[([^\]]*)\]', body)
+                found[event] = [t.strip() for t in types.group(1).split(',')] if types else None
+            return found
+        def jobs(text):
+            parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', text.split('\njobs:\n', 1)[1], flags=re.M)
+            return dict(zip(parts[1::2], parts[2::2]))
+        legacy = read('.github/workflows/codeflow-release.yml')
+        trusted = read('.github/workflows/codeflow-release-trusted.yml')
+        self.assertEqual(triggers(trusted), {'pull_request_target': ['opened', 'synchronize', 'reopened', 'edited',
+                                                                     'ready_for_review']})
+        (only,) = jobs(trusted).values()
+        self.assertNotRegex(only, r'(?m)^    if:', 'the trusted job runs on every event of its workflow')
+        legacy_triggers = triggers(legacy)
+        self.assertNotIn('pull_request_target', legacy_triggers)
+        self.assertNotIn('ready_for_review', legacy_triggers['pull_request'])
+        impact = jobs(legacy)['release-impact']
+        self.assertIn("    if: github.event_name == 'pull_request'\n", impact)
+        # For each pull request activity: the legacy workflow either runs
+        # its one release-impact job (the activity is one of its types and
+        # the job's condition holds for pull_request) or does not start.
+        for activity in ('opened', 'synchronize', 'reopened', 'edited', 'ready_for_review'):
+            with self.subTest(activity=activity):
+                runs_legacy = activity in legacy_triggers['pull_request']
+                self.assertEqual(runs_legacy, activity != 'ready_for_review')
+                self.assertIn(activity, triggers(trusted)['pull_request_target'])
+        # No other workflow emits either check name.
+        for path in sorted((ROOT / '.github/workflows').glob('*.yml')):
+            text = path.read_text()
+            for name in ('release impact', 'release impact (trusted)'):
+                count = len(re.findall(rf'^    name: {re.escape(name)}$', text, re.M))
+                expected = {('codeflow-release.yml', 'release impact'): 1,
+                            ('codeflow-release-trusted.yml', 'release impact (trusted)'): 1}.get((path.name, name), 0)
+                self.assertEqual(count, expected, f'{path.name} names {name!r} {count} times')
 
     def test_every_ready_run_keeps_its_signed_provenance(self):
         # TSK-1001: each ready pull_request run asks GitHub for its OIDC
@@ -345,11 +388,67 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(reuse.PROVENANCE_AUDIENCE, 'codeflow-admission')
         self.assertEqual(reuse.PROVENANCE_ARTIFACT.format(attempt=2), 'codeflow-provenance-2')
         reuse_job = dict(zip(parts[1::2], parts[2::2]))['reuse']
-        self.assertIn('--trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py', reuse_job)
+        self.assertIn('--run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml', reuse_job)
+        self.assertIn('--trusted-file scripts/ci-reuse.py --trusted-file scripts/requirements-admission.txt', reuse_job)
+        self.assertIn('--require-hashes', reuse_job)
         policy = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('          CODEFLOW_PR_IS_DRAFT: ${{ steps.body.outputs.draft }}\n', policy)
         self.assertIn('          DRAFT: ${{ steps.body.outputs.draft }}\n', policy)
         self.assertIn('--draft "$DRAFT"', policy)
+
+    def test_a_pull_request_cannot_narrow_its_own_gate(self):
+        # Review 3 SF-1: every gate job that reads the test config or a
+        # selection script takes those judge files from the base revision
+        # before using them, with one pinned step; run against a pull
+        # request that narrows its selection, the step restores the base's.
+        import tempfile
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        step = PARITY.JUDGE_STEP
+        def code(text):
+            return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#'))
+        readers = [name for name, text in jobs.items()
+                   if any(f in code(text) for f in ('codeflow test --', 'coverage-shards.py', 'windows-partitions.py',
+                                                    'journey-gate.py', 'coverage-merge.py'))]
+        self.assertEqual(sorted(readers), sorted(['gates', 'gates-release', 'gates-coverage', 'gates-coverage-report',
+                                                  'windows-tests', 'windows-release-journey', 'windows-journeys']))
+        for name in readers:
+            with self.subTest(job=name):
+                text = '\n'.join(line for line in jobs[name].splitlines() if not line.lstrip().startswith('#')) + '\n'
+                self.assertIn(step, text)
+                first_use = min(i for i in (text.find('codeflow test --'), text.find('scripts/coverage'),
+                                            text.find('scripts/windows-partitions'), text.find('scripts/journey-gate'))
+                                if i >= 0 and i > text.find(step))
+                self.assertLess(text.index(step), first_use)
+        for path in PARITY.JUDGE_FILES:
+            self.assertTrue((ROOT / path).exists(), path)
+        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            def git(*args):
+                return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false',
+                                       *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            git('init', '-q', '-b', 'main')
+            for path in PARITY.JUDGE_FILES:
+                (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                (repo / path).write_text(f'base {path}\n')
+            (repo / '.codeflow/test-config.json').write_text('{"targets": [{"name": "a"}, {"name": "b"}]}\n')
+            git('add', '-A'); git('commit', '-qm', 'base')
+            base = git('rev-parse', 'HEAD')
+            git('switch', '-qc', 'pr')
+            (repo / '.codeflow/test-config.json').write_text('{"targets": [{"name": "a"}]}\n')
+            (repo / 'scripts/coverage-shards.py').write_text('print("one trivial test")\n')
+            git('commit', '-qam', 'narrow the gate')
+            git('switch', '-q', 'main')
+            git('merge', '-q', '--no-ff', '-m', 'merge', 'pr')
+            git('remote', 'add', 'origin', str(repo))
+            done = subprocess.run(['bash', '-c', script], cwd=repo, capture_output=True, text=True,
+                                  env={**os.environ, 'BASE_SHA': base})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads((repo / '.codeflow/test-config.json').read_text())['targets'],
+                             [{'name': 'a'}, {'name': 'b'}])
+            self.assertEqual((repo / 'scripts/coverage-shards.py').read_text(), 'base scripts/coverage-shards.py\n')
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
@@ -409,11 +508,8 @@ class GateContracts(unittest.TestCase):
         self.assertIn('Swatinem/rust-cache@', workflow)
         # Release impact runs on pull_request_target (TSK-1001): one group per
         # pull request, cancelled when superseded; push runs are never.
-        # One group per pull request and event (the two release jobs never
-        # cancel each other), cancelled when superseded; push runs never.
-        self.assertIn("cancel-in-progress: ${{ github.event_name != 'push' }}", workflow)
-        self.assertIn("format('{0}-{1}-pr-{2}', github.workflow, github.event_name, github.event.pull_request.number) "
-                      "|| format('{0}-run-{1}', github.workflow, github.run_id)", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertIn("github.event_name == 'pull_request' && github.ref || github.run_id", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
     def test_every_workflow_action_is_pinned_to_a_commit(self):

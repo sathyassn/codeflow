@@ -244,6 +244,27 @@ COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
 SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
 SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
+# TSK-1001: every gate job that selects tests or judges floors takes these
+# judge files from the base revision first, so a pull request cannot narrow
+# its own gate.
+JUDGE_FILES = (".codeflow/test-config.json", "crates/codeflow-cli/tests/journey_gate.toml",
+               "scripts/coverage-merge.py", "scripts/coverage-shards.py", "scripts/coverage-test-times.json",
+               "scripts/journey-gate.py", "scripts/windows-partitions.py", "scripts/windows-test-times.json",
+               "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py")
+JUDGE_STEP = """\
+      - name: Take the gate's judge files from the base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \\
+            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \\
+            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \\
+            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
+"""
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
     name: codeflow gates (coverage ${{ matrix.shard }} of @COUNT@)
@@ -256,7 +277,7 @@ COVERAGE_JOB = """\
         shard: [@SHARDS@]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Install the differential shells
+@JUDGE@      - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
@@ -318,7 +339,7 @@ COVERAGE_REPORT_JOB = """\
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Begin journey check
+@JUDGE@      - name: Begin journey check
         shell: bash
         run: |
           rm -rf target/coverage
@@ -370,7 +391,7 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
                  + " " + SHARD_FILTER)
     numbers = range(1, shards + 1)
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
-    fill = {"@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
+    fill = {"@JUDGE@": JUDGE_STEP, "@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
             "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
             "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
     jobs = []
@@ -434,11 +455,16 @@ REUSE_JOB = """\
               --workflow-ref "$WORKFLOW_REF" --ref "$PUSHED_REF" \\
               --image-os "${ImageOS:-}" --image-version "${ImageVersion:-}" \\
               --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
-          else
-            python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \\
-              --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \\
-              --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \\
+          elif python3 -m venv "${RUNNER_TEMP}/admission" \\
+            && "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes \\
+              --no-deps -r scripts/requirements-admission.txt; then
+            "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" \\
+              --pull "$PR_NUMBER" --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" \\
+              --run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml \\
+              --trusted-file scripts/ci-reuse.py --trusted-file scripts/requirements-admission.txt \\
               --require "codeflow gates" --require windows
+          else
+            echo "ci-reuse edit: every job runs: the provenance verifier did not install"
           fi
 """
 
