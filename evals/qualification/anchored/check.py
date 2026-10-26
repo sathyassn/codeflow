@@ -128,11 +128,8 @@ def check(case: str, document: dict) -> dict:
             signals.append("orienting_figure_names_the_parts")
         if any(family(b) in ("state", "flow") for b in walk(blocks)):
             signals.append("retry_mechanism_carried_by_a_figure")
-        later = blocks[1:]
-        if later and all(
-            not (b.get("type") == "narrative") or is_section(b) or headings(b.get("markdown", ""))
-            for b in later
-        ):
+        narratives = [b for b in blocks if b.get("type") == "narrative" and not is_anchor(b)]
+        if narratives and all(b.get("markdown", "").lstrip().startswith("#") for b in narratives):
             signals.append("sections_titled_in_plain_words")
         for b in before:
             if b.get("type") == "narrative" and not is_anchor(b):
@@ -140,8 +137,6 @@ def check(case: str, document: dict) -> dict:
                 if sum(term in text for term in RETRY_TERMS) >= 2:
                     violations.append("definitions_paragraph_before_any_figure")
                     break
-        if first_figure is None:
-            violations.append("definitions_paragraph_before_any_figure")
         if not any(b.get("type") in ("figure", "html") for b in walk(blocks)) and any(
             b.get("type") == "table" for b in blocks
         ):

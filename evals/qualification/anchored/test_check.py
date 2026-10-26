@@ -1,9 +1,13 @@
 """Controls for check.py: an anchored document passes the structural signals;
 one missing its anchor or its governing figure fails them (TSK-445)."""
 
+import json
 import unittest
+from pathlib import Path
 
 from check import MIGRATION, RETRY, check
+
+CONTROLS = Path(__file__).resolve().parents[2] / "model-artifacts/method-controls"
 
 ANCHOR = {
     "type": "narrative",
@@ -74,6 +78,30 @@ class MigrationCase(unittest.TestCase):
         result = check(MIGRATION, {"blocks": [ANCHOR, section("options", "The two options"), cards, DECISION]})
         self.assertNotIn("anchor_then_governing_comparison", result["signals"])
         self.assertIn("narrative_first_text_cards_ask_last", result["violations"])
+
+
+class CommittedControls(unittest.TestCase):
+    """The structural signals check.py reads agree with the committed control
+    answers of both cases: every structural signal a control records is
+    found, and every structural violation it records is found."""
+
+    STRUCTURAL = {
+        "anchor_then_governing_comparison", "anchor_lines_before_any_figure",
+        "orienting_figure_names_the_parts", "retry_mechanism_carried_by_a_figure",
+        "sections_titled_in_plain_words", "one_ask", "narrative_first_text_cards_ask_last",
+        "definitions_paragraph_before_any_figure", "table_as_main_carrier",
+        "question_form_section_title", "more_than_one_ask",
+    }
+
+    def test_controls_agree(self):
+        controls = json.loads((CONTROLS / "controls.json").read_text(encoding="utf-8"))
+        for case in (MIGRATION, RETRY):
+            for entry in controls["cases"][case]:
+                with self.subTest(case=case, answer=entry["answer"]):
+                    document = json.loads((CONTROLS / entry["answer"]).read_text(encoding="utf-8"))
+                    result = check(case, document)
+                    found = set(result["signals"]) | set(result["violations"])
+                    self.assertEqual(self.STRUCTURAL & set(entry["signals"]), self.STRUCTURAL & found)
 
 
 if __name__ == "__main__":

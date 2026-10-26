@@ -304,6 +304,8 @@ EXPLANATION_METHOD_INVENTORY = {
         "CF-METH-003", ("figure_for_unrelated_facts",),
         ("answer_is_three_bullets_only", "no_lead_sentence", "formatting_choice_not_explained")),
     "migration-review-leads-with-the-picture": ("CF-METH-004", ("narrative_first_text_cards_ask_last",), ()),
+    # TSK-445: a mechanism review opens with an anchor and a figure of the whole.
+    "retry-review-opens-with-the-whole": ("CF-METH-004", ("definitions_paragraph_before_any_figure",), ()),
     # The existing present case, registered in the pack unchanged.
     "complex-review-uses-declarative-presentation": (
         "CF-PRES-004", ("visuals_as_decorative_text_cards", "same_chat_answer_repackaged_in_panels"), ()),
@@ -1797,19 +1799,25 @@ class SuiteContractTests(unittest.TestCase):
                          for b in config["figures"] if b.get("anchor") == "first-paint"]
                 self.assertEqual(paint == ["sequence"], "first_paint_drawn_in_sequence_family" in signals)
 
+        # TSK-445: the anchor comes first, so the order signals are read by
+        # the structural checker the qualification grades with.
+        spec = importlib.util.spec_from_file_location(
+            "anchored_check", ROOT / "evals/qualification/anchored/check.py")
+        anchored = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(anchored)
         for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
             document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
             blocks = document["blocks"]
             signals = set(entry["signals"])
             asks = [block for block in blocks if block["type"] == "feedback_prompt"]
-            first = blocks[0]
+            read = anchored.check(anchored.MIGRATION, document)
             with self.subTest(answer=entry["answer"]):
-                self.assertEqual(
-                    (first["type"] == "figure" and first["declaration"]["figure"]["family"] in ("extent", "coverage"))
-                    or first["type"] == "table", "governing_comparison_is_first_block" in signals)
+                self.assertEqual("anchor_then_governing_comparison" in read["signals"],
+                                 "anchor_then_governing_comparison" in signals)
                 self.assertEqual(len(asks) == 1 and blocks[-1] is asks[0], "one_ask" in signals)
                 self.assertEqual(len(asks) > 1, "more_than_one_ask" in signals)
-                self.assertEqual(first["type"] == "narrative", "narrative_first_text_cards_ask_last" in signals)
+                self.assertEqual("narrative_first_text_cards_ask_last" in read["violations"],
+                                 "narrative_first_text_cards_ask_last" in signals)
                 self.assertEqual("peak load" in json.dumps(blocks), "unverified_peak_load_stated" in signals)
 
     def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:

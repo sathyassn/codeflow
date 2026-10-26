@@ -1,0 +1,252 @@
+{
+  "schema_version": 2,
+  "title": "Job retries in the orders worker",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "intro",
+      "markdown": "A worker leases a job for a visibility timeout of 5 minutes. An attempt is one run of the job. After a third failed attempt the job moves to the dead-letter queue, and an operator can requeue it."
+    },
+    {
+      "type": "figure",
+      "id": "life",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "life",
+          "family": "state",
+          "binding": "authored",
+          "question": "How one job lives",
+          "idea": "A lost lease returns the job without counting an attempt, and only an operator requeue leaves the dead-letter queue.",
+          "title": "How one job lives",
+          "caption": "A lost lease returns the job without counting an attempt, and only an operator requeue leaves the dead-letter queue.",
+          "states": [
+            {
+              "name": "state",
+              "mark": "state",
+              "means": "A state of the job"
+            },
+            {
+              "name": "trans",
+              "mark": "trans",
+              "means": "A transition"
+            },
+            {
+              "name": "return",
+              "mark": "return",
+              "means": "Back to the queue"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "lost lease does not count",
+              "source": "RETRY.md",
+              "derive": "the retry description",
+              "check": {
+                "kind": "contains",
+                "text": "that run does not count as an attempt"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 200,
+            "draw": [
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 20,
+                "y": 60,
+                "w": 130,
+                "h": 44,
+                "id": "queued"
+              },
+              {
+                "text": "queued",
+                "x": 85,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "queued"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 290,
+                "y": 60,
+                "w": 130,
+                "h": 44,
+                "id": "leased"
+              },
+              {
+                "text": "leased",
+                "x": 355,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "leased"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 560,
+                "y": 60,
+                "w": 140,
+                "h": 44,
+                "id": "dead"
+              },
+              {
+                "text": "dead-letter",
+                "x": 630,
+                "y": 87,
+                "anchor": "middle",
+                "for": [
+                  "dead"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M150 82H290",
+                "head": "end",
+                "id": "take"
+              },
+              {
+                "text": "leases",
+                "x": 220,
+                "y": 74,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "take"
+                ]
+              },
+              {
+                "state": "trans",
+                "shape": "path",
+                "d": "M420 82H560",
+                "head": "end",
+                "id": "fail3"
+              },
+              {
+                "text": "fails a third time",
+                "x": 490,
+                "y": 74,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "fail3"
+                ]
+              },
+              {
+                "state": "return",
+                "shape": "path",
+                "d": "M355 104C355 170 85 170 85 104",
+                "head": "end",
+                "id": "lost"
+              },
+              {
+                "text": "lease lost, no attempt counted",
+                "x": 220,
+                "y": 180,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "lost"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "list",
+            "drops": [
+              "trans",
+              "return"
+            ],
+            "marks": [
+              "state"
+            ],
+            "width": 360,
+            "height": 240,
+            "draw": [
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 20,
+                "y": 20,
+                "w": 200,
+                "h": 44,
+                "id": "queued"
+              },
+              {
+                "text": "queued",
+                "x": 120,
+                "y": 47,
+                "anchor": "middle",
+                "for": [
+                  "queued"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 20,
+                "y": 96,
+                "w": 200,
+                "h": 44,
+                "id": "leased"
+              },
+              {
+                "text": "leased",
+                "x": 120,
+                "y": 123,
+                "anchor": "middle",
+                "for": [
+                  "leased"
+                ]
+              },
+              {
+                "state": "state",
+                "shape": "rect",
+                "x": 20,
+                "y": 172,
+                "w": 200,
+                "h": 44,
+                "id": "dead"
+              },
+              {
+                "text": "dead-letter",
+                "x": 120,
+                "y": 199,
+                "anchor": "middle",
+                "for": [
+                  "dead"
+                ]
+              }
+            ]
+          },
+          "twin": "facts"
+        }
+      }
+    },
+    {
+      "type": "decision",
+      "id": "ask",
+      "title": "Sign off on the retry design?",
+      "markdown": "Choose one.",
+      "options": [
+        {
+          "value": "yes",
+          "label": "Sign off"
+        },
+        {
+          "value": "no",
+          "label": "Not yet"
+        }
+      ]
+    }
+  ]
+}

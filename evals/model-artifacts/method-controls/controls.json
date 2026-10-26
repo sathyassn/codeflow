@@ -180,7 +180,7 @@
         "role": "passing",
         "answer": "migration/passing.json",
         "signals": [
-          "governing_comparison_is_first_block",
+          "anchor_then_governing_comparison",
           "comparison_carries_downtime_cost_and_evidence",
           "one_ask",
           "unverified_peak_load_stated"
@@ -193,6 +193,54 @@
         "signals": [
           "narrative_first_text_cards_ask_last",
           "more_than_one_ask"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "migration/faulty-no-anchor.json",
+        "signals": [
+          "comparison_carries_downtime_cost_and_evidence",
+          "one_ask",
+          "unverified_peak_load_stated"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "retry-review-opens-with-the-whole": [
+      {
+        "role": "passing",
+        "answer": "retry/passing.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "one_ask",
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty.json",
+        "signals": [
+          "retry_mechanism_carried_by_a_figure",
+          "one_ask",
+          "definitions_paragraph_before_any_figure"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-no-figure.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "sections_titled_in_plain_words",
+          "one_ask",
+          "unmeasured_outage_stated",
+          "table_as_main_carrier"
         ],
         "decision": "fail"
       }
