@@ -37,6 +37,13 @@ fn with_env(command: &mut Command) -> &mut Command {
         .env_remove("GITHUB_BASE_REF")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("GITHUB_EVENT_NAME")
+        // A caller's agent session must not judge the fixture's own
+        // commits (`git.root_checkout_commits` reads these markers).
+        .env_remove("CLAUDECODE")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CODEX_CI")
+        .env_remove("GROK_SESSION_ID")
 }
 
 fn codeflow(root: &Path, args: &[&str]) -> Output {
