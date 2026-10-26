@@ -108,29 +108,20 @@ fn installed_push(dir: &Path, branch: &str) -> Output {
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     git(dir, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
-    let mut cmd = Command::new("git");
-    cmd.args(["push", "-q", "origin", branch])
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("CODEFLOW_HOME", isolated_home())
+    git_command(dir)
+        .args(["push", "-q", "origin", branch])
         .env_remove("CODEFLOW_PR_BODY")
         .env_remove("GITHUB_EVENT_PATH")
         .env_remove("CODEFLOW_PR_IS_DRAFT")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE");
-    for name in codeflow_core::root_checkout::AGENT_MARKERS {
-        cmd.env_remove(name);
-    }
-    cmd.output().expect("git push runs")
+        .output()
+        .expect("git push runs")
 }
 
-fn git(dir: &Path, args: &[&str]) {
+/// A `git` process for the fixtures: no user or system configuration, this
+/// build as the hook binary, an isolated home, and no agent markers.
+fn git_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
-    cmd.args(args)
-        .current_dir(dir)
+    cmd.current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
@@ -141,7 +132,11 @@ fn git(dir: &Path, args: &[&str]) {
     for name in codeflow_core::root_checkout::AGENT_MARKERS {
         cmd.env_remove(name);
     }
-    let out = cmd.output().expect("git runs");
+    cmd
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = git_command(dir).args(args).output().expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed with {}: {}",
