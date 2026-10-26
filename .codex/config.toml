@@ -252,10 +252,13 @@ dangerously_allow_all_unix_sockets = false
 # file that is only ever replaced, by a new file created under a random
 # name and renamed over it, and read without following links. Only
 # validated values from it are printed: process numbers, a start time, a
-# known mode, and a folder only when it names an existing directory; errors
-# never quote it. So a link planted in the folder can at most be locked or
-# replaced, never written through, and can reveal at most the name of an
-# existing directory. The folder stays an advisory coordination boundary,
+# known mode, and a folder only when its text equals one the gate already
+# trusts (the project and its git worktrees); a planted folder value is
+# never resolved, and errors never quote the record. So a link planted in
+# the folder can at most be locked or replaced, never written through, and
+# reveals nothing beyond a folder the gate already trusts. A gate that
+# cannot write its record refuses rather than run uncoordinated. The folder
+# stays an advisory coordination boundary,
 # not a security boundary: a builder can still hold, delete or replace a
 # lock or a record and so block, mislead or split the coordination between
 # gates. A full gate also writes its evidence to `~/.codeflow/gate-runs`,

@@ -1230,7 +1230,15 @@ fn essential_and_full_refuse_every_mode_pair_across_worktrees_and_repositories()
                 );
                 assert!(error.contains(&format!("pid {}", child.id())), "{error}");
                 assert!(error.contains(&format!("{holder} mode")), "{error}");
-                assert!(error.contains(first.path().to_str().unwrap()), "{error}");
+                // The holder's folder is shown only to a gate that trusts
+                // it: a worktree of the same repository. Another repository
+                // sees an unknown directory (TSK-1003).
+                if directory == linked.as_path() {
+                    assert!(error.contains(first.path().to_str().unwrap()), "{error}");
+                } else {
+                    assert!(error.contains("in an unknown directory"), "{error}");
+                    assert!(!error.contains(first.path().to_str().unwrap()), "{error}");
+                }
                 assert!(!error.contains("starting target"), "{error}");
             }
         }
@@ -1477,6 +1485,50 @@ fn essential_refuses_an_unavailable_lock_directory_before_any_target() {
         "{error}"
     );
     assert!(!error.contains("starting target"), "{error}");
+}
+
+/// TSK-1003: with an existing lock file in a lock folder `codeflow` cannot
+/// write, the lock still opens read only, but the holder record cannot be
+/// written. `reserve` refuses without running its command, and the
+/// permissions doctor names the folder.
+#[cfg(unix)]
+#[test]
+fn reserve_refuses_when_the_holder_record_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = repo(QUICK_PASS);
+    let home = tempfile::tempdir().unwrap();
+    let locks = home.path().join("locks");
+    std::fs::create_dir(&locks).unwrap();
+    std::fs::write(locks.join("full-gate.lock"), "").unwrap();
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let reserved = run(
+        dir.path(),
+        home.path(),
+        &["reserve", "--", "touch", "reserved-ran"],
+    );
+    let doctor = run(
+        dir.path(),
+        home.path(),
+        &["doctor", "--check", "permissions"],
+    );
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(reserved.status.code(), Some(1), "{}", stderr(&reserved));
+    assert!(
+        stderr(&reserved).contains("holder record cannot be written"),
+        "{}",
+        stderr(&reserved)
+    );
+    assert!(!dir.path().join("reserved-ran").exists(), "the command ran");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        stderr(&doctor)
+    );
+    // A warning, as for every other unwritable gate folder.
+    assert!(
+        report.contains("warn  permissions:") && report.contains("locks: Permission denied"),
+        "{report}"
+    );
 }
 
 #[cfg(unix)]

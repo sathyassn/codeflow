@@ -26,10 +26,12 @@
 //! lock file is never written: it is opened read only, without following
 //! links, and only locked. The holder record ([`RECORD_FILE`]) is replaced
 //! whole by a new file renamed into place, read without following links,
-//! and shown only through validated values (numbers, a known mode, a folder
-//! only when it is an existing directory). A link planted in the folder can
-//! be locked or replaced, never written through, and reveals at most the
-//! name of an existing directory. The folder
+//! and shown only through validated values (numbers, a known mode, and a
+//! folder only when its text names one the gate already trusts; a planted
+//! folder value is never resolved). A link planted in the folder can be
+//! locked or replaced, never written through, and reveals nothing beyond a
+//! folder the gate already trusts. A gate that cannot write its record
+//! refuses instead of running uncoordinated. The folder
 //! stays an advisory coordination boundary: a seat that can write it can
 //! block or split coordination between gates. A record a pre-3.2 gate keeps
 //! inside the lock file is still read while the record file names no holder.
@@ -219,7 +221,18 @@ pub fn unwritable_gate_dirs(
         }
     };
     for dir in dirs {
-        if let Err(error) = open_lock_file(&dir.join(LOCK_FILE)) {
+        // A gate needs the lock file and a holder record it can create and
+        // rename into place; probe both, the record with a disposable name
+        // through the same anchored write, removed again (TSK-1003).
+        let lock = dir.join(LOCK_FILE);
+        let probe = dir.join(format!(".record-probe-{}", std::process::id()));
+        let result = open_lock_file(&lock).map(drop).and_then(|()| {
+            let (anchor, relative) = lock_anchor(&probe)?;
+            let tree = crate::contained::Tree::open(anchor)?;
+            tree.write(&relative, b"")?;
+            tree.remove(&relative)
+        });
+        if let Err(error) = result {
             unwritable.push((dir, error));
         }
     }
@@ -250,15 +263,16 @@ pub fn unwritable_gate_dirs(
 pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
     let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref())
         .map_err(|error| format!("cannot discover gate lock directories: {error}"))?;
+    let trusted = trusted_dirs(root);
     dirs.into_iter()
-        .map(|dir| holder_status(&dir.join(LOCK_FILE)))
+        .map(|dir| holder_status(&dir.join(LOCK_FILE), &trusted))
         .collect()
 }
 
 /// One status line for the lock at `path`: its holder's validated values, or
 /// that none is recorded.
-fn holder_status(path: &Path) -> Result<String, String> {
-    let record = read_holder(path, None).map_err(|error| {
+fn holder_status(path: &Path, trusted: &[String]) -> Result<String, String> {
+    let record = read_holder(path, None, trusted).map_err(|error| {
         format!(
             "cannot read gate lock {}: {error}",
             crate::git::display_path(path)
@@ -333,7 +347,7 @@ pub(crate) mod interleave {
 
 /// Open the lock file at `path` and take its OS lock without waiting, or
 /// say why not: the holder's record, or why the lock is unavailable.
-fn open_and_lock(path: &Path) -> Result<File, LockHeld> {
+fn open_and_lock(path: &Path, trusted: &[String]) -> Result<File, LockHeld> {
     let path = path.to_path_buf();
     let mut file = match open_lock_file(&path) {
         Ok(file) => file,
@@ -360,7 +374,7 @@ fn open_and_lock(path: &Path) -> Result<File, LockHeld> {
         }
         Err(error) if os_lock::is_contended(&error) => {
             return Err(LockHeld {
-                holder: read_holder(&path, Some(&mut file))
+                holder: read_holder(&path, Some(&mut file), trusted)
                     .unwrap_or_else(|error| format!("cannot read gate lock record: {error}")),
                 path,
                 running_groups: Vec::new(),
@@ -402,6 +416,7 @@ pub fn acquire_gate_lock(
         notes: Vec::new(),
     };
     let record = holder_record(project_dir, mode);
+    let trusted = trusted_dirs(project_dir);
     if dirs.is_empty() {
         lock.notes.push(
             "no gate lock location (no CodeFlow home and no git repository); \
@@ -411,10 +426,10 @@ pub fn acquire_gate_lock(
     }
     for dir in dirs {
         let path = dir.join(LOCK_FILE);
-        let file = open_and_lock(&path)?;
+        let file = open_and_lock(&path, &trusted)?;
         let mut acquired = AcquiredFile(file);
         let file = &mut acquired.0;
-        let previous = read_holder(&path, Some(file)).map_err(|error| LockHeld {
+        let previous = read_holder(&path, Some(file), &trusted).map_err(|error| LockHeld {
             holder: format!("cannot read gate lock record: {error}"),
             path: path.clone(),
             running_groups: Vec::new(),
@@ -441,11 +456,17 @@ pub fn acquire_gate_lock(
                 crate::git::display_line(&describe_holder(&previous))
             ));
         }
+        // The record is what lets another gate see this one and its live
+        // targets, so a gate that cannot write it does not run uncoordinated
+        // (TSK-1003): it refuses, and the lock releases as `acquired` drops.
         if let Err(error) = write_record(&path, &record) {
-            lock.notes.push(format!(
-                "gate lock at {} is held but its holder record could not be written: {error}",
-                crate::git::display_path(&path)
-            ));
+            return Err(LockHeld {
+                holder: format!(
+                    "gate lock unavailable: its holder record cannot be written: {error}"
+                ),
+                path,
+                running_groups: Vec::new(),
+            });
         }
         lock.files.push(acquired);
         lock.paths.push(path);
@@ -487,20 +508,30 @@ pub(crate) fn inherited_gate_locks() -> std::io::Result<Vec<File>> {
 /// Record that a target started in process group `pgid`, in every full-gate
 /// lock this process holds. A no-op when it holds none (light-only quick work, or a
 /// runner used outside `codeflow test`).
-pub fn target_group_started(pgid: u32) {
+///
+/// # Errors
+///
+/// When a holder record could not be rewritten; the target then runs
+/// without its group recorded, which the caller reports.
+pub fn target_group_started(pgid: u32) -> Result<(), String> {
     update_groups(|groups| {
         groups.insert(pgid);
-    });
+    })
 }
 
 /// Record that the target in process group `pgid` finished.
-pub fn target_group_finished(pgid: u32) {
+///
+/// # Errors
+///
+/// When a holder record could not be rewritten.
+pub fn target_group_finished(pgid: u32) -> Result<(), String> {
     update_groups(|groups| {
         groups.remove(&pgid);
-    });
+    })
 }
 
-fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
+fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) -> Result<(), String> {
+    let mut failures = Vec::new();
     let mut held = held();
     for lock in held.iter_mut() {
         change(&mut lock.groups);
@@ -510,10 +541,20 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
             let _ = writeln!(text, "group={group}");
         }
         for path in &lock.paths {
-            // Best effort, as a new record renamed into place: a missed write
-            // only weakens the killed-gate check.
-            let _ = write_record(path, &text);
+            // A new record renamed into place. A missed write weakens the
+            // killed-gate check, so it is reported, never ignored (TSK-1003).
+            if let Err(error) = write_record(path, &text) {
+                failures.push(format!(
+                    "the gate lock record beside {} could not be updated with target process groups: {error}",
+                    crate::git::display_path(path)
+                ));
+            }
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -718,7 +759,11 @@ fn record_path(lock: &Path) -> PathBuf {
 /// an older binary on the same machine is still seen: through `held` when
 /// the caller holds the lock file open, else through the same read-only
 /// open. Empty when neither names a holder. Nothing is created.
-fn read_holder(lock: &Path, held: Option<&mut File>) -> std::io::Result<String> {
+fn read_holder(
+    lock: &Path,
+    held: Option<&mut File>,
+    trusted: &[String],
+) -> std::io::Result<String> {
     let unreadable = |error: String| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -730,7 +775,7 @@ fn read_holder(lock: &Path, held: Option<&mut File>) -> std::io::Result<String> 
         let (anchor, relative) = lock_anchor(&record)?;
         let text =
             read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?;
-        let parsed = parse_record(&text).map_err(unreadable)?;
+        let parsed = parse_record(&text, trusted).map_err(unreadable)?;
         if !parsed.is_empty() {
             return Ok(parsed);
         }
@@ -743,7 +788,7 @@ fn read_holder(lock: &Path, held: Option<&mut File>) -> std::io::Result<String> 
             read_record(&mut crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?
         }
     };
-    parse_record(&legacy).map_err(unreadable)
+    parse_record(&legacy, trusted).map_err(unreadable)
 }
 
 /// At most 4096 bytes of `file`, from its start.
@@ -757,19 +802,65 @@ fn read_record(file: &mut File) -> std::io::Result<String> {
     String::from_utf8(bytes).map_err(|_| std::io::Error::other("gate lock record is not UTF-8"))
 }
 
+/// The folders a holder record's `dir` may name and still be shown: the
+/// project folder this gate runs for, its canonical form, and the main
+/// checkout and linked worktrees git lists for its repository, as strings
+/// with trailing separators removed. Only the project folder, which this
+/// process was given, is resolved; the git-listed paths are taken as text
+/// and never touched, since a seat that writes `.git` can change them.
+fn trusted_dirs(project_dir: &Path) -> Vec<String> {
+    let mut dirs = vec![project_dir.to_path_buf()];
+    if let Ok(canonical) = std::fs::canonicalize(project_dir) {
+        dirs.push(canonical);
+    }
+    if let Ok(repo) = git2::Repository::discover(project_dir) {
+        if let Some(workdir) = repo.workdir() {
+            dirs.push(workdir.to_path_buf());
+        }
+        let common = repo.commondir();
+        if common.file_name().is_some_and(|name| name == ".git") {
+            if let Some(main) = common.parent() {
+                dirs.push(main.to_path_buf());
+            }
+        }
+        if let Ok(names) = repo.worktrees() {
+            for name in names.iter().filter_map(|name| name.ok().flatten()) {
+                if let Ok(worktree) = repo.find_worktree(name) {
+                    dirs.push(worktree.path().to_path_buf());
+                }
+            }
+        }
+    }
+    let mut out: Vec<String> = dirs
+        .iter()
+        .map(|dir| trimmed_dir(&dir.display().to_string()).to_string())
+        .filter(|dir| !dir.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `dir` without trailing path separators, compared as text only.
+fn trimmed_dir(dir: &str) -> &str {
+    dir.trim_end_matches(['/', '\\'])
+}
+
 /// The modes a holder record names.
 const LOCK_MODES: [&str; 4] = ["full", "quick", "essential", "reserve"];
 
 /// Parse a holder record strictly and render it again from validated
 /// values only: `pid` as a process number, `started` as a Unix time,
 /// `mode` from [`LOCK_MODES`] (at most once each) and `group` lines as
-/// process group numbers. `dir` is kept only when it names an existing
-/// directory, in its canonical form; otherwise it is left out and shown as
-/// an unknown directory. Any other line refuses the whole record. Errors
-/// are fixed texts that never include the record's text, so a file reached
-/// through a planted link can reveal at most the name of an existing
-/// directory (TSK-1003).
-fn parse_record(text: &str) -> Result<String, String> {
+/// process group numbers. `dir` is kept only when its text equals one of
+/// `trusted` ([`trusted_dirs`]); otherwise it is left out and shown as an
+/// unknown directory. The `dir` value is never resolved, opened or passed
+/// to any filesystem call, so a planted value cannot reach a link, a
+/// network share or an outside folder (TSK-1003, SEC-4). Any other line
+/// refuses the whole record. Errors are fixed texts that never include the
+/// record's text, so a file reached through a planted link reveals nothing
+/// beyond a folder the gate already trusts.
+fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut out = String::new();
     for line in text.split_terminator('\n') {
@@ -798,16 +889,16 @@ fn parse_record(text: &str) -> Result<String, String> {
                 if value.is_empty() || value.chars().any(char::is_control) {
                     return Err("a dir value is empty or holds a control character".to_string());
                 }
-                match std::fs::canonicalize(value) {
-                    Ok(canonical) if canonical.is_dir() => canonical.display().to_string(),
-                    // Not an existing directory: shown as unknown, never as
-                    // the record's text.
-                    _ => {
-                        if !seen.insert("dir") {
-                            return Err("a repeated dir".to_string());
-                        }
-                        continue;
+                let value = trimmed_dir(value);
+                if let Some(dir) = trusted.iter().find(|dir| dir.as_str() == value) {
+                    dir.clone()
+                } else {
+                    // Not a folder the gate trusts: shown as unknown, never
+                    // as the record's text, and never looked up.
+                    if !seen.insert("dir") {
+                        return Err("a repeated dir".to_string());
                     }
+                    continue;
                 }
             }
             _ => return Err("an unknown key".to_string()),
@@ -855,7 +946,7 @@ fn describe_holder(record: &str) -> String {
     let pid = field("pid").unwrap_or("unknown");
     let dir = field("dir").map_or_else(
         || " in an unknown directory".to_string(),
-        |d| format!(" in {d}"),
+        |d| format!(" in {}", crate::git::display_line(d)),
     );
     let age = field("started")
         .and_then(|s| s.parse::<u64>().ok())
@@ -962,7 +1053,9 @@ mod tests {
         let first = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
         assert!(first.notes.is_empty(), "{:?}", first.notes);
 
-        let held = acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/work/b")).unwrap_err();
+        // A second gate for the same project sees the holder's folder, which
+        // it trusts; any other folder shows as unknown.
+        let held = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap_err();
         let message = held.to_string();
         assert!(
             message.contains(&format!("pid {}", std::process::id())),
@@ -1082,11 +1175,11 @@ mod tests {
         let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
         // A group number no other test uses: records are shared by every
         // lock this process holds.
-        target_group_started(4_000_001);
+        target_group_started(4_000_001).unwrap();
         let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
         assert!(record.contains("group=4000001"), "{record}");
         assert!(record.contains(&format!("pid={}", std::process::id())));
-        target_group_finished(4_000_001);
+        target_group_finished(4_000_001).unwrap();
         let record = std::fs::read_to_string(dir.join(RECORD_FILE)).unwrap();
         assert!(!record.contains("group=4000001"), "{record}");
         drop(lock);
@@ -1171,7 +1264,7 @@ mod tests {
             "{error}"
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
-        assert!(read_holder(&dir.join(LOCK_FILE), None).is_err());
+        assert!(read_holder(&dir.join(LOCK_FILE), None, &[]).is_err());
     }
 
     /// TSK-1003: a lock folder replaced by a link is refused as well.
@@ -1228,8 +1321,8 @@ mod tests {
         std::fs::write(&target, "keep me\n").unwrap();
         std::fs::remove_file(dir.join(LOCK_FILE)).unwrap();
         std::os::unix::fs::symlink(&target, dir.join(LOCK_FILE)).unwrap();
-        target_group_started(4_000_003);
-        target_group_finished(4_000_003);
+        target_group_started(4_000_003).unwrap();
+        target_group_finished(4_000_003).unwrap();
         drop(lock);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
     }
@@ -1261,7 +1354,7 @@ mod tests {
                     && !error.to_string().contains("SECRET"),
                 "{error}"
             );
-            let status = holder_status(&dir.join(LOCK_FILE));
+            let status = holder_status(&dir.join(LOCK_FILE), &[]);
             assert!(status.is_err(), "{status:?}");
             assert!(!format!("{status:?}").contains("SECRET"), "{status:?}");
             assert_eq!(
@@ -1305,16 +1398,13 @@ mod tests {
             ("SECRET-OUTSIDE\n", false),
             ("pid=999999\nstarted=1\n", true),
         ];
-        for (index, (dir, (text, acquires))) in [
-            tmp.path().join("home").join(HOME_LOCK_DIR),
-            tmp.path().join("repo/.git/codeflow"),
-            tmp.path().join("home2").join(HOME_LOCK_DIR),
-            tmp.path().join("repo2/.git/codeflow"),
-        ]
-        .into_iter()
-        .zip(cases.iter().chain(cases.iter()).copied())
-        .enumerate()
+        let locations = ["home/locks", "repo/.git/codeflow"];
+        for (index, (location, (text, acquires))) in locations
+            .iter()
+            .flat_map(|location| cases.iter().map(move |case| (*location, *case)))
+            .enumerate()
         {
+            let dir = tmp.path().join(format!("case-{index}")).join(location);
             std::fs::create_dir_all(&dir).unwrap();
             let sentinel = Rc::new(tmp.path().join(format!("outside-{index}")));
             std::fs::write(&*sentinel, text).unwrap();
@@ -1329,8 +1419,8 @@ mod tests {
             interleave::clear();
             assert_eq!(result.is_ok(), acquires, "{dir:?}: {result:?}");
             if let Ok(lock) = result {
-                target_group_started(4_000_005);
-                target_group_finished(4_000_005);
+                target_group_started(4_000_005).unwrap();
+                target_group_finished(4_000_005).unwrap();
                 drop(lock);
             }
             assert_eq!(
@@ -1338,7 +1428,7 @@ mod tests {
                 text,
                 "outside file changed at {dir:?}"
             );
-            let status = holder_status(&dir.join(LOCK_FILE));
+            let status = holder_status(&dir.join(LOCK_FILE), &[]);
             assert!(
                 !status.as_deref().unwrap_or_default().contains("SECRET"),
                 "{status:?}"
@@ -1364,7 +1454,7 @@ mod tests {
             let sentinel = tmp.path().join(format!("record-outside-{index}"));
             std::fs::write(&sentinel, "SECRET-OUTSIDE\n").unwrap();
             std::fs::hard_link(&sentinel, dir.join(RECORD_FILE)).unwrap();
-            let status = holder_status(&dir.join(LOCK_FILE));
+            let status = holder_status(&dir.join(LOCK_FILE), &[]);
             assert!(
                 !status.as_deref().unwrap_or_default().contains("SECRET"),
                 "{status:?}"
@@ -1384,8 +1474,8 @@ mod tests {
             std::fs::remove_file(dir.join(RECORD_FILE)).unwrap();
             std::fs::hard_link(&stale, dir.join(RECORD_FILE)).unwrap();
             let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
-            target_group_started(4_000_007);
-            target_group_finished(4_000_007);
+            target_group_started(4_000_007).unwrap();
+            target_group_finished(4_000_007).unwrap();
             drop(lock);
             assert_eq!(std::fs::read_to_string(&stale).unwrap(), "pid=999999\n");
             assert_eq!(
@@ -1433,8 +1523,8 @@ mod tests {
                 if let Ok(lock) =
                     acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
                 {
-                    target_group_started(4_000_009);
-                    target_group_finished(4_000_009);
+                    target_group_started(4_000_009).unwrap();
+                    target_group_finished(4_000_009).unwrap();
                     drop(lock);
                 }
                 if std::fs::read_to_string(&sentinel).unwrap() != "SECRET-OUTSIDE\n" {
@@ -1488,6 +1578,19 @@ mod tests {
     #[test]
     fn planted_record_text_never_reaches_any_output() {
         let tmp = tempfile::tempdir().unwrap();
+        // The review's case: a link to a folder whose name holds record
+        // lines, which a resolved `dir` would have injected (SEC-4).
+        #[cfg(unix)]
+        let injected = {
+            let base = std::fs::canonicalize(tmp.path()).unwrap();
+            let target = base.join("x\npid=SECRET_PID\nmode=SECRET_MODE");
+            std::fs::create_dir(&target).unwrap();
+            let link = base.join("injecting-link");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            format!("pid=999999\ndir={}\n", link.display())
+        };
+        #[cfg(not(unix))]
+        let injected = "pid=999999\ndir=/SECRET_PID\n".to_string();
         let mut case = 0;
         for location in ["home/locks", "repo/.git/codeflow"] {
             for name in [LOCK_FILE, RECORD_FILE] {
@@ -1495,13 +1598,14 @@ mod tests {
                     "pid=999999\ngroup=SECRET\n",
                     "pid=999999\ndir=/SECRET-dir\n",
                     "pid=999999\nmode=SECRET\n",
+                    injected.as_str(),
                 ] {
                     case += 1;
                     let dir = tmp.path().join(format!("case-{case}")).join(location);
                     std::fs::create_dir_all(&dir).unwrap();
                     std::fs::write(dir.join(name), planted).unwrap();
                     let mut output = String::new();
-                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE)));
+                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE), &[]));
                     match acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")) {
                         Ok(lock) => {
                             output.push_str(&lock.notes.join("\n"));
@@ -1511,7 +1615,7 @@ mod tests {
                             let _ = write!(output, "{held}\n{held:?}");
                         }
                     }
-                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE)));
+                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE), &[]));
                     assert!(
                         !output.contains("SECRET"),
                         "{location}/{name} {planted:?}:\n{output}"
@@ -1519,6 +1623,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// TSK-1003 round six (SEC-4, SEC-5): a planted `dir` value is never
+    /// resolved. Only a value equal to a folder the gate already trusts is
+    /// shown; a link to a folder whose name holds a newline cannot inject
+    /// record lines, and an outside or relative existing folder, or a UNC
+    /// path, shows as an unknown directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_dir_value_is_never_resolved_or_shown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let injected = base.join("x\nmode=PLANTED");
+        std::fs::create_dir(&injected).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&injected, &link).unwrap();
+        let outside = base.join("outside-existing");
+        std::fs::create_dir(&outside).unwrap();
+        let mut case = 0;
+        for (value, secret) in [
+            (link.display().to_string(), "PLANTED"),
+            (outside.display().to_string(), "outside-existing"),
+            ("src".to_string(), "codeflow-core"),
+            ("\\\\host\\share".to_string(), "host"),
+        ] {
+            for name in [LOCK_FILE, RECORD_FILE] {
+                case += 1;
+                let dir = base.join(format!("case-{case}")).join("locks");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(name), format!("pid=999999\ndir={value}\n")).unwrap();
+                let mut output = String::new();
+                let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE), &[]));
+                match acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")) {
+                    Ok(lock) => {
+                        output.push_str(&lock.notes.join("\n"));
+                        drop(lock);
+                    }
+                    Err(held) => {
+                        let _ = write!(output, "{held}\n{held:?}");
+                    }
+                }
+                assert!(
+                    !output.contains(secret) && output.contains("unknown directory"),
+                    "{name} dir={value:?}:\n{output}"
+                );
+            }
+        }
+    }
+
+    /// TSK-1003: with an existing lock file in a folder the process cannot
+    /// write, the lock opens read only but the holder record cannot be
+    /// written, so the gate refuses instead of running uncoordinated, and
+    /// the permissions probe names the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_lock_folder_refuses_and_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let home = tmp.path().join("home");
+        let dir = home.join(HOME_LOCK_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(LOCK_FILE), "").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let refused = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
+        let reported = unwritable_gate_dirs(tmp.path(), Some(&home));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = refused.expect_err("a gate that cannot write its record refuses");
+        assert!(
+            error
+                .to_string()
+                .contains("holder record cannot be written"),
+            "{error}"
+        );
+        assert!(
+            reported.iter().any(|(found, _)| *found == dir),
+            "{reported:?}"
+        );
     }
 
     #[test]
