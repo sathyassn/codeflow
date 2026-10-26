@@ -1,0 +1,11 @@
+id = "TSK-1013"
+uid = "454d8457-6568-4990-a06a-3446456cb5b2"
+kind = "TSK"
+title = "An opt-in time-box profile compares each task with its frozen band"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:17:20Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
