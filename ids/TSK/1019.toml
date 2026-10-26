@@ -1,0 +1,11 @@
+id = "TSK-1019"
+uid = "d64ab81f-bb75-4147-b93a-8ae71aa39290"
+kind = "TSK"
+title = "A link retargeted earlier on a line is judged after the retarget"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T21:16:12Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
