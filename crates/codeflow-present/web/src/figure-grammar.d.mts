@@ -8,4 +8,5 @@ export function entityLabel(value: string): string;
 export const ENTITY_ID: RegExp;
 export const FAMILIES: readonly string[];
 export const SHAPE_CLASSES: readonly string[];
+export const TONES: readonly string[];
 export const TEXT_CLASSES: readonly string[];

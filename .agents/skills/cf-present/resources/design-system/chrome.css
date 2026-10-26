@@ -31,7 +31,8 @@ button { cursor: pointer; }
 .cf-lede code, .cf-title code, .cf-h2 code { background: none; padding: 0; border: 0; font-size: 0.92em; color: inherit; }
 .cf-h2 { margin: 0 0 8px; font-size: var(--cf-fs-h2); font-weight: 600; line-height: 1.25; letter-spacing: -0.014em; text-wrap: balance; scroll-margin-top: 72px; }
 .cf-h3 { margin: 24px 0 6px; font-size: var(--cf-fs-h3); font-weight: 600; line-height: 1.35; letter-spacing: -0.006em; text-wrap: balance; scroll-margin-top: 72px; }
-.cf-lead { margin: 0 0 4px; max-width: var(--cf-measure); color: var(--cf-text); }
+/* A1: the paragraph after a section heading is its lead, set as a lede */
+.cf-lead { margin: 0 0 14px; max-width: var(--cf-measure); font-size: var(--cf-fs-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; text-wrap: pretty; color: var(--cf-text); }
 .cf-prose p { margin: 0 0 0.75em; max-width: var(--cf-measure); text-wrap: pretty; }
 
 .cf-prose ul:not([class]) { list-style: none; margin: 0 0 0.9em; padding: 0 0 0 1.1em; max-width: var(--cf-measure); }
@@ -348,8 +349,10 @@ mark { background: var(--cf-mark); color: inherit; border-radius: 2px; padding: 
 [data-cf-comment="armed"] .cf-doc, [data-cf-comment="armed"] .cf-doc * { cursor: text; }
 [data-cf-comment="armed"] .cf-doc figure, [data-cf-comment="armed"] .cf-doc figure * { cursor: crosshair; }
 [data-cf-comment="armed"][data-cf-tool="area"] .cf-doc, [data-cf-comment="armed"][data-cf-tool="area"] .cf-doc * { cursor: crosshair; user-select: none; }
-.cf-doc-title { margin: 0 0 6px; font-size: var(--cf-fs-display); font-weight: 600; line-height: 1.15; letter-spacing: -0.018em; text-wrap: balance; }
-.cf-doc-meta { margin: 0 0 28px; font-size: var(--cf-fs-caption); color: var(--cf-text-muted); }
+.cf-doc-title { margin: 0 0 10px; font-size: var(--cf-fs-display); font-weight: 600; line-height: 1.15; letter-spacing: -0.018em; text-wrap: balance; }
+/* A1: title, summary and provenance meta open the document column */
+.cf-doc-summary { margin: 0 0 14px; max-width: var(--cf-measure); font-size: var(--cf-fs-lede); font-weight: 450; line-height: 1.4; letter-spacing: -0.01em; text-wrap: balance; color: var(--cf-text); }
+.cf-doc-meta { margin: 0 0 36px; font-family: var(--cf-font-mono); font-size: var(--cf-fs-micro); letter-spacing: 0.02em; color: var(--cf-text-muted); }
 .cf-block { margin: 0 0 36px; scroll-margin-top: 108px; }
 .cf-status-list { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--cf-hairline); border-radius: var(--cf-radius-card); background: var(--cf-surface); }
 .cf-status-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--cf-hairline); }
