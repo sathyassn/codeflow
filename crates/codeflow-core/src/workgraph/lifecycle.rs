@@ -1084,23 +1084,55 @@ pub(super) fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -
         }
         return problems;
     }
-    let old_count = before.map_or(0, |record| record.superseded_blocks().len());
+    // One chronological archive (TSK-340, issue #217): the blocks `before`
+    // archived stay first, in order and with their provenance, and the
+    // first block this change archives is `before`'s active one. A later
+    // reopen and re-completion in the same range follow it. So the record
+    // `task status` compares with (the branch's last completion) and the
+    // one CI compares with (the anchored target, possibly an earlier
+    // completion) accept the same archive.
+    let old_archive = before
+        .map(RecordView::superseded_blocks)
+        .unwrap_or_default();
     let superseded = after.superseded_blocks();
     let old_active = before.and_then(|record| record.active_blocks().into_iter().next());
-    let kept = superseded.len() > old_count
-        && superseded.last().is_some_and(|block| {
-            block.parsed.is_ok()
-                && old_active
-                    .as_ref()
-                    .is_none_or(|old| same_block_content(old, block))
-        });
-    if !kept {
+    let in_order = superseded.len() >= old_archive.len()
+        && old_archive
+            .iter()
+            .zip(&superseded)
+            .all(|(old, new)| same_provenance(old, new));
+    let kept = superseded.len() > old_archive.len()
+        && superseded.iter().all(|block| block.parsed.is_ok())
+        && old_active
+            .as_ref()
+            .is_none_or(|old| same_block_content(old, &superseded[old_archive.len()]));
+    if !in_order {
+        problems.push(
+            "the `acceptance_superseded:` blocks stay in chronological order with their reviewed commit, review and reason; a reopen appends the block it archives after them"
+                .into(),
+        );
+    } else if !kept {
         problems.push(
             "reopening needs the old acceptance block kept under `acceptance_superseded:` with the reopen reason"
                 .into(),
         );
     }
     problems
+}
+
+/// Whether an archived block keeps its provenance: the reviewed commit, the
+/// review reference and the reopen reason. A redaction may reword evidence
+/// but never these (`redaction::preserves`).
+fn same_provenance(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
+    match (&old.parsed, &new.parsed) {
+        (Ok(old), Ok(new)) => {
+            old.superseded == new.superseded
+                && old.reviewed == new.reviewed
+                && old.review == new.review
+                && old.reason == new.reason
+        }
+        _ => false,
+    }
 }
 
 fn same_block_content(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {

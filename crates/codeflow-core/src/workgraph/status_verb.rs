@@ -274,12 +274,18 @@ fn bind_completion_of(
             &graph.with(after.clone()),
         )
         .map_err(|e| VerbError::Refused(vec![e]))?;
-        if !frozen.is_empty() {
-            return Err(VerbError::Refused(
-                frozen.into_iter().map(|f| f.message).collect(),
-            ));
-        }
         let findings = binding(repo_root, &graph.with(after.clone()), after);
+        if !frozen.is_empty() {
+            // The binding's own refusals follow the frozen criteria, so a
+            // waiver the reopen cannot take is named with them (issue #278).
+            let mut refused: Vec<String> = frozen.into_iter().map(|f| f.message).collect();
+            refused.extend(
+                findings
+                    .into_iter()
+                    .filter(|finding| !finding.contains(super::acceptance::REOPENED_CRITERIA)),
+            );
+            return Err(VerbError::Refused(refused));
+        }
         let remedy =
             crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
         gate_binding(
@@ -369,36 +375,32 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
-/// The merge base of the task's own branch with its target, when `HEAD` is
-/// that branch: the range a record-only amendment waiver may name (TSK-184).
-/// A branch name that is not valid UTF-8 is not the task's own branch, so no
-/// waiver is offered for its range.
+/// The merge base of `HEAD` with the task's target: the range a record-only
+/// amendment waiver may name (TSK-184), as the task's pull request names it
+/// on its `Task:` line, whatever its branch is called (TSK-340, issue
+/// #278). On the target branch itself there is no pull request, so there
+/// is no own range. The binder withholds the route from a range that
+/// reopens a landed completion.
 fn own_range_base(
     repo_root: &Path,
     repo: &git2::Repository,
     task: &RecordView,
     head: git2::Oid,
 ) -> Option<git2::Oid> {
-    repo.head()
-        .ok()
-        .and_then(|head| {
-            crate::git::name::reference_shorthand(&head)
-                .rule_text()
-                .ok()
-                .map(str::to_string)
-        })
-        .filter(|branch| {
-            super::task_id_from_branch(repo_root, branch)
-                .is_ok_and(|id| id.as_deref() == Some(task.id.as_str()))
-        })
-        .and_then(|_| {
-            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-                .ok()
-                .flatten()
-        })
-        .and_then(|target| repo.revparse_single(&target).ok())
-        .and_then(|object| object.peel_to_commit().ok())
-        .and_then(|target| history::merge_base(repo, head, target.id()).ok())
+    let target =
+        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+            .ok()
+            .flatten()?;
+    let on_target = repo.head().ok().is_some_and(|reference| {
+        reference.is_branch()
+            && crate::git::name::reference_shorthand(&reference).bytes()
+                == super::work_start::logical_target(&target).as_bytes()
+    });
+    if on_target {
+        return None;
+    }
+    let target = repo.revparse_single(&target).ok()?.peel_to_commit().ok()?;
+    history::merge_base(repo, head, target.id()).ok()
 }
 
 /// The binding of a completion to the reviewed commit (R-60), with the
