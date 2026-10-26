@@ -1096,18 +1096,24 @@ fn publish_main(root: &Path) {
 fn two_lines(shape: &str) -> tempfile::TempDir {
     let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
     let root = dir.path();
+    if shape == "rename" {
+        // A plan file on the target, which the planning branch renames.
+        write(root, "project-management/plans/note.md", "A plan.\n");
+        commit(root, "docs: plan a note");
+    }
     plan_two_lines(root);
     let extra = match shape {
         "product" => Some("src/planned.rs"),
         "instructions" => Some("project-management/AGENTS.md"),
         _ => None,
     };
+    git(root, &["switch", "plan/lines"]);
     if let Some(path) = extra {
-        git(root, &["switch", "plan/lines"]);
         write(root, path, "Not a record.\n");
         commit(root, "docs: carry a file that is no record");
-        git(root, &["switch", "main"]);
     }
+    shape_planning_branch(root, shape);
+    git(root, &["switch", "main"]);
     if shape == "own" {
         for line in [LINE_A, LINE_B] {
             git(root, &["switch", "-c", line, "main"]);
@@ -1137,6 +1143,58 @@ fn two_lines(shape: &str) -> tempfile::TempDir {
     advance(root, LINE_B, "docs/second.md");
     publish_main(root);
     dir
+}
+
+/// The inadmissible or unreadable shapes a shared planning merge can take
+/// beyond its paths: a mode, a type, a rename across the record class, and
+/// a task whose state at P cannot be read as one permitted record.
+fn shape_planning_branch(root: &Path, shape: &str) {
+    match shape {
+        "executable" => {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.join("project-management/plans/run.md");
+            write(root, "project-management/plans/run.md", "A plan.\n");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            commit(root, "docs: an executable plan");
+        }
+        "symlink" => {
+            std::fs::create_dir_all(root.join("project-management/plans")).unwrap();
+            std::os::unix::fs::symlink(
+                "../tasks/TSK-001.md",
+                root.join("project-management/plans/link.md"),
+            )
+            .unwrap();
+            commit(root, "docs: link a record");
+        }
+        "rename" => {
+            std::fs::create_dir_all(root.join("docs")).unwrap();
+            git(
+                root,
+                &["mv", "project-management/plans/note.md", "docs/note.md"],
+            );
+            commit(root, "docs: move a plan out of the records");
+        }
+        "no status" => {
+            let path = record_path("TSK-002");
+            let text = std::fs::read_to_string(root.join(&path)).unwrap();
+            write(root, &path, &text.replace("status: todo\n", ""));
+            commit(root, "docs: drop the status");
+        }
+        "shared uid" => {
+            let uid = "uid: 7d3c2f0e-1b2a-4c5d-8e9f-001122334455\n";
+            let path = record_path("TSK-002");
+            let text = std::fs::read_to_string(root.join(&path)).unwrap();
+            let with_uid = text.replace("id: TSK-002\n", &format!("id: TSK-002\n{uid}"));
+            write(root, &path, &with_uid);
+            write(
+                root,
+                &record_path("TSK-003"),
+                &with_uid.replace("TSK-002", "TSK-003"),
+            );
+            commit(root, "docs: two tasks with one uid");
+        }
+        _ => {}
+    }
 }
 
 /// Push each line first in turn, then the other, through the real
@@ -1174,7 +1232,16 @@ fn lines_with_their_own_planning_merges_push_in_either_order() {
 #[test]
 fn a_shared_merge_that_is_no_planning_landing_stays_refused() {
     let mut failures = Vec::new();
-    for shape in ["product", "instructions", "evil"] {
+    for shape in [
+        "product",
+        "instructions",
+        "evil",
+        "executable",
+        "symlink",
+        "rename",
+        "no status",
+        "shared uid",
+    ] {
         let dir = two_lines(shape);
         let root = dir.path();
         git(root, &["switch", LINE_A]);
