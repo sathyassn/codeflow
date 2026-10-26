@@ -268,6 +268,50 @@ pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, St
     })
 }
 
+/// Open the lock file at `path` and take its OS lock without waiting, or
+/// say why not: the holder's record, or why the lock is unavailable.
+fn open_and_lock(path: &Path) -> Result<File, LockHeld> {
+    let path = path.to_path_buf();
+    let mut file = match open_lock_file(&path) {
+        Ok(file) => file,
+        Err(error) => {
+            return Err(LockHeld {
+                holder: format!("gate lock unavailable: {error}"),
+                path,
+                running_groups: Vec::new(),
+            });
+        }
+    };
+    match os_lock::try_lock(&file) {
+        Ok(()) => {
+            if let Err(error) = same_lock_file(&path, &file) {
+                os_lock::unlock(&file);
+                return Err(LockHeld {
+                    holder: format!("gate lock unavailable: {error}; retry"),
+                    path,
+                    running_groups: Vec::new(),
+                });
+            }
+        }
+        Err(error) if os_lock::is_contended(&error) => {
+            return Err(LockHeld {
+                holder: read_record(&mut file)
+                    .unwrap_or_else(|error| format!("cannot read gate lock record: {error}")),
+                path,
+                running_groups: Vec::new(),
+            });
+        }
+        Err(error) => {
+            return Err(LockHeld {
+                holder: format!("gate lock unavailable: {error}"),
+                path,
+                running_groups: Vec::new(),
+            });
+        }
+    }
+    Ok(file)
+}
+
 /// Take every full-gate lock in `dirs`, or refuse naming the holder.
 ///
 /// # Errors
@@ -302,34 +346,7 @@ pub fn acquire_gate_lock(
     }
     for dir in dirs {
         let path = dir.join(LOCK_FILE);
-        let mut file = match open_lock_file(&path) {
-            Ok(file) => file,
-            Err(error) => {
-                return Err(LockHeld {
-                    holder: format!("gate lock unavailable: {error}"),
-                    path,
-                    running_groups: Vec::new(),
-                });
-            }
-        };
-        match os_lock::try_lock(&file) {
-            Ok(()) => {}
-            Err(error) if os_lock::is_contended(&error) => {
-                return Err(LockHeld {
-                    holder: read_record(&mut file)
-                        .unwrap_or_else(|error| format!("cannot read gate lock record: {error}")),
-                    path,
-                    running_groups: Vec::new(),
-                });
-            }
-            Err(error) => {
-                return Err(LockHeld {
-                    holder: format!("gate lock unavailable: {error}"),
-                    path,
-                    running_groups: Vec::new(),
-                });
-            }
-        }
+        let file = open_and_lock(&path)?;
         let mut acquired = AcquiredFile(file);
         let file = &mut acquired.0;
         let previous = read_record(file).map_err(|error| LockHeld {
@@ -598,11 +615,79 @@ fn lock_anchor(path: &Path) -> std::io::Result<(&Path, String)> {
 
 /// Open (creating if needed) the lock file at `path`. The lock folder and
 /// the file are refused when either is a link, and the file when it is not
-/// a regular file; the type is checked on the opened descriptor.
+/// a private regular file; both are checked on the opened descriptor.
 fn open_lock_file(path: &Path) -> std::io::Result<File> {
     let (anchor, relative) = lock_anchor(path)?;
     std::fs::create_dir_all(anchor)?;
-    crate::contained::Tree::open(anchor)?.lock_file(&relative)
+    private_lock(crate::contained::Tree::open(anchor)?.lock_file(&relative)?)
+}
+
+/// Refuse a lock file that another name also reaches, or that another user
+/// owns (TSK-1003).
+///
+/// The check runs on the opened descriptor, before any read, truncate or
+/// write, and every later operation uses that descriptor. That is enough:
+/// with one link and this user as owner, the lock folder's entry is the
+/// file's only name, so the descriptor cannot name an outside file such as
+/// a shell startup file, which has its own name. A hard link someone adds
+/// after the check names this same lock file and changes nothing written
+/// through the descriptor; it cannot make the descriptor name another file.
+/// A seat could only give an outside file a single name in the lock folder
+/// by removing its other names, which needs write access to the folders
+/// that hold them.
+fn private_lock(file: File) -> std::io::Result<File> {
+    let refuse = |why: &str| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("unsafe gate lock file: {why}"),
+        ))
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        if metadata.nlink() != 1 {
+            return refuse("it has more than one name (a hard link)");
+        }
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return refuse("another user owns it");
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` owns a live handle for the call, and `info` is a
+        // valid writable output buffer of the required type.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if info.nNumberOfLinks != 1 {
+            return refuse("it has more than one name (a hard link)");
+        }
+    }
+    Ok(file)
+}
+
+/// Whether the lock path still names the file `file` holds open. A lock
+/// file swapped for another regular file splits coordination: a later gate
+/// would lock the new file. The lock folder is an advisory coordination
+/// boundary, not a security boundary, so a swap after this check still
+/// splits it; the check closes the window while the lock is taken.
+fn same_lock_file(path: &Path, file: &File) -> std::io::Result<()> {
+    let (anchor, relative) = lock_anchor(path)?;
+    let current = crate::contained::Tree::open(anchor)?.open_regular(&relative)?;
+    if same_file::Handle::from_file(current)? == same_file::Handle::from_file(file.try_clone()?)? {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(
+            "the lock path names another file than the one locked",
+        ))
+    }
 }
 
 /// A lock file's holder record, read without taking the lock; empty when
@@ -611,10 +696,11 @@ fn gate_lock_record(path: &Path) -> std::io::Result<String> {
     if crate::absence::proven_absent(path)? {
         return Ok(String::new());
     }
-    // The same anchored, link-refusing read as the lock itself (TSK-1003).
+    // The same anchored, link-refusing open as the lock itself, and the
+    // same private-file check on the descriptor before reading (TSK-1003).
     let (anchor, relative) = lock_anchor(path)?;
-    let bytes = crate::contained::Tree::open(anchor)?.read(&relative, 4096)?;
-    String::from_utf8(bytes).map_err(|error| std::io::Error::other(error.to_string()))
+    let mut file = private_lock(crate::contained::Tree::open(anchor)?.open_regular(&relative)?)?;
+    read_record(&mut file)
 }
 
 fn read_record(file: &mut File) -> std::io::Result<String> {
@@ -638,10 +724,21 @@ fn holder_record(project_dir: &Path, mode: &str) -> String {
     )
 }
 
+/// Replace the record through the locked descriptor: `ftruncate`, then a
+/// positioned write at offset 0 (`pwrite` on Unix). The file is never
+/// reopened by name and never opened with `O_TRUNC`.
 fn write_record(file: &mut File, record: &str) -> std::io::Result<()> {
     file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(record.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.write_all_at(record.as_bytes(), 0)?;
+    }
+    #[cfg(not(unix))]
+    {
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(record.as_bytes())?;
+    }
     file.flush()
 }
 
@@ -1019,6 +1116,56 @@ mod tests {
         target_group_finished(4_000_003);
         drop(lock);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me\n");
+    }
+
+    /// TSK-1003 round three: a lock file planted as a hard link to an outside
+    /// file is refused at both lock locations, by the gate and by the status
+    /// read, and the outside file is neither read nor changed.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_file_planted_as_a_hard_link_is_refused_at_both_locations() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (index, dir) in [
+            tmp.path().join("home").join(HOME_LOCK_DIR),
+            tmp.path().join("repo/.git/codeflow"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            std::fs::create_dir_all(&dir).unwrap();
+            let target = tmp.path().join(format!("sentinel-{index}"));
+            std::fs::write(&target, "pid=1\nkeep me\n").unwrap();
+            std::fs::hard_link(&target, dir.join(LOCK_FILE)).unwrap();
+            let error = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+                .expect_err("a hard-linked lock file is refused");
+            assert!(
+                error.to_string().contains("gate lock unavailable"),
+                "{error}"
+            );
+            let status = gate_lock_record(&dir.join(LOCK_FILE));
+            assert!(status.is_err(), "status read the outside file: {status:?}");
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "pid=1\nkeep me\n"
+            );
+        }
+    }
+
+    /// TSK-1003 round three: a lock file swapped for another regular file
+    /// while it is being taken is not trusted: the path and the locked
+    /// descriptor must name the same file.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_whose_path_names_another_file_after_locking_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        let path = dir.join(LOCK_FILE);
+        let file = open_lock_file(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "").unwrap();
+        assert!(same_lock_file(&path, &file).is_err());
+        let fresh = open_lock_file(&path).unwrap();
+        assert!(same_lock_file(&path, &fresh).is_ok());
     }
 
     #[test]

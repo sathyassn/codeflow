@@ -432,6 +432,19 @@ impl Tree {
         })
     }
 
+    /// Open an existing regular file for reading.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link, the leaf is missing, or it is not a
+    /// regular file.
+    pub(crate) fn open_regular(&self, relative: &str) -> io::Result<File> {
+        self.explained(relative, || {
+            let (parent, name) = self.parent(relative, false)?;
+            platform::open_regular(&parent, &name)
+        })
+    }
+
     /// Open (creating if needed) a regular file to hold a lock on.
     ///
     /// # Errors
@@ -607,6 +620,26 @@ mod platform {
         // supplied because O_CREAT is set. A successful descriptor is owned once.
         let descriptor =
             unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o666) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    /// Open an existing regular file for reading, never through a link and
+    /// without blocking on a special file; the type is checked on the
+    /// opened descriptor.
+    pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: live directory descriptor and NUL-terminated basename. A
+        // successful descriptor is owned once.
+        let descriptor = unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
         if descriptor == -1 {
             return Err(io::Error::last_os_error());
         }
@@ -824,6 +857,14 @@ mod platform {
             }
             result => result?,
         };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn open_regular(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let file = open(parent, leaf, FILE_GENERIC_READ, false)?;
         if !file.metadata()?.is_file() {
             return Err(invalid());
         }

@@ -161,6 +161,9 @@ enum Fake {
     RejectsProject,
     /// Exits 0 and prints nothing.
     PrintsNothing,
+    /// In the project folder shows `network_proxy` with the project's value
+    /// but `hooks` without it: contradictory evidence.
+    Contradicts,
     /// Answers `--version` with something that is not a codex-cli version.
     NoVersion,
 }
@@ -183,6 +186,7 @@ fn fake_codex(fake: Fake) -> tempfile::TempDir {
         Fake::RejectsStartup => "if [ ! -f .codex/config.toml ]; then\n  echo 'Error loading configuration: default_permissions requires a `[permissions]` table' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  true\\n'\n",
         Fake::RejectsProject => "if [ -f .codex/config.toml ]; then\n  echo 'Error loading configuration: unknown permission key' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  false\\n'\n",
         Fake::PrintsNothing => "",
+        Fake::Contradicts => "proxy=false\nif [ -f .codex/config.toml ]; then proxy=true; fi\nprintf 'hooks  stable  false\\nnetwork_proxy  stable  %s\\n' \"$proxy\"\n",
     };
     let script = format!(
         "#!/bin/sh\nif [ \"$1\" = --version ]; then {version}; exit 0; fi\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> '{log}'\n{body}",
@@ -255,7 +259,7 @@ fn a_codex_that_loads_the_project_config_is_reported_with_the_exact_overrides() 
     let project = builder_project();
     let (line, bin) = builder_line(project.path(), Fake::LoadsProject);
     assert!(
-        line.starts_with("codex builder profile: observed codex-cli 9.9.9 accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder; the project config loaded there (features.network_proxy = true appears only with it)"),
+        line.starts_with("codex builder profile: observed codex-cli 9.9.9 accepts the builder launch overrides without a project config, as the TUI startup load reads them, and in the project folder; its feature table there is consistent with the project config loading (features.network_proxy = true only in the project folder), which does not prove which config layer supplied it"),
         "{line}"
     );
     assert!(
@@ -289,7 +293,7 @@ fn a_codex_that_skips_the_project_config_is_reported() {
         line.contains("but Codex did not load the project config there (features.network_proxy shows false, the project sets true)"),
         "{line}"
     );
-    assert!(!line.contains("loaded there"), "{line}");
+    assert!(!line.contains("consistent with"), "{line}");
 }
 
 /// TSK-1003: with no feature that tells the two runs apart, project loading
@@ -349,4 +353,22 @@ fn no_builder_profile_means_no_codex_run() {
         "{out}"
     );
     assert!(!bin.path().join("codex.log").exists(), "codex ran");
+}
+
+/// TSK-1003: one feature showing the project's value never outweighs
+/// another that contradicts it; the line says unverified.
+#[cfg(unix)]
+#[test]
+fn contradictory_feature_evidence_is_unverified() {
+    let project = configured_project();
+    write(
+        project.path(),
+        ".codex/config.toml",
+        "default_permissions = \"cf-guard\"\n[features]\nhooks = true\nnetwork_proxy = true\n[permissions.cf-guard]\n[permissions.cf-builder]\n",
+    );
+    let (line, _bin) = builder_line(project.path(), Fake::Contradicts);
+    assert!(
+        line.contains("whether Codex loaded the project config is unverified, because the features the project sets disagree or are missing"),
+        "{line}"
+    );
 }

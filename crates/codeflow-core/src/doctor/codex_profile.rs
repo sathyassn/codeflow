@@ -48,20 +48,25 @@ pub enum CodexLoad {
     NotRun(String),
 }
 
-/// Whether the run in the project folder loaded the project's config.
+/// What the feature tables say about the project folder's run loading the
+/// project's config. Two runs that differ only by folder show at most that
+/// the table is consistent with loading; they cannot name the layer that
+/// supplied a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectLayer {
-    /// A feature the project sets showed the project's value only there.
-    Loaded { feature: String, value: bool },
-    /// The project sets a feature that the project run did not show with
-    /// the project's value, so the project config was not loaded.
+    /// Every feature the project sets to a value the run without it does
+    /// not show appears with the project's value, and at least one does.
+    ConsistentWithLoading { features: Vec<(String, bool)> },
+    /// Every such feature appears without the project's value: the project
+    /// config was not loaded.
     NotLoaded {
         feature: String,
         shown: bool,
         configured: bool,
     },
-    /// No feature the project sets differs from the run without it.
-    Unverified,
+    /// No such feature, or they disagree (some with the project's value,
+    /// some without), or one is missing from a run.
+    Unverified { conflicting: bool },
 }
 
 /// What the installed Codex said about the builder overrides.
@@ -86,31 +91,38 @@ impl CodexBuilderProbe {
         else {
             return None;
         };
-        let mut not_loaded = None;
+        let mut agree = Vec::new();
+        let mut disagree = Vec::new();
+        let mut missing = false;
         for (feature, &value) in configured {
             // Only a feature whose project value differs from what Codex
-            // shows without the project can tell the two loads apart.
-            if startup.get(feature).is_none_or(|&shown| shown == value) {
-                continue;
+            // shows without the project can tell the two runs apart.
+            match startup.get(feature) {
+                Some(&shown) if shown != value => {}
+                Some(_) => continue,
+                None => {
+                    missing = true;
+                    continue;
+                }
             }
             match project.get(feature) {
-                Some(&shown) if shown == value => {
-                    return Some(ProjectLayer::Loaded {
-                        feature: feature.clone(),
-                        value,
-                    });
-                }
-                Some(&shown) => {
-                    not_loaded.get_or_insert(ProjectLayer::NotLoaded {
-                        feature: feature.clone(),
-                        shown,
-                        configured: value,
-                    });
-                }
-                None => {}
+                Some(&shown) if shown == value => agree.push((feature.clone(), value)),
+                Some(&shown) => disagree.push((feature.clone(), shown, value)),
+                None => missing = true,
             }
         }
-        Some(not_loaded.unwrap_or(ProjectLayer::Unverified))
+        // All evidence is weighed: one agreeing feature never outvotes a
+        // disagreeing or missing one.
+        Some(match (agree.is_empty(), disagree.first(), missing) {
+            (false, None, false) => ProjectLayer::ConsistentWithLoading { features: agree },
+            (true, Some((feature, shown, configured)), false) => ProjectLayer::NotLoaded {
+                feature: feature.clone(),
+                shown: *shown,
+                configured: *configured,
+            },
+            (true, None, false) => ProjectLayer::Unverified { conflicting: false },
+            _ => ProjectLayer::Unverified { conflicting: true },
+        })
     }
 }
 
@@ -132,13 +144,7 @@ fn probe_with_timeout(root: &Path, codex: &Path, timeout: Duration) -> CodexBuil
         };
     };
     let version = match super::run_captured(program, &["--version"], timeout, Some(""), None) {
-        Ok(run) if run.code == Some(0) => run
-            .stdout
-            .lines()
-            .next()
-            .map(str::trim)
-            .filter(|line| line.starts_with("codex-cli "))
-            .map(str::to_string)
+        Ok(run) if run.code == Some(0) => cli_version(&run.stdout)
             .ok_or_else(|| "codex --version did not print a codex-cli version".to_string()),
         Ok(_) => Err("codex --version failed".to_string()),
         Err(reason) => Err(format!("codex --version did not run: {reason}")),
@@ -155,9 +161,46 @@ fn probe_with_timeout(root: &Path, codex: &Path, timeout: Duration) -> CodexBuil
     }
 }
 
+/// `codex-cli MAJOR.MINOR.PATCH`, with an optional `-prerelease` of ASCII
+/// letters, digits, dots and hyphens, as the only output of
+/// `codex --version`. `None` for anything else.
+fn cli_version(stdout: &str) -> Option<String> {
+    let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+    let line = lines.next()?.trim();
+    if lines.next().is_some() {
+        return None;
+    }
+    let version = line.strip_prefix("codex-cli ")?;
+    let (core, pre) = match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    let numeric = |part: &&str| {
+        !part.is_empty()
+            && part.bytes().all(|b| b.is_ascii_digit())
+            && (part.len() == 1 || !part.starts_with('0'))
+    };
+    let pre_ok = pre.is_none_or(|pre| {
+        pre.split('.')
+            .all(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    });
+    (parts.len() == 3 && parts.iter().all(numeric) && pre_ok).then(|| line.to_string())
+}
+
+/// The stages `codex features list` prints between a name and its state.
+const FEATURE_STAGES: [&str; 5] = [
+    "stable",
+    "experimental",
+    "deprecated",
+    "removed",
+    "under development",
+];
+
 /// The rows of a `codex features list` table: each line is a feature name,
-/// its stage words and `true` or `false`. `None` when the output holds no
-/// row or a line of another shape.
+/// a known stage and `true` or `false`, and each name appears once. `None`
+/// when the output holds no row, a line of another shape, an unknown stage
+/// or a repeated name.
 fn feature_table(stdout: &str) -> Option<BTreeMap<String, bool>> {
     let mut table = BTreeMap::new();
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
@@ -170,14 +213,15 @@ fn feature_table(stdout: &str) -> Option<BTreeMap<String, bool>> {
             "false" => false,
             _ => return None,
         };
-        if words.len() < 3
+        let phase = words.get(1..words.len() - 1)?.join(" ");
+        if !FEATURE_STAGES.contains(&phase.as_str())
             || !name
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
+            || table.insert((*name).to_string(), value).is_some()
         {
             return None;
         }
-        table.insert((*name).to_string(), value);
     }
     (!table.is_empty()).then_some(table)
 }
@@ -257,6 +301,25 @@ mod tests {
     }
 
     #[test]
+    fn versions_must_be_codex_cli_semver() {
+        for good in ["codex-cli 0.164.0\n", "codex-cli 1.2.3-alpha.1\n"] {
+            assert!(cli_version(good).is_some(), "{good:?}");
+        }
+        for bad in [
+            "codex-cli banana\n",
+            "codex-cli 0.164\n",
+            "codex-cli 01.2.3\n",
+            "codex-cli 1.2.3-\n",
+            "codex-cli 1.2.3 extra\n",
+            "codex-cli 0.164.0\ncodex-cli 0.165.0\n",
+            "something 0.164.0\n",
+            "",
+        ] {
+            assert_eq!(cli_version(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn feature_tables_accept_only_feature_rows() {
         assert_eq!(
             feature_table("apps  stable  true\nnetwork_proxy  under development  false\nguardianv2.thread_context  stable  true\n"),
@@ -272,13 +335,16 @@ mod tests {
             "ok\n",
             "apps stable maybe\n",
             "Error: x y true\n",
+            "apps banana true\n",
+            "apps true\n",
+            "network_proxy  stable  false\nnetwork_proxy  stable  true\n",
         ] {
             assert_eq!(feature_table(odd), None, "{odd:?}");
         }
     }
 
     #[test]
-    fn project_layer_is_judged_from_a_distinguishing_feature() {
+    fn project_layer_weighs_every_distinguishing_feature() {
         let accepted = |pairs: &[(&str, bool)]| {
             CodexLoad::Accepted(
                 pairs
@@ -291,39 +357,56 @@ mod tests {
             ("hooks".to_string(), true),
             ("network_proxy".to_string(), true),
         ]);
-        let probe = |project: CodexLoad| CodexBuilderProbe {
-            version: Ok("codex-cli 9.9.9".to_string()),
-            startup: accepted(&[("hooks", true), ("network_proxy", false)]),
-            project,
+        let judge = |startup: CodexLoad, project: CodexLoad| {
+            CodexBuilderProbe {
+                version: Ok("codex-cli 9.9.9".to_string()),
+                startup,
+                project,
+            }
+            .project_layer(&configured)
         };
+        let off = || accepted(&[("hooks", false), ("network_proxy", false)]);
         assert_eq!(
-            probe(accepted(&[("hooks", true), ("network_proxy", true)])).project_layer(&configured),
-            Some(ProjectLayer::Loaded {
-                feature: "network_proxy".to_string(),
-                value: true
+            judge(off(), accepted(&[("hooks", true), ("network_proxy", true)])),
+            Some(ProjectLayer::ConsistentWithLoading {
+                features: vec![
+                    ("hooks".to_string(), true),
+                    ("network_proxy".to_string(), true)
+                ]
             })
         );
         assert_eq!(
-            probe(accepted(&[("hooks", true), ("network_proxy", false)]))
-                .project_layer(&configured),
+            judge(
+                off(),
+                accepted(&[("hooks", false), ("network_proxy", false)])
+            ),
             Some(ProjectLayer::NotLoaded {
-                feature: "network_proxy".to_string(),
+                feature: "hooks".to_string(),
                 shown: false,
                 configured: true
             })
         );
-        let same = CodexBuilderProbe {
-            version: Ok("codex-cli 9.9.9".to_string()),
-            startup: accepted(&[("hooks", true), ("network_proxy", true)]),
-            project: accepted(&[("hooks", true), ("network_proxy", true)]),
-        };
+        // The review's case: one feature agrees, another contradicts.
         assert_eq!(
-            same.project_layer(&configured),
-            Some(ProjectLayer::Unverified)
+            judge(
+                off(),
+                accepted(&[("hooks", false), ("network_proxy", true)])
+            ),
+            Some(ProjectLayer::Unverified { conflicting: true })
         );
+        // A distinguishing feature missing from the project run.
         assert_eq!(
-            probe(CodexLoad::Rejected("no".to_string())).project_layer(&configured),
-            None
+            judge(off(), accepted(&[("network_proxy", true)])),
+            Some(ProjectLayer::Unverified { conflicting: true })
         );
+        // Nothing tells the runs apart.
+        assert_eq!(
+            judge(
+                accepted(&[("hooks", true), ("network_proxy", true)]),
+                accepted(&[("hooks", true), ("network_proxy", true)])
+            ),
+            Some(ProjectLayer::Unverified { conflicting: false })
+        );
+        assert_eq!(judge(off(), CodexLoad::Rejected("no".to_string())), None);
     }
 }

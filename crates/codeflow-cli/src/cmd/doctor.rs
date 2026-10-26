@@ -337,10 +337,16 @@ fn codex_builder_line(
     );
     let boundary = "doctor cannot observe the boundary a running seat enforces";
     match probe.project_layer(&configured) {
-        Some(ProjectLayer::Loaded { feature, value }) => format!(
-            "{accepted}; the project config loaded there (features.{feature} = {value} appears only with it); {boundary}",
-            feature = shown(&feature)
-        ),
+        Some(ProjectLayer::ConsistentWithLoading { features }) => {
+            let features: Vec<String> = features
+                .iter()
+                .map(|(feature, value)| format!("features.{} = {value}", shown(feature)))
+                .collect();
+            format!(
+                "{accepted}; its feature table there is consistent with the project config loading ({} only in the project folder), which does not prove which config layer supplied it; {boundary}",
+                features.join(", ")
+            )
+        }
         Some(ProjectLayer::NotLoaded {
             feature,
             shown: seen,
@@ -349,7 +355,10 @@ fn codex_builder_line(
             "{accepted}, but Codex did not load the project config there (features.{feature} shows {seen}, the project sets {configured}); trust the project in Codex, or a builder seat runs the restricted startup profile; {boundary}",
             feature = shown(&feature)
         ),
-        Some(ProjectLayer::Unverified) | None => format!(
+        Some(ProjectLayer::Unverified { conflicting: true }) => format!(
+            "{accepted}; whether Codex loaded the project config is unverified, because the features the project sets disagree or are missing; {boundary}"
+        ),
+        Some(ProjectLayer::Unverified { conflicting: false }) | None => format!(
             "{accepted}; whether Codex loaded the project config is unverified, because no feature the project sets differs from the user config; {boundary}"
         ),
     }
