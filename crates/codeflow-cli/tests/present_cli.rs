@@ -3763,7 +3763,6 @@ impl HostMonitor {
             .env("ID", session_id)
             .env("HOME", &fixture.home)
             .env("XDG_STATE_HOME", fixture.home.join("state"))
-            .env(OWNER_PID_ENV, std::process::id().to_string())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
