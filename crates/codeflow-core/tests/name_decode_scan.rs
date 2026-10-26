@@ -263,7 +263,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // process output shown to a person, never compared
     (
         "codeflow-core/src/doctor/mod.rs",
-        "run_captured",
+        "run_captured_with",
         "from_utf8_lossy",
         2,
         "display",
@@ -1521,6 +1521,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-452: doctor's preflight report only prints evidence and decides
     // nothing. A missing or misread catalog, settings file or PATH entry is
     // printed as unavailable, never as configured or observed.
+    // TSK-1003: a probe whose stdout is not UTF-8 is unavailable to a
+    // caller that judges the whole output, never decoded lossily for it.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "run_captured_with",
+        "obtain-absent:from_utf8",
+        1,
+        "format-contract",
+    ),
     // TSK-1003: an unreadable Codex config reports the builder profile line
     // unavailable and runs nothing. Codex's refusal text is trimmed only to
     // print it. Its version line and feature table are read by their
@@ -6857,6 +6866,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/testing/gate_guard.rs", "parse_record", "is_dir", 1, "Type check on the canonical path of a record's dir value, whose error is propagated as not a directory; a dir that is not an existing directory is only left out of the display (shown as unknown), never read as proof of anything."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),

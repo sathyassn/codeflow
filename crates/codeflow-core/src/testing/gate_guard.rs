@@ -26,8 +26,10 @@
 //! lock file is never written: it is opened read only, without following
 //! links, and only locked. The holder record ([`RECORD_FILE`]) is replaced
 //! whole by a new file renamed into place, read without following links,
-//! and shown only through its parsed fields. A link planted in the folder
-//! can be locked or replaced, never written through or printed. The folder
+//! and shown only through validated values (numbers, a known mode, a folder
+//! only when it is an existing directory). A link planted in the folder can
+//! be locked or replaced, never written through, and reveals at most the
+//! name of an existing directory. The folder
 //! stays an advisory coordination boundary: a seat that can write it can
 //! block or split coordination between gates. A record a pre-3.2 gate keeps
 //! inside the lock file is still read while the record file names no holder.
@@ -113,8 +115,8 @@ impl Drop for GateLock {
         for path in &self.paths {
             // Best effort, before the locks release: an uncleared record only
             // reads as a stale lock, which the next gate reclaims. An empty
-            // record also stops a legacy record in the lock file from being
-            // reported again.
+            // record names no holder, so readers fall back to a legacy record
+            // inside the lock file, which a pre-3.2 gate may have left.
             let _ = write_record(path, "");
         }
         // AcquiredFile explicitly unlocks before its descriptor closes.
@@ -253,7 +255,7 @@ pub fn gate_lock_status(root: &Path) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// One status line for the lock at `path`: its holder's parsed fields, or
+/// One status line for the lock at `path`: its holder's validated values, or
 /// that none is recorded.
 fn holder_status(path: &Path) -> Result<String, String> {
     let record = read_holder(path, None).map_err(|error| {
@@ -522,9 +524,9 @@ fn live_groups(record: &str) -> Result<Vec<u32>, String> {
         if let Some(value) = line.strip_prefix("group=") {
             let pgid = value
                 .parse::<u32>()
-                .map_err(|error| format!("invalid group record {line:?}: {error}"))?;
+                .map_err(|_| "a group value is not a target process group".to_string())?;
             if pgid <= 1 {
-                return Err(format!("invalid target process group {pgid}"));
+                return Err("a group value is not a target process group".to_string());
             }
             if group_alive(pgid) {
                 groups.push(pgid);
@@ -709,8 +711,8 @@ fn record_path(lock: &Path) -> PathBuf {
 }
 
 /// The holder record for the lock at `lock`, parsed and rendered again from
-/// its known fields only, so an outside file reached through a planted link
-/// is never printed. The record file is read through an anchored read-only
+/// validated values only ([`parse_record`]), so an outside file reached
+/// through a planted link is never printed. The record file is read through an anchored read-only
 /// open that refuses links. While it is absent or empty, the legacy record
 /// a pre-3.2 gate keeps inside the lock file is read instead, so a gate of
 /// an older binary on the same machine is still seen: through `held` when
@@ -755,11 +757,18 @@ fn read_record(file: &mut File) -> std::io::Result<String> {
     String::from_utf8(bytes).map_err(|_| std::io::Error::other("gate lock record is not UTF-8"))
 }
 
-/// Parse a holder record strictly and render it again from its fields:
-/// `pid`, `started`, `dir` and `mode` at most once each, and `group` lines,
-/// in the order `holder_record` and the group updates write them. Any other
-/// line refuses the whole record, so nothing but these fields is ever
-/// shown. `dir` keeps its text, which the callers print escaped.
+/// The modes a holder record names.
+const LOCK_MODES: [&str; 4] = ["full", "quick", "essential", "reserve"];
+
+/// Parse a holder record strictly and render it again from validated
+/// values only: `pid` as a process number, `started` as a Unix time,
+/// `mode` from [`LOCK_MODES`] (at most once each) and `group` lines as
+/// process group numbers. `dir` is kept only when it names an existing
+/// directory, in its canonical form; otherwise it is left out and shown as
+/// an unknown directory. Any other line refuses the whole record. Errors
+/// are fixed texts that never include the record's text, so a file reached
+/// through a planted link can reveal at most the name of an existing
+/// directory (TSK-1003).
 fn parse_record(text: &str) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut out = String::new();
@@ -767,29 +776,47 @@ fn parse_record(text: &str) -> Result<String, String> {
         let (key, value) = line
             .split_once('=')
             .ok_or_else(|| "a line is not key=value".to_string())?;
-        let valid = match key {
-            "pid" | "started" => !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()),
-            "dir" => !value.is_empty() && !value.chars().any(char::is_control),
-            "mode" => !value.is_empty() && value.bytes().all(|b| b.is_ascii_lowercase()),
-            "group" => {
-                let group = value
-                    .parse::<u32>()
-                    .map_err(|error| format!("invalid group record {line:?}: {error}"))?;
-                if group <= 1 {
-                    return Err(format!("invalid target process group {group}"));
+        let shown = match key {
+            "pid" => value
+                .parse::<u32>()
+                .map(|pid| pid.to_string())
+                .map_err(|_| "a pid value is not a process number".to_string())?,
+            "started" => value
+                .parse::<u64>()
+                .map(|started| started.to_string())
+                .map_err(|_| "a started value is not a Unix time".to_string())?,
+            "mode" => LOCK_MODES
+                .iter()
+                .find(|mode| **mode == value)
+                .map(ToString::to_string)
+                .ok_or_else(|| "a mode value is not a known mode".to_string())?,
+            "group" => match value.parse::<u32>() {
+                Ok(group) if group > 1 => group.to_string(),
+                _ => return Err("a group value is not a target process group".to_string()),
+            },
+            "dir" => {
+                if value.is_empty() || value.chars().any(char::is_control) {
+                    return Err("a dir value is empty or holds a control character".to_string());
                 }
-                true
+                match std::fs::canonicalize(value) {
+                    Ok(canonical) if canonical.is_dir() => canonical.display().to_string(),
+                    // Not an existing directory: shown as unknown, never as
+                    // the record's text.
+                    _ => {
+                        if !seen.insert("dir") {
+                            return Err("a repeated dir".to_string());
+                        }
+                        continue;
+                    }
+                }
             }
             _ => return Err("an unknown key".to_string()),
         };
-        if !valid {
-            return Err(format!("an invalid {key} value"));
-        }
         if key != "group" && !seen.insert(key) {
             return Err(format!("a repeated {key}"));
         }
         // Writing to a String cannot fail.
-        let _ = writeln!(out, "{key}={value}");
+        let _ = writeln!(out, "{key}={shown}");
     }
     Ok(out)
 }
@@ -826,7 +853,10 @@ fn describe_holder(record: &str) -> String {
             .map(str::trim)
     };
     let pid = field("pid").unwrap_or("unknown");
-    let dir = field("dir").map(|d| format!(" in {d}")).unwrap_or_default();
+    let dir = field("dir").map_or_else(
+        || " in an unknown directory".to_string(),
+        |d| format!(" in {d}"),
+    );
     let age = field("started")
         .and_then(|s| s.parse::<u64>().ok())
         .map(|started| {
@@ -926,7 +956,10 @@ mod tests {
     #[test]
     fn a_second_gate_is_refused_naming_the_holder() {
         let tmp = tempfile::tempdir().unwrap();
-        let first = acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/work/a")).unwrap();
+        // The holder's folder is shown only when it exists.
+        let work = std::fs::canonicalize(tmp.path()).unwrap().join("work-a");
+        std::fs::create_dir(&work).unwrap();
+        let first = acquire_full_gate_lock(&dirs(tmp.path()), &work).unwrap();
         assert!(first.notes.is_empty(), "{:?}", first.notes);
 
         let held = acquire_full_gate_lock(&dirs(tmp.path()), Path::new("/work/b")).unwrap_err();
@@ -935,7 +968,10 @@ mod tests {
             message.contains(&format!("pid {}", std::process::id())),
             "{message}"
         );
-        assert!(message.contains("in /work/a"), "{message}");
+        assert!(
+            message.contains(&format!("in {}", work.display())),
+            "{message}"
+        );
         assert!(message.contains("one heavy gate"), "{message}");
 
         drop(first);
@@ -981,7 +1017,7 @@ mod tests {
             lock.notes
                 .iter()
                 .any(|n| n.contains("reclaimed a stale gate lock")
-                    && n.contains("pid 999999 in /gone/worktree")),
+                    && n.contains("pid 999999 in an unknown directory")),
             "{:?}",
             lock.notes
         );
@@ -1016,7 +1052,10 @@ mod tests {
             message.contains(&format!("process group {group}")),
             "{message}"
         );
-        assert!(message.contains("pid 999999 in /gone"), "{message}");
+        assert!(
+            message.contains("pid 999999 in an unknown directory"),
+            "{message}"
+        );
         assert!(
             std::fs::read_to_string(dir.join(LOCK_FILE))
                 .unwrap()
@@ -1259,16 +1298,26 @@ mod tests {
     fn unlink_and_relink_around_the_checks_never_writes_the_outside_file() {
         use std::rc::Rc;
         let tmp = tempfile::tempdir().unwrap();
-        for (index, dir) in [
+        // The first text is no record, so acquisition refuses; the second
+        // parses as a stale record, so acquisition succeeds and the group
+        // update and the drop run under the same interleaving.
+        let cases = [
+            ("SECRET-OUTSIDE\n", false),
+            ("pid=999999\nstarted=1\n", true),
+        ];
+        for (index, (dir, (text, acquires))) in [
             tmp.path().join("home").join(HOME_LOCK_DIR),
             tmp.path().join("repo/.git/codeflow"),
+            tmp.path().join("home2").join(HOME_LOCK_DIR),
+            tmp.path().join("repo2/.git/codeflow"),
         ]
         .into_iter()
+        .zip(cases.iter().chain(cases.iter()).copied())
         .enumerate()
         {
             std::fs::create_dir_all(&dir).unwrap();
             let sentinel = Rc::new(tmp.path().join(format!("outside-{index}")));
-            std::fs::write(&*sentinel, "SECRET-OUTSIDE\n").unwrap();
+            std::fs::write(&*sentinel, text).unwrap();
             let entry = Rc::new(dir.join(LOCK_FILE));
             std::fs::hard_link(&*sentinel, &*entry).unwrap();
             let (s, e) = (Rc::clone(&sentinel), Rc::clone(&entry));
@@ -1278,6 +1327,7 @@ mod tests {
             });
             let result = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"));
             interleave::clear();
+            assert_eq!(result.is_ok(), acquires, "{dir:?}: {result:?}");
             if let Ok(lock) = result {
                 target_group_started(4_000_005);
                 target_group_finished(4_000_005);
@@ -1285,7 +1335,7 @@ mod tests {
             }
             assert_eq!(
                 std::fs::read_to_string(&*sentinel).unwrap(),
-                "SECRET-OUTSIDE\n",
+                text,
                 "outside file changed at {dir:?}"
             );
             let status = holder_status(&dir.join(LOCK_FILE));
@@ -1428,6 +1478,47 @@ mod tests {
         assert_eq!(held.running_groups, vec![group]);
         target.kill().unwrap();
         target.wait().unwrap();
+    }
+
+    /// TSK-1003 round five (SEC-3): text planted in either lock file name,
+    /// at either lock location, never reaches any output: not a refusal,
+    /// not a note and not the status line. A `group` value that is not a
+    /// process group refuses with a fixed message; a `dir` that is not an
+    /// existing directory is shown as unknown.
+    #[test]
+    fn planted_record_text_never_reaches_any_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut case = 0;
+        for location in ["home/locks", "repo/.git/codeflow"] {
+            for name in [LOCK_FILE, RECORD_FILE] {
+                for planted in [
+                    "pid=999999\ngroup=SECRET\n",
+                    "pid=999999\ndir=/SECRET-dir\n",
+                    "pid=999999\nmode=SECRET\n",
+                ] {
+                    case += 1;
+                    let dir = tmp.path().join(format!("case-{case}")).join(location);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(dir.join(name), planted).unwrap();
+                    let mut output = String::new();
+                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE)));
+                    match acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")) {
+                        Ok(lock) => {
+                            output.push_str(&lock.notes.join("\n"));
+                            drop(lock);
+                        }
+                        Err(held) => {
+                            let _ = write!(output, "{held}\n{held:?}");
+                        }
+                    }
+                    let _ = writeln!(output, "{:?}", holder_status(&dir.join(LOCK_FILE)));
+                    assert!(
+                        !output.contains("SECRET"),
+                        "{location}/{name} {planted:?}:\n{output}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

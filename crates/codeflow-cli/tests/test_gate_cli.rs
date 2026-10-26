@@ -556,7 +556,8 @@ fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let err = stderr(&output);
     assert_eq!(output.status.code(), Some(0), "{err}");
     assert!(
-        err.contains("reclaimed a stale gate lock") && err.contains("pid 999999 in /gone"),
+        err.contains("reclaimed a stale gate lock")
+            && err.contains("pid 999999 in an unknown directory"),
         "{err}"
     );
 }

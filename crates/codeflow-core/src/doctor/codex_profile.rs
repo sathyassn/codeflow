@@ -151,12 +151,13 @@ fn probe_with_timeout(root: &Path, codex: &Path, timeout: Duration) -> CodexBuil
             project: CodexLoad::NotRun(reason),
         };
     };
-    let version = match super::run_captured(program, &["--version"], timeout, Some(""), None) {
-        Ok(run) if run.code == Some(0) => cli_version(&run.stdout)
-            .ok_or_else(|| "codex --version did not print a codex-cli version".to_string()),
-        Ok(_) => Err("codex --version failed".to_string()),
-        Err(reason) => Err(format!("codex --version did not run: {reason}")),
-    };
+    let version =
+        match super::run_captured_complete(program, &["--version"], timeout, Some(""), None) {
+            Ok(run) if run.code == Some(0) => cli_version(&run.stdout)
+                .ok_or_else(|| "codex --version did not print a codex-cli version".to_string()),
+            Ok(_) => Err("codex --version failed".to_string()),
+            Err(reason) => Err(format!("codex --version did not run: {reason}")),
+        };
     let startup = match tempfile::tempdir() {
         Ok(empty) => load(program, empty.path(), timeout),
         Err(error) => CodexLoad::NotRun(format!("no temporary folder: {error}")),
@@ -246,7 +247,7 @@ fn load(program: &str, cwd: &Path, timeout: Duration) -> CodexLoad {
         args.push("-c");
         args.push(value);
     }
-    let run = match super::run_captured(program, &args, timeout, Some(""), Some(cwd)) {
+    let run = match super::run_captured_complete(program, &args, timeout, Some(""), Some(cwd)) {
         Ok(run) => run,
         Err(reason) => return CodexLoad::NotRun(reason),
     };

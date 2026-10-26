@@ -161,6 +161,9 @@ enum Fake {
     RejectsProject,
     /// Exits 0 and prints nothing.
     PrintsNothing,
+    /// Prints a junk line, then exactly 64 KiB of valid feature rows, so
+    /// the last 64 KiB alone look like a whole valid table.
+    PadsOutput,
     /// In the project folder shows `network_proxy` with the project's value
     /// but `hooks` without it: contradictory evidence.
     Contradicts,
@@ -186,6 +189,7 @@ fn fake_codex(fake: Fake) -> tempfile::TempDir {
         Fake::RejectsStartup => "if [ ! -f .codex/config.toml ]; then\n  echo 'Error loading configuration: default_permissions requires a `[permissions]` table' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  true\\n'\n",
         Fake::RejectsProject => "if [ -f .codex/config.toml ]; then\n  echo 'Error loading configuration: unknown permission key' >&2\n  exit 1\nfi\nprintf 'network_proxy  stable  false\\n'\n",
         Fake::PrintsNothing => "",
+        Fake::PadsOutput => "echo 'JUNK'\ni=0\nwhile [ $i -lt 2048 ]; do printf 'f%05d             stable  true\\n' $i; i=$((i+1)); done\n",
         Fake::Contradicts => "proxy=false\nif [ -f .codex/config.toml ]; then proxy=true; fi\nprintf 'hooks  stable  false\\nnetwork_proxy  stable  %s\\n' \"$proxy\"\n",
     };
     let script = format!(
@@ -439,5 +443,18 @@ fn only_a_planted_codex_means_codex_unavailable() {
     assert!(
         out.contains("codex builder profile: unavailable: codex not found on PATH"),
         "{out}"
+    );
+}
+
+/// TSK-1003: output larger than the capture bound is never judged from its
+/// tail. A table whose last 64 KiB look valid is unavailable, not accepted.
+#[cfg(unix)]
+#[test]
+fn output_over_the_capture_bound_is_unavailable() {
+    let project = builder_project();
+    let (line, _bin) = builder_line(project.path(), Fake::PadsOutput);
+    assert!(
+        line.starts_with("codex builder profile: unavailable: not checked without a project config: it printed more than 64 KiB on a stream, so its output was not judged"),
+        "{line}"
     );
 }
