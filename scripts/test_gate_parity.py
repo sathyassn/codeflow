@@ -377,7 +377,8 @@ class GateBinaryControls(unittest.TestCase):
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$(python -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" filter ${{ matrix.partition }})"')
+                '-E "$FILTER"')
+PARTITION_FILTER = "FILTER: ${{ fromJSON(needs.judge.outputs.partitions)[format('{0}', matrix.partition)] }}"
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -427,14 +428,28 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
-                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" filter '
-                                                             '${{ matrix.partition }})"',
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$FILTER"',
                                                              "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
                 workflow = WORKFLOW.replace("run: " + old, "run: " + new)
                 self.assertNotEqual(workflow, WORKFLOW)
                 self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(workflow))
+
+    def test_a_filter_the_judge_job_did_not_select_is_drift(self):
+        # TSK-1001: the partition filter is the judge job's output for this
+        # partition, refused when empty; a filter the partition job computes
+        # itself, after checking out the pull request, is not the base's.
+        self.assertIn(PARTITION_FILTER, WORKFLOW)
+        for old, new in ((PARTITION_FILTER, 'FILTER: ${{ matrix.partition }}'),
+                         (PARTITION_FILTER, PARTITION_FILTER.replace("outputs.partitions", "outputs.shards")),
+                         ("    needs: [windows-build, judge]\n", "    needs: windows-build\n"),
+                         ('        run: test -n "$FILTER"\n\n      - name: Fetch the test archive',
+                          '        run: true\n\n      - name: Fetch the test archive')):
+            with self.subTest(new=new):
+                workflow = WORKFLOW.replace(old, new)
+                self.assertNotEqual(workflow, WORKFLOW)
+                self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
 
 
 class GatePartControls(unittest.TestCase):
@@ -804,11 +819,16 @@ class CoverageShardControls(unittest.TestCase):
                         run.replace(" -E", " --lib -E")):
             with self.subTest(changed=changed):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
-        self.assert_problem(self.EXACT, WORKFLOW.replace('coverage-shards.py" filter ${{ matrix.shard }}',
-                                                         'coverage-shards.py" filter 1'))
-        # The filter must come from the base's judge copy (TSK-1001).
-        self.assert_problem(self.EXACT, WORKFLOW.replace('"$CODEFLOW_JUDGE/scripts/coverage-shards.py" filter',
-                                                         'scripts/coverage-shards.py filter'))
+        # The filter is the judge job's selection for this shard (TSK-1001):
+        # another slot, a filter computed here or no emptiness check is refused.
+        shard = "FILTER: ${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}"
+        self.assertIn(shard, WORKFLOW)
+        self.assert_problem(self.EXACT, WORKFLOW.replace(shard, shard.replace("matrix.shard", "'1'")))
+        self.assert_problem(self.EXACT, WORKFLOW.replace(
+            shard, 'FILTER: $(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})'))
+        self.assert_problem(self.EXACT, WORKFLOW.replace("    needs: [reuse, judge]\n", "    needs: reuse\n"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace('        run: test -n "$FILTER"\n      - name: Remove old',
+                                                         '        run: true\n      - name: Remove old'))
         self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
                                                          "        run: true\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"

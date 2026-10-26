@@ -131,7 +131,7 @@ jobs:
           # job runs.
           elif python3 -m venv "${RUNNER_TEMP}/admission" \
             && "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes \
-              --no-deps -r scripts/requirements-admission.txt; then
+              --no-deps --only-binary=:all: -r scripts/requirements-admission.txt; then
             "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" \
               --pull "$PR_NUMBER" --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" \
               --run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml \
@@ -172,6 +172,43 @@ jobs:
           path: ${{ runner.temp }}/provenance.jwt
           retention-days: 30
           if-no-files-found: error
+
+  # The gate's selection (TSK-1001): the coverage shards' and the Windows
+  # partitions' test filters, computed from the base revision's selection
+  # scripts and measured data in a job that runs no pull request code, and
+  # handed to the shard and partition jobs as job outputs. A pull request
+  # cannot narrow what its gate selects, and no step of its own can rewrite
+  # the selection between computing and using it.
+  judge:
+    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    name: gate selection
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.select.outputs.shards }}
+      partitions: ${{ steps.select.outputs.partitions }}
+    steps:
+      # A pull request's base commit; any other event's own, protected commit.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Select the shards and partitions from the base
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, subprocess
+          for name, script, data in (("shards", "scripts/coverage-shards.py", "scripts/coverage-test-times.json"),
+                                     ("partitions", "scripts/windows-partitions.py", "scripts/windows-test-times.json")):
+              count = int(json.load(open(data))["partitions"])
+              found = {str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n)], check=True,
+                                              capture_output=True, text=True).stdout.strip() for n in range(1, count + 1)}
+              assert count > 0 and all(found.values()), f"{script} selected nothing for a slot"
+              print(f"{name}={json.dumps(found, sort_keys=True)}")
+          PY
 
   # The release binary every gate part runs `codeflow test` with is built
   # once here and shared as an artifact, never rebuilt per part (TSK-449).
@@ -469,37 +506,17 @@ jobs:
   gates-coverage:
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: codeflow gates (coverage ${{ matrix.shard }} of 2)
-    needs: reuse
+    needs: [reuse, judge]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      FILTER: ${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      # The gate's judge files come from the base revision (TSK-1001): the
-      # selection scripts, their measured data and self-tests, the journey
-      # map and the test config the coverage floors are read from. They are
-      # unpacked beside the checkout and run from there, so a pull request
-      # cannot narrow what its gate selects or the floor it must meet, and
-      # the code under test, the pull request's, keeps its own copies.
-      - name: Take the gate's judge files from the base
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = pull_request ]; then
-            judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
-            rm -rf "$judge" && mkdir -p "$judge"
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
-          else
-            judge="$(pwd)"
-          fi
-          echo "CODEFLOW_JUDGE=${judge}" >> "$GITHUB_ENV"
       - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
@@ -528,6 +545,8 @@ jobs:
         run: python3 -B scripts/with-node.py crates/codeflow-present/web/.node-version "npm ci --no-audit --ignore-scripts --prefix crates/codeflow-present/web && npm run build --prefix crates/codeflow-present/web"
       # A --no-report run adds to the profiles already in the target
       # directory, so any the cache restored are removed first.
+      - name: The gate selection gave this shard a filter
+        run: test -n "$FILTER"
       - name: Remove old coverage profiles
         run: cargo llvm-cov clean --workspace
       # The rust-coverage command with --no-report, on this shard's tests.
@@ -539,7 +558,7 @@ jobs:
         shell: bash
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E "$(python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" filter ${{ matrix.shard }})"
+        run: cargo llvm-cov nextest --workspace --no-fail-fast --no-report --profile codeflow -E "$FILTER"
       # The full report keeps each function's counters, which the report job
       # adds up. The test list for the partition check comes from these same
       # binaries: under the llvm-cov environment and in the llvm-cov target
@@ -596,7 +615,7 @@ jobs:
             judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
             rm -rf "$judge" && mkdir -p "$judge"
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
           else
             judge="$(pwd)"
           fi
@@ -624,7 +643,7 @@ jobs:
       # rust-coverage target's --fail-under-lines.
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards 2 target/coverage/data
+        run: python3 -I -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards 2 target/coverage/data
 
       # The journey-gate target's command, on the shards' results.
       - name: journey gate
@@ -632,14 +651,14 @@ jobs:
         shell: bash
         env:
           CODEFLOW_GATE_RESULTS: target/coverage/results
-        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_journey_gate.py" && python3 -B "$CODEFLOW_JUDGE/scripts/journey-gate.py" --part results --results "$CODEFLOW_GATE_RESULTS"
+        run: python3 -I -B "$CODEFLOW_JUDGE/scripts/test_journey_gate.py" && python3 -I -B "$CODEFLOW_JUDGE/scripts/journey-gate.py" --part results --results "$CODEFLOW_GATE_RESULTS"
 
       # Fails when a listed test ran in no shard, in two, or outside the
       # shard the plan gives it, and prints each shard's test time.
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
+        run: python3 -I -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list target/coverage/results/coverage-shard-1/tests.json target/coverage/results/coverage-shard-2/tests.json --results target/coverage/results
 
   # The required check runs on every event, even when a part
   # fails, is cancelled or did not run. Draft integration pull requests and
@@ -762,37 +781,17 @@ jobs:
   windows-tests:
     if: ${{ !cancelled() && needs.windows-build.result == 'success' && (github.event_name == 'pull_request' && !github.event.pull_request.draft && (contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || startsWith(github.event.pull_request.base.ref, 'integration/')) || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: windows tests (${{ matrix.partition }} of 12)
-    needs: windows-build
+    needs: [windows-build, judge]
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      FILTER: ${{ fromJSON(needs.judge.outputs.partitions)[format('{0}', matrix.partition)] }}
     strategy:
       fail-fast: false
       matrix:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      # The gate's judge files come from the base revision (TSK-1001): the
-      # selection scripts, their measured data and self-tests, the journey
-      # map and the test config the coverage floors are read from. They are
-      # unpacked beside the checkout and run from there, so a pull request
-      # cannot narrow what its gate selects or the floor it must meet, and
-      # the code under test, the pull request's, keeps its own copies.
-      - name: Take the gate's judge files from the base
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = pull_request ]; then
-            judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
-            rm -rf "$judge" && mkdir -p "$judge"
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
-          else
-            judge="$(pwd)"
-          fi
-          echo "CODEFLOW_JUDGE=${judge}" >> "$GITHUB_ENV"
       - name: Install the differential shells
         id: shells
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
@@ -813,6 +812,10 @@ jobs:
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-nextest@0.9.129
+
+      - name: The gate selection gave this partition a filter
+        shell: bash
+        run: test -n "$FILTER"
 
       - name: Fetch the test archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -839,7 +842,7 @@ jobs:
       # compiled in, and the report at target/nextest/codeflow/junit.xml.
       - name: cargo nextest run (one partition, from the archive)
         shell: bash
-        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$(python -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" filter ${{ matrix.partition }})"
+        run: cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite --no-fail-fast --profile codeflow -E "$FILTER"
 
       - name: Keep this partition's results for the journey gate
         if: always()
@@ -920,7 +923,7 @@ jobs:
 
       - name: journey gate (Python journeys)
         shell: bash
-        run: python scripts/journey-gate.py --part python --skip-benchmark
+        run: python -I -B scripts/journey-gate.py --part python --skip-benchmark
 
   # Consume this raw run's exact results from every partition. Unix-only
   # journeys and the own read-benchmark target are disclosed as skipped on
@@ -951,7 +954,7 @@ jobs:
             judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
             rm -rf "$judge" && mkdir -p "$judge"
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
           else
             judge="$(pwd)"
           fi
@@ -977,14 +980,14 @@ jobs:
 
       - name: journey gate
         shell: bash
-        run: python "$CODEFLOW_JUDGE/scripts/test_journey_gate.py" && python "$CODEFLOW_JUDGE/scripts/journey-gate.py" --results target/nextest/partitions --skip-benchmark --part results
+        run: python -I -B "$CODEFLOW_JUDGE/scripts/test_journey_gate.py" && python -I -B "$CODEFLOW_JUDGE/scripts/journey-gate.py" --results target/nextest/partitions --skip-benchmark --part results
 
       # Fails when a listed test ran in no partition, in two, or outside the
       # partition the plan gives it, and prints each partition's test time.
       - name: Every test ran in exactly one partition
         if: ${{ !cancelled() }}
         shell: bash
-        run: python "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python "$CODEFLOW_JUDGE/scripts/windows-partitions.py" check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
+        run: python -I -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python -I -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" check --list target/nextest/list/windows-tests.json --results target/nextest/partitions
 
   # The required Windows check runs on every event, even
   # when a job fails, is cancelled or did not run. Draft integration pull

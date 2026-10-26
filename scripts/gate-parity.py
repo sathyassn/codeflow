@@ -94,7 +94,13 @@ ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --a
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
     r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B "\$CODEFLOW_JUDGE/scripts/windows-partitions\.py" filter \$\{\{ matrix\.partition \}\}\)"$')
+    r'-E "\$FILTER"$')
+# TSK-1001: the filter is the base's selection, computed by the `judge` job
+# from the base revision and handed over as a job output; the partition job
+# reads it from that output only and refuses an empty one.
+PARTITION_FILTER = ("    env:\n"
+                    "      FILTER: ${{ fromJSON(needs.judge.outputs.partitions)[format('{0}', matrix.partition)] }}")
+FILTER_CHECK = 'run: test -n "$FILTER"'
 PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
 
@@ -130,7 +136,11 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
             archived = ARCHIVED_RUN.match(cmd)
             if archived:
                 count = planned_partitions() if planned is None else planned
-                if archived.group(1) not in archives:
+                lines = norm_job(text)
+                if (PARTITION_FILTER not in "\n".join(lines) or "    needs: [windows-build, judge]" not in lines
+                        or not any(line.strip() == FILTER_CHECK for line in lines)):
+                    cmd = f"{cmd} (the filter is not the judge job's selection for this partition)"
+                elif archived.group(1) not in archives:
                     cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
                 elif partitions != list(range(1, count + 1)):
                     cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
@@ -225,6 +235,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
     problems.extend(build_job_problems(jobs, gate))
     problems.extend(reuse_job_problems(jobs))
     line = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+    problems.extend(selection_job_problems(jobs, line.group(1) if line else "<the gates job's condition>"))
     guarded = GATES_IF.match(line.group(1)) if line else None
     problems.extend(coverage_job_problems(cfg, jobs, guarded.group(1) if guarded else ""))
     return problems
@@ -242,7 +253,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # the planner's (scripts/test_windows_partitions.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
 SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
-SHARD_FILTER = '-E "$(python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" filter ${{ matrix.shard }})"'
+SHARD_FILTER = '-E "$FILTER"'
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
 # TSK-1001: every gate job that selects tests or judges floors takes these
 # judge files from the base revision first, so a pull request cannot narrow
@@ -250,7 +261,8 @@ COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-u
 JUDGE_FILES = (".codeflow/test-config.json", "crates/codeflow-cli/tests/journey_gate.toml",
                "scripts/coverage-merge.py", "scripts/coverage-shards.py", "scripts/coverage-test-times.json",
                "scripts/journey-gate.py", "scripts/windows-partitions.py", "scripts/windows-test-times.json",
-               "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py")
+               "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py",
+               "scripts/fixtures/coverage-merge")
 JUDGE_STEP = """\
       - name: Take the gate's judge files from the base
         shell: bash
@@ -263,7 +275,7 @@ JUDGE_STEP = """\
             judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
             rm -rf "$judge" && mkdir -p "$judge"
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py scripts/fixtures/coverage-merge | tar -x -C "$judge"
           else
             judge="$(pwd)"
           fi
@@ -272,16 +284,18 @@ JUDGE_STEP = """\
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
     name: codeflow gates (coverage ${{ matrix.shard }} of @COUNT@)
-    needs: reuse
+    needs: [reuse, judge]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      FILTER: ${{ fromJSON(needs.judge.outputs.shards)[format('{0}', matrix.shard)] }}
     strategy:
       fail-fast: false
       matrix:
         shard: [@SHARDS@]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-@JUDGE@      - name: Install the differential shells
+      - name: Install the differential shells
         run: sudo apt-get update && sudo apt-get install -y bash zsh dash
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
@@ -303,6 +317,8 @@ COVERAGE_JOB = """\
       - name: present-web-build
         shell: bash
         run: @WEB_BUILD@
+      - name: The gate selection gave this shard a filter
+        run: test -n "$FILTER"
       - name: Remove old coverage profiles
         run: cargo llvm-cov clean --workspace
       - name: cargo llvm-cov nextest (one shard)
@@ -360,7 +376,7 @@ COVERAGE_REPORT_JOB = """\
           path: target/coverage/results
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards @COUNT@ target/coverage/data
+        run: python3 -I -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards @COUNT@ target/coverage/data
       - name: journey gate
         if: ${{ !cancelled() }}
         shell: bash
@@ -370,14 +386,15 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list @LISTS@ --results target/coverage/results
+        run: python3 -I -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python3 -I -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list @LISTS@ --results target/coverage/results
 """
 
 
 def judged(command: str) -> str:
     """`command` with each `scripts/<name>.py` it runs taken from the base's
     judge directory, as the coverage report runs the journey gate."""
-    return re.sub(r'(?<![\w/"$])scripts/([\w-]+\.py)', r'"$CODEFLOW_JUDGE/scripts/\1"', command)
+    judged = re.sub(r'(?<![\w/"$])scripts/([\w-]+\.py)', r'"$CODEFLOW_JUDGE/scripts/\1"', command)
+    return judged.replace('python3 -B "$CODEFLOW_JUDGE/', 'python3 -I -B "$CODEFLOW_JUDGE/')
 
 
 def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, list[str]]:
@@ -467,7 +484,7 @@ REUSE_JOB = """\
               --push-only "reuse a pull request verdict" --require "codeflow gates" --require windows
           elif python3 -m venv "${RUNNER_TEMP}/admission" \\
             && "${RUNNER_TEMP}/admission/bin/pip" install --quiet --disable-pip-version-check --require-hashes \\
-              --no-deps -r scripts/requirements-admission.txt; then
+              --no-deps --only-binary=:all: -r scripts/requirements-admission.txt; then
             "${RUNNER_TEMP}/admission/bin/python" -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" \\
               --pull "$PR_NUMBER" --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" \\
               --run-id "$GITHUB_RUN_ID" --trusted-file .github/workflows/codeflow-ci.yml \\
@@ -557,6 +574,52 @@ def build_job_problems(jobs: dict[str, str], gate: str) -> list[str]:
     if "name: codeflow-release" not in gate or 'echo "$RUNNER_TEMP/codeflow-bin" >> "$GITHUB_PATH"' not in gate:
         problems.append("each gate part must fetch the codeflow-release build and put it on PATH")
     return problems
+
+
+# TSK-1001: the gate's selection is computed in a job that runs no pull
+# request code: it checks out the base revision (a pull request's base, any
+# other event's own commit), runs only that revision's selection scripts in
+# isolated mode and hands each slot's filter to the shard and partition jobs
+# as a job output. A step those jobs run after checking out the pull request
+# cannot rewrite it.
+SELECTION_JOB = """\
+    if: {condition}
+    name: gate selection
+    needs: reuse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      shards: ${{{{ steps.select.outputs.shards }}}}
+      partitions: ${{{{ steps.select.outputs.partitions }}}}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{{{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}}}
+          persist-credentials: false
+      - name: Select the shards and partitions from the base
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, subprocess
+          for name, script, data in (("shards", "scripts/coverage-shards.py", "scripts/coverage-test-times.json"),
+                                     ("partitions", "scripts/windows-partitions.py", "scripts/windows-test-times.json")):
+              count = int(json.load(open(data))["partitions"])
+              found = {{str(n): subprocess.run(["python3", "-I", "-B", script, "filter", str(n)], check=True,
+                                              capture_output=True, text=True).stdout.strip() for n in range(1, count + 1)}}
+              assert count > 0 and all(found.values()), f"{{script}} selected nothing for a slot"
+              print(f"{{name}}={{json.dumps(found, sort_keys=True)}}")
+          PY
+"""
+
+
+def selection_job_problems(jobs: dict[str, str], condition: str) -> list[str]:
+    expected = SELECTION_JOB.format(condition=condition)
+    if norm_job(jobs.get("judge", "")) != norm_job(expected):
+        return ["the `judge` job must be exactly this, so the gate's selection comes from the base revision "
+                "in a job that runs no pull request code:\n" + expected]
+    return []
 
 
 def reuse_job_problems(jobs: dict[str, str]) -> list[str]:

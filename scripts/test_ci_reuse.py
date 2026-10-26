@@ -496,7 +496,7 @@ class AdmissionTests(unittest.TestCase):
     def test_the_token_is_verified_by_the_library_under_an_archival_time_policy(self):
         # Review 3 finding 4: PyJWT with cryptography verifies the token.
         # It is archival evidence: an expired token still admits, but iat,
-        # nbf and exp must be present and numeric, nbf no later than exp,
+        # nbf and exp must be present, finite numbers with nbf <= iat <= exp,
         # and iat inside the run's own window.
         name = "codeflow-provenance-1"
         def refuse(value, needle):
@@ -509,8 +509,16 @@ class AdmissionTests(unittest.TestCase):
         for field in ("iat", "nbf", "exp"):
             with self.subTest(field=field):
                 refuse(token({field: "soon"}), "")
-        refuse(token({"nbf": ISSUED + 600, "exp": ISSUED + 300}), "ends before it begins")
-        refuse(token({"iat": ISSUED - 7200}), "outside run 77's window")
+        # Review 4: each time is a finite number, and the token was issued
+        # inside its own validity (nbf <= iat <= exp).
+        for field in ("iat", "nbf", "exp"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(field=field, value=value):
+                    refuse(token({field: value}), "not a finite number")
+        refuse(token({"nbf": ISSUED + 600, "exp": ISSUED + 300}), "out of order")
+        refuse(token({"nbf": ISSUED + 5, "exp": ISSUED + 300}), "out of order")
+        refuse(token({"nbf": ISSUED - 600, "exp": ISSUED - 300}), "out of order")
+        refuse(token({"iat": ISSUED - 7200, "nbf": ISSUED - 7205, "exp": ISSUED - 6900}), "outside run 77's window")
         refuse(token({"iat": ISSUED + 7200, "nbf": ISSUED + 7200, "exp": ISSUED + 7500}), "outside run 77's window")
         api = AdmissionApi(runs=[admission_run(run_started_at=None)])
         self.assertIn("no readable start and end times", self.refused(api))

@@ -56,7 +56,11 @@ jobs:
       # takes a codeflow from PATH, and nothing of the candidate is built.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
+      # Restore only: a pull_request_target run never saves a cache a later
+      # trusted run could restore (TSK-1001).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: false
       - name: Build the target's codeflow that reads the body
         run: cargo build --release --locked -p codeflow-cli
       - name: Fetch the pull request head as data

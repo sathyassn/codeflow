@@ -68,6 +68,7 @@ import zipfile
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -383,11 +384,13 @@ def verify_token(token: str, keys: list[dict], run: dict) -> dict:
         raise Skip(f"the provenance token does not verify: {type(error).__name__}: {error}") from error
     times = {name: claims.get(name) for name in ("iat", "nbf", "exp")}
     bad = sorted(name for name, value in times.items()
-                 if isinstance(value, bool) or not isinstance(value, (int, float)))
+                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value))
     if bad:
-        raise Skip(f"the provenance token's {', '.join(bad)} is missing or not a number")
-    if times["nbf"] > times["exp"]:
-        raise Skip("the provenance token's validity ends before it begins")
+        raise Skip(f"the provenance token's {', '.join(bad)} is missing or not a finite number")
+    # Issued inside its own validity: not before it starts, not after it ends.
+    if not times["nbf"] <= times["iat"] <= times["exp"]:
+        raise Skip(f"the provenance token's times are out of order (nbf {times['nbf']}, iat {times['iat']}, "
+                   f"exp {times['exp']}); a token is issued inside its own validity")
     started, ended = epoch(run.get("run_started_at")), epoch(run.get("updated_at"))
     if started is None or ended is None:
         raise Skip(f"run {run.get('id')} has no readable start and end times to bind its token to")
