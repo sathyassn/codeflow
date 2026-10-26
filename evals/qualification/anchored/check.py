@@ -8,6 +8,9 @@ with), so emphasis, list markers and code blocks read as a reader sees them.
 Figures are read from their declarations: the words a composition draws, its
 marks and its states. Whether a fact is invented stays with the judged grade.
 
+The parser is pinned in requirements.txt beside this file; markdown_env.py
+installs the pins with `--require-hashes --no-deps` when they are missing.
+
 Usage: python3 -B check.py <case-id> <document.json>
 Prints one JSON object: {"signals": [...], "violations": [...]}.
 """
@@ -18,10 +21,11 @@ import json
 import re
 import sys
 
-try:
-    from markdown_it import MarkdownIt
-except ImportError as error:  # pragma: no cover - evaluator setup
-    raise SystemExit("check.py needs markdown-it-py: python3 -m pip install markdown-it-py") from error
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+import markdown_env  # noqa: E402
+
+markdown_env.ensure()
+from markdown_it import MarkdownIt  # noqa: E402
 
 MIGRATION = "migration-review-leads-with-the-picture"
 RETRY = "retry-review-opens-with-the-whole"
@@ -41,12 +45,44 @@ RETRY_TERMS = {
 # attempt, and the operator requeue out of the dead-letter queue.
 RETRY_MECHANISM = {
     "dead-letter": ("dead-letter", "dead letter"),
-    "backoff": ("30 s", "30 seconds", "60 s", "60 seconds"),
     "lost lease": ("lease lost", "lost lease", "loses its lease", "lease expires"),
     "no attempt counted": ("no attempt", "not counted", "does not count"),
     "requeue": ("requeue",),
     "visibility timeout": ("visibility timeout",),
 }
+# The facts RETRY.md states, read exactly. Durations are (value, unit) with
+# the unit in seconds or minutes, in any of the usual notations ("30 s",
+# "30s", "30 sec", "30 seconds"). The mechanism figure draws every one of
+# them, and no figure draws another duration or another failure count.
+DURATION = re.compile(r"(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m)\b")
+RETRY_DURATIONS = {(30, "s"), (60, "s"), (5, "min")}
+ORDINALS = {
+    "first": 1, "1st": 1, "one": 1, "second": 2, "2nd": 2, "two": 2, "third": 3, "3rd": 3,
+    "three": 3, "fourth": 4, "4th": 4, "four": 4, "fifth": 5, "5th": 5, "five": 5,
+}
+RETRY_DEAD_LETTER_FAILURE = 3
+# Words that state a thing was not measured; a sentence about the outage
+# carries the uncertainty only with one of them.
+UNMEASURED = re.compile(
+    r"\b(not (?:been )?(?:measured|tested|run)|unmeasured|untested|no measurement|never measured)\b"
+)
+
+
+def durations(text: str) -> set[tuple[int, str]]:
+    found = set()
+    for value, unit in DURATION.findall(text.lower()):
+        found.add((int(value), "min" if unit.startswith("m") else "s"))
+    return found
+
+
+def failure_counts(text: str) -> set[int]:
+    """The failure counts a text states: an ordinal or number next to
+    "fail", "failure" or "failed attempt"."""
+    found = set()
+    pattern = r"\b(" + "|".join(ORDINALS) + r"|\d+)\s+(?:failed|failure|fails?)\b"
+    for word in re.findall(pattern, text.lower()):
+        found.add(int(word) if word.isdigit() else ORDINALS[word])
+    return found
 
 
 class Narrative:
@@ -165,7 +201,40 @@ def figure_draws_mechanism(figure: dict) -> bool:
         labels = labelled_marks(figure, composition)
         if not all(has_any(labels, words) for words in RETRY_MECHANISM.values()):
             return False
+        if durations(labels) != RETRY_DURATIONS:
+            return False
+        if failure_counts(labels) != {RETRY_DEAD_LETTER_FAILURE}:
+            return False
     return True
+
+
+def retry_facts_wrong(figures: list[dict]) -> bool:
+    """A figure draws a duration or a failure count RETRY.md does not state."""
+    for figure in figures:
+        for composition in ("wide", "narrow"):
+            words = drawn_words(figure, composition) + " " + figure.get("caption", "").lower()
+            if not durations(words) <= RETRY_DURATIONS:
+                return True
+            if not failure_counts(words) <= {RETRY_DEAD_LETTER_FAILURE}:
+                return True
+    return False
+
+
+def prose_sentences(blocks: list[dict]) -> list[str]:
+    """Every sentence of the document's prose: narrative paragraphs and list
+    items, captions and decision prompts."""
+    texts = []
+    for block in walk(blocks):
+        parsed = narrative(block)
+        if parsed:
+            texts += parsed.paragraphs + parsed.list_text
+        figure = declaration(block)
+        if figure:
+            texts.append(figure.get("caption", ""))
+        for key in ("markdown", "caption", "prompt"):
+            if block.get("type") != "narrative" and isinstance(block.get(key), str):
+                texts.append(block[key])
+    return [s for text in texts for s in re.split(r"(?<=[.!?;])\s+", text) if s]
 
 
 def check(case: str, document: dict) -> dict:
@@ -249,8 +318,10 @@ def check(case: str, document: dict) -> dict:
             b.get("type") == "table" for b in blocks
         ):
             violations.append("table_as_main_carrier")
-        if "outage" in json.dumps(blocks).lower():
+        if any("outage" in s.lower() and UNMEASURED.search(s.lower()) for s in prose_sentences(blocks)):
             signals.append("unmeasured_outage_stated")
+        if retry_facts_wrong(figures):
+            violations.append("fact_invented")
     else:
         raise SystemExit(f"unknown case {case}")
     return {"signals": sorted(set(signals)), "violations": sorted(set(violations))}

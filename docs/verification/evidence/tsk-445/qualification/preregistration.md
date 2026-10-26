@@ -24,10 +24,16 @@ Registered before any trial launched, 2026-10-26T20:16:03Z.
 - Order: sequential, retry case then migration case, candidate arm first
   in each pair.
 - Grading: the present document the subject opened (its stored revision),
-  graded by evals/qualification/anchored/check.py, which reads the
-  Markdown as CommonMark and the figure declarations for every structural
-  and retry signal; the migration facts are judged by the evaluator, Claude Opus 5.5, against the fixture's
-  grading note. The other-lineage grading pass is owed to the primary.
+  graded by `evals/qualification/anchored/check.py` under the parser pinned
+  in `anchored/requirements.txt`. The checker settles the structure (anchor,
+  sections, nested asks, titles) and the retry facts exactly: the 30 and 60
+  second backoff and the 5 minute timeout in any usual notation, the
+  dead-letter step after the third failure, the lost lease, the requeue, and
+  the outage named as not measured. A judged pass by the evaluator, Claude
+  Opus 5.5, against the fixture's grading note covers what it cannot: the
+  migration facts (downtime, cost, evidence), any fact the retry figures
+  draw beyond those, and whether each figure is legible. The other-lineage
+  grading pass is owed to the primary.
 - Pass for AC-7: the candidate retry trial opens with an anchor and an
   orienting figure and carries the mechanism in a figure, with no
   prohibited signal.

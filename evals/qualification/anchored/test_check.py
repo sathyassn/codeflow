@@ -7,7 +7,10 @@ import json
 import unittest
 from pathlib import Path
 
-from check import MIGRATION, RETRY, check
+import markdown_env
+
+markdown_env.ensure()
+from check import MIGRATION, RETRY, check  # noqa: E402
 
 CONTROLS = Path(__file__).resolve().parents[2] / "model-artifacts/method-controls"
 
@@ -72,6 +75,18 @@ class RetryCase(unittest.TestCase):
         life["narrow"]["draw"] = [item for item in life["narrow"]["draw"] if item.get("id") != "requeue"
                                   and "requeue" not in item.get("for", [])]
         self.assertNotIn("retry_mechanism_carried_by_a_figure", check(RETRY, document)["signals"])
+
+    def test_wrong_facts_fail_and_an_equivalent_notation_passes(self):
+        # Codex round 3 mutations of the passing control, committed as controls.
+        for name in ("retry/faulty-backoff-90s.json", "retry/faulty-second-failure.json"):
+            with self.subTest(name=name):
+                result = check(RETRY, control(RETRY, name))
+                self.assertNotIn("retry_mechanism_carried_by_a_figure", result["signals"])
+                self.assertIn("fact_invented", result["violations"])
+        measured = check(RETRY, control(RETRY, "retry/faulty-outage-measured.json"))
+        self.assertNotIn("unmeasured_outage_stated", measured["signals"])
+        compact = check(RETRY, control(RETRY, "retry/passing-compact-durations.json"))
+        self.assertEqual(compact, check(RETRY, control(RETRY, "retry/passing.json")))
 
     def test_question_title_fails(self):
         result = check(RETRY, {"blocks": [ANCHOR, section("whole", "Will it hold?"), figure("whole", "flow"), DECISION]})

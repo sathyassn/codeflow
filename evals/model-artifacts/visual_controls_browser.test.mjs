@@ -62,8 +62,8 @@ test("every control fails exactly the figure rules recorded for it", { skip: pro
       }
     }
   } finally { await browser.close(); }
-  // TSK-445: 13 method figures (5 before, plus the figure-first migration and retry answers).
-  assert.equal(Object.keys(outcome).length, Object.values(controls.cases).flat().length + 13);
+  // TSK-445: 21 method figures (5 before, plus the figure-first migration and retry answers).
+  assert.equal(Object.keys(outcome).length, Object.values(controls.cases).flat().length + 21);
   assert.ok(Object.values(outcome).some((rules) => rules.length > 0), "no control failed any rule");
   assert.deepEqual(outcome, expected);
 });

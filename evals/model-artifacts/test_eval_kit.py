@@ -1800,17 +1800,21 @@ class SuiteContractTests(unittest.TestCase):
                 self.assertEqual(paint == ["sequence"], "first_paint_drawn_in_sequence_family" in signals)
 
         # TSK-445: the anchor comes first, so the order signals are read by
-        # the structural checker the qualification grades with.
-        spec = importlib.util.spec_from_file_location(
-            "anchored_check", ROOT / "evals/qualification/anchored/check.py")
-        anchored = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(anchored)
+        # the checker the qualification grades with. It runs as its own
+        # process, which installs its pinned parser when it is missing.
+        def anchored_check(case_id: str, answer: Path) -> dict:
+            result = subprocess.run(
+                [sys.executable, "-B", str(ROOT / "evals/qualification/anchored/check.py"), case_id, str(answer)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(0, result.returncode, result.stderr)
+            return json.loads(result.stdout)
+
         for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
             document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
             blocks = document["blocks"]
             signals = set(entry["signals"])
             asks = [block for block in blocks if block["type"] == "feedback_prompt"]
-            read = anchored.check(anchored.MIGRATION, document)
+            read = anchored_check("migration-review-leads-with-the-picture", directory / entry["answer"])
             with self.subTest(answer=entry["answer"]):
                 self.assertEqual("anchor_then_governing_comparison" in read["signals"],
                                  "anchor_then_governing_comparison" in signals)

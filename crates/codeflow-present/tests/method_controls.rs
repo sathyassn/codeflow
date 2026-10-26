@@ -67,6 +67,10 @@ fn retry_review_answers_are_valid_and_the_passing_one_is_anchored() {
         "retry/faulty-no-figure.json",
         "retry/faulty-no-requeue.json",
         "retry/faulty-no-timeout.json",
+        "retry/passing-compact-durations.json",
+        "retry/faulty-backoff-90s.json",
+        "retry/faulty-second-failure.json",
+        "retry/faulty-outage-measured.json",
     ] {
         let blocks = answer(name);
         assert_eq!(asks(&blocks), 1, "{name}");

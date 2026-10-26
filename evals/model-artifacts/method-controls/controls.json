@@ -267,6 +267,61 @@
           "unmeasured_outage_stated"
         ],
         "decision": "fail"
+      },
+      {
+        "role": "passing",
+        "answer": "retry/passing-compact-durations.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-backoff-90s.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-second-failure.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use",
+          "unmeasured_outage_stated",
+          "fact_invented"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "retry/faulty-outage-measured.json",
+        "signals": [
+          "anchor_lines_before_any_figure",
+          "one_ask",
+          "orienting_figure_names_the_parts",
+          "retry_mechanism_carried_by_a_figure",
+          "sections_titled_in_plain_words",
+          "terms_drawn_before_use"
+        ],
+        "decision": "fail"
       }
     ]
   }
