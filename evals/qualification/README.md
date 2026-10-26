@@ -574,3 +574,32 @@ primary closes peer tabs the subject left open, as it closes the trial tab.
 [grok-welcome]: https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/views/welcome/mod.rs
 [claude-onboarding]: https://github.com/anthropics/claude-code/issues/67149
 [codex-trust]: https://github.com/openai/codex/blob/main/codex-rs/tui/src/onboarding/trust_directory.rs
+
+## Grading anchored present documents
+
+`anchored/check.py` grades the present document a subject opened for the
+`retry-review-opens-with-the-whole` and
+`migration-review-leads-with-the-picture` cases (TSK-445). It parses
+narrative Markdown with markdown-it-py, pinned with mdurl by version and
+SHA-256 in `anchored/requirements.txt`. On the evaluator host and a
+developer machine, install the pins once:
+
+```sh
+python3 -m venv target/anchored-venv
+target/anchored-venv/bin/pip install --require-hashes --no-deps \
+  -r evals/qualification/anchored/requirements.txt
+target/anchored-venv/bin/python -B evals/qualification/anchored/check.py \
+  retry-review-opens-with-the-whole <document.json>
+```
+
+Run any other way, `check.py` and its tests install the same pins into
+`target/anchored-venv` (or `$CODEFLOW_ANCHORED_VENV`) with
+`--require-hashes --no-deps` and run again there; the `model-eval-kit` test
+target, which CI runs, takes that path. A failed install stops the run.
+
+The checker reads structure (the anchor, sections, nested asks, titles) and
+the retry facts exactly: the 30 and 60 second backoff and the 5 minute
+visibility timeout in any usual notation, the dead-letter step after the
+third failure, the lost lease, the requeue, and the outage named as not
+measured. The migration case's facts (downtime, cost, evidence) stay with
+a judged grade.
