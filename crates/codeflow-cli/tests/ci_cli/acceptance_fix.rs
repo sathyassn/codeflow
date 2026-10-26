@@ -1,5 +1,5 @@
 //! The CI entry point judges a fix range and both task-landing provenances.
-use super::{codeflow, combined, git, planned_task, run_in};
+use super::{codeflow, combined, git, installed_push, planned_task, run_in};
 use std::path::Path;
 
 const TASK: &str = "project-management/tasks/TSK-001.md";
@@ -199,7 +199,7 @@ fn ci_with(root: &Path, reviews: &str, env: &[(&str, &str)]) -> std::process::Ou
         .unwrap()
 }
 
-const NOT_LANDABLE: &str = "TSK-001 is not complete and its record has no acceptance block";
+const NOT_LANDABLE: &str = "TSK-001 is not complete (status";
 
 /// TSK-1001 AC-5: a code pull request for a task with no acceptance block
 /// is refused once it is known to be ready, from the variable or the
@@ -210,6 +210,14 @@ const NOT_LANDABLE: &str = "TSK-001 is not complete and its record has no accept
 fn an_unfinished_task_is_not_landable_once_ready() {
     let dir = fixture();
     let root = dir.path();
+    // A policy on the target, which the pre-push hook reads at the
+    // destination's default branch.
+    git(root, &["switch", "-q", "main"]);
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(root.join(".codeflow/policy.json"), "{\"git\": {}}\n").unwrap();
+    commit(root, "chore: add the policy");
+    git(root, &["switch", "-q", LINE]);
+    git(root, &["merge", "-q", "--ff-only", "main"]);
     git(root, &["switch", "-qc", "task/TSK-001-work"]);
     std::fs::write(root.join("work.rs"), "// work\n").unwrap();
     commit(root, "feat: work");
@@ -236,6 +244,30 @@ fn an_unfinished_task_is_not_landable_once_ready() {
         let text = combined(&out);
         assert_eq!(!out.status.success(), refused, "{env:?}: {text}");
         assert_eq!(text.contains(NOT_LANDABLE), refused, "{env:?}: {text}");
+    }
+    // AC-15: a real `git push` through the installed hook is not refused,
+    // since a push cannot tell readiness.
+    #[cfg(unix)]
+    {
+        let remote = events.path().join("remote.git");
+        git(
+            root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        // Fixture setup, before the hook is installed.
+        git(root, &["push", "-q", "origin", "main", LINE]);
+        let pushed = installed_push(root, "task/TSK-001-work");
+        let text = combined(&pushed);
+        assert!(!text.contains(NOT_LANDABLE), "{text}");
+        assert!(pushed.status.success(), "{text}");
     }
     // The former name is the release preflight's body path, never a draft
     // state (TSK-1001 AC-10).
@@ -299,6 +331,40 @@ fn a_derived_review_row_satisfies_a_required_reviews_section() {
             "{text}"
         );
     }
+}
+
+/// TSK-1001 review finding 4: an unfinished task with a parseable
+/// acceptance block naming an earlier commit is still refused once ready,
+/// and its block derives no Reviews row, under a policy that requires one.
+#[test]
+fn a_todo_task_with_a_parseable_block_is_still_not_landable() {
+    let dir = fixture();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        r#"{"git":{"pr_sections":"block","pr_required_sections":["Summary","Changes","Reviews"]}}"#,
+    )
+    .unwrap();
+    commit(root, "chore: require reviews");
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    std::fs::write(root.join("work.rs"), "// first\n").unwrap();
+    let stale = commit(root, "feat: first pass");
+    // The block stays in a todo record while product code moves on.
+    task(root, "todo", &block(&stale));
+    commit(root, "docs: paste an acceptance block");
+    std::fs::write(root.join("work.rs"), "// later\n").unwrap();
+    commit(root, "feat: later work");
+    let out = ci_with(root, "", &[("CODEFLOW_PR_IS_DRAFT", "false")]);
+    let text = combined(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains(NOT_LANDABLE), "{text}");
+    assert!(text.contains("(status todo)"), "{text}");
+    assert!(
+        text.contains("PR body is missing required section '## Reviews'"),
+        "an unfinished task's block derives no Reviews row: {text}"
+    );
+    assert!(!text.contains("row derived from"), "{text}");
 }
 
 #[test]

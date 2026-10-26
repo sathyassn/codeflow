@@ -90,6 +90,43 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
         .expect("binary runs")
 }
 
+/// Install the shipped pre-push shim as the repository's hook, as `codeflow
+/// init` lays it out, and run a real `git push` of `branch` to `origin`
+/// through it with this build as the hook binary (TSK-1001).
+fn installed_push(dir: &Path, branch: &str) -> Output {
+    let hooks = dir.join(".git/codeflow-hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let shim = hooks.join("pre-push");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks/pre-push"),
+        &shim,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(dir, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let mut cmd = Command::new("git");
+    cmd.args(["push", "-q", "origin", branch])
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
+        .env("CODEFLOW_HOME", isolated_home())
+        .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("CODEFLOW_PR_IS_DRAFT")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
+    cmd.output().expect("git push runs")
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
     cmd.args(args)

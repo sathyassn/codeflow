@@ -59,6 +59,26 @@ pub enum IdsCommand {
     },
 }
 
+/// Whether `ids check` applies (TSK-1001): durable work tracking is on in
+/// the checkout, or committed at the range's base or head, so a target
+/// checkout without tracking still checks a range that adds the first
+/// record. A state that cannot be read is an error, never off.
+fn check_tracking(
+    root: &std::path::Path,
+    base: Option<&str>,
+    head: Option<&str>,
+) -> Result<bool, String> {
+    let mut enabled = codeflow_core::workgraph::durable_work_tracking_enabled(root)
+        .map_err(codeflow_core::workgraph::work_start::tracking_state_message)?;
+    for revision in base.into_iter().chain(head) {
+        enabled |= codeflow_core::workgraph::durable_work_tracking_enabled_at(root, revision)
+            .map_err(|error| {
+                format!("cannot read whether {revision} tracks durable work: {error}")
+            })?;
+    }
+    Ok(enabled)
+}
+
 /// Run `codeflow ids`.
 pub fn run(args: &IdsArgs) -> i32 {
     let root = match super::repo_root() {
@@ -121,17 +141,14 @@ pub fn run(args: &IdsArgs) -> i32 {
             base,
             head,
         } => {
-            match codeflow_core::workgraph::durable_work_tracking_enabled(&root) {
+            match check_tracking(&root, base.as_deref(), head.as_deref()) {
                 Ok(true) => {}
                 Ok(false) => {
                     println!("codeflow ids check: durable work tracking is off; no registry rule applies");
                     return 0;
                 }
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ids check: {}",
-                        codeflow_core::workgraph::work_start::tracking_state_message(error)
-                    );
+                    eprintln!("codeflow ids check: {error}");
                     return 2;
                 }
             }

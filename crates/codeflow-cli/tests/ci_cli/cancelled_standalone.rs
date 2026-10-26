@@ -1,5 +1,5 @@
 //! TSK-414: preserve an unlanded cancellation without starting its task.
-use super::{codeflow, combined, git, planned_task, run_in};
+use super::{codeflow, combined, git, installed_push, planned_task, run_in};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -458,6 +458,13 @@ fn a_ready_cancellation_needs_a_review_of_its_head() {
         assert!(out.status.success(), "{env:?}: {}", combined(&out));
     }
     assert!(pre_push(root).status.success());
+    // A real `git push` through the installed hook is not refused either:
+    // a push cannot tell readiness.
+    #[cfg(unix)]
+    {
+        let pushed = installed_push(root, BRANCH);
+        assert!(pushed.status.success(), "{}", combined(&pushed));
+    }
     let reviewed = head(root);
     let approved = BODY.replace(
         "None: review follows.\n",
@@ -533,6 +540,14 @@ fn product_commits_reverted_later_still_refuse_a_planning_range() {
     let text = combined(&pushed);
     assert!(!pushed.status.success(), "{text}");
     assert!(text.contains("src/lib.rs"), "{text}");
+    // The same refusal through the installed hook on a real `git push`.
+    #[cfg(unix)]
+    {
+        let pushed = installed_push(root, BRANCH);
+        let text = combined(&pushed);
+        assert!(!pushed.status.success(), "{text}");
+        assert!(text.contains("src/lib.rs"), "{text}");
+    }
 
     // Two record-only commits pass.
     let dir = fixture("cancelled", true, true, None, false);
@@ -618,4 +633,52 @@ fn a_planning_amendment_validates_the_candidate_once() {
         "{}",
         String::from_utf8_lossy(&worktrees.stdout)
     );
+}
+
+/// TSK-1001 review finding 6: the first record a range adds is judged by
+/// the id registry from the committed states of the range, not only the
+/// checkout: run from the target checkout, which tracks nothing yet, or
+/// from the candidate, an unregistered incoming cancellation refuses in
+/// `codeflow ci` and in `codeflow ids check --base --head`.
+#[test]
+fn an_unregistered_first_record_refuses_from_either_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init(root);
+    commit(root);
+    git(root, &["switch", "-qc", BRANCH]);
+    write(root, TASK, &cancelled("TSK-001"));
+    commit(root);
+    for checkout in ["main", BRANCH] {
+        git(root, &["switch", "-q", checkout]);
+        let out = codeflow()
+            .args([
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                BRANCH,
+                "--branch",
+                BRANCH,
+                "--pr-body",
+                BODY,
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let text = combined(&out);
+        assert!(!out.status.success(), "{checkout}: {text}");
+        assert!(text.contains("work.id_registry"), "{checkout}: {text}");
+        let ids = codeflow()
+            .args(["ids", "check", "--base", "main", "--head", BRANCH])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let said = combined(&ids);
+        assert!(!ids.status.success(), "{checkout}: {said}");
+        assert!(
+            !said.contains("durable work tracking is off"),
+            "{checkout}: {said}"
+        );
+    }
 }

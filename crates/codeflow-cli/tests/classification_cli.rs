@@ -1417,7 +1417,7 @@ fn ci_draft(root: &Path, branch: &str, pr_body: &str, draft: &str) -> (i32, Stri
     )
 }
 
-const UNFINISHED: &str = "TSK-001 is not complete and its record has no acceptance block";
+const UNFINISHED: &str = "TSK-001 is not complete (status";
 
 /// TSK-451 AC-8: once ready, a code pull request's Testing section cites
 /// `codeflow test --mode quick` for the head tree, reported at the Testing

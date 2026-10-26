@@ -6,7 +6,6 @@
 use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
-use codeflow_core::workgraph::durable_work_tracking_enabled;
 use codeflow_core::workgraph::lifecycle::{
     judge_line_under, judge_pull_request_under, judge_release_range, Brought,
 };
@@ -88,7 +87,10 @@ pub(super) fn check(
     on_line: bool,
     brought: Option<&Brought>,
 ) -> Outcome {
-    match durable_work_tracking_enabled(root) {
+    // TSK-1001: tracking is on when the checkout, the base or the head
+    // commits it, so a target checkout without tracking still judges a
+    // range that adds the first record.
+    match super::tracking_active(root, base, head) {
         Ok(true) => {}
         Ok(false) => {
             return Outcome {
@@ -97,9 +99,9 @@ pub(super) fn check(
                 ran: false,
             }
         }
-        Err(error) => {
+        Err(violation) => {
             return Outcome {
-                violations: vec![super::tracking_state_violation(error)],
+                violations: vec![violation],
                 notices: Vec::new(),
                 ran: true,
             }

@@ -624,7 +624,7 @@ fn naming_the_completed_task_with_only_another_description_runs_the_preflight() 
 /// (TSK-1001 AC-6); wording that must leave a completed record goes by
 /// the redaction route.
 #[test]
-fn a_description_edit_of_the_completed_task_skips_the_preflight() {
+fn a_description_edit_of_the_completed_task_is_refused_without_the_preflight() {
     let dir = repo();
     let root = dir.path();
     git(root, &["switch", "-C", PLAN, "main"]);

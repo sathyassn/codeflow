@@ -1100,6 +1100,25 @@ struct Landing {
     code: bool,
 }
 
+/// Whether durable work tracking is on for a range (TSK-1001): in the
+/// checkout, or committed at `base` or at `head`. The committed states
+/// decide as well as the working checkout, so a hosted check run from a
+/// target checkout without tracking still judges a range that adds the
+/// first record. A state that cannot be read is a violation, never off.
+fn tracking_active(root: &Path, base: Option<&str>, head: &str) -> Result<bool, Violation> {
+    let mut enabled = codeflow_core::workgraph::durable_work_tracking_enabled(root)
+        .map_err(tracking_state_violation)?;
+    for revision in base.into_iter().chain(std::iter::once(head)) {
+        enabled |= codeflow_core::workgraph::durable_work_tracking_enabled_at(root, revision)
+            .map_err(|error| {
+                tracking_state_violation(format!(
+                    "cannot read whether {revision} tracks durable work: {error}"
+                ))
+            })?;
+    }
+    Ok(enabled)
+}
+
 /// Release acceptance applies only where durable tracking is enabled. All
 /// consulted states must be readable; a false result never hides a reader error.
 fn range_tracks_work(root: &Path, range: &classification::Range<'_>) -> Result<bool, String> {
@@ -1202,14 +1221,18 @@ fn review_row_check(
             ))
         }
     };
-    let Some(block) = acceptance_blocks(&record)
+    // TSK-1001: the task's status decides, never whether a block parses.
+    // An unfinished task's acceptance text binds nothing (the completion
+    // binding judges complete tasks only), so it derives no row.
+    let status = task_status(&record, task_id);
+    if status.as_deref() != Some("complete") {
+        return unfinished_ready(git, status.as_deref(), head, task_id, landing);
+    }
+    let block = acceptance_blocks(&record)
         .into_iter()
         .filter(|block| !block.is_superseded())
         .filter_map(|block| block.parsed.ok())
-        .next_back()
-    else {
-        return unfinished_ready(git, &record, head, task_id, landing);
-    };
+        .next_back()?;
     let reviewed = block.reviewed;
     let heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
     // TSK-451: the acceptance block is the completion record, so the row is
@@ -1257,14 +1280,29 @@ fn has_acceptance_block(root: &Path, head: &str, task_id: &str) -> bool {
         .ok()
         .flatten()
         .is_some_and(|record| {
-            codeflow_core::workgraph::record_text::acceptance_blocks(&record)
-                .into_iter()
-                .any(|block| !block.is_superseded() && block.parsed.is_ok())
+            // Only a completed task's block is the completion record
+            // (TSK-1001): an unfinished task's block derives no row.
+            task_status(&record, task_id).as_deref() == Some("complete")
+                && codeflow_core::workgraph::record_text::acceptance_blocks(&record)
+                    .into_iter()
+                    .any(|block| !block.is_superseded() && block.parsed.is_ok())
         })
 }
 
-/// A pull request known to be ready that changes code for a task with no
-/// acceptance block (TSK-1001) has no reviewed commit bound to it, so it is
+/// The `status` of `task_id`'s record text, or `None` when the record does
+/// not parse, which no check reads as complete.
+fn task_status(record: &str, task_id: &str) -> Option<String> {
+    codeflow_core::workgraph::lifecycle::RecordView::parse(
+        codeflow_core::workgraph::work_start::RecordKind::Task,
+        &format!("project-management/tasks/{task_id}.md"),
+        record,
+    )
+    .ok()
+    .map(|view| view.status)
+}
+
+/// A pull request known to be ready that changes code for a task that is
+/// not complete (TSK-1001) has no reviewed commit bound to it, so it is
 /// not landable: it is refused at the `git.work_records` level until the
 /// review is recorded in the block (`codeflow task status <id> complete`),
 /// which binds the reviewed commit and every later product change to it.
@@ -1275,7 +1313,7 @@ fn has_acceptance_block(root: &Path, head: &str, task_id: &str) -> bool {
 /// completion binding instead.
 fn unfinished_ready(
     git: &GitPolicy,
-    record: &str,
+    status: Option<&str>,
     head: &str,
     task_id: &str,
     landing: Landing,
@@ -1283,20 +1321,12 @@ fn unfinished_ready(
     if landing.readiness != Readiness::Ready || !landing.code {
         return None;
     }
-    let complete = codeflow_core::workgraph::lifecycle::RecordView::parse(
-        codeflow_core::workgraph::work_start::RecordKind::Task,
-        &format!("project-management/tasks/{task_id}.md"),
-        record,
-    )
-    .is_ok_and(|view| view.status == "complete");
-    if complete {
-        return None;
-    }
     Some(Violation::new(
         codeflow_core::workgraph::acceptance::BINDING_RULE,
         git.work_records_level(),
         format!(
-            "{task_id} is not complete and its record has no acceptance block, so this ready pull request has no reviewed commit bound to its code at {head}; it is not landable yet"
+            "{task_id} is not complete (status {}), so this ready pull request has no reviewed commit bound to its code at {head}; acceptance text in an unfinished record binds nothing; it is not landable yet",
+            status.unwrap_or("unreadable")
         ),
         codeflow_core::remedy::UNFINISHED_READY.with(&[("sha", head)]),
     ))
