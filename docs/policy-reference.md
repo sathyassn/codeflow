@@ -195,41 +195,80 @@ The table above labels every unsupported key.
 
 ## Secret-path matching
 
-`security.secret_reads` checks named reader operands and literals in inline
-interpreter code against hard-secret patterns. A recursive directory glob
-(`**/`) includes zero directories, so `id_rsa`, `./id_rsa`, nested and
-absolute forms receive the same refusal. The same applies to `id_ed25519`,
-`.pem`, `.key`, `.p12`, `.pfx` and `.netrc` patterns. `~`, `$HOME` and
-`${HOME}` spellings, repeated separators and named-user tildes reach the
-configured home-store rules. Comparisons fold ASCII case, including on
-case-sensitive volumes. Relative reader paths use the working directories
-followed by the command parser, including literal `cd` changes. Directory
-boundaries matter: `~/.ssh-notes/file` is not inside `~/.ssh`.
+`security.secret_reads` judges file operands of every program and literals
+in inline interpreter code against the hard-secret rules. The program does
+not need to appear in a reader list. Option values count too, including
+`--input=FILE`, `-fFILE` and values attached to short-option clusters.
+Search patterns remain text: `rg 'id_rsa' README.md` and
+`grep -n id_rsa docs/x.md` pass. The existing search-option grammar identifies
+pattern text and file values; an unknown option earns no text exemption.
 
-The shell check skips entire read-rule groups that have carve-outs. It does
-not enforce the `.env` or `secret`/`credentials` source-name groups, including
-`.env.production` and `credentials.json`. Claude's file-tool rules still
-apply those groups and preserve their example and source exceptions, such as
-`.env.example` and `secret_scan.rs`. Fixing recursive glob matching does not
-extend those groups to shell reads.
+Hard-secret names are protected wherever they occur, including inside the
+workspace. The `**/` rule includes zero directories, so `id_rsa`,
+`./id_rsa`, nested and absolute spellings receive the same refusal. The
+same applies to `id_ed25519`, `.pem`, `.key`, `.p12`, `.pfx` and `.netrc`
+patterns. A newline inside a directory name does not hide its secret leaf.
+Comparisons fold ASCII case, including on case-sensitive volumes.
 
-Reader patterns and brace operands are checked by their literal prefix;
-store directories and input-redirection sources are checked too. Ordinary
-patterns such as `src/*.rs` and `*.md` remain readable. A quoted wildcard is
-text the shell does not expand, so a search pattern such as
-`rg '^/etc/.*' docs` is not read by its prefix. The check does not
-resolve symlinks, paths computed by program code, operands supplied by
-`xargs`, command substitutions or process substitutions. Directory changes
-that the parser cannot resolve and directory changes inside interpreter
-code remain limits. Native
-filesystem denies are a separate backstop for the stores they cover. The
-macOS fixture exercises Seatbelt with the installed Claude `denyRead` paths:
-store reads fail, while a workspace `id_rsa` or `.env` remains readable under
-that store-only profile. This fixture does not establish live harness hook
-dispatch or profile adoption. Linux/WSL sandbox enforcement and native Windows
-sandbox behavior require separate platform evidence; the macOS fixture does
-not run there. A seat without an active filesystem sandbox has no such
-backstop.
+The shared shell resolver follows on-line assignments, directory changes,
+home parameters and supported static substitutions before judging operands.
+An operand it cannot resolve refuses as cannot-verify with an operator route.
+An active named-user tilde receives the home-store judgment; a quoted
+`'~somebody/.codex/auth.json'` stays a literal workspace path. Directory
+boundaries matter: `~/.ssh-notes/file` is outside `~/.ssh`.
+
+Shell braces and bracket expressions are expanded against the filesystem at
+classification time. A secret-named match refuses. A glob in a secret-store
+directory refuses even when it currently matches nothing; this includes
+`~/.codex`, `~/.ssh`, `~/.aws`, `~/.gnupg` and `~/.config/gh`. Store directories
+are derived from the action table's home read rules, with `~/.config/gh` also
+covered by the accepted shell-guard boundary. This does not change installed
+file-tool or sandbox rules.
+
+Search-tool selectors such as `rg -g`, `--glob`, `--iglob` and `grep --include`
+use the same rule against the parsed search roots. Selector matching includes
+recursive and hidden candidates conservatively. An unreadable expansion or
+an exceeded metadata budget refuses as cannot-verify when the complete
+pattern intersects a secret rule. Shell expansion reads at most 4096 entries;
+a recursive search-root inspection reads at most 65,536. A source glob that
+expands successfully without secret-named matches remains available. The
+same glob refuses after `id_rsa.rs` is planted among its matches. A quoted
+shell wildcard remains literal text, including `cat < 'id_rs?'`.
+
+Input redirections use a quote-aware scan, including no-space operators,
+`exec {fd}<`, numbered descriptors and redirections on compound commands.
+Heredoc data remains data when its recipient does not read code.
+
+Expansion observes the filesystem before execution. A secret-named file
+created between the check and the run can enter a glob after classification.
+This gap is narrow because the agent would have to create that file; an
+existing secret is never readable through these checked globs. Native
+filesystem denies remain the backstop for the paths they cover.
+
+The shell check skips read-rule groups that have carve-outs. It does not
+enforce the `.env` or `secret`/`credentials` source-name groups, including
+`.env.production` and `credentials.json`. File-tool rules still apply those
+groups with their example and source exceptions, such as `.env.example`
+and `secret_scan.rs`.
+
+Writer checks also use the shared resolver. An unread command substitution
+in a writer operand refuses while a checkout is reachable. Links created
+earlier on a line are followed before a subsequent `..`, and attached or
+long target-directory options receive the separated option's judgment.
+A call through an alias defined earlier on the line refuses when the path
+reader does not expand its body. Checkouts added or moved earlier on the
+line are protected from subsequent interpreter arguments and code literals.
+
+Paths assembled inside program code remain outside shell analysis, as do
+script-file contents and inputs supplied in another tool call. Secret-path
+checks do not resolve filesystem symlinks or certify arbitrary program
+behavior. Native filesystem denies are a separate backstop. The macOS
+fixture models installed Claude store-root denies and the hard-secret
+`Read(**/id_rsa*)` file-tool rule: store reads and workspace `id_rsa` reads
+fail; ordinary workspace files remain readable. Hook replay does not prove
+live harness dispatch or profile adoption. Linux/WSL and native Windows
+sandbox enforcement require separate platform evidence. A seat without an
+active filesystem sandbox has no such backstop.
 
 ## Planning amendment paths
 
