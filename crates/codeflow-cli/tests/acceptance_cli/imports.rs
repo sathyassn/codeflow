@@ -1145,27 +1145,42 @@ fn two_lines(shape: &str) -> tempfile::TempDir {
     dir
 }
 
+/// Commit `path` with Git `mode` (`100755` for an executable file,
+/// `120000` for a symbolic link whose target is `content`), written into
+/// the index so the fixture builds the same entry on every platform.
+fn index_entry(root: &Path, mode: &str, path: &str, content: &str) {
+    write(root, path, content);
+    let blob = git_out(root, &["hash-object", "-w", path]);
+    git(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("{mode},{blob},{path}"),
+        ],
+    );
+    git(root, &["commit", "-m", "docs: an entry of another mode"]);
+    git(root, &["reset", "--hard", "-q"]);
+}
+
 /// The inadmissible or unreadable shapes a shared planning merge can take
 /// beyond its paths: a mode, a type, a rename across the record class, and
 /// a task whose state at P cannot be read as one permitted record.
 fn shape_planning_branch(root: &Path, shape: &str) {
     match shape {
-        "executable" => {
-            use std::os::unix::fs::PermissionsExt;
-            let path = root.join("project-management/plans/run.md");
-            write(root, "project-management/plans/run.md", "A plan.\n");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            commit(root, "docs: an executable plan");
-        }
-        "symlink" => {
-            std::fs::create_dir_all(root.join("project-management/plans")).unwrap();
-            std::os::unix::fs::symlink(
-                "../tasks/TSK-001.md",
-                root.join("project-management/plans/link.md"),
-            )
-            .unwrap();
-            commit(root, "docs: link a record");
-        }
+        "executable" => index_entry(
+            root,
+            "100755",
+            "project-management/plans/run.md",
+            "A plan.\n",
+        ),
+        "symlink" => index_entry(
+            root,
+            "120000",
+            "project-management/plans/link.md",
+            "../tasks/TSK-001.md",
+        ),
         "rename" => {
             std::fs::create_dir_all(root.join("docs")).unwrap();
             git(
@@ -1347,4 +1362,290 @@ fn shared_ancestry_never_exempts_an_unpublished_home_only_version() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// TSK-1004 AC-5 to AC-8: a planning merge on the checked line moves a
+// task's declared home to another line.
+const LINE_C: &str = "integration/EPC-003-third";
+const MOVED: &str = "the landing changes the task's declared home";
+
+/// TSK-002 declaring `home`, with the epic of that line.
+fn homed(home: &str, status: &str, closeout: &str) -> String {
+    let epic = &home["integration/".len().."integration/".len() + 7];
+    task("TSK-002", status, OWN_JOURNEY, closeout)
+        .replace(
+            "integration_target: main",
+            &format!("integration_target: {home}"),
+        )
+        .replace("epic_id: EPC-001", &format!("epic_id: {epic}"))
+}
+
+fn superseded(reviewed: &str) -> String {
+    valid_block(reviewed).replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: missing criterion\n",
+    )
+}
+
+const MALFORMED: &str = "```yaml\nacceptance:\n  reviewed: [\n```\n";
+const SHARED_UID: &str = "uid: 7d3c2f0e-1b2a-4c5d-8e9f-001122334455\n";
+
+/// TSK-002 before and after the move for `case`.
+fn move_versions(case: &str, reviewed: &str) -> (String, String) {
+    let todo = |home: &str| homed(home, "todo", "Pending.\n");
+    let before = match case {
+        "complete before" => homed(LINE_A, "complete", &valid_block(reviewed)),
+        "block before" => homed(LINE_A, "todo", &valid_block(reviewed)),
+        "superseded before" => homed(LINE_A, "todo", &superseded(reviewed)),
+        "malformed before" => homed(LINE_A, "todo", MALFORMED),
+        "no status before" => todo(LINE_A).replace("status: todo\n", ""),
+        _ => todo(LINE_A),
+    };
+    let after = match case {
+        "todo to blocked" => format!(
+            "{}\n## Blocker\n\n- reason: waiting on the operator\n- owner: operator\n- revisit: approved\n",
+            homed(LINE_B, "blocked", "Pending.\n")
+        ),
+        "complete at L" => homed(LINE_B, "complete", &valid_block(reviewed)),
+        "superseded at L" => homed(LINE_B, "todo", &superseded(reviewed)),
+        _ => todo(LINE_B),
+    };
+    if case == "shared uid" {
+        let uid =
+            |text: String| text.replace("id: TSK-002\n", &format!("id: TSK-002\n{SHARED_UID}"));
+        return (uid(before), uid(after));
+    }
+    (before, after)
+}
+
+/// Write the move of `case` on the current branch and commit it, with
+/// whatever else the landing carries.
+fn write_move(root: &Path, case: &str, after: &str) {
+    let path = record_path("TSK-002");
+    if case == "executable" {
+        index_entry(root, "100755", &path, after);
+        return;
+    }
+    write(root, &path, after);
+    match case {
+        "product" => write(root, "src/planned.rs", "pub fn planned() {}\n"),
+        "agents" => write(root, "project-management/AGENTS.md", "Notes.\n"),
+        "hidden" => write(root, "project-management/.agents/notes.md", "Notes.\n"),
+        "docs" => write(root, "docs/note.md", "A note.\n"),
+        "rename out" => {
+            std::fs::create_dir_all(root.join("notes")).unwrap();
+            git(
+                root,
+                &["mv", "project-management/plans/note.md", "notes/note.md"],
+            );
+        }
+        "shared uid" => write(
+            root,
+            &record_path("TSK-003"),
+            &after.replace("TSK-002", "TSK-003"),
+        ),
+        _ => {}
+    }
+    commit(root, "docs: move the task to its own line");
+    if case == "symlink" {
+        index_entry(
+            root,
+            "120000",
+            "project-management/plans/link.md",
+            "../tasks/TSK-002.md",
+        );
+    }
+}
+
+/// Land `branch` on the current line as a planning merge, or, for `evil`,
+/// as a merge with a change neither parent holds.
+fn land_move(root: &Path, case: &str, branch: &str) {
+    if case == "evil" {
+        git(root, &["merge", "--no-ff", "--no-commit", branch]);
+        write(root, "project-management/plans/evil.md", "Unreviewed.\n");
+        commit(root, "chore: land reviewed work");
+    } else {
+        merge(root, branch);
+    }
+}
+
+/// `LINE_A` plans TSK-002, then a planning merge L on `LINE_A` moves it to
+/// `LINE_B`; the final home line branches from `LINE_A` after the move,
+/// both lines advance, and the home is published. `twice` and `twice bad`
+/// move it on to `LINE_C` (the second landing also carries a product file
+/// for `twice bad`), `back` moves it back to `LINE_A`, and `second parent`
+/// makes the move on `LINE_B`, which `LINE_A` then merges. Returns the
+/// repository on `LINE_A`.
+fn home_move(case: &str) -> tempfile::TempDir {
+    let dir = repo(&[], ",\"test_gate_on_push\":\"block\"");
+    let root = dir.path();
+    let reviewed = head(root);
+    let (before, after) = move_versions(case, &reviewed);
+    git(root, &["switch", "-c", "plan/home"]);
+    for epic in ["EPC-002", "EPC-003"] {
+        write(
+            root,
+            &format!("project-management/epics/{epic}.md"),
+            &EPIC.replace("EPC-001", epic),
+        );
+    }
+    write(root, &record_path("TSK-002"), &before);
+    // LINE_A keeps a task of its own, so it stays a verified epic line.
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE_A}"),
+        ),
+    );
+    if case == "rename out" {
+        write(root, "project-management/plans/note.md", "A plan.\n");
+    }
+    commit(root, "docs: plan the work");
+    git(root, &["switch", "-c", LINE_A, "main"]);
+    merge(root, "plan/home");
+    let mover = if case == "second parent" {
+        git(root, &["branch", LINE_B]);
+        LINE_B
+    } else {
+        LINE_A
+    };
+    if case == "direct" {
+        // A move written on the line itself is the line's own work, never
+        // an import, so the line's own classification judges it.
+        write_move(root, case, &after);
+    } else {
+        git(root, &["switch", "-c", "plan/move", mover]);
+        write_move(root, case, &after);
+        git(root, &["switch", mover]);
+        land_move(root, case, "plan/move");
+    }
+    let mut home = LINE_B;
+    if matches!(case, "twice" | "twice bad" | "back") {
+        home = if case == "back" { LINE_A } else { LINE_C };
+        git(root, &["switch", "-c", "plan/move-again", LINE_A]);
+        write(
+            root,
+            &record_path("TSK-002"),
+            &homed(home, "todo", "Pending.\n"),
+        );
+        if case == "twice bad" {
+            write(root, "src/planned.rs", "pub fn planned() {}\n");
+        }
+        commit(root, "docs: move the task again");
+        git(root, &["switch", LINE_A]);
+        merge(root, "plan/move-again");
+    }
+    if case != "second parent" && home != LINE_A {
+        git(root, &["branch", home, LINE_A]);
+    }
+    // Both lines advance past the move, as the 3.2.0 and EPC-025 lines did.
+    if home != LINE_A {
+        advance(root, home, "docs/home.md");
+    }
+    advance(root, LINE_A, "docs/line.md");
+    publish_main(root);
+    if home != LINE_A {
+        git(root, &["push", "--no-verify", "origin", home]);
+        git(root, &["fetch", "origin"]);
+    }
+    git(root, &["switch", LINE_A]);
+    if case == "second parent" {
+        merge(root, LINE_B);
+    }
+    dir
+}
+
+/// `codeflow ci` for `LINE_A` into `main`, as the checkpoint pull request
+/// runs it.
+fn line_into_main(root: &Path) -> (i32, String) {
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", LINE_A, "--into", "main",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+#[test]
+fn a_planning_merge_moves_a_todo_task_to_another_line() {
+    let mut failures = Vec::new();
+    for case in ["todo", "todo to blocked", "twice", "back"] {
+        let dir = home_move(case);
+        let result = line_into_main(dir.path());
+        if result.0 != 0 || result.1.contains(MOVED) || result.1.contains("work.import_authority") {
+            failures.push(format!("{case}: {}", result.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Every case is refused by `rule` with `diagnostic`; `rule` is
+/// `work.import_authority` unless the case names an earlier guard.
+fn home_moves_refused(cases: &[(&str, &str)]) {
+    let mut failures = Vec::new();
+    for (case, diagnostic) in cases {
+        let rule = if *case == "direct" {
+            "work.classification"
+        } else {
+            "work.import_authority"
+        };
+        let dir = home_move(case);
+        let result = line_into_main(dir.path());
+        if result.0 == 0
+            || !result.1.contains(rule)
+            || !result.1.contains("TSK-002")
+            || !result.1.contains(diagnostic)
+        {
+            failures.push(format!("{case}: {}", result.1));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn a_home_move_outside_a_permitted_state_stays_refused() {
+    home_moves_refused(&[
+        ("complete at L", MOVED),
+        ("complete before", MOVED),
+        ("block before", MOVED),
+        ("superseded at L", MOVED),
+        ("superseded before", MOVED),
+        ("malformed before", MOVED),
+        ("no status before", MOVED),
+        ("shared uid", MOVED),
+    ]);
+}
+
+#[test]
+fn a_home_move_through_no_planning_landing_stays_refused() {
+    home_moves_refused(&[
+        (
+            "evil",
+            "the home landing contains an unreviewed merge resolution",
+        ),
+        ("product", MOVED),
+        ("agents", MOVED),
+        ("hidden", MOVED),
+        ("symlink", MOVED),
+        ("rename out", MOVED),
+        ("executable", MOVED),
+        ("docs", MOVED),
+        ("direct", "has a commit made directly on the line"),
+    ]);
+}
+
+#[test]
+fn a_home_move_off_the_checked_line_stays_refused() {
+    home_moves_refused(&[("second parent", MOVED), ("twice bad", MOVED)]);
 }
