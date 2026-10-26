@@ -432,6 +432,19 @@ impl Tree {
         })
     }
 
+    /// Open, creating it and its folders if needed, a regular file read
+    /// only, to hold a lock on without ever writing it.
+    ///
+    /// # Errors
+    ///
+    /// When a component is a link or the leaf is not a regular file.
+    pub(crate) fn create_read_only(&self, relative: &str) -> io::Result<File> {
+        self.explained(relative, || {
+            let (parent, name) = self.parent(relative, true)?;
+            platform::create_read_only(&parent, &name)
+        })
+    }
+
     /// Open an existing regular file for reading.
     ///
     /// # Errors
@@ -616,6 +629,28 @@ mod platform {
             | libc::O_CLOEXEC
             | libc::O_NONBLOCK
             | if exclusive { libc::O_EXCL } else { 0 };
+        // SAFETY: live directory descriptor and NUL-terminated basename; mode is
+        // supplied because O_CREAT is set. A successful descriptor is owned once.
+        let descriptor =
+            unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o666) };
+        if descriptor == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned this owned descriptor.
+        let file = unsafe { File::from_raw_fd(descriptor) };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    /// Open, creating if needed, a regular file read only: never through a
+    /// link, never truncated, without blocking on a special file; the type
+    /// is checked on the opened descriptor.
+    pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let name = name(leaf)?;
+        let flags =
+            libc::O_RDONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
         // SAFETY: live directory descriptor and NUL-terminated basename; mode is
         // supplied because O_CREAT is set. A successful descriptor is owned once.
         let descriptor =
@@ -854,6 +889,19 @@ mod platform {
                 // One bounded fallback, no retry on a racing disappearance.
                 // Existing lease files are opened without DELETE access.
                 open(parent, leaf, FILE_GENERIC_READ | FILE_GENERIC_WRITE, false)?
+            }
+            result => result?,
+        };
+        if !file.metadata()?.is_file() {
+            return Err(invalid());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn create_read_only(parent: &ConfinedDirectory, leaf: &OsStr) -> io::Result<File> {
+        let file = match open(parent, leaf, FILE_GENERIC_READ, true) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                open(parent, leaf, FILE_GENERIC_READ, false)?
             }
             result => result?,
         };

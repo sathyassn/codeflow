@@ -94,23 +94,31 @@ impl CodexBuilderProbe {
         let mut agree = Vec::new();
         let mut disagree = Vec::new();
         let mut missing = false;
+        let mut contradicted = false;
         for (feature, &value) in configured {
-            // Only a feature whose project value differs from what Codex
-            // shows without the project can tell the two runs apart.
-            match startup.get(feature) {
-                Some(&shown) if shown != value => {}
-                Some(_) => continue,
-                None => {
-                    missing = true;
-                    continue;
+            // Every configured feature must appear in the project run with
+            // the project's value; a missing row or another value there is
+            // contrary evidence whatever the run without the project showed.
+            let Some(&in_project) = project.get(feature) else {
+                missing = true;
+                continue;
+            };
+            let Some(&in_startup) = startup.get(feature) else {
+                missing = true;
+                continue;
+            };
+            if in_startup != value {
+                // Only these features tell the two runs apart.
+                if in_project == value {
+                    agree.push((feature.clone(), value));
+                } else {
+                    disagree.push((feature.clone(), in_project, value));
                 }
-            }
-            match project.get(feature) {
-                Some(&shown) if shown == value => agree.push((feature.clone(), value)),
-                Some(&shown) => disagree.push((feature.clone(), shown, value)),
-                None => missing = true,
+            } else if in_project != value {
+                contradicted = true;
             }
         }
+        let missing = missing || contradicted;
         // All evidence is weighed: one agreeing feature never outvotes a
         // disagreeing or missing one.
         Some(match (agree.is_empty(), disagree.first(), missing) {
@@ -176,16 +184,21 @@ fn cli_version(stdout: &str) -> Option<String> {
         None => (version, None),
     };
     let parts: Vec<&str> = core.split('.').collect();
-    let numeric = |part: &&str| {
+    let numeric = |part: &str| {
         !part.is_empty()
             && part.bytes().all(|b| b.is_ascii_digit())
             && (part.len() == 1 || !part.starts_with('0'))
     };
+    // SemVer 9: identifiers are non-empty ASCII alphanumerics and hyphens,
+    // and a numeric identifier has no leading zero.
     let pre_ok = pre.is_none_or(|pre| {
-        pre.split('.')
-            .all(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+        pre.split('.').all(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && (!id.bytes().all(|b| b.is_ascii_digit()) || numeric(id))
+        })
     });
-    (parts.len() == 3 && parts.iter().all(numeric) && pre_ok).then(|| line.to_string())
+    (parts.len() == 3 && parts.iter().all(|part| numeric(part)) && pre_ok).then(|| line.to_string())
 }
 
 /// The stages `codex features list` prints between a name and its state.
@@ -302,7 +315,12 @@ mod tests {
 
     #[test]
     fn versions_must_be_codex_cli_semver() {
-        for good in ["codex-cli 0.164.0\n", "codex-cli 1.2.3-alpha.1\n"] {
+        for good in [
+            "codex-cli 0.164.0\n",
+            "codex-cli 1.2.3-alpha.1\n",
+            "codex-cli 1.2.3-0\n",
+            "codex-cli 1.2.3-0a1\n",
+        ] {
             assert!(cli_version(good).is_some(), "{good:?}");
         }
         for bad in [
@@ -310,6 +328,8 @@ mod tests {
             "codex-cli 0.164\n",
             "codex-cli 01.2.3\n",
             "codex-cli 1.2.3-\n",
+            "codex-cli 1.2.3-01\n",
+            "codex-cli 1.2.3-alpha.007\n",
             "codex-cli 1.2.3 extra\n",
             "codex-cli 0.164.0\ncodex-cli 0.165.0\n",
             "something 0.164.0\n",
@@ -398,6 +418,29 @@ mod tests {
         assert_eq!(
             judge(off(), accepted(&[("network_proxy", true)])),
             Some(ProjectLayer::Unverified { conflicting: true })
+        );
+        // The review's cases: a feature that does not tell the runs apart
+        // still contradicts when the project run lacks the project's value.
+        let hooks_on = || accepted(&[("hooks", true), ("network_proxy", false)]);
+        assert_eq!(
+            judge(
+                hooks_on(),
+                accepted(&[("hooks", false), ("network_proxy", true)])
+            ),
+            Some(ProjectLayer::Unverified { conflicting: true })
+        );
+        assert_eq!(
+            judge(hooks_on(), accepted(&[("network_proxy", true)])),
+            Some(ProjectLayer::Unverified { conflicting: true })
+        );
+        assert_eq!(
+            judge(
+                hooks_on(),
+                accepted(&[("hooks", true), ("network_proxy", true)])
+            ),
+            Some(ProjectLayer::ConsistentWithLoading {
+                features: vec![("network_proxy".to_string(), true)]
+            })
         );
         // Nothing tells the runs apart.
         assert_eq!(

@@ -246,14 +246,16 @@ dangerously_allow_all_unix_sockets = false
 #
 # `~/.codeflow/locks` is writable so a builder can run `codeflow reserve`
 # and the heavy quick targets, which hold `~/.codeflow/locks/full-gate.lock`
-# besides the lock under the common `.git`. CodeFlow opens both lock files
-# without following links, refuses one that is not a regular file, has a
-# second name (a hard link) or belongs to another user, and rewrites them
-# only through the locked descriptor; those are the cases in which a file
-# planted there could redirect a later gate's reads or writes. The folder
-# stays an advisory coordination boundary, not a security boundary: a
-# builder can still hold, delete or replace a lock and so block or split
-# the coordination between gates. A full gate also writes its evidence to
+# besides the lock under the common `.git`. CodeFlow never writes a lock
+# file: it opens it read only, without following links, refusing anything
+# but a regular file, and only locks it. The holder record is a separate
+# file that is only ever replaced, by a new file created under a random
+# name and renamed over it, and read without following links; only its
+# parsed fields are printed. So a link planted in the folder can at most be
+# locked or replaced, never written through or shown. The folder stays an
+# advisory coordination boundary, not a security boundary: a builder can
+# still hold, delete or replace a lock or a record and so block, mislead or
+# split the coordination between gates. A full gate also writes its evidence to
 # `~/.codeflow/gate-runs`, which stays unwritable here: that decision is
 # TSK-337's. Nothing else under the home folder is writable; a relocated
 # `CODEFLOW_HOME` is not covered.

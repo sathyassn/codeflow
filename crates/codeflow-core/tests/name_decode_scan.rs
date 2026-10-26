@@ -4104,7 +4104,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays a holder snapshot and start time only; neither admission nor process-group identity uses these values.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "lines",
         1,
         "display",
@@ -4112,10 +4112,18 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Displays empty records and a numeric start time; this query never acquires or reclaims a lock.
     (
         "crates/codeflow-core/src/testing/gate_guard.rs",
-        "gate_lock_status",
+        "holder_status",
         "trim",
         2,
         "display",
+    ),
+    // TSK-1003: the holder record is parsed by its exact LF-separated key=value format; any line outside it refuses the whole record, so only parsed fields are shown.
+    (
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "parse_record",
+        "split_terminator",
+        1,
+        "format-contract",
     ),
     // Explicit LF records and exact decimal group= values preserve the lock format; whitespace cannot change a process group identity.
     (
@@ -6501,6 +6509,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/contained.rs", "Tree::write_with_hook", "is_file", 1, "Type check on metadata from platform::metadata with errors propagated."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "ErrorKind::NotFound", 1, "A no-follow stat not finding the leaf in the held parent proves it missing; the create then opens without following links, and other errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::create_file", "is_file", 3, "Type checks on metadata obtained with propagated errors (platform::metadata and the opened file's metadata on each platform)."),
+    ("crates/codeflow-core/src/contained.rs", "platform::create_read_only", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular lock file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::open_regular", "is_file", 2, "Type check on the opened file's metadata, with propagated errors, on each platform; a non-regular file is refused, never read as absent."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_dir", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),
     ("crates/codeflow-core/src/contained.rs", "platform::remove", "is_file", 1, "Windows type check on the metadata of the handle just opened; errors propagate."),

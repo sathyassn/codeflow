@@ -385,10 +385,10 @@ fn killed_gate_keeps_its_lock_until_its_target_exits(mode: &str) {
             parsed
         })
         .expect("the target wrote its group");
-    // The gate records the group in its lock file just after the target
+    // The gate records the group in its holder record just after the target
     // starts, and the target can write its file first: wait for the record
     // before killing the gate, or the kill can land between the two.
-    let lock_file = home.path().join("locks/full-gate.lock");
+    let lock_file = home.path().join("locks/full-gate.record");
     let recorded = (0..200).any(|_| {
         let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
         let found = text.lines().any(|l| l == format!("group={group}"));
@@ -1525,7 +1525,7 @@ fn quick_default_class_controls_undeclared_targets_and_keeps_explicit_light_work
 fn lock_status_reads_both_holder_records_without_running_or_changing_them() {
     let home = tempfile::tempdir().unwrap();
     let root = held_until_released("essential");
-    let path = home.path().join("locks/full-gate.lock");
+    let path = home.path().join("locks/full-gate.record");
     let empty = run(root.path(), home.path(), &["test", "--lock-status"]);
     assert!(empty.status.success(), "{}", stderr(&empty));
     assert!(String::from_utf8_lossy(&empty.stdout).contains("no recorded holder"));

@@ -372,3 +372,72 @@ fn contradictory_feature_evidence_is_unverified() {
         "{line}"
     );
 }
+
+/// TSK-1003 (SEC-2): a `codex` planted in the project is never run, whether
+/// `PATH` reaches it through a relative entry or an absolute one inside the
+/// project; the next `codex` on `PATH` outside the project is used.
+#[cfg(unix)]
+#[test]
+fn a_codex_inside_the_project_or_on_a_relative_path_entry_is_never_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = builder_project();
+    let marker = project.path().join("planted-ran");
+    for dir in [project.path().to_path_buf(), project.path().join("bin")] {
+        std::fs::create_dir_all(&dir).unwrap();
+        let planted = dir.join("codex");
+        std::fs::write(
+            &planted,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'codex-cli 9.9.9'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let outside = fake_codex(Fake::LoadsProject);
+    let path = std::env::join_paths([
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::new(),
+        project.path().join("bin"),
+        outside.path().to_path_buf(),
+    ])
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(project.path())
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", project.path().join("personal"))
+        .args(["doctor", "--preflight"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert!(!marker.exists(), "a planted codex ran:\n{out}");
+    let outside_dir = std::fs::canonicalize(outside.path()).unwrap();
+    assert!(
+        out.contains(&format!(
+            "executable codex: observed on PATH at {}",
+            outside_dir.join("codex").display()
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("codex builder profile: observed codex-cli 9.9.9"),
+        "{out}"
+    );
+}
+
+/// TSK-1003 (SEC-2): with only a planted `codex` on `PATH`, none is found.
+#[cfg(unix)]
+#[test]
+fn only_a_planted_codex_means_codex_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = builder_project();
+    let planted = project.path().join("codex");
+    std::fs::write(&planted, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = preflight(project.path(), project.path());
+    assert!(
+        out.contains("codex builder profile: unavailable: codex not found on PATH"),
+        "{out}"
+    );
+}

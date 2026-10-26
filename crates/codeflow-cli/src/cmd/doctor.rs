@@ -34,7 +34,8 @@ pub fn run(args: &DoctorArgs) -> i32 {
     };
     if args.preflight {
         let mut out = std::io::stdout();
-        for line in preflight_report(&root, &|name| find_on_path(name)) {
+        let excluded = project_roots(&root);
+        for line in preflight_report(&root, &|name| find_on_path(name, &excluded)) {
             let _ = term_writeln!(out, "{line}");
         }
         return 0;
@@ -82,14 +83,51 @@ fn harness_executable(harness: &str) -> &str {
     harness.split('-').next().unwrap_or(harness)
 }
 
-/// The first `name` on `PATH`, as the operating system would find it; never
-/// executed.
-fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+/// The project folder and, for a linked worktree, the main checkout that
+/// holds the common `.git`, each canonical: the folders a checked-out file
+/// could plant an executable in.
+fn project_roots(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> = std::fs::canonicalize(root).into_iter().collect();
+    // The repository lock folder is `<common .git>/codeflow`.
+    let common = codeflow_core::testing::gate_guard::lock_dirs(root, None)
+        .ok()
+        .and_then(|dirs| {
+            dirs.first()
+                .and_then(|dir| dir.parent().map(std::path::Path::to_path_buf))
+        });
+    if let Some(common) = common {
+        let main = if common.file_name().is_some_and(|name| name == ".git") {
+            common.parent()
+        } else {
+            Some(common.as_path())
+        };
+        if let Some(main) = main.and_then(|main| std::fs::canonicalize(main).ok()) {
+            if !roots.contains(&main) {
+                roots.push(main);
+            }
+        }
+    }
+    roots
+}
+
+/// The first `name` on `PATH`, as the operating system would find it, with
+/// two exceptions (TSK-1003): relative entries, such as `.` or an empty one,
+/// are skipped, and a candidate whose canonical path lies inside one of
+/// `excluded` (the project and its main checkout) is skipped, so a file
+/// planted in the project is never taken for a tool. The preflight runs
+/// only `codex`, and only for the builder profile line.
+fn find_on_path(name: &str, excluded: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        let candidate = dir.join(name);
-        candidate.is_file().then_some(candidate)
-    })
+    std::env::split_paths(&path)
+        .filter(|dir| dir.is_absolute())
+        .find_map(|dir| {
+            let candidate = dir.join(name);
+            if !candidate.is_file() {
+                return None;
+            }
+            let canonical = std::fs::canonicalize(&candidate).ok()?;
+            (!excluded.iter().any(|root| canonical.starts_with(root))).then_some(canonical)
+        })
 }
 
 /// One executable's line: observed on `PATH`, or unavailable.
