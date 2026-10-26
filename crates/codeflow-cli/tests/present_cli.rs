@@ -3494,14 +3494,35 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
     close_and_clear(&fixture, &id);
 }
 
+/// Every example document the skill ships (`*document.example.json`, found
+/// by walking the skill, so a new one is checked too) checks with no fault
+/// and no warning: no figure-balance, title or mannered line (TSK-445 AC-10).
 #[test]
 fn tsk259_the_skill_examples_check_clean() {
+    fn examples(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                examples(&path, found);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("document.example.json"))
+            {
+                found.push(path);
+            }
+        }
+    }
     let fixture = setup_project();
-    for example in [
-        "assets/base/agents/skills/cf-present/resources/present-document.example.json",
-        "assets/base/agents/skills/cf-present/assets/review-document.example.json",
-    ] {
-        let path = repository_file(example);
+    let mut found = Vec::new();
+    examples(
+        &repository_file("assets/base/agents/skills/cf-present"),
+        &mut found,
+    );
+    found.sort();
+    assert!(found.len() >= 2, "{found:?}");
+    for path in found {
+        let example = path.display().to_string();
         let output = codeflow(
             &fixture.project,
             &fixture.home,
@@ -3715,4 +3736,220 @@ fn tsk441_end_review_route_closes_the_session() {
         std::thread::sleep(Duration::from_millis(200));
     }
     close_and_clear(&fixture, &running.session_id);
+}
+
+/// A host monitor (TSK-445 AC-9): it runs one command and hands every
+/// stdout line to the host the moment it is written, as Claude Code's
+/// Monitor tool and a Grok background task do. It never re-runs the
+/// command; the command must keep delivering by itself.
+struct HostMonitor {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl HostMonitor {
+    fn start(fixture: &TestProject, session_id: &str, script: &str) -> Self {
+        use std::io::BufRead;
+        let binary = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+        let path = format!(
+            "{}:{}",
+            binary.parent().unwrap().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut child = Command::new("sh")
+            .args(["-c", script])
+            .current_dir(&fixture.project)
+            .env("PATH", path)
+            .env("ID", session_id)
+            .env("HOME", &fixture.home)
+            .env("XDG_STATE_HOME", fixture.home.join("state"))
+            .env(OWNER_PID_ENV, std::process::id().to_string())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, lines) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { child, lines }
+    }
+
+    /// The next line the monitor hands the host, within ten seconds.
+    fn next(&self, what: &str) -> serde_json::Value {
+        let line = self
+            .lines
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("{what} did not reach the host monitor"));
+        serde_json::from_str(&line).unwrap()
+    }
+}
+
+impl Drop for HostMonitor {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Posts a review with two notes on the forms document's first block.
+fn post_two_note_review(service: &FormsService) {
+    let page = application_page(service.port, &service.authority, &service.cookie);
+    let label = attribute_after(
+        &page,
+        "data-cf-block-id=\"store-choice\"",
+        "data-cf-block-label",
+    );
+    let note = |n: u32, body: &str| {
+        serde_json::json!({
+            "client_id": format!("9a4f6c21-0000-4000-8000-{n:012x}"),
+            "block_id": "store-choice",
+            "block_label": label,
+            "kind": "comment",
+            "body": body,
+        })
+    };
+    let review = serde_json::json!({
+        "event_id": "5d0b8f7e-0000-4000-8000-0000000445a1",
+        "session_id": service.session_id,
+        "revision": 1,
+        "verdict": "request_changes",
+        "instruction": "Fix the marked parts.",
+        "notes": [note(1, "The palette reads flat."), note(2, "Name the second lane.")],
+    });
+    let posted = post_review(
+        service.port,
+        &service.authority,
+        &service.cookie,
+        &review.to_string(),
+    );
+    assert!(posted.starts_with("HTTP/1.1 201 "), "{posted}");
+}
+
+/// Drives one review session against a host monitor running `script`:
+/// two answers and then one review with two notes, each sent only after
+/// the batch before it reached the host, then a close. Every event must
+/// reach the host with nothing re-armed, and the command must end once the
+/// session closes.
+fn assert_monitor_receives_every_batch(script: &str) {
+    let fixture = setup_project();
+    let service = FormsService::open(&fixture);
+    let monitor = HostMonitor::start(&fixture, &service.session_id, script);
+    // Let the stream start before the first batch, as a host does.
+    thread::sleep(Duration::from_millis(600));
+
+    let first = service.answer(
+        1,
+        "store-choice",
+        1,
+        r#"{"home":"local","keep-days":30}"#,
+        None,
+    );
+    let line = monitor.next("the first answer");
+    assert_eq!(
+        (line["kind"].as_str(), line["event_id"].as_str()),
+        (Some("answer"), Some(first.as_str())),
+        "{line}"
+    );
+
+    let second = service.answer(1, "d-scope", 2, r#"{"choice":"a"}"#, None);
+    let line = monitor.next("the second answer, sent after the first batch");
+    assert_eq!(
+        (line["kind"].as_str(), line["event_id"].as_str()),
+        (Some("answer"), Some(second.as_str())),
+        "{line}"
+    );
+
+    post_two_note_review(&service);
+    let line = monitor.next("the review, sent after the second batch");
+    assert_eq!(
+        (
+            line["kind"].as_str(),
+            line["format"].as_u64(),
+            line["untrusted"].as_bool()
+        ),
+        (Some("review"), Some(2), Some(true)),
+        "{line}"
+    );
+    let bodies: Vec<_> = line["notes"]
+        .as_array()
+        .expect("a v2 review carries a notes array")
+        .iter()
+        .map(|note| note["body"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        bodies,
+        ["The palette reads flat.", "Name the second lane."],
+        "{line}"
+    );
+
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "close", &service.session_id],
+    ));
+    let mut monitor = monitor;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = monitor.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stream did not end when the session closed"
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(status.code(), Some(0));
+    assert!(monitor.lines.try_recv().is_err(), "an event arrived twice");
+    let pending = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "responses",
+            "list",
+            &service.session_id,
+            "--status",
+            "pending",
+        ],
+    ));
+    assert_eq!(pending.lines().count(), 0, "{pending}");
+}
+
+/// TSK-445 AC-9, the CLI: one `--follow --format v2` run delivers two
+/// answers and a review with both note bodies, each sent in its own batch
+/// after the one before it was read, and ends when the session closes.
+#[test]
+fn feedback_follow_v2_delivers_every_batch_until_the_session_closes() {
+    assert_monitor_receives_every_batch(
+        r#"exec codeflow present feedback "$ID" --follow --format v2"#,
+    );
+}
+
+/// The monitor command the skill tells a host to run: the first `sh` block
+/// of `cf-present/references/feedback-loop.md`.
+fn skill_monitor_command() -> String {
+    let reference = skill_file("references/feedback-loop.md");
+    let start = reference
+        .find("```sh\n")
+        .expect("feedback-loop.md shows the monitor command in an sh block")
+        + "```sh\n".len();
+    let end = start + reference[start..].find("```").unwrap();
+    reference[start..end].to_string()
+}
+
+/// TSK-445 AC-9, the host journey: the command the skill's feedback loop
+/// tells a host to run under its monitor keeps delivering after the first
+/// batch with no manual re-arm. The one-shot `--wait` loop the skill taught
+/// before exits after the first batch, so this fails on it.
+#[test]
+fn the_skill_feedback_loop_reaches_the_host_without_a_re_arm() {
+    assert_monitor_receives_every_batch(&skill_monitor_command());
 }
