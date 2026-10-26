@@ -11,6 +11,8 @@ use std::process::{Command, Output};
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
+#[path = "acceptance_journey/sequence.rs"]
+mod sequence;
 use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {

@@ -2442,11 +2442,12 @@ fn a_recompletion_keeps_a_criterion_amended_on_the_target() {
     );
 }
 
-/// TSK-140 and TSK-184 composed: a task pull request may merge its target
-/// after the review (TSK-184), but a one-PR fix reviews its own range and
-/// never stacks such a merge on that review (TSK-140, R-119).
+/// TSK-140, TSK-184 and TSK-340 composed: a task pull request may merge its
+/// target after the review (TSK-184), and since TSK-340 (issue #217) a
+/// one-PR fix takes the same allowance: its review still lies inside its
+/// own fix range, which starts where the review left the target.
 #[test]
-fn a_one_pr_fix_never_stacks_a_line_merge_on_its_review() {
+fn a_one_pr_fix_stacks_a_clean_line_merge_on_its_review() {
     for stacked in [false, true] {
         let (dir, _, archived) = one_pr_fix();
         let root = dir.path();
@@ -2469,15 +2470,12 @@ fn a_one_pr_fix_never_stacks_a_line_merge_on_its_review() {
             &format!("{archived}{}", fix_block(&reviewed)),
         );
         let result = ci(root, "task/TSK-001-fix", "TSK-001");
-        if stacked {
-            assert_blocks(
-                &result,
-                "a fix range does not stack a line merge",
-                &["work.acceptance_binding", "TSK-001", "inside the fix range"],
-            );
+        let what = if stacked {
+            "a fix range stacks a clean line merge"
         } else {
-            assert_passes(&result, "one pull request fix");
-        }
+            "one pull request fix"
+        };
+        assert_passes(&result, what);
     }
 }
 
@@ -2562,10 +2560,10 @@ fn reopened_in_its_own_range() -> (tempfile::TempDir, String) {
 }
 
 /// A completion made and reopened inside its own pull request is a
-/// reopening range too (R-119): a clean merge of the target after the fix
-/// review is not stacked on that review, by the verb or by CI.
+/// reopening range too (R-119): since TSK-340 a clean merge of the target
+/// after the fix review stacks on that review, by the verb and by CI.
 #[test]
-fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
+fn a_completion_reopened_in_its_own_range_stacks_a_clean_line_merge() {
     for stacked in [false, true] {
         let (dir, archived) = reopened_in_its_own_range();
         let root = dir.path();
@@ -2590,15 +2588,8 @@ fn a_completion_reopened_in_its_own_range_never_stacks_a_line_merge() {
         let verb = status_complete(root, "TSK-001");
         complete(root, "TSK-001", OWN_JOURNEY, &closeout);
         let result = ci(root, "task/TSK-001-fix", "TSK-001");
-        if stacked {
-            let needle = "src/line.rs changed after the reviewed commit";
-            assert_ne!(verb.0, 0, "the verb stacked a line merge: {}", verb.1);
-            assert!(verb.1.contains(needle), "{}", verb.1);
-            assert_blocks(&result, "an in-range reopen stacks nothing", &[needle]);
-        } else {
-            assert_passes(&verb, "the verb on an in-range reopen and fix");
-            assert_passes(&result, "an in-range reopen and fix");
-        }
+        assert_passes(&verb, "the verb on an in-range reopen and fix");
+        assert_passes(&result, "an in-range reopen and fix");
     }
 }
 
@@ -2649,22 +2640,23 @@ fn a_one_pr_fix_has_no_own_range_waiver() {
         assert_blocks(
             &result,
             "an own-range waiver in a reopening range",
-            &["AC-1 waiver", "which is not on the target"],
+            &[
+                "AC-1 waiver",
+                "which is not on the target; a reopened task's waiver must name a planning commit on the target that amends this criterion",
+            ],
         );
     }
 }
 
-/// The same refusal when the range itself completed and reopened the task,
-/// which is still `todo` on its target.
+/// When the range itself completed and reopened the task, which is still
+/// `todo` on its target, no completion landed: the range is still the
+/// task's own pull request, so the own-range waiver stands, by the verb and
+/// by CI (TSK-340, issue #278).
 #[test]
-fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
+fn a_completion_reopened_in_its_own_range_keeps_the_own_range_waiver() {
     let (dir, archived) = reopened_in_its_own_range();
     for result in waive_by_own_amendment(dir.path(), &archived) {
-        assert_blocks(
-            &result,
-            "an own-range waiver after an in-range reopen",
-            &["AC-1 waiver", "which is not on the target"],
-        );
+        assert_passes(&result, "an own-range waiver after an in-range reopen");
     }
 }
 
