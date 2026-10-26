@@ -7,24 +7,31 @@
 #   proposed merge tree and the host's published state. It blocks. The
 #   block's own fields are judged by `codeflow ci`'s one evaluator, which
 #   release.py calls; this job judges nothing of the block separately.
-#   It runs on `pull_request_target`, so its definition, its release.py and
-#   the codeflow it builds come from the protected target, never from the
-#   pull request: the candidate is fetched as git data and judged, never
-#   built or run (TSK-1001). The head, base and body it judged are pinned
-#   before and rechecked after, so success names exactly what was judged.
+#   Until the trusted job below is required, this `pull_request` job keeps
+#   reporting `release impact` as before; it runs the candidate's own
+#   definition, so it is the check being replaced, not a trusted one.
+# - release impact (trusted): the same judgment on `pull_request_target`,
+#   whose definition GitHub takes from the default branch, so its
+#   release.py and the codeflow it builds come from the protected target and
+#   the candidate is fetched as git data, never built or run (TSK-1001). The
+#   head, base and body it judged are pinned before and rechecked after.
+#   Once `main` carries this job, a follow-up (TSK-1015) removes the
+#   `pull_request` job and the operator makes this check the required one.
 # - release state: the merged state on main and on every integration line,
 #   without writes. Publication reads this job's result on main.
 name: codeflow-release
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main, "integration/**"]
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  group: ${{ github.event_name != 'push' && format('{0}-{1}-pr-{2}', github.workflow, github.event_name, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -32,6 +39,38 @@ permissions:
 jobs:
   release-impact:
     name: release impact
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      # release.py reads and judges the body with the codeflow built from
+      # this same checkout, the evaluator `codeflow ci` uses, so the two
+      # cannot judge a body differently (TSK-147 F4, TSK-451). It never
+      # takes a codeflow from PATH.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the codeflow that reads the body
+        run: cargo build --release --locked -p codeflow-cli
+      - name: Validate reviewed release intent
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin "$BASE_REF"
+          python3 scripts/release.py check-pr \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --target-ref "origin/$BASE_REF" --body-env CODEFLOW_PR_BODY \
+            --codeflow-bin target/release/codeflow
+
+  release-impact-trusted:
+    name: release impact (trusted)
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

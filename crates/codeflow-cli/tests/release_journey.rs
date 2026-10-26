@@ -198,9 +198,12 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
     let own = std::fs::read_to_string(root.join(".github/workflows/codeflow-release.yml")).unwrap();
     for required in [
         "branches: [main, \"integration/**\"]",
-        // TSK-1001: on pull_request_target, from the target's definitions.
-        "pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]",
+        "types: [opened, synchronize, reopened, edited]",
         "name: release impact",
+        "python3 scripts/release.py check-pr",
+        // TSK-1001: the trusted job beside it, from the target's definitions.
+        "pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]",
+        "name: release impact (trusted)",
         "python3 -I scripts/release.py check-pr",
         "python3 -I scripts/release.py pr-snapshot",
         // The body is read by the codeflow built from the same checkout.

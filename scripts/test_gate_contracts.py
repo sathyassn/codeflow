@@ -110,7 +110,10 @@ class GateContracts(unittest.TestCase):
             "github.event.changes.base.ref.from == ''\n"), reuse)
         self.assertIn('python3 -I scripts/ci-reuse.py edit --repo', reuse)
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
-        self.assertNotIn(': write', workflow)
+        # The one write permission is the provenance job's OIDC token
+        # request (TSK-1001); nothing writes to the repository.
+        self.assertEqual(re.findall(r'^ +([a-z-]+): write$', workflow, re.M), ['id-token'])
+        self.assertIn('      contents: read\n      id-token: write\n', jobs['provenance'])
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
         for key in ('gates', 'windows', 'windows-build', 'windows-release-journey'):
             with self.subTest(job=key):
@@ -285,15 +288,22 @@ class GateContracts(unittest.TestCase):
             self.assertEqual(names('full'), 'lint')
 
     def test_release_impact_judges_the_candidate_with_the_targets_definitions(self):
-        # TSK-1001 review finding 1: release impact runs on
-        # pull_request_target from the target's base commit, builds only
-        # that checkout's codeflow, runs only its release.py, fetches the
-        # candidate as git data, and pins and rechecks head, base and body.
+        # TSK-1001: `release impact (trusted)` runs on pull_request_target
+        # from the target's base commit, builds only that checkout's
+        # codeflow, runs only its release.py, fetches the candidate as git
+        # data, and pins and rechecks head, base and body. During the
+        # transition the existing `pull_request` job keeps reporting
+        # `release impact` unchanged; TSK-1015 removes it once main carries
+        # the trusted job.
         workflow = read('.github/workflows/codeflow-release.yml')
         self.assertIn('  pull_request_target:\n    types: [opened, synchronize, reopened, edited, ready_for_review]\n',
                       workflow)
-        self.assertNotRegex(workflow, r'(?m)^  pull_request:')
-        job = workflow.split('  release-impact:\n', 1)[1].split('\n  release-state:\n', 1)[0]
+        self.assertIn('  pull_request:\n    types: [opened, synchronize, reopened, edited]\n', workflow)
+        legacy = workflow.split('  release-impact:\n', 1)[1].split('\n  release-impact-trusted:\n', 1)[0]
+        self.assertIn('    name: release impact\n', legacy)
+        self.assertIn("    if: github.event_name == 'pull_request'\n", legacy)
+        job = workflow.split('  release-impact-trusted:\n', 1)[1].split('\n  release-state:\n', 1)[0]
+        self.assertIn('    name: release impact (trusted)\n', job)
         self.assertIn("    if: github.event_name == 'pull_request_target'\n", job)
         checkouts = re.findall(r'uses: actions/checkout@[0-9a-f]{40}[^\n]*\n        with:\n          ref: ([^\n]+)\n', job)
         self.assertEqual(checkouts, ['${{ github.event.pull_request.base.sha }}'])
@@ -318,6 +328,28 @@ class GateContracts(unittest.TestCase):
         policy = read('.github/workflows/codeflow-policy.yml')
         self.assertIn('--base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256"', policy)
         self.assertIn('          BODY_SHA256: ${{ steps.body.outputs.sha256 }}\n', policy)
+
+    def test_every_ready_run_keeps_its_signed_provenance(self):
+        # TSK-1001: each ready pull_request run asks GitHub for its OIDC
+        # token with the admission audience and keeps it as an artifact
+        # named for its attempt, which admission and edit reuse verify.
+        workflow = read('.github/workflows/codeflow-ci.yml')
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        job = dict(zip(parts[1::2], parts[2::2]))['provenance']
+        self.assertIn("    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}\n", job)
+        self.assertIn('&audience=codeflow-admission', job)
+        self.assertIn('name: codeflow-provenance-${{ github.run_attempt }}', job)
+        spec = importlib.util.spec_from_file_location('ci_reuse', ROOT / 'scripts' / 'ci-reuse.py')
+        reuse = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reuse)
+        self.assertEqual(reuse.PROVENANCE_AUDIENCE, 'codeflow-admission')
+        self.assertEqual(reuse.PROVENANCE_ARTIFACT.format(attempt=2), 'codeflow-provenance-2')
+        reuse_job = dict(zip(parts[1::2], parts[2::2]))['reuse']
+        self.assertIn('--trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py', reuse_job)
+        policy = read('.github/workflows/codeflow-policy.yml')
+        self.assertIn('          CODEFLOW_PR_IS_DRAFT: ${{ steps.body.outputs.draft }}\n', policy)
+        self.assertIn('          DRAFT: ${{ steps.body.outputs.draft }}\n', policy)
+        self.assertIn('--draft "$DRAFT"', policy)
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and
@@ -377,9 +409,11 @@ class GateContracts(unittest.TestCase):
         self.assertIn('Swatinem/rust-cache@', workflow)
         # Release impact runs on pull_request_target (TSK-1001): one group per
         # pull request, cancelled when superseded; push runs are never.
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}", workflow)
-        self.assertIn("format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || "
-                      "format('{0}-run-{1}', github.workflow, github.run_id)", workflow)
+        # One group per pull request and event (the two release jobs never
+        # cancel each other), cancelled when superseded; push runs never.
+        self.assertIn("cancel-in-progress: ${{ github.event_name != 'push' }}", workflow)
+        self.assertIn("format('{0}-{1}-pr-{2}', github.workflow, github.event_name, github.event.pull_request.number) "
+                      "|| format('{0}-run-{1}', github.workflow, github.run_id)", workflow)
         self.assertIn('cargo build --release --locked -p codeflow-cli', workflow)
 
     def test_every_workflow_action_is_pinned_to_a_commit(self):
