@@ -2651,6 +2651,20 @@ fn worktree_add_reads_linked_includes_by_their_logical_path() {
                 &shell_path(&logical.join("parent.conf")),
             ],
         );
+        // A second spelling of the same file, through a directory alias, so
+        // the coverage does not rely on how the platform lays out its
+        // temporary directory.
+        let alias = f.temp.path().join("alias");
+        std::os::unix::fs::symlink(&logical, &alias).unwrap();
+        git(
+            &f.root,
+            &[
+                "config",
+                "--add",
+                &format!("includeIf.gitdir:{root}/.git/worktrees/linkedwt.path"),
+                &shell_path(&alias.join("parent.conf")),
+            ],
+        );
         let stage = f.temp.path().join("stage");
         std::fs::create_dir_all(stage.join("linkedwt")).unwrap();
         let dest = shell_path(&stage.join("linkedwt"));
