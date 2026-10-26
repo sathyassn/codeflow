@@ -45,7 +45,7 @@ still represents the same conceptual item.
 | Information shape | Block | Use it for |
 |---|---|---|
 | a relationship the reader must see | `figure` | the default primary carrier: a figure-grammar declaration in one of the nine families, drawn by the runtime with its legend, caption and table twin |
-| anchor, section title and lead | `narrative` | the anchor list, a `## ` section heading with one or two lead lines, or a passage of at most three sentences |
+| anchor, section title and lead | `narrative` | the anchor list, a `## ` section heading with a lead of one or two lines, or a passage of at most three sentences |
 | enumerable points | `bullets` | steps, findings, criteria, or concise options |
 | exceptional emphasis | `callout` | one material note, risk, success, warning, or danger |
 | peer alternatives | `comparison` | two to four genuinely comparable directions |
@@ -82,8 +82,8 @@ surface has not earned its visual claim.
 ### Narrative and bullets
 
 A section opens with a narrative block whose Markdown starts with a `## `
-heading naming the topic in plain words, then one or two lead lines. The
-heading renders as the section title and labels the section list:
+heading naming the topic in plain words, then a lead of one or two lines.
+The heading renders as the section title and labels the section list:
 
 ```json
 {"type":"narrative","id":"life-head","markdown":"## How one follow-up lives\n\nThe path above is the normal case. A follow-up can also wait, be dropped with a reason, or reopen."}

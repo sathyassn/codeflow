@@ -10,7 +10,7 @@
     {
       "type": "narrative",
       "id": "anchor",
-      "markdown": "## What you are looking at\n\n- **What:** the change that keeps Claude and Codex apart while they explore, so each opinion stays independent until one settle step (TSK-042).\n- **Why it matters:** if the lanes share context early, the second opinion repeats the first.\n- **Where it stands:** built and reviewed; every check is green except the native Windows canary, which has not run.\n- **You decide:** ship now with the canary as a follow-up, or hold until it runs."
+      "markdown": "## What you are looking at\n\n- **What:** the change that keeps Claude and Codex from reading each other's work while they explore, so each opinion stays independent until they meet once to settle (TSK-042).\n- **Why it matters:** in the last review where both read the same notes early, Codex repeated two of Claude's three findings and added none of its own.\n- **Where it stands:** built and reviewed; every check is green except the native Windows canary, which has not run.\n- **You decide:** ship now with the canary as a follow-up, or hold until it runs."
     },
     {
       "type": "narrative",

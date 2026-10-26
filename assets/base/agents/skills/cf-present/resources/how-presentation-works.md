@@ -87,11 +87,10 @@ encodes them (figure/tree/table/media), or you stay in chat.
 
 ## 3. Anchor first, then build in order
 
-This section is the document method.
 Work through `explanation-method.md` first: its stages settle the reader,
-the altitudes and the carrier, and its check decides whether the page opens. Then walk the page top to bottom in
-plain words before JSON encodes it, with stable `id`s for blocks that
-persist across revisions.
+the altitudes and the carrier, and its check decides whether the page
+opens. Then walk the page top to bottom in plain words before JSON encodes
+it, with stable `id`s for blocks that persist across revisions.
 
 A reader opens the page knowing only what they brought: the conversation,
 the project and their own words for things. The page connects to that before
@@ -111,20 +110,25 @@ and connect the dots alone; that is the failure this section prevents.
 ```
 
 - **Anchor.** The first block is a `narrative` block: a `## ` heading that
-  names what the reader is looking at, then a Markdown list of three to five
+  names what the reader is looking at, then a Markdown list of four or five
   short lines, one fact each: what this is, named in the reader's words and
   tied to the request or issue it answers; why it matters, as the problem
-  the reader already knows with one concrete instance; where it stands; and
-  what the reader decides at the end. It defines nothing: terms arrive in
-  the picture.
-- **Picture of the whole.** The next block is one figure that shows every
-  part the document covers, each labelled with the name the later blocks
-  use. It is the map: the reader sees the whole before any part.
+  the reader already knows with one concrete instance; where it stands;
+  what the reader decides at the end; and at most one more line of context.
+  It defines nothing and names no term the picture has not drawn yet.
+- **Picture of the whole.** The second section holds one figure that shows
+  every part the document covers, each labelled with the name the later
+  blocks use: its heading and lead, then the figure. It is the map: the
+  reader sees the whole before any part.
 - **Problem, then model, then behaviour.** Order the parts the way
   understanding grows: the familiar problem before the new model, the
   normal path before the exceptions, structure before timing. When the
   subject replaces something, the problem section can draw today beside the
   proposal.
+- **One variant.** When the problem can be drawn in the reader's own words
+  with no new term, its section may come before the picture of the whole,
+  as the worked example below does. Every other order is anchor, picture,
+  problem.
 - **Decision.** End with the one decision or verdict, as a `decision` block
   whose options use the names the figures drew.
 
@@ -135,7 +139,7 @@ detail, they need the anchor again in miniature: where they are, why this
 part, and how it connects to what they just saw.
 
 - **Open each part with a section block:** a `narrative` block whose
-  Markdown starts with a `## ` heading, then one or two lead lines. The
+  Markdown starts with a `## ` heading, then a lead of one or two lines. The
   heading renders as a section title and becomes the label in the page's
   section list; a block with no heading shows a cut-off sentence there
   instead. A `### ` heading opens a subsection under it.
@@ -165,8 +169,8 @@ as the argument.
 - **Every concept is a figure.** A concept, mechanism, lifecycle, ownership
   model or comparison is a figure in the grammar family its relationship
   names (`figure-grammar.md` section 1), drawn by its lessons ("Composing a
-  figure"). Text is limited to the anchor, a one-line lead per section, the
-  caption and short bullets.
+  figure"). Text is limited to the anchor, a lead of one or two lines per
+  section, the caption and short bullets.
 - **A narrative block is a few sentences.** At most three sentences, or a
   short list. A longer passage is a figure, a list or a table waiting to be
   drawn.
@@ -202,20 +206,19 @@ stands, the decision asked) and then one structure figure that draws each
 term where it sits. Its chat form:
 
 ```text
- +- Coordination ledger (this clone) ------------------------------+
- |  +- Work stream: release 3.2 ---+  +- Work stream: docs ------+ |
- |  |  (C) coordinator             |  |  (C) coordinator         | |
- |  |    | hands out               |  |    | hands out           | |
- |  |    v                         |  |    v                    | |
- |  |  [lane] --owes--> <follow-up>|  |  [lane]                 | |
+ +- Coordination ledger (this clone) -----------------------------+
+ |  +- Work stream: release 3.2 ---+  +- Work stream: docs -----+ |
+ |  | (C) coordinator              |  | (C) coordinator         | |
+ |  |   | hands out                |  |   | hands out           | |
+ |  |   v                          |  |   v                     | |
+ |  | [lane] --owes--> <follow-up> |  | [lane]                  | |
  |  +------------------------------+  +-------------------------+ |
- +--------------------------------|--------------------------------+
-                                  | closes with proof from
-                                  v
-                    tasks, pull requests, ADRs (read only)
+ +-------------------------------|--------------------------------+
+                                 | closes with proof from
+                                 v
+                tasks, pull requests, ADRs (read only)
 Legend: (C) coordinator  [lane] delegated work  <..> follow-up
-Caption: Each work stream has its own coordinator, lanes and
-follow-ups, and a follow-up closes only with proof from the records.
+Caption: A follow-up closes only with proof from the records.
 ```
 
 Each term is now a mark with a legend entry, the boundary is a drawn edge
@@ -224,20 +227,22 @@ with proof from`) carry what the definitions said.
 
 ### The worked example: the coordination ledger presentation
 
-The coordination ledger design review (its final revision, which asked the
-operator to accept ADR-0086) is the document this method was written from.
-What it does right:
+The coordination ledger design review is CodeFlow's own design review, the
+document this method was written from (its final revision asked the
+operator to accept ADR-0086). It is not shipped with the skill, and this
+section describes all of it that matters. What it does right:
 
 - The anchor list says what it is, why it matters with real instances (a
   hand-written list that stopped after nine days, three builders resumed
   from memory), where the design stands and the decision asked, in four
   lines.
-- The problem comes first, as a flow figure of an ask today and with the
-  ledger, before any new term.
+- It takes the variant above: the problem comes first, as a flow figure of
+  an ask today and with the ledger, drawn in the reader's own words (your
+  ask, a session that stops).
 - One structure figure draws the whole: the ledger, its work streams, each
   stream's coordinator, lanes and follow-ups, and the records it reads.
-- Every later part opens with a `## ` or `### ` heading and one lead line,
-  so the section list reads as the argument.
+- Every later part opens with a `## ` or `### ` heading and a lead of one
+  or two lines, so the section list reads as the argument.
 - Each part is a figure in its family: the record links as structure, one
   follow-up's life as state, a harness handover as sequence, the failures
   against the mechanisms as coverage, the plan as graph.

@@ -30,11 +30,11 @@ note of that review.
 - **Always `--format v2`.** The v1 stream carries review envelopes only: it
   never delivers an answer and only names pending ones on stderr.
 
-Never use a one-shot listener for a live session: a `--wait` loop exits
-after the first batch, and anything the reviewer sends after it sits unread
-until someone re-arms it. That happened on 2026-10-23, when a review with
-notes and a palette answer waited unread. Never start another model or agent
-to listen for you.
+Where the host has a monitor, never use a one-shot listener for a live
+session: a `--wait` loop exits after the first batch, and anything the
+reviewer sends after it sits unread until someone re-arms it, as a review
+with notes and a palette answer once did. Never start another model or
+agent to listen for you.
 
 Lines come in the order they were stored: by time, a review before any other
 kind at the same second, then by sequence. `responses list` uses the same

@@ -26,13 +26,14 @@ The method behind each question is `resources/how-presentation-works.md`
 section 3.
 
 1. What **job** does this surface do that chat cannot?
-2. Does the page open with an **anchor** (three to five lines: what, why
-   with one real instance, where it stands, what is decided) and then one
-   **picture of the whole** naming every part that follows?
+2. Does the page open with an **anchor** (four or five lines, one fact
+   each: what, why with one real instance, where it stands, what is
+   decided) and then a section with one **picture of the whole** naming
+   every part that follows?
 3. Do the parts follow the order understanding grows (the familiar problem,
    the new model, how it behaves, the decision), each opening with a `## `
    section whose title names the topic in plain words, never a question,
-   and one or two lead lines tying it to the picture?
+   and a lead of one or two lines tying it to the picture?
 4. Is every concept a figure in its family, with its governing path in
    accent-bearing marks, and does structure still argue if sentences are
    removed?
@@ -50,8 +51,8 @@ section 3.
   three sentences each);
 - tables outside a disclosure.
 
-Every section has its figure, the second count is zero or near it, and the
-third is zero. A concept-shaped document with no figure, or with narrative
+Every concept section has its figure, the second count is at most one, and
+the third is zero. A concept-shaped document with no figure, or with narrative
 as its largest part, is restructured, not opened.
 
 **Read the check.** `codeflow present check --file <document.json>` prints
