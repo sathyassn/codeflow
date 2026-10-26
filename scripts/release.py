@@ -2374,6 +2374,66 @@ def verify_clean_builds(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "verified", "version": version, "archives": len(archives)}))
 
 
+def pull_snapshot(repository: str, pull: int, *, cwd: Path) -> tuple[dict[str, Any], str]:
+    """The identity of pull request `pull` that a release judgment binds,
+    read live (TSK-1001): state, draft, head and base commits, base branch
+    and the SHA-256 of its body; and the body itself."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository or ""):
+        fail(f"pr-snapshot needs OWNER/NAME, not {repository!r}")
+    live = github_json(f"repos/{repository}/pulls/{pull}", cwd=cwd)
+    if not isinstance(live, dict):
+        fail(f"GitHub returned no pull request for #{pull}")
+    body = live.get("body") or ""
+    if not isinstance(body, str):
+        fail(f"pull request #{pull} has a body that is not text")
+    state = {
+        "state": live.get("state"),
+        "draft": live.get("draft"),
+        "head": (live.get("head") or {}).get("sha"),
+        "base_ref": (live.get("base") or {}).get("ref"),
+        "base_sha": (live.get("base") or {}).get("sha"),
+        "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+    }
+    return state, body
+
+
+def pr_snapshot(args: argparse.Namespace) -> None:
+    """Pin, or recheck, the pull request a hosted release judgment reads
+    (TSK-1001). With --expect-head/--expect-base-ref/--expect-base-sha it
+    refuses a pull request that is not open at that head and base, writes
+    the snapshot to --output and the body it hashed to --body-out. With
+    --expect it refuses any difference from a pinned snapshot, so success is
+    reported only for the head, base and body that were judged."""
+    state, body = pull_snapshot(args.repository, args.pull, cwd=args.root)
+    if args.expect:
+        try:
+            pinned = json.loads(args.expect.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            fail(f"cannot read the pinned snapshot {args.expect}: {error}")
+        moved = sorted(key for key in set(pinned) | set(state) if pinned.get(key) != state.get(key))
+        if moved:
+            fail(
+                f"pull request #{args.pull} moved while its release impact was judged ({', '.join(moved)}); "
+                "the verdict belongs to the earlier snapshot, so re-run the check"
+            )
+    else:
+        expected = {"state": "open", "head": args.expect_head, "base_ref": args.expect_base_ref,
+                    "base_sha": args.expect_base_sha}
+        if not all(expected.values()):
+            fail("pr-snapshot needs --expect, or --expect-head, --expect-base-ref and --expect-base-sha")
+        moved = sorted(key for key, value in expected.items() if state.get(key) != value)
+        if moved:
+            fail(
+                f"pull request #{args.pull} does not match the event this check belongs to ({', '.join(moved)}); "
+                "re-run the check for its current state"
+            )
+    if args.output:
+        args.output.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    if args.body_out:
+        args.body_out.write_text(body, encoding="utf-8")
+    print(json.dumps({"status": "pinned" if not args.expect else "unchanged", **state}, sort_keys=True))
+
+
 def add_host_args(value: argparse.ArgumentParser) -> None:
     value.add_argument("--host-state", type=Path)
     value.add_argument("--repository", default="")
@@ -2400,6 +2460,17 @@ def parser() -> argparse.ArgumentParser:
         check.add_argument("--codeflow-bin", help=f"the codeflow that reads the body (else ${CODEFLOW_BIN})")
         add_host_args(check)
         check.set_defaults(func=check_pr)
+
+    snap = sub.add_parser("pr-snapshot", help="pin or recheck the pull request a release judgment reads")
+    snap.add_argument("--repository", required=True)
+    snap.add_argument("--pull", type=int, required=True)
+    snap.add_argument("--expect", type=Path, help="a pinned snapshot that must still hold")
+    snap.add_argument("--expect-head")
+    snap.add_argument("--expect-base-ref")
+    snap.add_argument("--expect-base-sha")
+    snap.add_argument("--output", type=Path)
+    snap.add_argument("--body-out", type=Path)
+    snap.set_defaults(func=pr_snapshot)
 
     prepare = sub.add_parser("sync")
     prepare.add_argument("--cargo", default="cargo")

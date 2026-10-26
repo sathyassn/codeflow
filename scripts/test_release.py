@@ -1263,6 +1263,94 @@ class PullRequestTests(unittest.TestCase):
         self.run_check(base, head, self.repo.body("minor"))
 
 
+class TrustedJudgeTests(unittest.TestCase):
+    """TSK-1001 review finding 1: the hosted release impact runs the
+    target's release.py and codeflow on a target checkout and reads the
+    candidate as git data only, so a candidate that replaces the evaluator
+    or loosens the configuration cannot change the verdict."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_a_candidate_evaluator_or_config_cannot_replace_the_judge(self) -> None:
+        base = self.repo.target
+        command(self.repo.root, "git", "switch", "-q", "-c", "candidate")
+        self.repo.pending("2.0.1", [("patch", "small fix")])
+        # The candidate's own judge would pass anything.
+        self.repo.write("scripts/release.py", "import sys\nprint('{\"status\": \"ok\"}')\nsys.exit(0)\n")
+        config = json.loads(self.repo.config.read_text())
+        config["watched_contract_paths"] = []
+        self.repo.write(".release/config.json", json.dumps(config))
+        head = self.repo.commit("feat: replace the judge")
+        # The hosted job's working tree is the target, never the candidate.
+        command(self.repo.root, "git", "switch", "-q", "main")
+        body = self.repo.root / "body.md"
+        body.write_text(self.repo.body("minor"))
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
+            release.check_pr(self.repo.args(base=base, head=head, target_ref=base, body_file=body, body_env=None))
+        self.assertEqual(self.repo.load(), release.load_config(self.repo.root / ".release/config.json"))
+        self.assertNotIn("watched_contract_paths\": []", (self.repo.root / ".release/config.json").read_text())
+
+
+class PullSnapshotTests(unittest.TestCase):
+    """TSK-1001: the release judgment pins the head, base and body it reads
+    and refuses to report when any of them moved."""
+
+    def live(self, **changes: object) -> dict[str, object]:
+        value: dict[str, object] = {"state": "open", "draft": False, "body": "Task: TSK-1\n",
+                                    "head": {"sha": "b" * 40}, "base": {"ref": "main", "sha": "a" * 40}}
+        value.update(changes)
+        return value
+
+    def run_snapshot(self, reads: list[dict[str, object]], *extra: str) -> tuple[Path, Path]:
+        directory = Path(self.temp.name)
+        args = release.parser().parse_args(["--root", str(directory), "pr-snapshot", "--repository", "o/r",
+                                            "--pull", "7", *extra])
+        with mock.patch.object(release, "github_json", side_effect=reads), \
+                contextlib.redirect_stdout(io.StringIO()):
+            args.func(args)
+        return directory / "snapshot.json", directory / "body.md"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def pin(self, live: dict[str, object]) -> Path:
+        directory = Path(self.temp.name)
+        self.run_snapshot([live], "--expect-head", "b" * 40, "--expect-base-ref", "main", "--expect-base-sha",
+                          "a" * 40, "--output", str(directory / "snapshot.json"), "--body-out",
+                          str(directory / "body.md"))
+        return directory / "snapshot.json"
+
+    def test_an_unmoved_pull_request_passes_and_the_judged_body_is_the_hashed_one(self) -> None:
+        pinned = self.pin(self.live())
+        self.assertEqual((Path(self.temp.name) / "body.md").read_text(), "Task: TSK-1\n")
+        self.run_snapshot([self.live()], "--expect", str(pinned))
+
+    def test_a_moved_head_base_body_or_state_refuses(self) -> None:
+        pinned = self.pin(self.live())
+        for changes, field in (({"head": {"sha": "c" * 40}}, "head"),
+                               ({"base": {"ref": "main", "sha": "c" * 40}}, "base_sha"),
+                               ({"base": {"ref": "other", "sha": "a" * 40}}, "base_ref"),
+                               ({"body": "Task: TSK-2\n"}, "body_sha256"),
+                               ({"draft": True}, "draft")):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(release.ReleaseError, f"moved while.*{field}"):
+                    self.run_snapshot([self.live(**changes)], "--expect", str(pinned))
+
+    def test_a_pull_request_that_is_not_the_events_refuses_before_judging(self) -> None:
+        for changes in ({"head": {"sha": "c" * 40}}, {"state": "closed"},
+                        {"base": {"ref": "main", "sha": "c" * 40}}):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(release.ReleaseError, "does not match the event"):
+                    self.pin(self.live(**changes))
+
+
 class PublicationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = Repository()

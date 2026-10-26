@@ -92,6 +92,13 @@ Merge:
 - Main-push and integration-line CI repeat the state check without writing.
 - These release jobs live in `codeflow-release.yml`, outside the managed
   `codeflow-ci.yml` that every adopter receives. No scaffold installs them.
+- `release impact` runs on `pull_request_target`, including body edits and
+  a draft made ready. It checks out the target's base commit, builds only
+  that commit's `codeflow`, runs only its `scripts/release.py`, and fetches
+  the pull request head as git data, never built or run, so a pull request
+  cannot replace its own judge. `release.py pr-snapshot` pins the head,
+  base and body before `check-pr` and rechecks them before the job reports,
+  so the verdict names exactly what was judged (TSK-1001).
 - A PR check tests the merge with `main` as it was when the run started, so
   a green from an older `main` says nothing about the current one. Under
   ADR-0081 the `main` ruleset requires branches to be up to date before
@@ -403,7 +410,7 @@ Three planes check release state, from cheapest to authoritative:
 |---|---|---|
 | Pre-push | `release.py preflight` for each pushed branch | only a push that breaks a release tree its base kept valid |
 | `codeflow integrate` | `release.py check-state --structural` in the test stage | an invalid tree |
-| CI, `codeflow-release.yml` | `release impact` (full `check-pr`) on pull requests; `release state` on pushes to `main` and `integration/**` | yes |
+| CI, `codeflow-release.yml` | `release impact` (full `check-pr`, from the target's definitions) on pull requests through `pull_request_target`; `release state` on pushes to `main` and `integration/**` | yes |
 
 The first two planes are the local planes:
 
