@@ -1055,7 +1055,7 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
 
     OWN = {
         ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
-        ".github/workflows/codeflow-release.yml",
+        ".github/workflows/codeflow-release.yml", ".github/workflows/codeflow-release-trusted.yml",
         ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
         ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
         ".github/workflows/release-post-announce.yml",

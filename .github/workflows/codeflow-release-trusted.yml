@@ -1,0 +1,104 @@
+# The trusted release-impact judgment (TSK-1001, ADR-0062). It runs on
+# `pull_request_target`, whose definition GitHub takes from the default
+# branch, so its release.py and the codeflow it builds come from a protected
+# base and the pull request is fetched as git data, never built or run. The
+# head, base and body it judged are pinned before and rechecked after.
+#
+# It lives in its own file and triggers only on its own events, so no
+# event reports it, or the `pull_request` job `release impact` in
+# codeflow-release.yml, as skipped: a skipped job can satisfy a required
+# check. Until `main` carries this file, the `pull_request` job keeps
+# reporting as before; the follow-up TSK-1015 then removes it, and the
+# operator makes `release impact (trusted)` the required check.
+name: codeflow-release-trusted
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+concurrency:
+  group: ${{ format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-impact:
+    name: release impact (trusted)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # Only a protected base supplies the code this job builds and runs:
+      # before any checkout or build, a pull request into any other branch
+      # fails here, since a branch its author controls would run its own
+      # code as the judge (TSK-1001).
+      - name: The base branch is a protected one
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          case "$BASE_REF" in
+            main|master|integration/*) echo "base ${BASE_REF} is protected" ;;
+            *) echo "::error::the base ${BASE_REF} is not main, master or integration/**; its code is not trusted to judge this pull request"; exit 1 ;;
+          esac
+      # The target's base commit, never the pull request head: the
+      # definition, release.py and the codeflow below all come from it.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      # release.py reads and judges the body with the codeflow built from
+      # this same target checkout, the evaluator `codeflow ci` uses, so the
+      # two cannot judge a body differently (TSK-147 F4, TSK-451). It never
+      # takes a codeflow from PATH, and nothing of the candidate is built.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the target's codeflow that reads the body
+        run: cargo build --release --locked -p codeflow-cli
+      - name: Fetch the pull request head as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head" "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          fetched=$(git rev-parse refs/codeflow/pr-head)
+          if [ "$fetched" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
+          fi
+      - name: Pin the head, base and body judged
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          python3 -I scripts/release.py pr-snapshot --repository "$REPOSITORY" --pull "$PR_NUMBER"
+          --expect-head "$HEAD_SHA" --expect-base-ref "$BASE_REF" --expect-base-sha "$BASE_SHA"
+          --output "$RUNNER_TEMP/release-snapshot.json" --body-out "$RUNNER_TEMP/release-body.md"
+      - name: Validate reviewed release intent
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 -I scripts/release.py check-pr
+          --base "$BASE_SHA" --head "$HEAD_SHA"
+          --target-ref "origin/$BASE_REF" --body-file "$RUNNER_TEMP/release-body.md"
+          --codeflow-bin target/release/codeflow
+      - name: Recheck the pinned snapshot before reporting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          python3 -I scripts/release.py pr-snapshot --repository "$REPOSITORY" --pull "$PR_NUMBER"
+          --expect "$RUNNER_TEMP/release-snapshot.json"
