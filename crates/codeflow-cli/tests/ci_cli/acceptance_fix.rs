@@ -226,7 +226,20 @@ fn an_unfinished_task_is_not_landable_once_ready() {
     let event = events.path().join("event.json");
     std::fs::write(&event, r#"{"pull_request":{"draft":false}}"#).unwrap();
     let event = event.to_str().unwrap();
+    // A rerun of an old draft event: the pinned live readiness, passed as
+    // the variable, wins over the event file (TSK-1001 review 2).
+    let draft_event = events.path().join("draft-event.json");
+    std::fs::write(&draft_event, r#"{"pull_request":{"draft":true}}"#).unwrap();
+    let draft_event = draft_event.to_str().unwrap();
     for (env, refused) in [
+        (
+            vec![
+                ("GITHUB_EVENT_PATH", draft_event),
+                ("CODEFLOW_PR_IS_DRAFT", "false"),
+            ],
+            true,
+        ),
+        (vec![("GITHUB_EVENT_PATH", draft_event)], false),
         (vec![("CODEFLOW_PR_IS_DRAFT", "false")], true),
         (vec![("GITHUB_EVENT_PATH", event)], true),
         (vec![("CODEFLOW_PR_IS_DRAFT", "true")], false),

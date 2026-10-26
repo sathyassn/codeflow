@@ -437,6 +437,7 @@ REUSE_JOB = """\
           else
             python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \\
               --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \\
+              --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \\
               --require "codeflow gates" --require windows
           fi
 """

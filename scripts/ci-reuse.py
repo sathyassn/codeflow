@@ -63,6 +63,9 @@ run of the same pull request, head and base passed, so its verdicts stand.
 from __future__ import annotations
 
 import argparse
+import base64
+import io
+import zipfile
 import fnmatch
 import hashlib
 import json
@@ -71,6 +74,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -308,9 +312,114 @@ def verdicts_problem(api, run: dict, required: set[str]) -> str | None:
     return None
 
 
+# Execution provenance (TSK-1001). GitHub's REST reference documents no
+# guarantee that a run's `pull_requests` names the pull request that started
+# it, and exposes no SHA of the workflow file a run executed. A run's GitHub
+# Actions OIDC token does: GitHub signs it, the workflow cannot forge its
+# claims, and it names the run, its attempt, the event, the merge ref and
+# commit it ran on, and the commit of the workflow file (`workflow_sha`).
+# codeflow-ci's `run provenance` job requests one with this audience and
+# keeps it as the run's artifact; admission verifies it here.
+OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+OIDC_JWKS = f"{OIDC_ISSUER}/.well-known/jwks"
+PROVENANCE_AUDIENCE = "codeflow-admission"
+PROVENANCE_ARTIFACT = "codeflow-provenance-{attempt}"
+PROVENANCE_FILE = "provenance.jwt"
+# DigestInfo prefix for SHA-256 in an EMSA-PKCS1-v1_5 encoding (RFC 8017).
+SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def b64url(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def verify_rs256(token: str, keys: list[dict]) -> dict:
+    """The claims of an RS256 JWT whose signature verifies under the JWKS key
+    its header names (RFC 7515, RFC 8017 RSASSA-PKCS1-v1_5); raises Skip
+    for anything else. Uses no third-party code."""
+    parts = token.strip().split(".")
+    if len(parts) != 3:
+        raise Skip("the provenance token is not a JWT")
+    try:
+        header = json.loads(b64url(parts[0]))
+        claims = json.loads(b64url(parts[1]))
+        signature = int.from_bytes(b64url(parts[2]), "big")
+    except (ValueError, TypeError) as error:
+        raise Skip(f"the provenance token cannot be read: {error}") from error
+    if not isinstance(header, dict) or header.get("alg") != "RS256" or not isinstance(claims, dict):
+        raise Skip("the provenance token is not an RS256 token with claims")
+    key = next((key for key in keys if key.get("kid") == header.get("kid") and key.get("kty") == "RSA"), None)
+    if key is None:
+        raise Skip(f"no GitHub OIDC key {header.get('kid')!r} signs the provenance token")
+    modulus = int.from_bytes(b64url(key["n"]), "big")
+    exponent = int.from_bytes(b64url(key["e"]), "big")
+    size = (modulus.bit_length() + 7) // 8
+    digest = hashlib.sha256(f"{parts[0]}.{parts[1]}".encode("ascii")).digest()
+    payload = SHA256_DIGEST_INFO + digest
+    expected = b"\x00\x01" + b"\xff" * (size - len(payload) - 3) + b"\x00" + payload
+    if signature >= modulus or pow(signature, exponent, modulus).to_bytes(size, "big") != expected:
+        raise Skip("the provenance token's signature does not verify")
+    return claims
+
+
+def provenance_problem(api, git, run: dict, repo: str, pull: int, head: str, base_ref: str, base_sha: str,
+                       workflow_path: str, trusted: list[str]) -> str | None:
+    """Why the run's signed GitHub identity does not prove that it ran the
+    trusted workflow for exactly this pull request, head and base, or None.
+    The token must verify under GitHub's keys with this issuer and audience
+    and name this repository, run and attempt, a `pull_request` event on
+    this pull request's merge ref, this base branch and the workflow file at
+    the merge commit it ran; that merge commit's parents must be the base
+    commit and the head, and every trusted file there must equal the base's,
+    so the workflow that executed is the trusted one."""
+    attempt = run.get("run_attempt")
+    name = PROVENANCE_ARTIFACT.format(attempt=attempt)
+    try:
+        token = api.provenance(run["id"], name, PROVENANCE_FILE)
+        keys = api.oidc_keys()
+    except Skip as error:
+        return f"run {run['id']} carries no readable signed provenance ({error})"
+    except Exception as error:  # noqa: BLE001 - an unreadable provenance refuses
+        return f"run {run['id']} carries no readable signed provenance ({type(error).__name__}: {error})"
+    try:
+        claims = verify_rs256(token, keys)
+    except Skip as error:
+        return f"run {run['id']}: {error}"
+    merge_ref = f"refs/pull/{pull}/merge"
+    expected = {
+        "iss": OIDC_ISSUER,
+        "aud": PROVENANCE_AUDIENCE,
+        "repository": repo,
+        "run_id": str(run["id"]),
+        "run_attempt": str(attempt),
+        "event_name": "pull_request",
+        "ref": merge_ref,
+        "base_ref": base_ref,
+        "workflow_ref": f"{repo}/{workflow_path}@{merge_ref}",
+    }
+    wrong = sorted(key for key, value in expected.items() if claims.get(key) != value)
+    if wrong:
+        return (f"run {run['id']}'s signed provenance does not name this run, pull request and base "
+                f"({', '.join(f'{key}={claims.get(key)!r}' for key in wrong)})")
+    merge = claims.get("sha")
+    if not isinstance(merge, str) or not SHA.match(merge) or claims.get("workflow_sha") != merge:
+        return f"run {run['id']}'s signed provenance names no merge commit its workflow ran from"
+    try:
+        parents = git.parents(merge)
+    except Skip as error:
+        return f"cannot read the merge commit {merge} run {run['id']} ran: {error}"
+    if parents != [base_sha, head]:
+        return (f"run {run['id']} ran the merge commit {merge} of {parents}, not of the base {base_sha} and the "
+                f"head {head}")
+    problem = trusted_files_problem(git, base_sha, merge, trusted)
+    if problem:
+        return f"run {run['id']} did not run the trusted workflow: {problem}"
+    return None
+
+
 def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git=None,
           trusted: list[str] | None = None, expected_base_ref: str = "", expected_base_sha: str = "",
-          expected_body_sha256: str | None = None) -> int:
+          expected_body_sha256: str | None = None, expected_draft: bool | None = None) -> int:
     """Merge admission for a pull request (TSK-449 AC-6, TSK-1001): the id
     of the newest codeflow-ci pull_request run that tested exactly this
     pull request's head against the base the caller judged, when it
@@ -333,7 +442,9 @@ def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git
         raise Skip(f"no expected base was given ({expected_base_ref!r} at {expected_base_sha!r}); admission binds "
                    "the base the caller judged")
     before = snapshot(api.pull(pull))
-    expected = {"state": "open", "draft": False, "head": head, "base_ref": expected_base_ref,
+    if expected_draft is None:
+        raise Skip("no judged draft state was given; admission binds the readiness the caller judged")
+    expected = {"state": "open", "draft": expected_draft, "head": head, "base_ref": expected_base_ref,
                 "base_sha": expected_base_sha}
     if expected_body_sha256 is not None:
         expected["body_sha256"] = expected_body_sha256
@@ -342,6 +453,9 @@ def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git
         raise Skip(f"pull request #{pull} does not match the snapshot this check judged ({', '.join(moved)}: "
                    f"{', '.join(f'{key}={before.get(key)!r}' for key in moved)}); re-run this check for its current "
                    "state")
+    if expected_draft:
+        raise Skip(f"pull request #{pull} was judged as a draft, and a draft is never admitted; mark it ready, "
+                   "which judges it again")
     problem = trusted_files_problem(git, expected_base_sha, head, list(trusted or [])) if git else \
         "no git reader was given, so the workflow file cannot be proved to be the base's"
     if problem:
@@ -362,6 +476,10 @@ def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git
     problem = verdicts_problem(api, run, required)
     if problem:
         raise Skip(problem)
+    problem = provenance_problem(api, git, run, api.repo, pull, head, expected_base_ref, expected_base_sha,
+                                 workflow_path, list(trusted or []))
+    if problem:
+        raise Skip(problem)
     after = snapshot(api.pull(pull))
     if after != before:
         changed = sorted(key for key in before if before[key] != after.get(key))
@@ -374,7 +492,7 @@ def admit(head: str, workflow_path: str, required: set[str], api, pull: int, git
 
 
 def edit_reuse(head: str, workflow_path: str, required: set[str], api, pull: int, base_ref: str,
-               base_sha: str, current: int) -> int:
+               base_sha: str, current: int, git=None, trusted: list[str] | None = None) -> int:
     """For a pull request run started by an `edited` event that kept the
     base (a title or body edit), the id of the newest earlier run of the
     same pull request, head and base, when it completed with success and
@@ -396,6 +514,12 @@ def edit_reuse(head: str, workflow_path: str, required: set[str], api, pull: int
     problem = verdicts_problem(api, run, required)
     if problem:
         raise Skip(problem)
+    if git is None:
+        raise Skip("no git reader was given, so the reused run's workflow cannot be proved trusted")
+    problem = provenance_problem(api, git, run, api.repo, pull, head, base_ref, base_sha, workflow_path,
+                                 list(trusted or []))
+    if problem:
+        raise Skip(problem)
     return run["id"]
 
 
@@ -408,13 +532,15 @@ def edit_main(argv: list[str]) -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--workflow-ref", required=True)
     parser.add_argument("--run-id", type=int, required=True, help="this run, never reused")
+    parser.add_argument("--trusted-file", action="append", default=[],
+                        help="a file the reused run's workflow commit must hold as the base does")
     parser.add_argument("--require", action="append", default=[], help="a verdict job that must have succeeded")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
     args = parser.parse_args(argv)
     try:
         path = workflow_path(args.workflow_ref, args.repo)
         run = edit_reuse(args.head, path, set(args.require), Api(args.api, args.repo, os.environ.get("GH_TOKEN", "")),
-                         args.pull, args.base_ref, args.base_sha, args.run_id)
+                         args.pull, args.base_ref, args.base_sha, args.run_id, Git(), args.trusted_file)
     except Skip as reason:
         print(f"ci-reuse edit: every job runs: {reason}")
         return 0
@@ -440,6 +566,7 @@ def admit_main(argv: list[str]) -> int:
     parser.add_argument("--base-ref", required=True, help="the base branch the caller judged")
     parser.add_argument("--base-sha", required=True, help="the base commit the caller judged")
     parser.add_argument("--body-sha256", required=True, help="the SHA-256 of the body the caller judged")
+    parser.add_argument("--draft", required=True, choices=["true", "false"], help="the draft state the caller judged")
     parser.add_argument("--require", action="append", default=[], help="a verdict job that must succeed")
     parser.add_argument("--wait", type=int, default=0, help="seconds to wait for a pending or absent run")
     parser.add_argument("--api", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
@@ -449,7 +576,8 @@ def admit_main(argv: list[str]) -> int:
     while True:
         try:
             run = admit(args.head, args.workflow, set(args.require), api, args.pull, Git(), args.trusted_file,
-                        args.base_ref, args.base_sha, args.body_sha256)
+                        args.base_ref, args.base_sha, args.body_sha256,
+                        args.draft == "true")
         except Pending as reason:
             if time.monotonic() + POLL_SECONDS > deadline:
                 print(f"ci-reuse admit: refused: {reason}; re-run this check once that run completes")
@@ -523,6 +651,48 @@ class Api:
             "X-GitHub-Api-Version": "2022-11-28"})
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
+
+    def bytes_at(self, url: str) -> bytes:
+        """The body at `url`, an API address that may redirect to storage:
+        the token goes to the API host only, never to a redirect."""
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+        opener = urllib.request.build_opener(NoRedirect)
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28"})
+        try:
+            with opener.open(request, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            location = error.headers.get("Location") if error.code in (301, 302, 303, 307, 308) else None
+            if not location:
+                raise
+        with urllib.request.urlopen(urllib.request.Request(location), timeout=60) as response:
+            return response.read()
+
+    def provenance(self, run: int, name: str, member: str) -> str:
+        """The text of `member` in the run's artifact `name`; Skip when the
+        run has no such artifact, or it is expired or malformed."""
+        found = [item for item in self.pages(f"actions/runs/{run}/artifacts?name={urllib.parse.quote(name)}",
+                                             "artifacts")
+                 if item.get("name") == name and not item.get("expired")]
+        if len(found) != 1:
+            raise Skip(f"run {run} has {len(found)} live artifacts named {name}")
+        archive = self.bytes_at(found[0]["archive_download_url"])
+        try:
+            with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+                return bundle.read(member).decode("ascii")
+        except (KeyError, zipfile.BadZipFile, UnicodeDecodeError) as error:
+            raise Skip(f"artifact {name} of run {run} holds no readable {member}: {error}") from error
+
+    def oidc_keys(self) -> list[dict]:
+        with urllib.request.urlopen(OIDC_JWKS, timeout=30) as response:
+            keys = json.load(response).get("keys")
+        if not isinstance(keys, list):
+            raise Skip("GitHub's OIDC key set is unreadable")
+        return keys
 
     def pages(self, path: str, key: str | None) -> list[dict]:
         found: list[dict] = []

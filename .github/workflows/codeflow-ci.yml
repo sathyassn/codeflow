@@ -129,8 +129,41 @@ jobs:
           else
             python3 -I scripts/ci-reuse.py edit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
               --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --workflow-ref "$WORKFLOW_REF" --run-id "$GITHUB_RUN_ID" \
+              --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
               --require "codeflow gates" --require windows
           fi
+
+  # Run provenance (TSK-1001). GitHub documents no guarantee that a run's
+  # `pull_requests` names the pull request that started it, and exposes no
+  # SHA of the workflow file a run executed. This job asks GitHub for the
+  # run's OIDC token, which GitHub signs and the workflow cannot forge: it
+  # names the run, its attempt, the event, the merge ref and commit, and the
+  # workflow file's commit. Merge admission and edit reuse verify it
+  # (scripts/ci-reuse.py). A fork's pull request gets no token and so is
+  # never admitted. Its only write permission is the token request.
+  provenance:
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    name: run provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Request the run's signed identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --max-time 30 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=codeflow-admission" \
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])' > "${RUNNER_TEMP}/provenance.jwt"
+      - name: Keep it with the run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codeflow-provenance-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/provenance.jwt
+          retention-days: 30
+          if-no-files-found: error
 
   # The release binary every gate part runs `codeflow test` with is built
   # once here and shared as an artifact, never rebuilt per part (TSK-449).

@@ -127,6 +127,12 @@ jobs:
           # The digest of the exact body judged here, from the same read;
           # merge admission binds it and refuses when the body moved since.
           echo "sha256=$(python3 -I -c 'import hashlib, json, sys; print(hashlib.sha256((json.load(open(sys.argv[1])).get("body") or "").encode("utf-8")).hexdigest())' "${RUNNER_TEMP}/pull.json")" >> "$GITHUB_OUTPUT"
+          # The draft state from the same read, so the judgment and the
+          # admission below use one snapshot, never the event's older one
+          # (a rerun of a draft event after the pull request was made ready).
+          # A draft state that is not true or false fails this job.
+          draft=$(python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])).get("draft"); sys.exit(2) if not isinstance(d, bool) else print(str(d).lower())' "${RUNNER_TEMP}/pull.json")
+          echo "draft=${draft}" >> "$GITHUB_OUTPUT"
 
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
@@ -137,6 +143,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
+          CODEFLOW_PR_IS_DRAFT: ${{ steps.body.outputs.draft }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
         run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
 
@@ -162,7 +169,7 @@ jobs:
           fi
 
       # Merge admission (TSK-449 AC-6, TSK-1001). It binds trusted identity
-      # only: the head, base and body this job judged, which the live pull
+      # only: the head, base, body and draft state this job judged, which the live pull
       # request must match before and after admission; the codeflow-ci
       # workflow and this verdict script hashed at the head against that
       # base (a pull request that edits either picks its own jobs and is
@@ -189,12 +196,12 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BODY_SHA256: ${{ steps.body.outputs.sha256 }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          DRAFT: ${{ github.event.pull_request.draft }}
+          DRAFT: ${{ steps.body.outputs.draft }}
         run: |
           wait=2100
           if [ "$DRAFT" = true ]; then wait=0; fi
           python3 -I scripts/ci-reuse.py admit --repo "$REPOSITORY" --head "$HEAD_SHA" --pull "$PR_NUMBER" \
             --workflow .github/workflows/codeflow-ci.yml \
             --trusted-file .github/workflows/codeflow-ci.yml --trusted-file scripts/ci-reuse.py \
-            --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256" \
+            --base-ref "$BASE_REF" --base-sha "$BASE_SHA" --body-sha256 "$BODY_SHA256" --draft "$DRAFT" \
             --require "codeflow gates" --require windows --wait "$wait"
