@@ -1,0 +1,11 @@
+id = "TSK-1009"
+uid = "b974912e-0c02-46b6-9c66-206ff983d819"
+kind = "TSK"
+title = "Changed paths that owe end-to-end, UI or mutation evidence are checked"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:14:33Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
