@@ -103,11 +103,35 @@ each batch.
   operator merges. Its required checks count only when they ran on the
   current tip of `main`; under ADR-0081 the `main` ruleset requires an
   up-to-date branch, so a pull request that is behind is updated first. A
-  clean update leaves a completed task's acceptance block standing only when
-  the pull request did not reopen its task; a hand-resolved update
-  invalidates it, and a pull request that reopened its task inside its own
-  range needs a new review and a new binding after the update (SPC-013 R-60,
-  R-119).
+  clean update leaves a completed task's acceptance block standing, also
+  when the pull request reopened its task; a hand-resolved update
+  invalidates it (SPC-013 R-60, R-119).
+- A task can be blocked, completed, reopened and completed again, and its
+  epic closed after it, with ordinary commands that `task status`, the task
+  pull request's `codeflow ci` and the line's pull request into `main` all
+  accept:
+
+  ```text
+  task branch    review -> task status blocked -> task status todo
+                 -> task status complete            (task PR, lands)
+  fix branch     task status todo --reason -> fix -> review
+                 -> task status complete            (fix PR, lands)
+                 [a clean merge of the line after the review is allowed]
+  planning PR    epic status complete               (closeout, lands)
+  line -> main   codeflow ci accepts the whole sequence
+  ```
+
+  The Blocker that `task status` writes and removes is not reviewed scope.
+  Each reopen appends the block it supersedes to one chronological
+  archive, so the record reads the same against the line and against
+  `main`. A completion's span ends at the completion; its record, criteria
+  and archive stay protected, and the epic's Closeout rides its own
+  planning pull request, since a completion commit changes only its own
+  record. A reopen of a landed completion keeps its criteria, so its
+  waiver names a planning commit on the target; a reopen of a completion
+  that never landed is still the task's own pull request and keeps the
+  in-branch waiver route, as does a task pull request on a branch whose
+  name carries no task id.
 - A later task may build on a predecessor before it lands, named with
   `--on TSK-NNN@<sha>`. The pin names the predecessor branch tip. Its Reviews
   section must approve that tip or an ancestor whose later commits change
