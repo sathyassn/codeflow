@@ -2,7 +2,7 @@
   "schema_version": 2,
   "title": "Ship or hold the dual-lineage boundary",
   "language": "en",
-  "summary": "The ship decision for TSK-042, with one open check.",
+  "summary": "The ship decision for the dual-lineage boundary, with one check still open.",
   "provenance": {
     "task_id": "TSK-042"
   },
@@ -10,7 +10,7 @@
     {
       "type": "narrative",
       "id": "anchor",
-      "markdown": "## Ship or hold the dual-lineage boundary\n\n- **What:** a change that keeps Claude and Codex apart while they explore, so each opinion stays independent until one settle step (TSK-042).\n- **Why it matters:** if the lanes share context early, the second opinion stops being a second opinion.\n- **Where it stands:** built and reviewed; every check is green except the native Windows canary, which has not run.\n- **You decide:** ship now with the canary as a follow-up, or hold until it runs."
+      "markdown": "## What you are looking at\n\n- **What:** the change that keeps Claude and Codex apart while they explore, so each opinion stays independent until one settle step (TSK-042).\n- **Why it matters:** if the lanes share context early, the second opinion repeats the first.\n- **Where it stands:** built and reviewed; every check is green except the native Windows canary, which has not run.\n- **You decide:** ship now with the canary as a follow-up, or hold until it runs."
     },
     {
       "type": "narrative",
@@ -506,7 +506,7 @@
     {
       "type": "narrative",
       "id": "evidence-head",
-      "markdown": "## What the evidence says\n\nThe Gates step of the figure, check by check."
+      "markdown": "## What the evidence says\n\nThe Gates step of [fig:whole-path], check by check."
     },
     {
       "type": "status",
@@ -530,29 +530,518 @@
       ]
     },
     {
-      "type": "narrative",
-      "id": "options-head",
-      "markdown": "## Your two options\n\nBoth keep the path above; they differ only in when the canary runs."
-    },
-    {
-      "type": "comparison",
-      "id": "options",
-      "columns": [
+      "type": "disclosure",
+      "id": "evidence-detail",
+      "summary": "Every check and where it is recorded",
+      "blocks": [
         {
-          "title": "Ship now",
-          "markdown": "- merge today\n- the canary runs as a tracked follow-up before release"
-        },
-        {
-          "title": "Hold",
-          "markdown": "- merge after the canary passes\n- nothing waits on a follow-up"
+          "type": "table",
+          "id": "checks",
+          "title": "Every check and where it is recorded",
+          "columns": [
+            "Check",
+            "Result",
+            "Recorded in"
+          ],
+          "rows": [
+            [
+              "Workspace tests",
+              "pass",
+              "the task evidence"
+            ],
+            [
+              "Cross-lineage review",
+              "pass, findings addressed",
+              "the integration branch"
+            ],
+            [
+              "Native Windows canary",
+              "not run",
+              "release qualification, which owns it"
+            ]
+          ]
         }
       ]
+    },
+    {
+      "type": "narrative",
+      "id": "options-head",
+      "markdown": "## The two options\n\nBoth keep the path in [fig:whole-path]; they differ only in whether the canary runs before or after the merge."
+    },
+    {
+      "type": "figure",
+      "id": "options",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "options",
+          "family": "flow",
+          "binding": "authored",
+          "question": "What changes between shipping now and holding?",
+          "idea": "The two options differ only in whether the canary runs before or after your merge.",
+          "title": "Where the canary runs in each option",
+          "kicker": "The two options",
+          "caption": "Shipping now merges today and runs the canary as a follow-up before release, and holding stops the merge until the canary passes.",
+          "states": [
+            {
+              "name": "agent",
+              "mark": "agent",
+              "means": "A step an agent takes"
+            },
+            {
+              "name": "human",
+              "mark": "human",
+              "means": "Your merge"
+            },
+            {
+              "name": "done",
+              "mark": "done",
+              "means": "Can travel today"
+            },
+            {
+              "name": "todo",
+              "mark": "todo",
+              "means": "Travels later"
+            },
+            {
+              "name": "stop",
+              "mark": "stop",
+              "means": "The merge waits here"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "neither option bypasses a gate",
+              "source": "AGENTS.md",
+              "derive": "the git floor in the always rules",
+              "check": {
+                "kind": "contains",
+                "text": "never bypass a gate"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 240,
+            "draw": [
+              {
+                "text": "Ship now",
+                "x": 24,
+                "y": 70,
+                "style": "strong"
+              },
+              {
+                "text": "Hold",
+                "x": 24,
+                "y": 160,
+                "style": "strong"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M119 100H290",
+                "id": "a-to-merge"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M309 100H471",
+                "id": "a-to-canary"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M489 100H620",
+                "id": "a-to-release"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 110,
+                "cy": 100,
+                "r": 8,
+                "id": "a-gates"
+              },
+              {
+                "text": "gates pass",
+                "x": 110,
+                "y": 132,
+                "anchor": "middle",
+                "for": [
+                  "a-gates"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 300,
+                "cy": 100,
+                "r": 9,
+                "id": "a-merge"
+              },
+              {
+                "text": "you merge today",
+                "x": 300,
+                "y": 132,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "a-merge"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 480,
+                "cy": 100,
+                "r": 8,
+                "id": "a-canary"
+              },
+              {
+                "text": "canary runs as a follow-up",
+                "x": 480,
+                "y": 132,
+                "anchor": "middle",
+                "for": [
+                  "a-canary"
+                ]
+              },
+              {
+                "text": "release",
+                "x": 630,
+                "y": 105,
+                "style": "mute",
+                "for": [
+                  "a-to-release"
+                ]
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M119 190H291",
+                "id": "b-to-canary"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M309 190H471",
+                "id": "b-to-merge"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M489 190H620",
+                "id": "b-to-release"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 200,
+                "y1": 178,
+                "x2": 200,
+                "y2": 202,
+                "id": "b-wait"
+              },
+              {
+                "text": "merge waits for the canary",
+                "x": 200,
+                "y": 168,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "b-wait"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 110,
+                "cy": 190,
+                "r": 8,
+                "id": "b-gates"
+              },
+              {
+                "text": "gates pass",
+                "x": 110,
+                "y": 222,
+                "anchor": "middle",
+                "for": [
+                  "b-gates"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 300,
+                "cy": 190,
+                "r": 8,
+                "id": "b-canary"
+              },
+              {
+                "text": "canary runs",
+                "x": 300,
+                "y": 222,
+                "anchor": "middle",
+                "for": [
+                  "b-canary"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 480,
+                "cy": 190,
+                "r": 9,
+                "id": "b-merge"
+              },
+              {
+                "text": "you merge after it passes",
+                "x": 480,
+                "y": 222,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "b-merge"
+                ]
+              },
+              {
+                "text": "release",
+                "x": 630,
+                "y": 195,
+                "style": "mute",
+                "for": [
+                  "b-to-release"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "stack",
+            "drops": [],
+            "marks": "same",
+            "reason": "Both options keep their four steps at phone width, with shorter labels.",
+            "width": 360,
+            "height": 250,
+            "draw": [
+              {
+                "text": "Ship now",
+                "x": 16,
+                "y": 40,
+                "style": "strong"
+              },
+              {
+                "text": "Hold",
+                "x": 16,
+                "y": 160,
+                "style": "strong"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M49 70H130",
+                "id": "a-to-merge"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M149 70H231",
+                "id": "a-to-canary"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M249 70H296",
+                "id": "a-to-release"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 40,
+                "cy": 70,
+                "r": 8,
+                "id": "a-gates"
+              },
+              {
+                "text": "gates",
+                "x": 40,
+                "y": 100,
+                "anchor": "middle",
+                "for": [
+                  "a-gates"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 140,
+                "cy": 70,
+                "r": 9,
+                "id": "a-merge"
+              },
+              {
+                "text": "merge",
+                "x": 140,
+                "y": 100,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "a-merge"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 240,
+                "cy": 70,
+                "r": 8,
+                "id": "a-canary"
+              },
+              {
+                "text": "canary",
+                "x": 240,
+                "y": 100,
+                "anchor": "middle",
+                "for": [
+                  "a-canary"
+                ]
+              },
+              {
+                "text": "release",
+                "x": 304,
+                "y": 75,
+                "style": "mute",
+                "for": [
+                  "a-to-release"
+                ]
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M49 200H131",
+                "id": "b-to-canary"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M149 200H231",
+                "id": "b-to-merge"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M249 200H296",
+                "id": "b-to-release"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 90,
+                "y1": 188,
+                "x2": 90,
+                "y2": 212,
+                "id": "b-wait"
+              },
+              {
+                "text": "waits",
+                "x": 90,
+                "y": 178,
+                "anchor": "middle",
+                "style": "mute",
+                "for": [
+                  "b-wait"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 40,
+                "cy": 200,
+                "r": 8,
+                "id": "b-gates"
+              },
+              {
+                "text": "gates",
+                "x": 40,
+                "y": 230,
+                "anchor": "middle",
+                "for": [
+                  "b-gates"
+                ]
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 140,
+                "cy": 200,
+                "r": 8,
+                "id": "b-canary"
+              },
+              {
+                "text": "canary",
+                "x": 140,
+                "y": 230,
+                "anchor": "middle",
+                "for": [
+                  "b-canary"
+                ]
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 240,
+                "cy": 200,
+                "r": 9,
+                "id": "b-merge"
+              },
+              {
+                "text": "merge",
+                "x": 240,
+                "y": 230,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "b-merge"
+                ]
+              },
+              {
+                "text": "release",
+                "x": 304,
+                "y": 205,
+                "style": "mute",
+                "for": [
+                  "b-to-release"
+                ]
+              }
+            ]
+          },
+          "twin": {
+            "columns": [
+              "Option",
+              "Order",
+              "What waits"
+            ],
+            "rows": [
+              [
+                "Ship now",
+                "gates, merge, canary, release",
+                "the release waits on the canary as a tracked follow-up"
+              ],
+              [
+                "Hold",
+                "gates, canary, merge, release",
+                "the merge waits until the canary passes"
+              ]
+            ]
+          }
+        }
+      }
     },
     {
       "type": "decision",
       "id": "ship-or-hold",
       "title": "Ship now or hold?",
-      "markdown": "Mark a wrong step on the figure first, then choose.",
+      "markdown": "Mark a wrong step on either figure first, then choose.",
       "options": [
         {
           "value": "ship",
