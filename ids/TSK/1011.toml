@@ -1,0 +1,11 @@
+id = "TSK-1011"
+uid = "f2d78c12-8fd3-4ac7-a756-e894089e87ca"
+kind = "TSK"
+title = "A child epic line inherits the line adoptions of the line it starts from"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:15:53Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
