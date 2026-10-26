@@ -1505,6 +1505,8 @@ fn home_move(case: &str) -> tempfile::TempDir {
     commit(root, "docs: plan the work");
     git(root, &["switch", "-c", LINE_A, "main"]);
     merge(root, "plan/home");
+    // The line as it stood before the move, for a push that updates it.
+    git(root, &["tag", "before-move"]);
     let mover = if case == "second parent" {
         git(root, &["branch", LINE_B]);
         LINE_B
@@ -1582,9 +1584,32 @@ fn a_planning_merge_moves_a_todo_task_to_another_line() {
     let mut failures = Vec::new();
     for case in ["todo", "todo to blocked", "twice", "back"] {
         let dir = home_move(case);
-        let result = line_into_main(dir.path());
-        if result.0 != 0 || result.1.contains(MOVED) || result.1.contains("work.import_authority") {
-            failures.push(format!("{case}: {}", result.1));
+        let root = dir.path();
+        // The receiving range through CI into the default branch, and
+        // through the real pre-push entry. A first push judges only what
+        // the destination does not already hold, and the published home
+        // holds the move, so the pushed line was published before the move
+        // and this push updates it: the move is in the judged range.
+        let ci = line_into_main(root);
+        let before = git_out(root, &["rev-parse", "before-move"]);
+        git(
+            root,
+            &[
+                "push",
+                "--no-verify",
+                "origin",
+                &format!("{before}:refs/heads/{LINE_A}"),
+            ],
+        );
+        git(root, &["fetch", "origin"]);
+        let push = pre_push(root, LINE_A, &before);
+        for (entry, result) in [("ci", ci), ("pre-push", push)] {
+            if result.0 != 0
+                || result.1.contains(MOVED)
+                || result.1.contains("work.import_authority")
+            {
+                failures.push(format!("{case} ({entry}): {}", result.1));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
