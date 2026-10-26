@@ -218,12 +218,12 @@ def trusted_files_problem(git, base: str, head: str, paths: list[str]) -> str | 
     """Why the head's copy of a trusted file is not the base's, or None.
     The run tested the merge of the head into the base; a file whose bytes
     are equal at both carries the base's content into that merge, so the
-    run's jobs, job names and verdict logic are the base's. What the gate
-    jobs select and the floors they enforce come from the base as well,
-    since codeflow-ci takes its judge files (test config, selection scripts
-    and their data) from the base revision; the code under test, and the
-    `codeflow` built from it, are the pull request's, which the gate tests
-    rather than trusts."""
+    run's jobs, job names and verdict logic are the base's. The gate's
+    selection (coverage shards, Windows partitions, journey map) and its
+    coverage floors come from the base as well: codeflow-ci unpacks those
+    judge files from the base revision and runs them from there. The code
+    under test, the test targets' commands and the `codeflow` built from it
+    are the pull request's, which the gate tests rather than trusts."""
     if not paths:
         return "no trusted file was named; admission binds the workflow file and the verdict script"
     for path in paths:

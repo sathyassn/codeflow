@@ -49,8 +49,8 @@ class GateContracts(unittest.TestCase):
         # AC-1: the job after the partitions reads results only; the Python
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
-        self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertIn('journey-gate.py" --results target/nextest/partitions --skip-benchmark --part results', journeys)
+        self.assertIn('windows-partitions.py" check --list', journeys)
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
@@ -397,35 +397,35 @@ class GateContracts(unittest.TestCase):
         self.assertIn('--draft "$DRAFT"', policy)
 
     def test_a_pull_request_cannot_narrow_its_own_gate(self):
-        # Review 3 SF-1: every gate job that reads the test config or a
-        # selection script takes those judge files from the base revision
-        # before using them, with one pinned step; run against a pull
-        # request that narrows its selection, the step restores the base's.
+        # Review 3 SF-1: the gate's selection scripts, their data, the
+        # journey map and the floor config come from the base revision. Each
+        # job that runs one unpacks the base's judge files beside the
+        # checkout first (one pinned step) and runs them from there, so the
+        # pull request's copies stay data and the code under test keeps them.
         import tempfile
         workflow = read('.github/workflows/codeflow-ci.yml')
         parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
         jobs = dict(zip(parts[1::2], parts[2::2]))
-        step = PARITY.JUDGE_STEP
         def code(text):
-            return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#'))
-        readers = [name for name, text in jobs.items()
-                   if any(f in code(text) for f in ('codeflow test --', 'coverage-shards.py', 'windows-partitions.py',
-                                                    'journey-gate.py', 'coverage-merge.py'))]
-        self.assertEqual(sorted(readers), sorted(['gates', 'gates-release', 'gates-coverage', 'gates-coverage-report',
-                                                  'windows-tests', 'windows-release-journey', 'windows-journeys']))
-        for name in readers:
-            with self.subTest(job=name):
-                text = '\n'.join(line for line in jobs[name].splitlines() if not line.lstrip().startswith('#')) + '\n'
-                self.assertIn(step, text)
-                first_use = min(i for i in (text.find('codeflow test --'), text.find('scripts/coverage'),
-                                            text.find('scripts/windows-partitions'), text.find('scripts/journey-gate'))
-                                if i >= 0 and i > text.find(step))
-                self.assertLess(text.index(step), first_use)
+            return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#')) + '\n'
+        judges = re.compile(r'scripts/(?:coverage-shards|windows-partitions|journey-gate|coverage-merge|'
+                            r'test_coverage_merge|test_journey_gate|test_windows_partitions)\.py')
+        for name, text in jobs.items():
+            body = code(text).replace(PARITY.JUDGE_STEP, '')
+            for use in re.finditer(r'(\S*)' + judges.pattern, body):
+                with self.subTest(job=name, use=use.group(0)):
+                    if name == 'windows-release-journey':
+                        self.assertIn("      - name: Take the journey map from the base\n", body)
+                    else:
+                        self.assertEqual(use.group(1), '"$CODEFLOW_JUDGE/', 'a judge script runs from the base copy')
+                        self.assertIn(PARITY.JUDGE_STEP, code(text))
+        self.assertIn('--floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json"', workflow)
         for path in PARITY.JUDGE_FILES:
             self.assertTrue((ROOT / path).exists(), path)
-        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        script = '\n'.join(line[10:] for line in PARITY.JUDGE_STEP.split('        run: |\n', 1)[1].splitlines())
         with tempfile.TemporaryDirectory() as directory:
-            repo = Path(directory)
+            repo = Path(directory) / 'repo'
+            repo.mkdir()
             def git(*args):
                 return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false',
                                        *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
@@ -443,12 +443,25 @@ class GateContracts(unittest.TestCase):
             git('switch', '-q', 'main')
             git('merge', '-q', '--no-ff', '-m', 'merge', 'pr')
             git('remote', 'add', 'origin', str(repo))
+            temp, env_file = Path(directory) / 'temp', Path(directory) / 'env'
+            temp.mkdir()
             done = subprocess.run(['bash', '-c', script], cwd=repo, capture_output=True, text=True,
-                                  env={**os.environ, 'BASE_SHA': base})
+                                  env={**os.environ, 'EVENT': 'pull_request', 'BASE_SHA': base,
+                                       'RUNNER_TEMP': str(temp), 'GITHUB_ENV': str(env_file)})
             self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(json.loads((repo / '.codeflow/test-config.json').read_text())['targets'],
+            judge = Path(env_file.read_text().strip().split('=', 1)[1])
+            self.assertEqual(json.loads((judge / '.codeflow/test-config.json').read_text())['targets'],
                              [{'name': 'a'}, {'name': 'b'}])
-            self.assertEqual((repo / 'scripts/coverage-shards.py').read_text(), 'base scripts/coverage-shards.py\n')
+            self.assertEqual((judge / 'scripts/coverage-shards.py').read_text(), 'base scripts/coverage-shards.py\n')
+            # The checkout keeps the pull request's copies for the code under test.
+            self.assertEqual((repo / 'scripts/coverage-shards.py').read_text(), 'print("one trivial test")\n')
+            # A push judges with its own (protected) tree.
+            done = subprocess.run(['bash', '-c', script], cwd=repo, capture_output=True, text=True,
+                                  env={**os.environ, 'EVENT': 'push', 'RUNNER_TEMP': str(temp),
+                                       'GITHUB_ENV': str(env_file)})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(Path(env_file.read_text().strip().splitlines()[-1].split('=', 1)[1]).resolve(),
+                             repo.resolve())
 
     def test_release_tier_targets_leave_the_hosted_landing_gate(self):
         # TSK-449 AC-4: prose-exhaustive, read-benchmark, present-browser and

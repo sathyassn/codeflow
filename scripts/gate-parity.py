@@ -94,7 +94,7 @@ ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --a
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
     r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\}\)"$')
+    r'-E "\$\(python -B "\$CODEFLOW_JUDGE/scripts/windows-partitions\.py" filter \$\{\{ matrix\.partition \}\}\)"$')
 PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
 
 
@@ -242,7 +242,7 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # the planner's (scripts/test_windows_partitions.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
 SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
-SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
+SHARD_FILTER = '-E "$(python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" filter ${{ matrix.shard }})"'
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
 # TSK-1001: every gate job that selects tests or judges floors takes these
 # judge files from the base revision first, so a pull request cannot narrow
@@ -253,17 +253,21 @@ JUDGE_FILES = (".codeflow/test-config.json", "crates/codeflow-cli/tests/journey_
                "scripts/test_coverage_merge.py", "scripts/test_journey_gate.py", "scripts/test_windows_partitions.py")
 JUDGE_STEP = """\
       - name: Take the gate's judge files from the base
-        if: github.event_name == 'pull_request'
         shell: bash
         env:
+          EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git checkout "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml \\
-            scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json \\
-            scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json \\
-            scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py
+          if [ "$EVENT" = pull_request ]; then
+            judge="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/codeflow-judge"
+            rm -rf "$judge" && mkdir -p "$judge"
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            git archive "$BASE_SHA" -- .codeflow/test-config.json crates/codeflow-cli/tests/journey_gate.toml scripts/coverage-merge.py scripts/coverage-shards.py scripts/coverage-test-times.json scripts/journey-gate.py scripts/windows-partitions.py scripts/windows-test-times.json scripts/test_coverage_merge.py scripts/test_journey_gate.py scripts/test_windows_partitions.py | tar -x -C "$judge"
+          else
+            judge="$(pwd)"
+          fi
+          echo "CODEFLOW_JUDGE=${judge}" >> "$GITHUB_ENV"
 """
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
@@ -356,7 +360,7 @@ COVERAGE_REPORT_JOB = """\
           path: target/coverage/results
       - name: Line coverage of the whole suite
         shell: bash
-        run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards @COUNT@ target/coverage/data
+        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_coverage_merge.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-merge.py" --floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards @COUNT@ target/coverage/data
       - name: journey gate
         if: ${{ !cancelled() }}
         shell: bash
@@ -366,8 +370,14 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list @LISTS@ --results target/coverage/results
+        run: python3 -B "$CODEFLOW_JUDGE/scripts/test_windows_partitions.py" && python3 -B "$CODEFLOW_JUDGE/scripts/coverage-shards.py" check --list @LISTS@ --results target/coverage/results
 """
+
+
+def judged(command: str) -> str:
+    """`command` with each `scripts/<name>.py` it runs taken from the base's
+    judge directory, as the coverage report runs the journey gate."""
+    return re.sub(r'(?<![\w/"$])scripts/([\w-]+\.py)', r'"$CODEFLOW_JUDGE/scripts/\1"', command)
 
 
 def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, list[str]]:
@@ -393,7 +403,7 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
     fill = {"@JUDGE@": JUDGE_STEP, "@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
             "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
-            "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
+            "@JOURNEY@": judged(full.get("journey-gate", "")), "@LISTS@": lists}
     jobs = []
     for template in (COVERAGE_JOB, COVERAGE_REPORT_JOB):
         for marker, value in fill.items():

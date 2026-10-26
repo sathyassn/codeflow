@@ -47,6 +47,8 @@
       "scripts/windows-test-times.json",
       "scripts/test_windows_partitions.py",
       "scripts/ci-reuse.py",
+      "scripts/admission_env.py",
+      "scripts/requirements-admission.txt",
       "scripts/test_ci_reuse.py",
       "scripts/coverage-shards.py",
       "scripts/coverage-test-times.json",

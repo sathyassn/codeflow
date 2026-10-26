@@ -377,7 +377,7 @@ class GateBinaryControls(unittest.TestCase):
 
 ARCHIVED_RUN = ('cargo nextest run --archive-file target/windows-tests.tar.zst --workspace-remap . --extract-to . '
                 '--extract-overwrite --no-fail-fast --profile codeflow '
-                '-E "$(python -B scripts/windows-partitions.py filter ${{ matrix.partition }})"')
+                '-E "$(python -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" filter ${{ matrix.partition }})"')
 ARCHIVE = "cargo nextest archive --workspace --profile codeflow --archive-file target/windows-tests.tar.zst"
 
 
@@ -427,7 +427,7 @@ class WindowsPartitionControls(unittest.TestCase):
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--archive-file target/windows-tests.tar.zst",
                                                              "--archive-file target/other.tar.zst")),
                          (ARCHIVED_RUN, ARCHIVED_RUN.replace("--no-fail-fast ", "")),
-                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B scripts/windows-partitions.py filter '
+                         (ARCHIVED_RUN, ARCHIVED_RUN.replace('-E "$(python -B "$CODEFLOW_JUDGE/scripts/windows-partitions.py" filter '
                                                              '${{ matrix.partition }})"',
                                                              "--partition count:${{ matrix.partition }}/12"))):
             with self.subTest(new=new):
@@ -804,8 +804,11 @@ class CoverageShardControls(unittest.TestCase):
                         run.replace(" -E", " --lib -E")):
             with self.subTest(changed=changed):
                 self.assert_problem(self.EXACT, WORKFLOW.replace(run, changed))
-        self.assert_problem(self.EXACT, WORKFLOW.replace("coverage-shards.py filter ${{ matrix.shard }}",
-                                                         "coverage-shards.py filter 1"))
+        self.assert_problem(self.EXACT, WORKFLOW.replace('coverage-shards.py" filter ${{ matrix.shard }}',
+                                                         'coverage-shards.py" filter 1'))
+        # The filter must come from the base's judge copy (TSK-1001).
+        self.assert_problem(self.EXACT, WORKFLOW.replace('"$CODEFLOW_JUDGE/scripts/coverage-shards.py" filter',
+                                                         'scripts/coverage-shards.py filter'))
         self.assert_problem(self.EXACT, WORKFLOW.replace("        run: cargo llvm-cov clean --workspace\n",
                                                          "        run: true\n"))
         self.assert_problem(self.EXACT, WORKFLOW.replace("          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n"
@@ -841,11 +844,13 @@ class CoverageShardControls(unittest.TestCase):
         self.assert_problem("must require exactly present-web-build", cfg=mutated(requires))
 
     def test_a_report_that_could_pass_without_every_shard_or_the_floor_is_refused(self):
-        merge = "--floor-from .codeflow/test-config.json --shards 2 target/coverage/data"
+        merge = '--floor-from "$CODEFLOW_JUDGE/.codeflow/test-config.json" --shards 2 target/coverage/data'
         self.assertIn(merge, WORKFLOW)
         controls = {
             "a fixed floor": WORKFLOW.replace(merge, "--floor 80 --shards 2 target/coverage/data"),
-            "one shard": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 1 target/coverage/data"),
+            "one shard": WORKFLOW.replace(merge, merge.replace("--shards 2", "--shards 1")),
+            "the pull request's floors": WORKFLOW.replace(merge, "--floor-from .codeflow/test-config.json --shards 2 "
+                                                                 "target/coverage/data"),
             "a forgiven merge": WORKFLOW.replace(merge, merge + " || true"),
             "a skipped journey step": WORKFLOW.replace(
                 "      - name: journey gate\n        if: ${{ !cancelled() }}\n",
