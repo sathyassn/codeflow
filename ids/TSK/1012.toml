@@ -1,0 +1,11 @@
+id = "TSK-1012"
+uid = "3edc590b-1f27-4f0b-ab0b-0ef929488df9"
+kind = "TSK"
+title = "Estimate outcomes measure claim starts, open-task age and deleted lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-26T18:16:37Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
