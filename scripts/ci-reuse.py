@@ -230,8 +230,8 @@ def trusted_files_problem(git, base: str, head: str, paths: list[str]) -> str | 
             return f"cannot read {path} at the base {base} and the head {head}: {error}"
         if trusted != candidate:
             return (f"the pull request changes {path} (base sha256 {trusted}, head sha256 {candidate}), so its "
-                    "run's jobs and verdicts come from a file the pull request controls; land that change through "
-                    "a human-merged pull request whose review covers the workflow, or revert it here")
+                    "run's jobs and verdicts come from a file the pull request controls; automatic admission "
+                    "refuses a pull request that changes them")
     return None
 
 
