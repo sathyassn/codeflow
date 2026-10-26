@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[allow(dead_code)]
+#[path = "support/drain_pipe.rs"]
+mod drain_pipe;
 #[path = "support/json_schema.rs"]
 mod json_schema;
 
@@ -3749,7 +3752,6 @@ struct HostMonitor {
 
 impl HostMonitor {
     fn start(fixture: &TestProject, session_id: &str, script: &str) -> Self {
-        use std::io::BufRead;
         let binary = Path::new(env!("CARGO_BIN_EXE_codeflow"));
         let path = format!(
             "{}:{}",
@@ -3767,16 +3769,7 @@ impl HostMonitor {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (sender, lines) = std::sync::mpsc::channel();
-        thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if sender.send(line).is_err() {
-                    break;
-                }
-            }
-        });
+        let lines = drain_pipe::drain_lines(child.stdout.take());
         Self { child, lines }
     }
 
