@@ -92,7 +92,9 @@ fn run_in(dir: &Path, args: &[&str]) -> Output {
 
 /// Install the shipped pre-push shim as the repository's hook, as `codeflow
 /// init` lays it out, and run a real `git push` of `branch` to `origin`
-/// through it with this build as the hook binary (TSK-1001).
+/// through it with this build as the hook binary (TSK-1001). Unix only:
+/// the shim is a shell script.
+#[cfg(unix)]
 fn installed_push(dir: &Path, branch: &str) -> Output {
     let hooks = dir.join(".git/codeflow-hooks");
     std::fs::create_dir_all(&hooks).unwrap();
@@ -102,7 +104,6 @@ fn installed_push(dir: &Path, branch: &str) -> Output {
         &shim,
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();

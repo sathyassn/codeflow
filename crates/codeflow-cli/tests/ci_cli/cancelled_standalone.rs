@@ -1,5 +1,7 @@
 //! TSK-414: preserve an unlanded cancellation without starting its task.
-use super::{codeflow, combined, git, installed_push, planned_task, run_in};
+#[cfg(unix)]
+use super::installed_push;
+use super::{codeflow, combined, git, planned_task, run_in};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Output, Stdio};

@@ -1,5 +1,7 @@
 //! The CI entry point judges a fix range and both task-landing provenances.
-use super::{codeflow, combined, git, installed_push, planned_task, run_in};
+#[cfg(unix)]
+use super::installed_push;
+use super::{codeflow, combined, git, planned_task, run_in};
 use std::path::Path;
 
 const TASK: &str = "project-management/tasks/TSK-001.md";
