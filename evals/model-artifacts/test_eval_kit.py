@@ -6152,6 +6152,9 @@ class ProcessRepairTests(unittest.TestCase):
                 self.assertEqual(str(host / ".codeflow-eval" / harness), env[key])
             self.assertEqual([str(trial / "bin"), "/usr/bin"], env["PATH"].split(os.pathsep))
             self.assertEqual("1", env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
+            # The harness version a trial records is the one it runs: no
+            # update is installed into the disposable home mid-trial.
+            self.assertEqual("1", env["DISABLE_AUTOUPDATER"])
             self.assertEqual("0", env["GROK_MEMORY"])
             self.assertFalse(any("personal" in value for value in env.values()))
             for name in [".claude", ".claude.json", ".codex", ".grok"]:
